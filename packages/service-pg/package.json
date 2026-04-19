@@ -1,0 +1,31 @@
+{
+  "name": "@statewalker/service-pg",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Legacy PostgreSQL service adapter. Scheduled for replacement by direct drizzle/pg usage.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+  },
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "pg": "catalog:",
+    "@statewalker/shared-adapters": "workspace:*",
+    "@statewalker/shared-logger": "workspace:*",
+    "@statewalker/shared-registry": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/pg": "catalog:",
+    "typescript": "catalog:"
+  }
+}

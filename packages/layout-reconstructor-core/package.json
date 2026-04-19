@@ -1,0 +1,32 @@
+{
+  "name": "@statewalker/layout-reconstructor-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Experimental layout-reconstruction core using @lume/kiwi constraint solving. Future uncertain.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src/**"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check --write --unsafe .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "@lume/kiwi": "^0.4.4"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "@statewalker/service-http",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Experimental HTTP service contract. Scheduled for refactor.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+  },
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "files": [
+    "dist/**",
+    "src/**"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "start": "tsx watch ./src/index.ts",
+    "test": "pnpm run typecheck:tests && vitest run",
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc",
+    "clean": "rimraf dist",
+    "lint": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "urlpattern-polyfill": "^10.1.0",
+    "@statewalker/shared-adapters": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "rimraf": "catalog:",
+    "tsdown": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

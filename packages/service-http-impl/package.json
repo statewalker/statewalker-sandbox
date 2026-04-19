@@ -1,0 +1,53 @@
+{
+  "name": "@statewalker/service-http-impl",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Experimental Hono-based implementation of @statewalker/service-http. Scheduled for refactor.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+  },
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "files": [
+    "dist/**",
+    "src/**"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "start": "tsx watch ./src/index.ts",
+    "test": "pnpm run typecheck:tests && vitest run",
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc",
+    "test:watch": "vitest",
+    "clean": "rimraf dist",
+    "lint": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "@hono/node-server": "catalog:",
+    "@hono/node-ws": "^1.0.0",
+    "@statewalker/service-http": "workspace:*",
+    "@statewalker/service-rpc": "workspace:*",
+    "hono": "catalog:",
+    "ws": "^8.18.0",
+    "@statewalker/shared-adapters": "workspace:*",
+    "@statewalker/shared-logger": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.10",
+    "rimraf": "catalog:",
+    "tsdown": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "tsx": "catalog:",
+    "@statewalker/shared-registry": "workspace:*"
+  }
+}
