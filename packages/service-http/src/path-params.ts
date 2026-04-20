@@ -1,4 +1,4 @@
-if (!globalThis.URLPattern) {
+if (!(globalThis as { URLPattern?: unknown }).URLPattern) {
   await import("urlpattern-polyfill");
 }
 

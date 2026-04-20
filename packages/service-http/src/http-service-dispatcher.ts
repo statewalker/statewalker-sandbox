@@ -1,5 +1,5 @@
 // Conditional ESM module loading (Node.js and browser)
-if (!globalThis.URLPattern) {
+if (!(globalThis as { URLPattern?: unknown }).URLPattern) {
   await import("urlpattern-polyfill");
 }
 
