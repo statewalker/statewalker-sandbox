@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "urlpattern-polyfill": "^10.1.0",
-    "@statewalker/shared-adapters": "workspace:*"
+    "@statewalker/shared-adapters": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "catalog:",
