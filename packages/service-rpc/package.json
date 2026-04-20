@@ -30,8 +30,8 @@
     "format": "biome format --write ."
   },
   "dependencies": {
-    "comlink": "^4.4.2",
-    "@statewalker/shared-generators": "^0.1.0"
+    "comlink": "catalog:",
+    "@statewalker/shared-generators": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

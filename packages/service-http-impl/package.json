@@ -32,22 +32,22 @@
   },
   "dependencies": {
     "@hono/node-server": "catalog:",
-    "@hono/node-ws": "^1.0.0",
+    "@hono/node-ws": "catalog:",
     "@statewalker/service-http": "workspace:*",
     "@statewalker/service-rpc": "workspace:*",
     "hono": "catalog:",
-    "ws": "^8.18.0",
-    "@statewalker/shared-adapters": "^0.1.0",
-    "@statewalker/shared-logger": "^0.1.0"
+    "ws": "catalog:",
+    "@statewalker/shared-adapters": "catalog:",
+    "@statewalker/shared-logger": "catalog:"
   },
   "devDependencies": {
-    "@types/ws": "^8.5.10",
+    "@types/ws": "catalog:",
     "rimraf": "catalog:",
     "tsdown": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "tsx": "catalog:",
-    "@statewalker/shared-registry": "^0.1.0"
+    "@statewalker/shared-registry": "catalog:"
   }
 }

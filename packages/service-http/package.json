@@ -30,8 +30,8 @@
     "format": "biome format --write ."
   },
   "dependencies": {
-    "urlpattern-polyfill": "^10.1.0",
-    "@statewalker/shared-adapters": "^0.1.0"
+    "urlpattern-polyfill": "catalog:",
+    "@statewalker/shared-adapters": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

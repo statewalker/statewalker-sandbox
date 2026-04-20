@@ -23,7 +23,7 @@
     "format": "biome format --write ."
   },
   "dependencies": {
-    "@lume/kiwi": "^0.4.4"
+    "@lume/kiwi": "catalog:"
   },
   "devDependencies": {
     "typescript": "catalog:",

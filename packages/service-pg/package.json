@@ -20,9 +20,9 @@
   },
   "dependencies": {
     "pg": "catalog:",
-    "@statewalker/shared-adapters": "^0.1.0",
-    "@statewalker/shared-logger": "^0.1.0",
-    "@statewalker/shared-registry": "^0.1.0"
+    "@statewalker/shared-adapters": "catalog:",
+    "@statewalker/shared-logger": "catalog:",
+    "@statewalker/shared-registry": "catalog:"
   },
   "devDependencies": {
     "@types/pg": "catalog:",
