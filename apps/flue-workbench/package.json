@@ -1,0 +1,42 @@
+{
+  "name": "@statewalker/flue-workbench",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-first Flue agent workbench. Pick a local directory, talk to Gemini, edit files. Sandbox-tier.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 5173",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.75.4",
+    "@earendil-works/pi-ai": "^0.75.4",
+    "@flue/runtime": "^0.7.0",
+    "@just-bash/executor": "^1.0.2",
+    "@statewalker/webrun-files": "catalog:",
+    "@statewalker/webrun-files-browser": "catalog:",
+    "@statewalker/webrun-files-composite": "catalog:",
+    "@statewalker/webrun-files-mem": "catalog:",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "just-bash": "^3.0.1",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}
