@@ -39,6 +39,7 @@ export {
   type SessionDataLike,
 } from "./files-api-session-store.js";
 export { gateSecret } from "./gate-secret.js";
+export { type MountedXterm, type MountXtermOptions, mountXtermTerminal } from "./mount-xterm.js";
 export { workbenchSessionId } from "./session-id.js";
 export { newSecretCommand, newSessionCommand } from "./static-commands.js";
 // ── Terminal contract ──────────────────────────────────────────────
