@@ -148,8 +148,48 @@ export async function createWorkbench(opts: CreateWorkbenchOptions): Promise<Wor
 
   // Wire terminal input → human bash. A complete line (terminated by \r or \n)
   // is executed; output is streamed back to the terminal. Ctrl-C is reserved
-  // for the in-flight `agent` command; the input-handler itself is the
-  // production-grade port (task 6.2) and replaces this minimal loop.
+  // for the in-flight `agent` command; a production-grade input-handler port
+  // (task 6.2) replaces this minimal loop in a follow-up.
+  //
+  // SHELL-STATE PERSISTENCE
+  // -----------------------
+  // `Bash.exec()` builds a copy of `this.state` for each call and runs the
+  // script against the copy — internal `cd` / `export FOO=bar` mutations are
+  // thrown away when the call returns. Without compensation, typing `cd /foo`
+  // then `ls` would list the constructor cwd, not `/foo`.
+  //
+  // The fix:
+  //   1. Maintain our own `currentCwd` + `currentEnv` between calls.
+  //   2. Append a cwd probe (`; printf '\x01CWD:%s\x01' "$(pwd)"`) to every
+  //      script so the post-execution cwd shows up at the end of stdout.
+  //      `\x01` is SOH — it never appears in normal command output, so the
+  //      marker is unambiguous and easy to strip before display.
+  //   3. Pass `{ cwd, env }` into every `exec()` so the user-visible state
+  //      threads forward. `env` comes from `BashExecResult.env` directly
+  //      (already exposes the post-script env, including `export`s).
+  let currentCwd = cwd;
+  let currentEnv: Record<string, string> | undefined;
+  // \x01 (SOH) is the sentinel — chosen because it never appears in real
+  // command output, so the marker is unambiguous and easy to strip.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional SOH sentinel
+  const CWD_MARKER_RE = /\x01CWD:(.*?)\x01/;
+  const CWD_PROBE = `; printf '\\x01CWD:%s\\x01' "$(pwd)"`;
+  const runShellLine = async (line: string) => {
+    const r = await humanBash.exec(`{ ${line}; } ${CWD_PROBE}`, {
+      cwd: currentCwd,
+      env: currentEnv,
+      replaceEnv: currentEnv !== undefined,
+    });
+    let stdout = r.stdout;
+    const m = CWD_MARKER_RE.exec(stdout);
+    if (m?.[1]) {
+      currentCwd = m[1];
+      stdout = stdout.replace(CWD_MARKER_RE, "");
+    }
+    currentEnv = r.env;
+    return { ...r, stdout };
+  };
+
   const lineBuffer: string[] = [];
   const inputDisposer = opts.terminal.onData(async (chunk) => {
     for (const ch of chunk) {
@@ -159,7 +199,7 @@ export async function createWorkbench(opts: CreateWorkbenchOptions): Promise<Wor
         opts.terminal.write("\r\n");
         if (!line) continue;
         try {
-          const r = await humanBash.exec(line);
+          const r = await runShellLine(line);
           if (r.stdout) opts.terminal.write(r.stdout.replace(/\n/g, "\r\n"));
           if (r.stderr) {
             opts.terminal.write(`\x1b[31m${r.stderr.replace(/\n/g, "\r\n")}\x1b[0m`);
@@ -188,7 +228,9 @@ export async function createWorkbench(opts: CreateWorkbenchOptions): Promise<Wor
     views,
     sessionId,
     async runShell(commandLine) {
-      return humanBash.exec(commandLine);
+      // Use the same state-preserving helper as the terminal input loop so
+      // programmatic shell calls share cwd/env with what the user types.
+      return runShellLine(commandLine);
     },
     async dispose() {
       inputDisposer.dispose();
