@@ -46,8 +46,20 @@ export function mountXtermTerminal(opts: MountXtermOptions): MountedXterm {
   xterm.open(opts.container);
   fit.fit();
 
-  const handleResize = () => fit.fit();
-  window.addEventListener("resize", handleResize);
+  // Refit on both window resize AND container size changes (the latter covers
+  // the case where the host element is re-laid-out by surrounding React state
+  // — e.g. a banner appearing above it). Without the ResizeObserver, xterm
+  // would render at the size it had at open() time and never grow/shrink.
+  const refit = () => {
+    try {
+      fit.fit();
+    } catch {
+      // fit() can throw if the container is detached or zero-sized; ignore.
+    }
+  };
+  window.addEventListener("resize", refit);
+  const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(refit) : null;
+  resizeObserver?.observe(opts.container);
 
   const term: Terminal = {
     write: (data) => xterm.write(data),
@@ -65,7 +77,8 @@ export function mountXtermTerminal(opts: MountXtermOptions): MountedXterm {
     term,
     xterm,
     dispose: () => {
-      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("resize", refit);
+      resizeObserver?.disconnect();
       xterm.dispose();
     },
   };
