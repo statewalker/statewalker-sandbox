@@ -2,8 +2,8 @@ import { writeText } from "@statewalker/webrun-files";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { Bash } from "just-bash";
 import { describe, expect, it } from "vitest";
-import { filesApiBashFactory } from "./bash-factory.js";
-import { FilesApiAdapter } from "./files-api-adapter.js";
+import { filesApiBashFactory } from "../../src/lib/bash-factory.js";
+import { FilesApiAdapter } from "../../src/lib/files-api-adapter.js";
 
 describe("filesApiBashFactory", () => {
   it("returns a BashFactory whose result satisfies BashLike", async () => {

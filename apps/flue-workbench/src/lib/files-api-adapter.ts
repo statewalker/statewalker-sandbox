@@ -108,15 +108,21 @@ export class FilesApiAdapter implements IFileSystem {
     _options?: WriteFileOptions | BufferEncoding,
   ): Promise<void> {
     const p = normalizePath(path);
-    let existing = "";
+    // Read the existing file as bytes, append the new chunk as bytes, write
+    // bytes. Going through a UTF-8 string round-trip would corrupt binary
+    // files (replacement chars on invalid sequences) and even garble plain
+    // ASCII appended to a binary file.
+    const incoming = typeof content === "string" ? new TextEncoder().encode(content) : content;
+    let next: Uint8Array;
     if (await this.files.exists(p)) {
-      existing = await readText(this.files, p);
+      const existing = await concatChunks(this.files.read(p));
+      next = new Uint8Array(existing.byteLength + incoming.byteLength);
+      next.set(existing, 0);
+      next.set(incoming, existing.byteLength);
+    } else {
+      next = incoming;
     }
-    const next =
-      typeof content === "string"
-        ? existing + content
-        : existing + new TextDecoder().decode(content);
-    await writeText(this.files, p, next);
+    await this.files.write(p, [next]);
   }
 
   // ── metadata ──────────────────────────────────────────────────────

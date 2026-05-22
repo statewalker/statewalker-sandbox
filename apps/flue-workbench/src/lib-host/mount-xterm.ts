@@ -2,7 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal as Xterm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import type { Terminal } from "./terminal-contract.js";
+import type { Terminal } from "../lib/terminal-contract.js";
 
 export interface MountXtermOptions {
   container: HTMLElement;

@@ -24,8 +24,8 @@ export async function gateSecret(
   let provided: string;
   try {
     provided = await onSecretRequest(name);
-  } catch (_cause) {
-    throw new WorkbenchSecretMissingError(name);
+  } catch (cause) {
+    throw new WorkbenchSecretMissingError(name, { cause });
   }
   if (!provided) {
     throw new WorkbenchSecretMissingError(name);

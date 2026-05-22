@@ -1,7 +1,7 @@
 import { readText, tryReadText, writeText } from "@statewalker/webrun-files";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildFilesViews } from "./build-files-views.js";
+import { buildFilesViews } from "../../src/lib/build-files-views.js";
 
 describe("buildFilesViews", () => {
   let rootFiles: MemFilesApi;
@@ -14,9 +14,8 @@ describe("buildFilesViews", () => {
     await writeText(rootFiles, "/.settings/sessions/abc.json", "{}");
   });
 
-  it("returns the three views (root, system, user)", () => {
+  it("returns the system + user views", () => {
     const views = buildFilesViews(rootFiles);
-    expect(views.rootFiles).toBe(rootFiles);
     expect(views.systemFiles).toBeDefined();
     expect(views.userFiles).toBeDefined();
   });

@@ -2,12 +2,6 @@ import type { SessionData, SessionStore } from "@flue/runtime";
 import type { FilesApi } from "@statewalker/webrun-files";
 import { readText, writeText } from "@statewalker/webrun-files";
 
-/**
- * Local re-export for test ergonomics — the test suite only needs the
- * shape (version/entries/leafId/etc.), not the full Flue type graph.
- */
-export type SessionDataLike = SessionData;
-
 export interface FilesApiSessionStoreOptions {
   /** Must be the system view (`buildFilesViews(...).systemFiles`). */
   files: FilesApi;
@@ -40,7 +34,15 @@ export class FilesApiSessionStore implements SessionStore {
     const p = this.pathOf(id);
     if (!(await this.files.exists(p))) return null;
     const text = await readText(this.files, p);
-    return JSON.parse(text) as SessionData;
+    try {
+      return JSON.parse(text) as SessionData;
+    } catch {
+      // Corrupted session file (partial write, hand-edit, merge conflict).
+      // Returning null forces a fresh session — better than crashing boot
+      // with an opaque SyntaxError. The corrupt file is left in place so
+      // the user can inspect/recover it; the next save overwrites it.
+      return null;
+    }
   }
 
   async save(id: string, data: SessionData): Promise<void> {

@@ -6,8 +6,8 @@
 export class WorkbenchSecretMissingError extends Error {
   readonly secretName: string;
 
-  constructor(secretName: string) {
-    super(`Required secret "${secretName}" was not provided.`);
+  constructor(secretName: string, options?: { cause?: unknown }) {
+    super(`Required secret "${secretName}" was not provided.`, options);
     this.name = "WorkbenchSecretMissingError";
     this.secretName = secretName;
   }

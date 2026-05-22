@@ -1,15 +1,12 @@
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { describe, expect, it } from "vitest";
-import { buildBash } from "./build-bash.js";
+import { buildBash } from "../../src/lib/build-bash.js";
 
 describe("buildBash", () => {
-  it("returns an executor and a BashFactory", async () => {
+  it("returns a BashFactory", async () => {
     const files = new MemFilesApi();
     await files.mkdir("/workspace");
-    const { executor, factory } = await buildBash({ files, cwd: "/workspace" });
-    expect(executor).toBeDefined();
-    expect(executor.commands).toBeInstanceOf(Array);
-    expect(typeof executor.invokeTool).toBe("function");
+    const factory = await buildBash({ files, cwd: "/workspace" });
     expect(typeof factory).toBe("function");
   });
 
@@ -17,7 +14,7 @@ describe("buildBash", () => {
     const files = new MemFilesApi();
     await files.mkdir("/workspace");
 
-    const { factory } = await buildBash({
+    const factory = await buildBash({
       files,
       cwd: "/workspace",
       tools: {
@@ -40,7 +37,7 @@ describe("buildBash", () => {
   it("model-facing factory survives with no tools", async () => {
     const files = new MemFilesApi();
     await files.mkdir("/workspace");
-    const { factory } = await buildBash({ files, cwd: "/workspace" });
+    const factory = await buildBash({ files, cwd: "/workspace" });
     const bash = await factory();
     const r = await bash.exec("echo ok");
     expect(r.exitCode).toBe(0);

@@ -1,13 +1,13 @@
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { Bash } from "just-bash";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildFilesViews } from "./build-files-views.js";
-import { FilesApiAdapter } from "./files-api-adapter.js";
-import { FilesApiSecretStore } from "./files-api-secret-store.js";
-import { FilesApiSessionStore } from "./files-api-session-store.js";
-import { newSecretCommand, newSessionCommand } from "./static-commands.js";
+import { buildFilesViews } from "../../src/lib/build-files-views.js";
+import { FilesApiAdapter } from "../../src/lib/files-api-adapter.js";
+import { FilesApiSecretStore } from "../../src/lib/files-api-secret-store.js";
+import { FilesApiSessionStore } from "../../src/lib/files-api-session-store.js";
+import { newSecretCommand, newSessionCommand } from "../../src/lib/human-commands.js";
 
-describe("static-commands", () => {
+describe("human-commands (secret + session)", () => {
   let rootFiles: MemFilesApi;
   let userFiles: ReturnType<typeof buildFilesViews>["userFiles"];
   let systemFiles: ReturnType<typeof buildFilesViews>["systemFiles"];

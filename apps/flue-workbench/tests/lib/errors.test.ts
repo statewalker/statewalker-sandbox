@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WorkbenchSecretMissingError } from "./errors.js";
+import { WorkbenchSecretMissingError } from "../../src/lib/errors.js";
 
 describe("WorkbenchSecretMissingError", () => {
   it("is an Error subclass", () => {

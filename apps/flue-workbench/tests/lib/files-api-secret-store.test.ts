@@ -1,7 +1,8 @@
+import { writeText } from "@statewalker/webrun-files";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildFilesViews } from "./build-files-views.js";
-import { FilesApiSecretStore } from "./files-api-secret-store.js";
+import { buildFilesViews } from "../../src/lib/build-files-views.js";
+import { FilesApiSecretStore } from "../../src/lib/files-api-secret-store.js";
 
 describe("FilesApiSecretStore", () => {
   let rootFiles: MemFilesApi;
@@ -54,6 +55,35 @@ describe("FilesApiSecretStore", () => {
       await store.set("KEY", "v");
       const env = await store.asEnv("APP_");
       expect(env).toEqual({ APP_KEY: "v" });
+    });
+  });
+
+  describe("Corruption tolerance", () => {
+    it("treats malformed JSON on disk as empty store", async () => {
+      await writeText(systemFiles, "/.settings/secrets.json", "{not valid json");
+      const store = new FilesApiSecretStore({ systemFiles });
+      expect(await store.get("KEY")).toBeUndefined();
+      expect(await store.list()).toEqual([]);
+    });
+
+    it("recovers from corruption: next set overwrites the malformed file", async () => {
+      await writeText(systemFiles, "/.settings/secrets.json", "<<garbage>>");
+      const store = new FilesApiSecretStore({ systemFiles });
+      await store.set("RECOVERED", "ok");
+      expect(await store.get("RECOVERED")).toBe("ok");
+    });
+  });
+
+  describe("Concurrent writes", () => {
+    it("serialised set calls compose into deterministic final state", async () => {
+      const store = new FilesApiSecretStore({ systemFiles });
+      // Without serialisation, both sets read the same empty cache, mutate
+      // their own copies, and the slower writer would clobber the other.
+      await Promise.all([store.set("A", "1"), store.set("B", "2")]);
+      const keys = await store.list();
+      expect(keys.sort()).toEqual(["A", "B"]);
+      expect(await store.get("A")).toBe("1");
+      expect(await store.get("B")).toBe("2");
     });
   });
 

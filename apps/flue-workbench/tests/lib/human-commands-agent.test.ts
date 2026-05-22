@@ -1,7 +1,7 @@
 import type { FlueEvent } from "@flue/runtime";
 import { describe, expect, it } from "vitest";
-import { newAgentCommand } from "./agent-command.js";
-import type { Terminal } from "./terminal-contract.js";
+import { newAgentCommand } from "../../src/lib/human-commands.js";
+import type { Terminal } from "../../src/lib/terminal-contract.js";
 
 // ── Minimal fakes ─────────────────────────────────────────────────
 

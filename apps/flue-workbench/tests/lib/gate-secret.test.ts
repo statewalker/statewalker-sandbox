@@ -1,9 +1,9 @@
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildFilesViews } from "./build-files-views.js";
-import { WorkbenchSecretMissingError } from "./errors.js";
-import { FilesApiSecretStore } from "./files-api-secret-store.js";
-import { gateSecret } from "./gate-secret.js";
+import { buildFilesViews } from "../../src/lib/build-files-views.js";
+import { WorkbenchSecretMissingError } from "../../src/lib/errors.js";
+import { FilesApiSecretStore } from "../../src/lib/files-api-secret-store.js";
+import { gateSecret } from "../../src/lib/gate-secret.js";
 
 describe("gateSecret", () => {
   let rootFiles: MemFilesApi;

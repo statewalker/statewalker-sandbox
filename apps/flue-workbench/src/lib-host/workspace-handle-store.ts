@@ -35,13 +35,17 @@ export async function openOrResumeWorkspace(): Promise<{
   // for v1 since a user normally picks distinct directories per workspace.
   // If they ever pick two folders with identical names, they'll share a
   // session id; that's a v2 concern.
+  //
+  // If the handle is missing or has no name, we throw instead of falling
+  // back to a generic key — a fallback would silently share session ids
+  // across every workspace that took this path.
   const cached = await get<FileSystemDirectoryHandle>(HANDLE_KEY);
-  const workspaceKey = cached?.name ?? "workspace";
+  const workspaceKey = cached?.name;
+  if (!workspaceKey) {
+    throw new Error(
+      "openOrResumeWorkspace: directory handle has no name; cannot derive a stable workspaceKey.",
+    );
+  }
 
   return { files, workspaceKey };
-}
-
-/** Forget the cached handle (e.g. user clicked "Switch workspace"). */
-export async function forgetWorkspace(): Promise<void> {
-  await del(HANDLE_KEY);
 }

@@ -2,7 +2,7 @@ import { writeText } from "@statewalker/webrun-files";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { Bash, InMemoryFs } from "just-bash";
 import { describe, expect, it } from "vitest";
-import { FilesApiAdapter } from "./files-api-adapter.js";
+import { FilesApiAdapter } from "../../src/lib/files-api-adapter.js";
 
 /**
  * Seeds the supplied bashes' filesystems with the same content so we can
@@ -99,6 +99,23 @@ describe("FilesApiAdapter — parity with just-bash's InMemoryFs", () => {
       // After removal, `test -d /x` exits non-zero (1), printed by `echo $?`.
       expect(aRm.stdout.trim()).toBe("1");
       expect(bRm.stdout.trim()).toBe("1");
+    });
+  });
+
+  describe("Scenario: appendFile preserves binary content", () => {
+    it("appending text to a file containing non-UTF-8 bytes does not corrupt the original bytes", async () => {
+      const memFs = new MemFilesApi();
+      // Bytes 0x80..0x83 are a stand-alone continuation sequence — invalid as
+      // UTF-8. A read-as-text/write-as-text round-trip would replace them with
+      // U+FFFD and destroy the file.
+      const binary = new Uint8Array([0x80, 0x81, 0x82, 0x83]);
+      await memFs.write("/bin.dat", [binary]);
+
+      const adapter = new FilesApiAdapter({ files: memFs, cwd: "/" });
+      await adapter.appendFile("/bin.dat", "X");
+
+      const after = await adapter.readFileBuffer("/bin.dat");
+      expect(Array.from(after)).toEqual([0x80, 0x81, 0x82, 0x83, 0x58]); // "X" === 0x58
     });
   });
 

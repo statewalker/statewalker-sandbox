@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { configureGemini, GEMINI_PROVIDER } from "./configure-gemini.js";
+import { configureGemini, GEMINI_PROVIDER } from "../../src/lib/configure-gemini.js";
 
 describe("configureGemini", () => {
   it("accepts a non-empty API key without throwing", () => {

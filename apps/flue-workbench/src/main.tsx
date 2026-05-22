@@ -1,12 +1,8 @@
 import type { BrowserFilesApi } from "@statewalker/webrun-files-browser";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import {
-  createWorkbench,
-  mountXtermTerminal,
-  type Workbench,
-  WorkbenchSecretMissingError,
-} from "./lib/index.js";
+import { createWorkbench, type Workbench, WorkbenchSecretMissingError } from "./lib/index.js";
+import { mountXtermTerminal } from "./lib-host/mount-xterm.js";
 import { openOrResumeWorkspace } from "./lib-host/workspace-handle-store.js";
 import { askGeminiKey } from "./ui/ask-gemini-key.js";
 import { isSupportedBrowser, Landing, type LandingReason } from "./ui/landing.js";
@@ -47,6 +43,11 @@ function App() {
         setStage({ kind: "landing", reason: { kind: "cancelled" } });
         return;
       }
+      if (err instanceof DOMException && err.name === "NotAllowedError") {
+        // Browser refused to (re-)grant access to the cached handle.
+        setStage({ kind: "landing", reason: { kind: "permission-denied" } });
+        return;
+      }
       setStage({
         kind: "landing",
         reason: { kind: "error", message: err instanceof Error ? err.message : String(err) },
@@ -77,7 +78,7 @@ function App() {
           onSecretRequest: askGeminiKey,
         });
         if (cancelled) {
-          await workbench.dispose();
+          workbench.dispose();
           mounted.dispose();
           xtermRef.current = null;
           return;

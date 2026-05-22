@@ -13,61 +13,78 @@ export interface FilesApiSecretStoreOptions {
 }
 
 /**
- * JSON-file-backed secret store. The cache is invalidated on every
- * `set`/`delete` (re-read on next access) so concurrent stores against
- * the same `FilesApi` stay coherent.
+ * JSON-file-backed secret store. Reads always hit disk (the file is small;
+ * a stale cache is more dangerous than the extra read). Writes are
+ * serialized through an internal promise chain so concurrent `set`/`delete`
+ * calls don't race on the read-modify-write cycle.
+ *
+ * Corrupted JSON on disk is treated as an empty store; the next `set`
+ * overwrites it. Boot does not fail on a malformed file.
  */
 export class FilesApiSecretStore {
   private readonly files: FilesApi;
   private readonly path: string;
-  private cache?: Record<string, string>;
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(opts: FilesApiSecretStoreOptions) {
     this.files = opts.systemFiles;
     this.path = opts.path ?? "/.settings/secrets.json";
   }
 
-  private async load(): Promise<Record<string, string>> {
-    if (this.cache) return this.cache;
+  private async loadFromDisk(): Promise<Record<string, string>> {
     const text = await tryReadText(this.files, this.path);
-    this.cache = text ? JSON.parse(text) : {};
-    // biome-ignore lint/style/noNonNullAssertion: cache just assigned above
-    return this.cache!;
-  }
-
-  private async flush(): Promise<void> {
-    await writeText(this.files, this.path, JSON.stringify(this.cache ?? {}));
+    if (!text) return {};
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+    } catch {
+      // Malformed JSON — treat as empty so boot survives partial writes /
+      // hand-edited corruption. Next write overwrites the file.
+      return {};
+    }
   }
 
   async get(key: string): Promise<string | undefined> {
-    const all = await this.load();
+    const all = await this.loadFromDisk();
     return all[key];
   }
 
-  async set(key: string, value: string): Promise<void> {
-    // Re-load from disk before writing so concurrent stores see each other's writes.
-    this.cache = undefined;
-    const all = await this.load();
-    all[key] = value;
-    await this.flush();
-  }
-
-  async delete(key: string): Promise<void> {
-    this.cache = undefined;
-    const all = await this.load();
-    delete all[key];
-    await this.flush();
-  }
-
   async list(): Promise<string[]> {
-    this.cache = undefined;
-    return Object.keys(await this.load());
+    return Object.keys(await this.loadFromDisk());
   }
 
   async asEnv(prefix = ""): Promise<Record<string, string>> {
-    this.cache = undefined;
-    const all = await this.load();
+    const all = await this.loadFromDisk();
     if (!prefix) return { ...all };
     return Object.fromEntries(Object.entries(all).map(([k, v]) => [`${prefix}${k}`, v]));
+  }
+
+  set(key: string, value: string): Promise<void> {
+    return this.mutate((all) => {
+      all[key] = value;
+    });
+  }
+
+  delete(key: string): Promise<void> {
+    return this.mutate((all) => {
+      delete all[key];
+    });
+  }
+
+  /**
+   * Serialize read-modify-write through `writeQueue` so concurrent
+   * `set`/`delete` calls compose into a deterministic final state instead
+   * of last-writer-wins.
+   */
+  private mutate(apply: (all: Record<string, string>) => void): Promise<void> {
+    const next = this.writeQueue.then(async () => {
+      const all = await this.loadFromDisk();
+      apply(all);
+      await writeText(this.files, this.path, JSON.stringify(all));
+    });
+    // Swallow rejection on the chain so one failure doesn't poison subsequent
+    // queued writes. Each `next` keeps its own rejection for the caller.
+    this.writeQueue = next.catch(() => undefined);
+    return next;
   }
 }

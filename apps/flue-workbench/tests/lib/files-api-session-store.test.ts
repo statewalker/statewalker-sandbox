@@ -1,12 +1,14 @@
+import type { SessionData } from "@flue/runtime";
+import { writeText } from "@statewalker/webrun-files";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildFilesViews } from "./build-files-views.js";
-import { FilesApiSessionStore, type SessionDataLike } from "./files-api-session-store.js";
+import { buildFilesViews } from "../../src/lib/build-files-views.js";
+import { FilesApiSessionStore } from "../../src/lib/files-api-session-store.js";
 
 // The store only round-trips a JSON blob; we don't construct a real
 // Flue `MessageEntry` here. Cast through unknown to keep the fixture
 // schema-agnostic — what matters is that whatever we save comes back.
-const sampleSessionData = (): SessionDataLike =>
+const sampleSessionData = (): SessionData =>
   ({
     version: 3,
     entries: [
@@ -21,7 +23,7 @@ const sampleSessionData = (): SessionDataLike =>
     metadata: {},
     createdAt: "2026-05-21T00:00:00.000Z",
     updatedAt: "2026-05-21T00:00:01.000Z",
-  }) as unknown as SessionDataLike;
+  }) as unknown as SessionData;
 
 describe("FilesApiSessionStore", () => {
   let rootFiles: MemFilesApi;
@@ -77,5 +79,19 @@ describe("FilesApiSessionStore", () => {
     const store = new FilesApiSessionStore({ files: systemFiles });
     await store.save("workbench/x/main", sampleSessionData());
     expect(await systemFiles.exists("/.settings/sessions")).toBe(true);
+  });
+
+  it("returns null when the persisted session JSON is corrupted", async () => {
+    const store = new FilesApiSessionStore({ files: systemFiles });
+    const id = "workbench/repo-foo/main";
+    // Save a valid session, then overwrite the file with garbage.
+    await store.save(id, sampleSessionData());
+    const safeId = Array.from(new TextEncoder().encode(id))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    await writeText(systemFiles, `/.settings/sessions/${safeId}.json`, "{partial");
+    // Should not throw — the workbench treats this as "no session" and
+    // continues with a fresh one.
+    expect(await store.load(id)).toBeNull();
   });
 });
