@@ -24,7 +24,13 @@ export default defineConfig({
     // Pre-bundle the executor against our shim, so dev mode and prod use the
     // same resolution. Without this, `pnpm vite dev` may still pre-bundle
     // `@just-bash/executor`'s `import "just-bash"` against the default entry.
-    include: ["@just-bash/executor"],
+    //
+    // Also pre-bundle pi-ai's `google` provider: pi-ai's `register-builtins.js`
+    // loads each provider via a lazy `import()`. In dev, Vite optimises those
+    // on first use, then refreshes the URL hash — any in-flight call against
+    // an old hash crashes with `504 Outdated Optimize Dep`. Listing it here
+    // forces pre-bundling at startup with a stable hash.
+    include: ["@just-bash/executor", "@earendil-works/pi-ai/google"],
   },
   build: {
     target: "esnext",
