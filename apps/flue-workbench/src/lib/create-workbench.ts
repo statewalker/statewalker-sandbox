@@ -195,7 +195,7 @@ export async function createWorkbench(opts: CreateWorkbenchOptions): Promise<Wor
   // follows the `$` so the user's typed text is rendered in the default
   // terminal colour, not cyan.
   const writePrompt = () => {
-    opts.terminal.write(`\x1b[36mflue-workbench:${currentCwd}$\x1b[0m `);
+    opts.terminal.write(`\x1b[36mflue-workbench\x1b[0m:${currentCwd} $ `);
   };
   // Initial prompt — written once after the banner so the user sees a ready
   // input line as soon as createWorkbench resolves.
