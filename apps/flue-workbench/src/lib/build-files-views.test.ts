@@ -60,11 +60,23 @@ describe("buildFilesViews", () => {
       expect(await systemFiles.exists("/notes.md")).toBe(false);
     });
 
-    it("systemFiles list at root yields only .settings", async () => {
+    // Root is intentionally NOT visible through the system view — the predicate
+    // matches only paths under /.settings/**. Production callers (SecretStore,
+    // SessionStore) reach files by direct path, not by walking the root tree,
+    // so this is fine. Listing `/` therefore yields nothing.
+    it("systemFiles list at root yields nothing (predicate doesn't match `/`)", async () => {
       const { systemFiles } = buildFilesViews(rootFiles);
       const names: string[] = [];
       for await (const entry of systemFiles.list("/")) names.push(entry.name);
-      expect(names).toEqual([".settings"]);
+      expect(names).toEqual([]);
+    });
+
+    it("systemFiles list at /.settings yields its contents", async () => {
+      const { systemFiles } = buildFilesViews(rootFiles);
+      const names: string[] = [];
+      for await (const entry of systemFiles.list("/.settings")) names.push(entry.name);
+      expect(names).toContain("secrets.json");
+      expect(names).toContain("sessions");
     });
   });
 });

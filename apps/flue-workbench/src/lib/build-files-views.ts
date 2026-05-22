@@ -32,7 +32,7 @@ export function buildFilesViews(rootFiles: FilesApi): FilesViews {
   // listing `/` can enumerate `.settings` as a child; everything else outside
   // the `/.settings/**` subtree is hidden.
   const isSystemPath = (p: string): boolean =>
-    p === "/" || p === SYSTEM_PREFIX || p.startsWith(`${SYSTEM_PREFIX}/`);
+    p === SYSTEM_PREFIX || p.startsWith(`${SYSTEM_PREFIX}/`);
 
   return {
     rootFiles,
