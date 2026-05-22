@@ -190,6 +190,17 @@ export async function createWorkbench(opts: CreateWorkbenchOptions): Promise<Wor
     return { ...r, stdout };
   };
 
+  // Shell-style prompt: cyan `flue-workbench:<cwd>$`. Re-read every time so
+  // the cwd reflects the most recent `cd`. The reset (`\x1b[0m`) immediately
+  // follows the `$` so the user's typed text is rendered in the default
+  // terminal colour, not cyan.
+  const writePrompt = () => {
+    opts.terminal.write(`\x1b[36mflue-workbench:${currentCwd}$\x1b[0m `);
+  };
+  // Initial prompt — written once after the banner so the user sees a ready
+  // input line as soon as createWorkbench resolves.
+  writePrompt();
+
   const lineBuffer: string[] = [];
   const inputDisposer = opts.terminal.onData(async (chunk) => {
     for (const ch of chunk) {
@@ -197,7 +208,10 @@ export async function createWorkbench(opts: CreateWorkbenchOptions): Promise<Wor
         const line = lineBuffer.join("").trim();
         lineBuffer.length = 0;
         opts.terminal.write("\r\n");
-        if (!line) continue;
+        if (!line) {
+          writePrompt();
+          continue;
+        }
         try {
           const r = await runShellLine(line);
           if (r.stdout) opts.terminal.write(r.stdout.replace(/\n/g, "\r\n"));
@@ -208,6 +222,7 @@ export async function createWorkbench(opts: CreateWorkbenchOptions): Promise<Wor
           const msg = err instanceof Error ? err.message : String(err);
           opts.terminal.write(`\x1b[31m${msg}\r\n\x1b[0m`);
         }
+        writePrompt();
       } else if (ch === "" || ch === "\b") {
         if (lineBuffer.length > 0) {
           lineBuffer.pop();
