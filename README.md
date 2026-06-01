@@ -2,7 +2,7 @@
 
 HTTP proxy that exposes a local [llama.cpp](https://github.com/ggml-org/llama.cpp)
 + Gemma model over the OpenAI v1 wire format. Built on
-[`@repo/openai-compat`](../../packages/openai-compat) (the adapter) and
+[`@statewalker/openai-compat`](../../../statewalker-ai/packages/openai-compat) (the adapter) and
 [Hono](https://hono.dev/) (the transport).
 
 ## Architecture
@@ -14,7 +14,7 @@ openai client (curl, openai SDK, IDE plugin, ...)
 Hono server (@hono/node-server)
   │
   ▼  app.fetch(Request)
-@repo/openai-compat handler
+@statewalker/openai-compat handler
   │
   ▼  generateText / streamText
 @ai-sdk/openai provider (baseURL = http://127.0.0.1:8080/v1)

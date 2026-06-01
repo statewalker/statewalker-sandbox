@@ -16,7 +16,7 @@
   "dependencies": {
     "@ai-sdk/openai": "catalog:",
     "@hono/node-server": "catalog:",
-    "@repo/openai-compat": "workspace:*",
+    "@statewalker/openai-compat": "workspace:*",
     "ai": "catalog:",
     "hono": "catalog:"
   },
