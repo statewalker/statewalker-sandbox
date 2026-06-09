@@ -1,4 +1,4 @@
-import type { BrowserFilesApi } from "@statewalker/webrun-files-browser";
+import type { FilesApi } from "@statewalker/webrun-files";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { createWorkbench, type Workbench, WorkbenchSecretMissingError } from "./lib/index.js";
@@ -14,11 +14,14 @@ type Stage =
   // Workspace picked; terminal container is rendered at full size so xterm
   // has a sized DOM node to open into. The useEffect below mounts xterm +
   // runs createWorkbench, then transitions to "running" on success.
-  | { kind: "wiring"; files: BrowserFilesApi; workspaceKey: string }
+  | { kind: "wiring"; files: FilesApi; workspaceKey: string }
   | { kind: "running"; workspaceName: string };
 
 function App() {
-  const [stage, setStage] = useState<Stage>({ kind: "landing", reason: { kind: "initial" } });
+  const [stage, setStage] = useState<Stage>({
+    kind: "landing",
+    reason: { kind: "initial" },
+  });
   const termHostRef = useRef<HTMLDivElement | null>(null);
   const workbenchRef = useRef<Workbench | null>(null);
   const xtermRef = useRef<{ dispose: () => void } | null>(null);
@@ -50,7 +53,10 @@ function App() {
       }
       setStage({
         kind: "landing",
-        reason: { kind: "error", message: err instanceof Error ? err.message : String(err) },
+        reason: {
+          kind: "error",
+          message: err instanceof Error ? err.message : String(err),
+        },
       });
     }
   };
@@ -94,7 +100,10 @@ function App() {
         } else {
           setStage({
             kind: "landing",
-            reason: { kind: "error", message: err instanceof Error ? err.message : String(err) },
+            reason: {
+              kind: "error",
+              message: err instanceof Error ? err.message : String(err),
+            },
           });
         }
       }
@@ -140,7 +149,13 @@ function App() {
         <Landing reason={stage.reason} onPickWorkspace={pickWorkspace} />
       )}
       {stage.kind === "booting" && (
-        <main style={{ fontFamily: "system-ui, sans-serif", padding: "4rem", textAlign: "center" }}>
+        <main
+          style={{
+            fontFamily: "system-ui, sans-serif",
+            padding: "4rem",
+            textAlign: "center",
+          }}
+        >
           Loading workspace…
         </main>
       )}
