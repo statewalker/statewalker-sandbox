@@ -1,4 +1,4 @@
-import { createOpenAICompat, type Init } from "@statewalker/ai-openai-compat";
+import { createOpenAICompat, type Init } from "@statewalker/ai-openai-compat.core";
 import { Hono } from "hono";
 
 export const createApp = (init: Init): Hono => {
