@@ -2,8 +2,8 @@
  * HOST dev server — a tiny static file server for the emitted tree.
  *
  * `/`            → index.html (the document; sets <base href="/~/">)
- * `/~/…`         → dist/~/…   (emitted modules: main.js, styles.js, tokens.css, logo.svg)
- * `/~/~deps/…`   → dist/~/~deps/…  (npm dep proxies: react, react-dom)
+ * `/~/…`         → dist/~/…   (emitted modules: main.js, styles.js, palette.css, logo.svg)
+ * `/pkg@ver/…`   → dist/pkg@ver/…  (transformed npm dependency files at the tree root)
  *
  * node:fs is fine here — this is the dev-server host boundary (like
  * webrun-modules/examples/http-server.ts), not guest/production code.
@@ -26,7 +26,7 @@ const TYPES: Record<string, string> = {
 };
 
 createServer((req, res) => {
-  const pathname = decodeURIComponent((req.url ?? "/").split("?")[0]);
+  const pathname = decodeURIComponent((req.url ?? "/").split("?")[0] ?? "/");
   // Map "/" to index.html; everything else into dist/. normalize() blocks `..`.
   const rel = pathname === "/" ? "index.html" : normalize(pathname).replace(/^(\.\.[/\\])+/, "");
   const file = pathname === "/" ? join(ROOT, "index.html") : join(DIST, rel);

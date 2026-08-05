@@ -27,6 +27,15 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Surface load/runtime errors into the page (dev aid — the demo has no other UI chrome).
+      function showErr(msg) {
+        var el = document.getElementById("root");
+        if (el) el.innerHTML = '<pre style="color:#b91c1c;white-space:pre-wrap;padding:1rem;font:13px monospace">' + String(msg) + "</pre>";
+      }
+      window.addEventListener("error", function (e) { showErr((e.error && e.error.stack) || e.message); });
+      window.addEventListener("unhandledrejection", function (e) { showErr("Unhandled promise rejection: " + ((e.reason && e.reason.stack) || e.reason)); });
+    </script>
     <script type="module" src="/~/main.js"></script>
   </body>
 </html>

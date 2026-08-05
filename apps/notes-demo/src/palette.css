@@ -1,0 +1,7 @@
+/* A plain (non-Tailwind) leaf stylesheet, reached via an @import chain from
+ * theme.css. Under ext-map the build emits this as a REAL /~/palette.css file
+ * (F2), and theme.css's injector KEEPS `@import "./palette.css"` — so this file
+ * must resolve at runtime against the document base (see index.html <base>). */
+:root {
+  --note-line: #c7d2fe;
+}
