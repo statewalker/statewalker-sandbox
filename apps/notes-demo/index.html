@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Notes — webrun-modules no-bundle demo</title>
+    <!--
+      F2/F3 DEPLOYMENT REQUIREMENT — <base href="/~/">.
+
+      The Tailwind entry is emitted as /~/styles.js, a <style> injector. Its embedded
+      CSS carries the @import-chain content (tokens.css, reached via F2 — a real
+      /~/tokens.css is also emitted) INCLUDING the F3 rule
+      `.logo { background-image: url("./logo.svg"); }`.
+
+      Relative URLs inside an injected <style> (a url() asset, or any kept @import)
+      resolve against the DOCUMENT base URL, NOT against the injector module. So we
+      set the document base to the emitted-tree root:
+
+          <base href="/~/">
+
+      With this base, both the ES-module imports (`/~/main.js` → `./app.js`, …) AND
+      the injected `url("./logo.svg")` resolve under /~/ — the latter to the REAL
+      /~/logo.svg asset F3 emits. Drop the <base> and url("./logo.svg") would 404
+      against the document root.
+    -->
+    <base href="/~/" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/~/main.js"></script>
+  </body>
+</html>
