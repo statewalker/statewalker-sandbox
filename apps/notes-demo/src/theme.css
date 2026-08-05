@@ -1,0 +1,10 @@
+/* A plain (non-Tailwind) stylesheet imported from JS (main.tsx). Unlike the
+ * Tailwind entry (which INLINES its @imports), a plain CSS @import is KEPT in the
+ * emitted <style> injector — this is the case that exercises F2 at RUNTIME:
+ * the injected `@import "./palette.css"` resolves against the document base URL
+ * (index.html `<base href="/~/">`) to the real /~/palette.css the build emits. */
+@import "./palette.css";
+
+.note-card {
+  border: 1px solid var(--note-line);
+}

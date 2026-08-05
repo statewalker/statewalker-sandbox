@@ -1,0 +1,12 @@
+/* The Tailwind entry (`@import "tailwindcss"`) + the F2 @import chain.
+ *
+ * `@import "tailwindcss"` makes this a `tailwind-css` input: the build's Tailwind
+ * transform generates the full utility stylesheet (honoring the @theme tokens that
+ * `./tokens.css` contributes through the import chain below).
+ *
+ * `@import "./tokens.css"` is the F2 chain: the build emits a REAL /~/tokens.css
+ * and keeps this specifier in the injected <style>, so it resolves against the
+ * document base (see index.html's <base href="/~/">).
+ */
+@import "tailwindcss";
+@import "./tokens.css";
