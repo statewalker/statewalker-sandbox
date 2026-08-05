@@ -4,12 +4,19 @@ A browser note-taking app served **with no bundler** — it dogfoods the
 [`@statewalker/webrun-modules-build`](../../../webrun-files/packages/webrun-modules-build)
 no-bundle pipeline end to end, and validates its Phase-3 CSS features in a real browser.
 
-`newProjectBuild({ project, cache })` scans the TS + CSS sources under `src/` and
-emits a **static `.js` tree** into `dist/` (ext-map: `main.ts` → `/~/main.js`,
+`newProjectBuild({ project, cache })` scans the TS/TSX + CSS sources under `src/`
+and emits a **static `.js` tree** into `dist/` (ext-map: `main.tsx` → `/~/main.js`,
 `styles.css` → `/~/styles.js` `<style>`-injector, npm deps → transformed files at
 the tree root). The browser loads `/~/main.js` as a plain ES module — **no bundler,
-no CDN, no import map**. The UI is plain DOM/TypeScript (no framework), so the demo
-showcases the pipeline and its CSS handling, not a UI library.
+no CDN, no import map**. The UI is **React** (`react`/`react-dom` served from npm,
+transformed CJS→ESM on the fly), so the demo also exercises no-bundle React
+end-to-end (createRoot, hooks, state).
+
+> No-bundle React needs two webrun-modules transform behaviours the CSS-only demo
+> didn't: the JSX runtime must match the globals' `NODE_ENV` (browser → production
+> `jsx`), and React's `process.env.NODE_ENV`-gated package entry must be dead-code-
+> eliminated to a **single** react instance (else react-dom's `ReactSharedInternals`
+> is undefined and it crashes at render). Both landed in webrun-modules.
 
 ## What it proves (Phase-3 features, verified in-browser)
 

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Browser note-taking demo served no-bundle through @statewalker/webrun-modules-build: Tailwind (v4) styling, a plain @import CSS chain (F2 runtime) + url() asset (F3), and a swappable FilesApi store (persistent by default, in-memory via ?mem for tests).",
+  "description": "Browser React note-taking demo served no-bundle through @statewalker/webrun-modules-build: Tailwind (v4) styling, a plain @import CSS chain (F2 runtime) + url() asset (F3), React served from npm, and a swappable FilesApi store (persistent by default, in-memory via ?mem for tests).",
   "license": "MIT",
   "scripts": {
     "build": "tsx build.ts",
@@ -15,10 +15,14 @@
     "@statewalker/webrun-files": "catalog:",
     "@statewalker/webrun-files-node": "catalog:",
     "@statewalker/webrun-modules": "catalog:",
-    "@statewalker/webrun-modules-build": "catalog:"
+    "@statewalker/webrun-modules-build": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
   },
   "devDependencies": {
     "@statewalker/webrun-files-mem": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
