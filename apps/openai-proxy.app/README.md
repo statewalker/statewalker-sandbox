@@ -2,7 +2,7 @@
 
 HTTP proxy that exposes a local [llama.cpp](https://github.com/ggml-org/llama.cpp)
 + Gemma model over the OpenAI v1 wire format. Built on
-[`@statewalker/openai-compat`](../../../statewalker-ai/packages/openai-compat) (the adapter) and
+[`@statewalker/openai-compat`](https://github.com/statewalker/statewalker-workbench/tree/main/packages/ai-openai-compat.core) (the adapter) and
 [Hono](https://hono.dev/) (the transport).
 
 ## Architecture

@@ -1,0 +1,36 @@
+{
+  "schema": "statewalker.llm-connections",
+  "version": 1,
+  "clientKeys": [
+    { "id": "ck_workbench", "name": "Workbench" },
+    { "id": "ck_ci", "name": "CI runner" }
+  ],
+  "providers": {
+    "anthropic": {
+      "prioritized": [
+        {
+          "id": "key_existing1",
+          "name": "Production",
+          "apiKey": "sk-ant-existing-key-value",
+          "alwaysUse": true,
+          "models": { "mode": "specific", "ids": ["claude-sonnet-5", "claude-opus-5"] },
+          "clientKeys": { "mode": "specific", "ids": ["ck_workbench"] }
+        }
+      ],
+      "fallback": []
+    },
+    "openai": {
+      "prioritized": [],
+      "fallback": [
+        {
+          "id": "key_existing2",
+          "name": "Spare",
+          "apiKey": "sk-spare",
+          "alwaysUse": false,
+          "models": { "mode": "all" },
+          "clientKeys": { "mode": "all" }
+        }
+      ]
+    }
+  }
+}
