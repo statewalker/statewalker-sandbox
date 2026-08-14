@@ -1,0 +1,32 @@
+{
+  "name": "@repo/openai-proxy-app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "HTTP proxy that exposes a local llama.cpp + Gemma model over the OpenAI v1 wire format, using @repo/openai-compat and Hono.",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "catalog:",
+    "@hono/node-server": "catalog:",
+    "@statewalker/ai-openai-compat.core": "workspace:*",
+    "ai": "catalog:",
+    "hono": "catalog:"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "catalog:",
+    "@biomejs/biome": "catalog:",
+    "@types/node": "catalog:",
+    "openai": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
