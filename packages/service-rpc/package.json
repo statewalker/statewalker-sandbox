@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "comlink": "catalog:",
-    "@statewalker/shared-generators": "catalog:"
+    "@statewalker/shared-generators": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",

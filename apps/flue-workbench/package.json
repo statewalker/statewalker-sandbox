@@ -20,9 +20,9 @@
     "@earendil-works/pi-ai": "^0.75.4",
     "@flue/runtime": "^0.7.0",
     "@just-bash/executor": "^1.0.2",
-    "@statewalker/webrun-files": "catalog:",
-    "@statewalker/webrun-files-browser": "catalog:",
-    "@statewalker/webrun-files-composite": "catalog:",
+    "@statewalker/webrun-files": "workspace:*",
+    "@statewalker/webrun-files-browser": "workspace:*",
+    "@statewalker/webrun-files-composite": "workspace:*",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
@@ -32,7 +32,7 @@
     "react-dom": "catalog:"
   },
   "devDependencies": {
-    "@statewalker/webrun-files-mem": "catalog:",
+    "@statewalker/webrun-files-mem": "workspace:*",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
