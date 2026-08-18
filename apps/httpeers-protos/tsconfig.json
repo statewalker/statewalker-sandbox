@@ -3,13 +3,29 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2022", "DOM"],
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["lib", "01-identity", "02-http-over-p2p", "03-access-control", "04-backpressure"]
+  "include": [
+    "lib",
+    "01-identity",
+    "02-http-over-p2p",
+    "03-access-control",
+    "04-backpressure",
+    "05-router-mounts",
+    "06-open-relay",
+    "07-access-tree",
+    "08-revocation",
+    "09-role-vocabulary"
+  ]
 }
