@@ -1,0 +1,30 @@
+{
+  "name": "@statewalker/httpeers-protos",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable httpeers prototypes: HTTP over libp2p with proven peer identity.",
+  "scripts": {
+    "demo:01-identity": "tsx 01-identity/main.ts",
+    "demo:02-http-over-p2p": "tsx 02-http-over-p2p/main.ts",
+    "demo:03-access-control": "tsx 03-access-control/main.ts",
+    "demo:04-backpressure": "tsx 04-backpressure/main.ts",
+    "demo:all": "pnpm demo:01-identity && pnpm demo:02-http-over-p2p && pnpm demo:03-access-control && pnpm demo:04-backpressure",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@chainsafe/libp2p-noise": "17.0.0",
+    "@chainsafe/libp2p-yamux": "8.0.1",
+    "@libp2p/interface": "3.2.5",
+    "@libp2p/tcp": "11.0.26",
+    "@multiformats/multiaddr": "13.0.3",
+    "@statewalker/webrun-http-streams": "workspace:*",
+    "@statewalker/webrun-streams-libp2p": "workspace:*",
+    "libp2p": "3.3.8"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:"
+  }
+}
