@@ -19,6 +19,10 @@ Prototypes 01, 02, 03, 04 and 06 start **real libp2p nodes**. 05, 07, 08 and 09
 exercise pure logic — routing, policy resolution, revocation and vocabulary —
 which needs no network and is clearer without one.
 
+Every prototype folder carries its own `README.md` enumerating **exactly what
+it verifies** — each claim, how it is established, what would make it fail, and
+what it deliberately does not cover.
+
 ## The prototypes
 
 | | Shows | Why it matters |
