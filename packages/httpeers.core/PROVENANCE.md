@@ -1230,3 +1230,70 @@ its own doc comment/tests, neither of which import libp2p.
 
 Landed in its own commit, separate from `httpeers-stack`'s Task 8 app-level work, so this
 core change is reviewable on its own — see that task's report for the commit SHA.
+
+## Task 8 (review round) — `RevocationChecker`: the hub can enforce revocation on itself
+
+Review of the app-level Task 8 work found that `apps/httpeers-stack` wired `isRevoked`
+nowhere at all: `grep -rn "isRevoked" apps/httpeers-stack/src/` returned nothing. The
+hub's own binding middleware never consulted revocation, so a revoked member's — or
+**admin's** — already-issued token was honoured on every hub endpoint until it expired.
+The app-level fix (a bespoke `memberStore` check bolted onto `/search` only) covered the
+one route being built and silently left every other mount, `/admin/*` included,
+unprotected: a revoked admin could keep calling `DELETE /admin/members/{peerId}` until
+their own token expired.
+
+The right fix is `createPeer`'s existing `revocationCache` seam, used the way it was
+designed — but that seam previously only accepted a `RevocationCache` (the PULLED,
+snapshot-based, provider-side mechanism), and the hub is not a provider: it owns
+`RevocationRegistry`, the live source of truth, directly, in the same process. Requiring
+it to also keep a synchronised `RevocationCache` just to reuse `.check()` would add a
+cache with nothing to be stale relative to — exactly what this project's own revocation
+design (`revocation.ts`'s module comment) argues against for the actual pull case.
+
+**The fix**: extracted `RevocationChecker` — the one-method shape (`check(claims) ->
+reason | null`) `createPeer`'s `revocationCache` option actually needs. `RevocationCache`
+now `implements RevocationChecker` (no behaviour change). `RevocationRegistry` gained its
+own `check` method — identical decision logic to `RevocationCache.check` (same entry
+shape, same `iat < changedAt` comparison), reading its own live `entries` map directly,
+with no staleness dimension at all (a registry cannot be stale relative to itself).
+`peer.ts`'s `CreatePeerInit.revocationCache` field is now typed `RevocationChecker`
+instead of the concrete `RevocationCache` class — the only change at that call site; the
+internal wiring (`revocationCache ? async (claims) => revocationCache.check(claims) :
+undefined`) needed no change at all, since it already only ever called `.check()`.
+
+**A peer that owns its own `RevocationRegistry` can now pass it directly as
+`revocationCache`** — no cache, no synchronisation step, no pull. `apps/httpeers-stack`'s
+`hub/main.ts` does exactly this (see that app's own `PROVENANCE.md` for the corrected
+Step 3 and the review-round test list).
+
+**Tests** (`tests/revocation.test.ts`, new `describe("A-2 unit: registry.check — the hub
+checking itself, no cache", ...)`, 5 cases, mirroring the existing `RevocationCache.check`
+cases one-for-one where the semantics genuinely match, plus one that has no cache
+equivalent):
+- accepts a token minted AFTER the change (re-admission works);
+- refuses a token minted BEFORE the change;
+- distinguishes a role change from a revocation;
+- ignores peers with no entry;
+- is LIVE, not a snapshot — a change made after construction is seen on the very next
+  `check()` call, no `update()` needed (the property that makes "no cache" true, not just
+  asserted).
+
+```
+$ pnpm run typecheck && pnpm run typecheck:tests
+(clean, both)
+
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  12 passed (12)
+      Tests  146 passed (146)
+
+$ grep -rlE "^import.*libp2p" src/
+src/tokens.ts
+src/transport-duplex.ts
+```
+
+146 = 141 + 5 new (the pre-work fix's 141 unaffected; only `revocation.ts`/`peer.ts` and
+their tests changed here). Isolation grep unaffected — `revocation.ts` and `peer.ts`
+already imported no libp2p, and still don't.
+
+Landed in its own commit, again separate from the app-level review-round fix — see
+`httpeers-stack`'s Task 8 report for that commit SHA and the full review-round writeup.

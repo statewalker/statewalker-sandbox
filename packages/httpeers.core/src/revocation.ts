@@ -33,6 +33,20 @@
  * avoid. The `isRevoked` seam on the binding middleware (`peer-handlers.ts`)
  * is `async`, so wiring `check` to it is a wrap-at-the-call-site concern for
  * whichever task assembles the peer, not a reason to change this signature.
+ *
+ * TWO CONSUMERS OF THE SAME DECISION, NOT TWO MECHANISMS. A remote provider
+ * has no direct line to the hub's own state, so it pulls a snapshot
+ * (`RevocationCache`) on its own schedule and checks against that. The hub
+ * itself has no such gap — it holds `RevocationRegistry`, the live source of
+ * truth for its own change entries, in the same process. Requiring it to
+ * also keep a synchronised `RevocationCache` just to reuse `.check()` would
+ * add a cache with nothing to be stale relative to. `RevocationChecker`
+ * below is the shared shape (`check(claims) -> reason | null`) both sides
+ * satisfy: `RevocationCache` reads a pulled snapshot; `RevocationRegistry`'s
+ * own `check` (added alongside `list`/`policyVersion`) reads its live
+ * entries directly. `createPeer`'s `revocationCache` option
+ * (`peer.ts`) accepts either — a peer wired against a `RevocationRegistry`
+ * it owns enforces revocation on itself with no cache and no pull.
  */
 import type { PeerIdStr } from "./types.js";
 
@@ -42,6 +56,17 @@ export interface ChangeEntry {
   changedAt: number;
   /** Roles after the change. Empty means revoked. Informational. */
   roles: string[];
+}
+
+/**
+ * The shape `createPeer`'s `revocationCache` option actually needs: `null`
+ * means accept, a string is the reason to refuse. Both `RevocationCache`
+ * (a pulled snapshot) and `RevocationRegistry` (a live source of truth)
+ * satisfy it — see the module comment for why that is two consumers of one
+ * decision, not two mechanisms.
+ */
+export interface RevocationChecker {
+  check(claims: { sub: PeerIdStr; iat: number }): string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,7 +79,7 @@ export interface RevocationRegistryInit {
   now?: () => number;
 }
 
-export class RevocationRegistry {
+export class RevocationRegistry implements RevocationChecker {
   private readonly entries = new Map<PeerIdStr, ChangeEntry>();
   private version = 1;
   private readonly maxTokenTtl: number;
@@ -68,6 +93,24 @@ export class RevocationRegistry {
   /** Revocation is a role change to the empty set. */
   revoke(peerId: PeerIdStr): void {
     this.changeRoles(peerId, []);
+  }
+
+  /**
+   * Direct, synchronous check against this registry's own live entries — for
+   * a peer that owns this registry (the hub itself) to enforce revocation on
+   * its own endpoints, with no cache and nothing to pull: see the module
+   * comment. Same decision logic as `RevocationCache.check` (same entry
+   * shape, same `iat < changedAt` comparison) — duplicated rather than
+   * shared through inheritance, since a registry that owns its entries and a
+   * cache that was handed a snapshot of them are different things that
+   * happen to compare the same way. No staleness dimension: unlike a pulled
+   * cache, a registry cannot be stale relative to itself.
+   */
+  check(claims: { sub: PeerIdStr; iat: number }): string | null {
+    const entry = this.entries.get(claims.sub);
+    if (entry == null) return null;
+    if (claims.iat >= entry.changedAt) return null; // minted after the change
+    return entry.roles.length === 0 ? "membership revoked" : "roles changed; obtain a fresh token";
   }
 
   changeRoles(peerId: PeerIdStr, roles: string[]): void {
@@ -119,7 +162,7 @@ export interface RevocationCacheInit {
 
 export type StalenessMode = "fresh" | "stale";
 
-export class RevocationCache {
+export class RevocationCache implements RevocationChecker {
   private entries = new Map<PeerIdStr, ChangeEntry>();
   private version = 0;
   private fetchedAt = 0;

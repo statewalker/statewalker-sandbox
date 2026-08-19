@@ -48,6 +48,46 @@ describe("A-2 unit: registry", () => {
   });
 });
 
+/**
+ * `RevocationRegistry.check` — added so a peer that OWNS the registry (the
+ * hub itself) can enforce revocation on its own endpoints directly, with no
+ * cache and nothing to pull (see `revocation.ts`'s module comment). Same
+ * decision logic as `RevocationCache.check` below, checked here against the
+ * registry's own live entries instead of a fetched snapshot.
+ */
+describe("A-2 unit: registry.check — the hub checking itself, no cache", () => {
+  it("accepts a token minted AFTER the change — re-admission works", () => {
+    const r = new RevocationRegistry({ maxTokenTtlMs: 10_000, now: () => 1000 });
+    r.revoke("a");
+    expect(r.check({ sub: "a", iat: 1500 })).toBeNull();
+  });
+
+  it("refuses a token minted BEFORE the change", () => {
+    const r = new RevocationRegistry({ maxTokenTtlMs: 10_000, now: () => 1000 });
+    r.revoke("a");
+    expect(r.check({ sub: "a", iat: 500 })).toMatch(/revoked/);
+  });
+
+  it("distinguishes a role change from a revocation", () => {
+    const r = new RevocationRegistry({ maxTokenTtlMs: 10_000, now: () => 1000 });
+    r.changeRoles("a", ["member"]);
+    expect(r.check({ sub: "a", iat: 500 })).toMatch(/roles changed/);
+  });
+
+  it("ignores peers with no entry", () => {
+    const r = new RevocationRegistry({ maxTokenTtlMs: 10_000 });
+    r.revoke("a");
+    expect(r.check({ sub: "b", iat: 1 })).toBeNull();
+  });
+
+  it("is live, not a snapshot: a change made after construction is seen immediately, no update() call needed", () => {
+    const r = new RevocationRegistry({ maxTokenTtlMs: 10_000, now: () => 1000 });
+    expect(r.check({ sub: "a", iat: 500 })).toBeNull(); // no entry yet: accepted
+    r.revoke("a"); // changedAt = 1000, later than iat = 500
+    expect(r.check({ sub: "a", iat: 500 })).toMatch(/revoked/); // seen on the very next call
+  });
+});
+
 describe("A-2 unit: cache", () => {
   const cache = (entries: ChangeEntry[], opts: { maxStalenessMs?: number; now?: () => number } = {}) => {
     const c = new RevocationCache(opts);
