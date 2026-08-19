@@ -503,9 +503,15 @@ task's first pass had. Generating it one scope higher, in `createPeer`, is what 
 later task's minting logic (Task 7, wiring `createEndpoints`) close over `privateKey`
 without threading `createNode`'s internals back out. Per explicit instruction, the key is
 **not** exposed on the returned `Peer`, and no `Peer.mint()` convenience was added —
-that API belongs with Task 7's endpoint design, not pre-empted here. This is the one
-change that adds a fourth import-line hit to the isolation grep — see "Verification"
-below; it is the same class of exception already established for `tokens.ts`.
+that API belongs with Task 7's endpoint design, not pre-empted here. This adds a third
+file (`peer.ts`) to the isolation grep's hit list — see "Verification" below; it is the
+same class of exception already established for `tokens.ts`.
+
+Reviewed separately, and confirmed correct, but the specific contract test the review
+asked for — "that a supplied `privateKey` is the identity the peer actually presents
+(mint with it, verify the peer's own `peerId` matches the token's issuer)" — hadn't
+landed yet in the same commit; added in an immediate follow-up (see "Verification"
+below for the final counts).
 
 **accessTree/vocabulary pairing.** `createPeer` now throws at construction if exactly one
 of `accessTree`/`vocabulary` is supplied — defaulting both together (a matched pair) is
@@ -587,20 +593,21 @@ $ pnpm run typecheck:tests
 
 $ pnpm vitest run --no-file-parallelism
  Test Files  10 passed (10)
-      Tests  123 passed (123)
+      Tests  124 passed (124)
 
 $ pnpm vitest run --no-file-parallelism tests/peer.test.ts
  Test Files  1 passed (1)
-      Tests  8 passed (8)
+      Tests  9 passed (9)
 
 $ npx biome check src/ tests/ package.json
 (clean, no output; no formatting changes needed)
 ```
 
-Test count moved from 115/115 (end of Task 5) to **123/123** — 8 new cases, all in
+Test count moved from 115/115 (end of Task 5) to **124/124** — 9 new cases, all in
 `tests/peer.test.ts`: the two composition proofs, D6/D7/D8 (all against two real libp2p
-nodes over loopback TCP), and three added in this follow-up — the two accessTree/
-vocabulary pairing-guard throws, and the neither-supplied defaults case.
+nodes over loopback TCP), the two accessTree/vocabulary pairing-guard throws, the
+neither-supplied defaults case, and the `privateKey`-becomes-real-identity case (mints
+and verifies a token against the peer's own reported peerId).
 
 ### `DEFAULT_MAX_STREAMS` / `DEFAULT_DRAIN_TIMEOUT_MS`: why this pair
 

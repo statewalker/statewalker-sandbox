@@ -32,7 +32,7 @@ import { DEFAULT_ACCESS_TREE } from "../src/access-tree.js";
 import { lookupPeer } from "../src/peer-context.js";
 import { createPeer, type Peer } from "../src/peer.js";
 import { createMounts } from "../src/router.js";
-import { mintToken } from "../src/tokens.js";
+import { mintToken, verifyToken } from "../src/tokens.js";
 import { ANONYMOUS, json } from "../src/types.js";
 import { DEFAULT_MAX_STREAMS, PROTOCOL } from "../src/transport-duplex.js";
 import { DEFAULT_VOCABULARY } from "../src/vocabulary.js";
@@ -185,6 +185,39 @@ describe("createPeer: identity by closure over the shipped transport", () => {
     expect(results[0]).toBe(clientId);
     expect(results).toHaveLength(20);
   }, 30_000);
+
+  // --- privateKey retention: a supplied key becomes the peer's real identity
+
+  it("a supplied privateKey becomes the peer's actual identity, mintable and verifiable against it", async () => {
+    const key = await generateKeyPair("Ed25519");
+    const expectedPeerId = peerIdFromPrivateKey(key).toString();
+
+    // No `node` supplied -- exercises createPeer's own self-built-node path,
+    // where `privateKey` is threaded to `createNode` rather than generated
+    // (and lost) inside it.
+    const hubLikePeer = await createPeer({ privateKey: key, listen: ["/ip4/127.0.0.1/tcp/0"] });
+    try {
+      expect(hubLikePeer.peerId).toBe(expectedPeerId);
+      expect(hubLikePeer.libp2p.peerId.toString()).toBe(expectedPeerId);
+
+      // Mint with the SAME key the caller supplied, then verify against the
+      // peer's own reported peerId as issuer -- proving the key `createPeer`
+      // built its node with is the exact key still available to sign with,
+      // not a different one generated and discarded somewhere in between.
+      const token = await mintToken({
+        privateKey: key,
+        sub: "12D3KooWSomeMemberXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        roles: ["member"],
+        ttlMs: 60_000,
+      });
+      const claims = await verifyToken(token, { issuer: hubLikePeer.peerId });
+      expect(claims.mesh).toBe(hubLikePeer.peerId);
+      expect(claims.iss).toBe(hubLikePeer.peerId);
+      expect(claims.sub).toBe("12D3KooWSomeMemberXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
+    } finally {
+      await hubLikePeer.stop();
+    }
+  }, 20_000);
 
   // --- accessTree/vocabulary: default together, or not at all ---------------
 
