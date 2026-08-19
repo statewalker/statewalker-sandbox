@@ -58,6 +58,14 @@ export async function startHub(init: StartHubInit = {}) {
     accessTree: HUB_ACCESS,
     vocabulary,
     usesTransportIdentity: usesTransportIdentity(),
+    // The hub enforces revocation on ITS OWN endpoints by consulting its own
+    // live `RevocationRegistry` directly -- no cache, no pull: it already
+    // holds the source of truth in this same process. This is the SAME
+    // `revocations` instance `createHubEndpoints` below uses to bump the
+    // policy version on `DELETE /admin/members/{peerId}`, so a revoked
+    // token stops working on the very next request to ANY hub mount, not
+    // just the one route someone remembered to check.
+    revocationCache: revocations,
     mounts: (ctx) => {
       const hub = createHubEndpoints({
         selfPeerId: ctx.peerId,

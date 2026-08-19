@@ -353,35 +353,21 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
     "/admin/members",
     createAdminEndpoints({ memberStore: init.memberStore, revocations: init.revocations }),
   );
-  // `/search`'s `.access` entry (`policy.ts`) only checks the CAPABILITY a
-  // token's roles expand to -- and a revoked member's already-issued token
-  // is still cryptographically valid, still carries "member", until it
-  // expires on its own. Revocation therefore needs an EXTRA check here,
-  // same idea as the bootstrap presence handler's `memberStore.get`
-  // above but reused for a non-bootstrap, capability-gated route: is the
-  // caller still a current member RIGHT NOW, not just "was one when this
-  // token was minted." `"membership revoked"` deliberately echoes
-  // `RevocationCache.check`'s own wording (`revocation.ts`) for a caller
-  // that greps for that phrase, even though this is a direct, synchronous
-  // check against this hub's own live `memberStore` -- correct specifically
-  // BECAUSE this handler runs on the hub itself, which holds the source of
-  // truth directly and has no reason to wait for a pulled cache the way a
-  // remote provider does. Deliberately scoped to `/search` only: no other
-  // route in this task's brief needs it, and adding it everywhere is a
-  // bigger change than this task asked for.
-  const requireCurrentMembership =
-    (handler: FetchHandler): FetchHandler =>
-    async (req) => {
-      const claims = claimsOf(req);
-      if (claims != null && init.memberStore.get(claims.sub) == null) {
-        return json({ error: "membership revoked" }, 403);
-      }
-      return handler(req);
-    };
-  mounts.provide(
-    "/search",
-    requireCurrentMembership(createSearchEndpoint({ upstream: init.searchUpstream ?? fixtureUpstream })),
-  );
+  // Revocation for `/search` (and every other route on this hub) is NOT
+  // handled here. `.access` (`policy.ts`) only ever checks the CAPABILITY a
+  // token's roles expand to, which cannot see a membership change made
+  // after the token was minted -- but the fix for that is a single seam on
+  // this peer's own `createPeer` (`hub/main.ts`'s `revocationCache:
+  // revocations`, using `RevocationRegistry`'s own `check`, added in
+  // `httpeers.core` alongside this task -- see that package's
+  // `revocation.ts`), applied uniformly to EVERY mount by the binding
+  // middleware before any handler runs. An earlier version of this file put
+  // a bespoke membership check on this one mount instead; that covered only
+  // the route being built and silently left every other hub endpoint
+  // (including `/admin/*`) still honouring a revoked token until it
+  // expired -- removed on review. See `hub/main.ts` and this app's
+  // `PROVENANCE.md`.
+  mounts.provide("/search", createSearchEndpoint({ upstream: init.searchUpstream ?? fixtureUpstream }));
 
   return {
     mounts,

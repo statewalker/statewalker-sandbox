@@ -42,6 +42,9 @@ async function buildHub(stateFilePath: string): Promise<TestHub> {
     accessTree: HUB_ACCESS,
     vocabulary: VOCABULARY,
     usesTransportIdentity: usesTransportIdentity(),
+    // Same wiring as `hub/main.ts` and `admin.test.ts`: the hub enforces
+    // revocation on itself via its own live registry, no cache needed.
+    revocationCache: revocations,
     mounts: (ctx) =>
       createHubEndpoints({
         selfPeerId: ctx.peerId,
