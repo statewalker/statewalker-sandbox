@@ -4,3 +4,5 @@ export * from "./store.js";
 export * from "./peer-context.js";
 export * from "./peer-handlers.js";
 export * from "./router.js";
+export * from "./vocabulary.js";
+export * from "./access-tree.js";

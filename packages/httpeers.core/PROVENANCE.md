@@ -145,3 +145,134 @@ that folder `12` still carries).
   declared type. The test file's stubs do the mirror-image widening the other way
   (`opts.peer as ProvenPeer`), matching the archive's own test technique, to let a
   test deliberately construct the contract-violating case.
+
+## Task 4 — access tree and role vocabulary
+
+Source material for Task 4 is the same archive as Tasks 2 and 3
+(`notes/2026/2026-08/2026-08-16/httpeers-plan/prototypes/`), but this time as a
+promotion **plus a documented delta**: folder `33` ships the pre-vocabulary tree,
+folder `37` ships the vocabulary and a hunk-level changelog describing exactly how
+the tree changes on top of folder `33`. No folder ships the already-merged
+post-vocabulary `access-tree.ts` — it had to be produced by applying the delta,
+not copied.
+
+| File | Actual basis | How resolved |
+| --- | --- | --- |
+| `src/vocabulary.ts` | Promoted from `37-httpeers-prototype-v0.9.0-role-vocabulary/vocabulary.ts`, as-is: `CapabilityDef`, `RoleDef`, `Vocabulary`, `VocabularyError`, `expandRoles`, `validateVocabulary`, `validateRoles`, `assertValid`, `DEFAULT_VOCABULARY`. Only formatting changed to house style (double quotes, semicolons) — no logic differs from the archive. | Team lead's dispatch message: promote as-is; do not adopt the `apps/httpeers-protos/lib/vocabulary.ts` reimplementation, which additionally rejects unnamespaced role names and has no `implies` (ledger R23) — role names stay plain (`member`, `admin`); only capabilities are namespaced (`std:`, `app:`). |
+| `src/access-tree.ts` | Promoted from `33-httpeers-prototype-v0.7.0-access-tree/access-tree.ts`, **then the hunk-level delta in `37-httpeers-prototype-v0.9.0-role-vocabulary/CHANGES-v0.9.0.txt` applied on top**: `resolveAccess` gained a `vocab: Vocabulary` parameter and expands `claims.roles` to capabilities via `expandRoles` before comparing against `anyOf` (`anyOf.some(r => claims.roles.includes(r))` → `expandRoles(vocab, claims.roles)` + `anyOf.find(c => held.has(c))`); a new `validateAccessTree(vocab, tree)` export was added; `withAccessTree` now validates at construction (`assertValid([...validateVocabulary(vocab), ...validateAccessTree(vocab, init.tree)])`) instead of never validating; and `DEFAULT_ACCESS_TREE` was rewritten in capabilities (`std:mesh.read`, `std:test`, `std:mesh.admin`) in place of role names. Two changes beyond the delta text, per the team lead's dispatch message: `AccessTreeInit.isTrustedPath` renamed to `usesTransportIdentity` (matching Task 3's already-renamed `UsesTransportIdentity` type — the old name does not compile against `types.ts`), and `vocabulary` added to `AccessTreeInit` as **optional**, defaulting to `DEFAULT_VOCABULARY` — required because folder 37's own `vocabulary.test.ts` (promoted as-is, see below) calls `withAccessTree({ tree, isTrustedPath })` — now `usesTransportIdentity` — without ever passing a `vocabulary`, and those calls' pass/fail behaviour (which capabilities are undeclared) only reproduces correctly if the omitted vocabulary resolves to `DEFAULT_VOCABULARY`. | Team lead's dispatch message, "two shape facts the brief does not state"; `CHANGES-v0.9.0.txt`'s hunk-level diff. |
+| `src/index.ts` | Two-line addition: `export * from "./vocabulary.js"; export * from "./access-tree.js";`, alongside the existing barrel exports. | Mechanical — new modules need barrel exports like every other `src/*.ts`. |
+| `tests/vocabulary.test.ts` | Promoted from `37-httpeers-prototype-v0.9.0-role-vocabulary/vocabulary.test.ts` **as-is** (17 tests: 5 role-expansion, 5 vocabulary-validation, 3 policy-validation, 4 fail-fast). Only the `withAccessTree({ tree, isTrustedPath })` call sites were renamed to `usesTransportIdentity` to compile against the renamed type; no assertion changed. | Team lead's dispatch message: promote as-is. |
+| `tests/access-tree.test.ts` | Promoted from `33-httpeers-prototype-v0.7.0-access-tree/access-tree.test.ts` (23 tests), **with exactly three tests' ad-hoc trees updated** for the capability switch — see "The three updated tests" below — plus one new describe block (5 tests, not promoted) covering `withAccessTree`'s dispatch behaviour, which no archived test file exercises. `claims()` gained an `iat` field (this package's `MeshClaims` requires it; the archive's did not, matching the same fix Task 3 already made in `binding.test.ts`). **The eleven-case equivalence table is byte-for-byte unmodified** — see "Equivalence table" below. | Team lead's dispatch message: promote, apply the delta, do not touch the equivalence table. |
+
+### The three updated tests
+
+Per `CHANGES-v0.9.0.txt`: "Three access-tree tests, whose ad-hoc trees named roles
+where capabilities now belong." Two ad-hoc trees are shared across several `it`
+blocks each; only the `it` blocks whose assertions actually depend on which
+capability a claim holds needed the literal roles (`'member'`, `'admin'`) in their
+tree's `anyOf` replaced with capabilities from `DEFAULT_VOCABULARY`
+(`'std:mesh.read'`, held by both `member` and `admin`; `'std:mesh.admin'`, held only
+by `admin`). Confirmed by hand-simulating each `it` against the unswapped literal
+(`anyOf: ['member']`/`['admin']`, which `expandRoles` never produces — those strings
+are role names, not declared capabilities — so every match against them would be a
+silent `false`):
+
+1. **`A-1: root-to-leaf override > a deeper entry overrides a shallower one`** — asserts
+   `member` is allowed at `/docs/` and `admin` is allowed at `/docs/secret/`; both
+   assertions would flip from `true` to `false` without the swap.
+2. **`A-1: per-method policy > read is allowed to members, write only to admins`** —
+   asserts `member` is allowed on `GET /notes/x` and `admin` is allowed on
+   `PUT /notes/x`; both would flip.
+3. **`A-1: per-method policy > an unlisted method falls back to the directory entry`** —
+   asserts `member` is allowed on `POST /notes/x` (no method override, falls back to
+   the directory-level `anyOf`); would flip.
+
+The other `it` blocks that share these two ad-hoc trees (`reports which directory
+governed the decision`; `a deeper entry can WIDEN as well as narrow`; `a method can
+be denied to everyone`) either assert only `.source`, assert on `null` claims (never
+reaching the `anyOf` comparison), or assert a deny that an empty `anyOf` produces
+regardless of vocabulary — none of their assertions depend on the swap, so they were
+left as literal strings in the shared tree object without affecting their own outcome.
+
+### Equivalence table — confirmed unmodified
+
+The eleven `(path, roles) → allow/deny` triples in
+`A-1: equivalence with the rules array it replaces` are unchanged from the archive,
+character-for-character (`cases` array, `access-tree.test.ts`). Only
+`DEFAULT_ACCESS_TREE` itself (capabilities, not roles — per the delta) and the
+`decide` helper (now threading `DEFAULT_VOCABULARY` through the added `vocab`
+parameter of `resolveAccess`) changed; the table's inputs and expected outputs did
+not. All eleven pass. This is deliberate, per the team lead's instruction: the table
+is a falsification test for the port, and the archive states plainly (both
+`CHANGES-v0.9.0.txt` and note 36 §4) that it needed no change at all — verified by
+hand here (member holds `std:mesh.read`/`std:test` via `DEFAULT_VOCABULARY`'s
+`member` role; admin holds those transitively via `implies: ['member']`, plus
+`std:mesh.admin` directly) before running the suite, not discovered by trial and
+error against a failing assertion.
+
+### Not promoted, and why
+
+- **`apps/httpeers-protos/lib/access-tree.ts`.** Read for cross-check only, per the
+  team lead's instruction. It grants on `{ mesh, roles }` directly and never wired a
+  vocabulary — the *earlier* shape, superseded by the walked tree this task promotes.
+- **`apps/httpeers-protos/lib/vocabulary.ts`.** Read for cross-check only. It rejects
+  unnamespaced role names and has no `implies` — over-applying note 36 §2's
+  capability-namespacing argument to roles, which the archive being promoted
+  (folder 37) deliberately does not do (ledger R23: role names are plain).
+- **`store.ts` (`validateRoles` wiring in `createInvitation`/`setRoles`) and
+  `endpoints.ts` (`GET /.well-known/vocabulary`, the third heartbeat version-vector
+  counter) from `CHANGES-v0.9.0.txt`.** Both belong to later tasks — invitations and
+  the hub do not exist yet in this package. Not implemented, not stubbed.
+
+### Verification
+
+- `grep -nE "^import.*libp2p" src/access-tree.ts src/vocabulary.ts tests/access-tree.test.ts tests/vocabulary.test.ts` —
+  no matches; `grep -n "libp2p"` (unanchored) also finds none.
+- `pnpm run typecheck` and `pnpm run typecheck:tests` both pass clean.
+- `pnpm vitest run --no-file-parallelism` — 8 test files, **105** tests, all passing.
+  `tests/access-tree.test.ts` alone: 28 tests (23 promoted + 5 new middleware-dispatch
+  tests). `tests/vocabulary.test.ts` alone: 17 tests, all promoted.
+- `npx biome check` on the four new/touched files (`src/access-tree.ts`,
+  `src/vocabulary.ts`, `src/index.ts`, `tests/access-tree.test.ts`,
+  `tests/vocabulary.test.ts`) — no issues.
+
+### Design notes not in the dispatch message
+
+- **Why `withAccessTree`'s returned handler gets fresh tests at all.** The archive
+  never tests it: folder 33 predates `withAccessTree` validating anything at
+  construction, and folder 37's `vocabulary.test.ts` only calls `withAccessTree` to
+  assert it throws or does not throw — it never invokes the *returned* handler
+  against a `Request`. Since the team lead's dispatch message specifically flagged
+  that `withAccessTree` is "a middleware, not a resolver" and that its claims come
+  from `lookupClaims`/`cacheClaims` rather than `getClaims`, leaving that half
+  completely untested seemed like exactly the gap the message was warning against.
+  The five new tests in `tests/access-tree.test.ts`'s `A-1: withAccessTree as
+  middleware` block populate the claims cache directly with `cacheClaims` (never
+  calling `getClaims`, matching the team lead's explicit instruction not to
+  reintroduce token verification into the policy layer) and cover: the
+  transport-identity bypass, an admitted request, a 403 (claims present but
+  insufficient), a 401 (no claims cached for a path that requires them), and a
+  public path admitted with nothing cached.
+- **`AccessTreeInit.vocabulary` is optional, not required.** The brief's own
+  "Interfaces" section writes `withAccessTree({ tree, vocabulary, usesTransportIdentity })`
+  without marking `vocabulary` optional, which would make every one of folder 37's
+  promoted `vocabulary.test.ts` construction calls (none of which pass `vocabulary`)
+  a type error. Making it `vocabulary?: Vocabulary`, defaulting to
+  `DEFAULT_VOCABULARY` inside `withAccessTree`, is the only reading under which
+  "promote `vocabulary.test.ts` as-is" and "the delta adds a `vocabulary` field" are
+  both simultaneously true — confirmed by hand-checking that every one of those
+  promoted calls' pass/throw outcomes is unchanged when the omitted vocabulary
+  resolves to `DEFAULT_VOCABULARY` (e.g. `'std:typo'`, `'std:one'`, `'std:two'` are
+  all genuinely undeclared in `DEFAULT_VOCABULARY`, so the throw tests throw for the
+  right reason; `'std:test'` is genuinely declared, so the "constructs cleanly" test
+  does).
+- **Grant reason text.** `resolveAccess`'s grant-path reason changed from the
+  archive's `` `granted by role` `` to `` `granted by capability '${granted}'` ``
+  (naming which capability matched). `CHANGES-v0.9.0.txt` only documents the
+  *deny*-path message changing (`requires one of: admin` → `requires one of:
+  std:mesh.admin`, which falls out for free since `anyOf` now holds capability
+  strings); it says nothing about the grant-path string. No archived or promoted
+  test asserts on that exact string, so this is a minor, deliberate improvement
+  in the same spirit as the documented deny-message change, not a scope
+  addition — flagged here in case a later task's integration test expects the
+  older wording.
