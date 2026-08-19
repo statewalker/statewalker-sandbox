@@ -230,7 +230,14 @@ export interface CreatePeerInit {
    * rather than getting its own timer.
    */
   maxConcurrentOutbound?: number;
-  /** Injected clock, threaded into `verifyToken`. Defaults to `Date.now`. */
+  /**
+   * Injected clock, threaded into both `verifyToken` (expiry checks) and a
+   * `mounts` factory's `mintToken` (the `iat` it stamps). Defaults to
+   * `Date.now`. A hub that also owns a `RevocationRegistry` should pass the
+   * SAME `clock.ts` `createMonotonicClock()` instance here and to that
+   * registry's own `now` — see `revocation.ts`'s "ONE HUB-ISSUED CLOCK, NOT
+   * TWO" for why two independently-defaulted `Date.now` clocks can tie.
+   */
   now?: () => number;
 }
 
@@ -321,6 +328,14 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
   // a caller-supplied `node` with no key handed to us — the closure throws
   // lazily, only if a factory that needed it is actually called, rather than
   // failing every plain-`Mounts` or non-minting caller up front.
+  //
+  // `now` is threaded through here too, not just into `verifyToken` below —
+  // a hub that passes a shared `clock.ts` `createMonotonicClock()` instance
+  // as `init.now` needs its OWN minting to draw from that same instance, or
+  // sharing it with a `RevocationRegistry` built from the same clock buys
+  // nothing (see `revocation.ts`'s "ONE HUB-ISSUED CLOCK, NOT TWO"). Omitted
+  // entirely, this is `undefined`, and `mintToken` falls back to its own
+  // `Date.now` default exactly as before.
   const mintTokenForMounts = async (
     sub: string,
     roles: string[],
@@ -332,7 +347,7 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
           "supply `privateKey`, or omit `node` so createPeer generates and retains one itself.",
       );
     }
-    return mintToken({ privateKey, sub, roles, ttlMs });
+    return mintToken({ privateKey, sub, roles, ttlMs, now });
   };
   const mounts =
     mountsInit == null

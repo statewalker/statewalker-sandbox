@@ -32,6 +32,7 @@ import { join } from "node:path";
 import type { MemberStore } from "@statewalker/httpeers.core";
 import {
   createMemberStore,
+  createMonotonicClock,
   createPeer,
   type Peer,
   RevocationRegistry,
@@ -53,7 +54,13 @@ interface TestHub {
 }
 
 async function buildHub(stateFilePath: string): Promise<TestHub> {
-  const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS });
+  // ONE shared clock for minting AND the revocation registry -- see
+  // `revocation.ts`'s "ONE HUB-ISSUED CLOCK, NOT TWO". This suite mints a
+  // token then revokes it moments later (in-process, no dialed round trip,
+  // so the gap can be well under a millisecond); two independent `Date.now`
+  // defaults can tie, a shared monotonic clock cannot.
+  const clock = createMonotonicClock();
+  const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS, now: clock });
   const persistent = createPersistentHub({
     filePath: stateFilePath,
     vocabulary: VOCABULARY,
@@ -64,6 +71,7 @@ async function buildHub(stateFilePath: string): Promise<TestHub> {
     accessTree: HUB_ACCESS,
     vocabulary: VOCABULARY,
     usesTransportIdentity: usesTransportIdentity(),
+    now: clock,
     // Same instance `createHubEndpoints` below bumps on DELETE
     // /admin/members/{id} -- the hub enforcing revocation against its OWN
     // live registry, no cache, no pull. See the module comment.

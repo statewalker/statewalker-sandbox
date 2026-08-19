@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createMemberStore,
+  createMonotonicClock,
   createPeer,
   type Peer,
   RevocationRegistry,
@@ -35,13 +36,17 @@ interface TestHub {
 }
 
 async function buildHub(stateFilePath: string): Promise<TestHub> {
-  const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS });
+  // Same shared-clock wiring as `admin.test.ts`'s `buildHub` -- see
+  // `revocation.ts`'s "ONE HUB-ISSUED CLOCK, NOT TWO".
+  const clock = createMonotonicClock();
+  const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS, now: clock });
   const persistent = createPersistentHub({ filePath: stateFilePath, vocabulary: VOCABULARY, createMemberStore });
 
   const peer = await createPeer({
     accessTree: HUB_ACCESS,
     vocabulary: VOCABULARY,
     usesTransportIdentity: usesTransportIdentity(),
+    now: clock,
     // Same wiring as `hub/main.ts` and `admin.test.ts`: the hub enforces
     // revocation on itself via its own live registry, no cache needed.
     revocationCache: revocations,

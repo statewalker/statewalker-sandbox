@@ -46,6 +46,7 @@ import type {
 } from "@statewalker/httpeers.core";
 import {
   createMemberStore,
+  createMonotonicClock,
   createPeer,
   DEFAULT_ACCESS_TREE,
   DEFAULT_VOCABULARY,
@@ -70,7 +71,13 @@ export interface TestHub {
 export async function buildTestHub(): Promise<TestHub> {
   const dir = mkdtempSync(join(tmpdir(), "httpeers-e2e-hub-"));
   const vocabulary = DEFAULT_VOCABULARY;
-  const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS });
+  // ONE shared clock for this hub's minting AND its revocation registry —
+  // see `revocation.ts`'s "ONE HUB-ISSUED CLOCK, NOT TWO". Two independent
+  // `Date.now` defaults can tie (mint a token, then revoke that same peer,
+  // both well within a millisecond); a `RevocationRegistry` and a
+  // `mintToken` call drawing from the SAME monotonic instance cannot.
+  const clock = createMonotonicClock();
+  const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS, now: clock });
 
   const persistent = createPersistentHub({
     filePath: join(dir, "hub-state.json"),
@@ -83,6 +90,7 @@ export async function buildTestHub(): Promise<TestHub> {
     accessTree: DEFAULT_ACCESS_TREE,
     vocabulary,
     usesTransportIdentity: usesTransportIdentity(),
+    now: clock,
     mounts: (ctx) =>
       createHubEndpoints({
         selfPeerId: ctx.peerId,
