@@ -159,7 +159,7 @@ not copied.
 | File | Actual basis | How resolved |
 | --- | --- | --- |
 | `src/vocabulary.ts` | Promoted from `37-httpeers-prototype-v0.9.0-role-vocabulary/vocabulary.ts`, as-is: `CapabilityDef`, `RoleDef`, `Vocabulary`, `VocabularyError`, `expandRoles`, `validateVocabulary`, `validateRoles`, `assertValid`, `DEFAULT_VOCABULARY`. Only formatting changed to house style (double quotes, semicolons) — no logic differs from the archive. | Team lead's dispatch message: promote as-is; do not adopt the `apps/httpeers-protos/lib/vocabulary.ts` reimplementation, which additionally rejects unnamespaced role names and has no `implies` (ledger R23) — role names stay plain (`member`, `admin`); only capabilities are namespaced (`std:`, `app:`). |
-| `src/access-tree.ts` | Promoted from `33-httpeers-prototype-v0.7.0-access-tree/access-tree.ts`, **then the hunk-level delta in `37-httpeers-prototype-v0.9.0-role-vocabulary/CHANGES-v0.9.0.txt` applied on top**: `resolveAccess` gained a `vocab: Vocabulary` parameter and expands `claims.roles` to capabilities via `expandRoles` before comparing against `anyOf` (`anyOf.some(r => claims.roles.includes(r))` → `expandRoles(vocab, claims.roles)` + `anyOf.find(c => held.has(c))`); a new `validateAccessTree(vocab, tree)` export was added; `withAccessTree` now validates at construction (`assertValid([...validateVocabulary(vocab), ...validateAccessTree(vocab, init.tree)])`) instead of never validating; and `DEFAULT_ACCESS_TREE` was rewritten in capabilities (`std:mesh.read`, `std:test`, `std:mesh.admin`) in place of role names. Two changes beyond the delta text, per the team lead's dispatch message: `AccessTreeInit.isTrustedPath` renamed to `usesTransportIdentity` (matching Task 3's already-renamed `UsesTransportIdentity` type — the old name does not compile against `types.ts`), and `vocabulary` added to `AccessTreeInit` as **optional**, defaulting to `DEFAULT_VOCABULARY` — required because folder 37's own `vocabulary.test.ts` (promoted as-is, see below) calls `withAccessTree({ tree, isTrustedPath })` — now `usesTransportIdentity` — without ever passing a `vocabulary`, and those calls' pass/fail behaviour (which capabilities are undeclared) only reproduces correctly if the omitted vocabulary resolves to `DEFAULT_VOCABULARY`. | Team lead's dispatch message, "two shape facts the brief does not state"; `CHANGES-v0.9.0.txt`'s hunk-level diff. |
+| `src/access-tree.ts` | Promoted from `33-httpeers-prototype-v0.7.0-access-tree/access-tree.ts`, **then the hunk-level delta in `37-httpeers-prototype-v0.9.0-role-vocabulary/CHANGES-v0.9.0.txt` applied on top**: `resolveAccess` gained a `vocab: Vocabulary` parameter and expands `claims.roles` to capabilities via `expandRoles` before comparing against `anyOf` (`anyOf.some(r => claims.roles.includes(r))` → `expandRoles(vocab, claims.roles)` + `anyOf.find(c => held.has(c))`); a new `validateAccessTree(vocab, tree)` export was added; `withAccessTree` now validates at construction (`assertValid([...validateVocabulary(vocab), ...validateAccessTree(vocab, init.tree)])`) instead of never validating; and `DEFAULT_ACCESS_TREE` was rewritten in capabilities (`std:mesh.read`, `std:test`, `std:mesh.admin`) in place of role names. Two changes beyond the delta text, per the team lead's dispatch message: `AccessTreeInit.isTrustedPath` renamed to `usesTransportIdentity` (matching Task 3's already-renamed `UsesTransportIdentity` type — the old name does not compile against `types.ts`), and `vocabulary` added to `AccessTreeInit` as a **required** field (see "Task 4 — fix round 1" below for why an initial optional-with-default reading was corrected). | Team lead's dispatch message, "two shape facts the brief does not state"; `CHANGES-v0.9.0.txt`'s hunk-level diff. |
 | `src/index.ts` | Two-line addition: `export * from "./vocabulary.js"; export * from "./access-tree.js";`, alongside the existing barrel exports. | Mechanical — new modules need barrel exports like every other `src/*.ts`. |
 | `tests/vocabulary.test.ts` | Promoted from `37-httpeers-prototype-v0.9.0-role-vocabulary/vocabulary.test.ts` **as-is** (17 tests: 5 role-expansion, 5 vocabulary-validation, 3 policy-validation, 4 fail-fast). Only the `withAccessTree({ tree, isTrustedPath })` call sites were renamed to `usesTransportIdentity` to compile against the renamed type; no assertion changed. | Team lead's dispatch message: promote as-is. |
 | `tests/access-tree.test.ts` | Promoted from `33-httpeers-prototype-v0.7.0-access-tree/access-tree.test.ts` (23 tests), **with exactly three tests' ad-hoc trees updated** for the capability switch — see "The three updated tests" below — plus one new describe block (5 tests, not promoted) covering `withAccessTree`'s dispatch behaviour, which no archived test file exercises. `claims()` gained an `iat` field (this package's `MeshClaims` requires it; the archive's did not, matching the same fix Task 3 already made in `binding.test.ts`). **The eleven-case equivalence table is byte-for-byte unmodified** — see "Equivalence table" below. | Team lead's dispatch message: promote, apply the delta, do not touch the equivalence table. |
@@ -253,19 +253,17 @@ error against a failing assertion.
   transport-identity bypass, an admitted request, a 403 (claims present but
   insufficient), a 401 (no claims cached for a path that requires them), and a
   public path admitted with nothing cached.
-- **`AccessTreeInit.vocabulary` is optional, not required.** The brief's own
-  "Interfaces" section writes `withAccessTree({ tree, vocabulary, usesTransportIdentity })`
-  without marking `vocabulary` optional, which would make every one of folder 37's
-  promoted `vocabulary.test.ts` construction calls (none of which pass `vocabulary`)
-  a type error. Making it `vocabulary?: Vocabulary`, defaulting to
-  `DEFAULT_VOCABULARY` inside `withAccessTree`, is the only reading under which
-  "promote `vocabulary.test.ts` as-is" and "the delta adds a `vocabulary` field" are
-  both simultaneously true — confirmed by hand-checking that every one of those
-  promoted calls' pass/throw outcomes is unchanged when the omitted vocabulary
-  resolves to `DEFAULT_VOCABULARY` (e.g. `'std:typo'`, `'std:one'`, `'std:two'` are
-  all genuinely undeclared in `DEFAULT_VOCABULARY`, so the throw tests throw for the
-  right reason; `'std:test'` is genuinely declared, so the "constructs cleanly" test
-  does).
+- **`AccessTreeInit.vocabulary` was originally optional; corrected to required in
+  the "Task 4 — fix round 1" section below.** The reasoning that led here at
+  first: the brief's "Interfaces" section writes
+  `withAccessTree({ tree, vocabulary, usesTransportIdentity })` without marking
+  `vocabulary` optional, but every one of folder 37's promoted
+  `vocabulary.test.ts` construction calls omits it, so a required field would
+  make "promote as-is" a type error. Making it optional resolved that
+  particular conflict but reopened the exact failure class this task exists to
+  close (see the fix section for why, and how it was resolved instead: keep it
+  required, and make the promoted calls pass `DEFAULT_VOCABULARY` explicitly —
+  a call-shape change, not a logic change).
 - **Grant reason text.** `resolveAccess`'s grant-path reason changed from the
   archive's `` `granted by role` `` to `` `granted by capability '${granted}'` ``
   (naming which capability matched). `CHANGES-v0.9.0.txt` only documents the
@@ -276,3 +274,82 @@ error against a failing assertion.
   in the same spirit as the documented deny-message change, not a scope
   addition — flagged here in case a later task's integration test expects the
   older wording.
+
+## Task 4 — fix round 1: `AccessTreeInit.vocabulary` made required
+
+Review finding: `AccessTreeInit.vocabulary` was originally `vocabulary?: Vocabulary`
+with `const vocab = init.vocabulary ?? DEFAULT_VOCABULARY;` inside `withAccessTree`.
+That default is a silent one — a caller who forgets to pass their own vocabulary
+gets no compile error, and `validateAccessTree` only catches the mistake when the
+policy names a capability absent from `DEFAULT_VOCABULARY`. A policy naming only
+`std:` capabilities that happen to also exist in `DEFAULT_VOCABULARY` would
+construct cleanly and then be evaluated, at runtime, against the wrong
+role → capability mapping — silently. That is the exact failure class A-3 exists to
+refuse (a policy that is broken but looks like it works), reintroduced one layer up
+by making the vocabulary itself optional.
+
+**Fix:** `vocabulary` is now **required** on `AccessTreeInit`
+(`src/access-tree.ts`); `withAccessTree` reads it directly
+(`const { vocabulary: vocab } = init;`), with no `?? DEFAULT_VOCABULARY` fallback.
+The now-unused `DEFAULT_VOCABULARY` import was dropped from `src/access-tree.ts`.
+
+This is the second time a "promote `X.test.ts` as-is" instruction has had to be
+qualified — the first was the typing fixes Task 4's own note above already
+describes for `strict`/`noUncheckedIndexedAccess`. Both times, the archive's
+*logic* was reproduced faithfully; its *call shape* was not. Concretely here: three
+`withAccessTree(...)` construction calls in the promoted `tests/vocabulary.test.ts`
+("A-3: fail fast, not closed") and one in the newly-written
+`tests/access-tree.test.ts`'s `A-1: withAccessTree as middleware`'s `subject()`
+helper now pass `vocabulary: DEFAULT_VOCABULARY` explicitly, where the archive
+(and the original promotion) passed nothing. Per the team lead's boundary on this
+fix, only construction-call shape changed — no assertion in either file was
+touched, confirmed by diffing against the pre-fix versions:
+
+```
+$ git diff -- packages/httpeers.core/src/access-tree.ts packages/httpeers.core/tests/access-tree.test.ts packages/httpeers.core/tests/vocabulary.test.ts
+```
+
+shows only the `vocabulary?` → `vocabulary` interface field, the `init.vocabulary ??
+DEFAULT_VOCABULARY` → `init.vocabulary` destructure, the dropped import, and the
+four `vocabulary: DEFAULT_VOCABULARY,` lines added to construction-call object
+literals — every `expect(...)` line is unchanged.
+
+No new runtime test was added for the closed hole: once `vocabulary` is required,
+the silent-wrong-default state cannot exist, and the compiler enforces that —
+which is the point. Per the team lead's explicit instruction, asserting a
+now-impossible state would be a test with no failure mode.
+
+### Verification
+
+```
+$ pnpm run typecheck
+> tsc --noEmit
+(clean, no output)
+
+$ pnpm run typecheck:tests
+> tsc -p tsconfig.tests.json --noEmit
+(clean, no output)
+
+$ pnpm vitest run --no-file-parallelism
+ Test Files  8 passed (8)
+      Tests  105 passed (105)
+   Duration  1.12s
+
+$ npx biome check src/access-tree.ts tests/access-tree.test.ts tests/vocabulary.test.ts
+(clean, no output)
+```
+
+Test count unchanged at 105/105 — this fix closes a hole in the type system, not a
+runtime behaviour, so no test count moves. The affected tests
+(`tests/vocabulary.test.ts`'s three "A-3: fail fast, not closed" cases and
+`tests/access-tree.test.ts`'s five "A-1: withAccessTree as middleware" cases,
+8 total) all still pass with the same assertions as before the fix.
+
+### Two Minors deferred to final review (not touched, per team lead's instruction)
+
+Both inherited verbatim from archive folder 33, not introduced by this task:
+
+- `withAccessTree`'s 401-vs-403 selection substring-matches the decision reason
+  (`decision.reason.includes("token")`) rather than using a typed discriminant.
+- The redundant `(lookupClaims(req) ?? null) as MeshClaims | null` cast in
+  `withAccessTree`.

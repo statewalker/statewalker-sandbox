@@ -117,7 +117,11 @@ describe("A-3: fail fast, not closed", () => {
     // A policy that denies everyone because of a typo is indistinguishable
     // from a policy that works. Refusing to start is the better failure.
     expect(() =>
-      withAccessTree({ tree: { "/x/": { anyOf: ["std:typo"] } }, usesTransportIdentity }),
+      withAccessTree({
+        tree: { "/x/": { anyOf: ["std:typo"] } },
+        vocabulary: DEFAULT_VOCABULARY,
+        usesTransportIdentity,
+      }),
     ).toThrow(VocabularyError);
   });
 
@@ -125,6 +129,7 @@ describe("A-3: fail fast, not closed", () => {
     try {
       withAccessTree({
         tree: { "/a/": { anyOf: ["std:one"] }, "/b/": { anyOf: ["std:two"] } },
+        vocabulary: DEFAULT_VOCABULARY,
         usesTransportIdentity,
       });
       throw new Error("should have thrown");
@@ -137,6 +142,7 @@ describe("A-3: fail fast, not closed", () => {
     expect(() =>
       withAccessTree({
         tree: { "/": { anyOf: [] }, "/test/": { anyOf: ["std:test"] } },
+        vocabulary: DEFAULT_VOCABULARY,
         usesTransportIdentity,
       }),
     ).not.toThrow();

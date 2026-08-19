@@ -28,7 +28,7 @@
 import { lookupClaims } from "./peer-context.js";
 import type { FetchHandler, MeshClaims, UsesTransportIdentity } from "./types.js";
 import { json } from "./types.js";
-import { DEFAULT_VOCABULARY, assertValid, expandRoles, validateVocabulary } from "./vocabulary.js";
+import { assertValid, expandRoles, validateVocabulary } from "./vocabulary.js";
 import type { Vocabulary } from "./vocabulary.js";
 
 export interface AccessEntry {
@@ -151,8 +151,15 @@ export function validateAccessTree(vocab: Vocabulary, tree: AccessTree): string[
 
 export interface AccessTreeInit {
   tree: AccessTree;
-  /** Defaults to `DEFAULT_VOCABULARY` when omitted. */
-  vocabulary?: Vocabulary;
+  /**
+   * Required, not defaulted: a caller who forgets to pass a vocabulary must
+   * see a compile error, not silently get `DEFAULT_VOCABULARY` applied to a
+   * policy written against a different one. A default here would fail
+   * closed only when the wrong vocabulary happens to lack a capability the
+   * policy names — the same class of silent misconfiguration this whole
+   * module exists to refuse.
+   */
+  vocabulary: Vocabulary;
   usesTransportIdentity: UsesTransportIdentity;
 }
 
@@ -167,7 +174,7 @@ export interface AccessTreeInit {
  * the better failure.
  */
 export function withAccessTree(init: AccessTreeInit) {
-  const vocab = init.vocabulary ?? DEFAULT_VOCABULARY;
+  const { vocabulary: vocab } = init;
   assertValid([...validateVocabulary(vocab), ...validateAccessTree(vocab, init.tree)]);
 
   return (next: FetchHandler): FetchHandler =>
