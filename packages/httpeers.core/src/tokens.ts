@@ -18,9 +18,27 @@
  * `claims.sub === provenPeer` (did the transport handshake prove the caller
  * is the subject) is left to the binding middleware — a later task.
  */
+import { generateKeyPair } from "@libp2p/crypto/keys";
 import type { Ed25519PrivateKey } from "@libp2p/interface";
 import { peerIdFromPrivateKey, peerIdFromString } from "@libp2p/peer-id";
 import type { MeshClaims } from "./types.js";
+
+/**
+ * Generate a fresh Ed25519 signing key for a mesh identity — a hub's own
+ * key, or any peer's, since `mintToken`/`verifyToken` treat every peerId
+ * the same way. Lives here, not at the call site, because this file already
+ * owns keys (`mintToken`'s `privateKey`, `verifyToken`'s peerId↔key
+ * recovery) and already imports `@libp2p/crypto`/`@libp2p/peer-id` — the
+ * one other file in this package (besides `transport-duplex.ts`) with a
+ * principled reason to. A caller elsewhere in this package that needs a key
+ * should call this rather than importing `generateKeyPair` itself, so the
+ * isolation grep's allowlist stays exactly two entries, each with an
+ * obvious reason, rather than growing a third for no reason but where the
+ * call happened to be written.
+ */
+export async function generateMeshKey(): Promise<Ed25519PrivateKey> {
+  return generateKeyPair("Ed25519");
+}
 
 /** The only algorithm and token type this package will mint or accept. */
 const ALG = "EdDSA" as const;

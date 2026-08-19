@@ -495,17 +495,19 @@ Two follow-ups from the team lead, both applied:
 
 **Key retention.** `CreatePeerInit` gained `privateKey?: Ed25519PrivateKey`. When `node`
 is not supplied and no `privateKey` is given, `createPeer` — not `createNode` — generates
-one via `generateKeyPair("Ed25519")` and passes it to `createNode({ listen, privateKey })`.
-The team lead's own read of the archived `29/peer.ts` confirmed this is the only place it
-can happen: `createLibp2p` never hands a generated key back out, so generating it inside
-`createNode` would make it unreachable the instant that call returns — the exact loss this
-task's first pass had. Generating it one scope higher, in `createPeer`, is what will let a
-later task's minting logic (Task 7, wiring `createEndpoints`) close over `privateKey`
-without threading `createNode`'s internals back out. Per explicit instruction, the key is
-**not** exposed on the returned `Peer`, and no `Peer.mint()` convenience was added —
-that API belongs with Task 7's endpoint design, not pre-empted here. This adds a third
-file (`peer.ts`) to the isolation grep's hit list — see "Verification" below; it is the
-same class of exception already established for `tokens.ts`.
+one and passes it to `createNode({ listen, privateKey })`. The team lead's own read of
+the archived `29/peer.ts` confirmed this is the only place it can happen: `createLibp2p`
+never hands a generated key back out, so generating it inside `createNode` would make it
+unreachable the instant that call returns — the exact loss this task's first pass had.
+Generating it one scope higher, in `createPeer`, is what will let a later task's minting
+logic (Task 7, wiring `createEndpoints`) close over `privateKey` without threading
+`createNode`'s internals back out. Per explicit instruction, the key is **not** exposed
+on the returned `Peer`, and no `Peer.mint()` convenience was added — that API belongs
+with Task 7's endpoint design, not pre-empted here. This initially called
+`generateKeyPair` from `@libp2p/crypto/keys` directly in `peer.ts`, adding a third file
+to the isolation grep's hit list; a further follow-up (below, "generateKeyPair moved
+into tokens.ts") closed that back down to the two-file allowlist by moving the call
+behind a new `generateMeshKey()` export in `tokens.ts`.
 
 Reviewed separately, and confirmed correct, but the specific contract test the review
 asked for — "that a supplied `privateKey` is the identity the peer actually presents
@@ -522,6 +524,29 @@ role→capability mapping, valid at construction, silently wrong at runtime). Bo
 (`accessTree` alone, `vocabulary` alone) and the "neither supplied, both default" case are
 now covered by `tests/peer.test.ts` — the latter also exercises `defaultMounts()` end to
 end for the first time (every other test in this file supplies its own `mounts`).
+
+### `generateKeyPair` moved into `tokens.ts`
+
+Per the team lead's ruling, closing the third-grep-hit issue flagged above: the
+isolation constraint's practical value is a one-line grep against a **short, principled
+allowlist**, one file for the transport (`transport-duplex.ts`), one for crypto/identity
+(`tokens.ts`) — each with an obvious reason. `peer.ts` calling `generateKeyPair` directly
+was correct in substance but the wrong shape: a third entry justified only by "this is
+where the call happened to be written" is how an allowlist stops meaning anything, since
+the next addition has an equally reasonable excuse. `tokens.ts` already owns keys
+(`mintToken`'s `privateKey`, `verifyToken`'s peerId↔key recovery) and already imports
+`@libp2p/crypto`/`@libp2p/peer-id` — a `generateMeshKey()` there reads as belonging; the
+same call in `peer.ts` read as incidental.
+
+```ts
+export async function generateMeshKey(): Promise<Ed25519PrivateKey> {
+  return generateKeyPair("Ed25519");
+}
+```
+
+`peer.ts` now imports `generateMeshKey` from `./tokens.js` instead of `generateKeyPair`
+from `@libp2p/crypto/keys` directly. Behaviour identical; only the import moved. See
+"Verification" below for the grep output now listing exactly the two-file allowlist.
 
 ### `typecheck` — known-blocked, not by this task's own files
 
@@ -567,19 +592,22 @@ deliberately, not a chore to rush.
 
 ```
 $ grep -rlE "^import.*libp2p" src/
-src/peer.ts
 src/tokens.ts
 src/transport-duplex.ts
 ```
 
-`tokens.ts`'s hit predates this task (Task 1: `@libp2p/peer-id`/`@libp2p/interface` for
-Ed25519 peerId derivation, not the transport itself). `peer.ts`'s hit is new in this
-follow-up — `import { generateKeyPair } from "@libp2p/crypto/keys"` for the key-retention
-fix above — and is the same class of exception: `@libp2p/crypto` is Ed25519 key material,
-not the libp2p transport (`node.handle`, `createLibp2p`, stream muxing), which stays
-confined to `transport-duplex.ts` alone. Both hits are substring matches on the literal
-grep pattern (`"libp2p"` inside `@libp2p/peer-id` and `@libp2p/crypto`), not violations of
-the isolation constraint's actual intent.
+Exactly the short, principled allowlist the constraint is meant to check: one file for
+the transport (`transport-duplex.ts`), one for crypto/identity (`tokens.ts`) — each with
+an obvious reason, checkable in one grep. `peer.ts`'s key-retention fix (above) initially
+called `generateKeyPair` from `@libp2p/crypto/keys` directly, which added a third hit —
+correct in substance but, per the team lead's ruling, not the right shape: a third
+allowlist entry justified only by "this is where the call happened to be written" is how
+an allowlist stops meaning anything, since the next addition has an equally reasonable
+excuse. Closed by adding `generateMeshKey(): Promise<Ed25519PrivateKey>` to `tokens.ts`
+(which already owns keys — `mintToken`'s `privateKey`, `verifyToken`'s peerId↔key
+recovery — and already imports `@libp2p/crypto`/`@libp2p/peer-id`) and having `peer.ts`
+call that instead. Behaviour identical; only the import moved, and `peer.ts` drops out
+of the grep entirely.
 
 ```
 $ pnpm install   # from the umbrella root

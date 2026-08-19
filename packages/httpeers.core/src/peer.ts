@@ -24,7 +24,6 @@
  * directly on the request `serveTransport`'s per-stream closure registered
  * the peer on, with nothing re-constructing it in between.
  */
-import { generateKeyPair } from "@libp2p/crypto/keys";
 import { DEFAULT_ACCESS_TREE } from "./access-tree.js";
 import type { AccessTree } from "./access-tree.js";
 import { withAccessTree } from "./access-tree.js";
@@ -34,7 +33,7 @@ import type { RevocationCache } from "./revocation.js";
 import { createMounts, createPeerRouter } from "./router.js";
 import type { Ed25519PrivateKey, Libp2p } from "./transport-duplex.js";
 import { createNode, createRemote, PROTOCOL, serveTransport } from "./transport-duplex.js";
-import { verifyToken } from "./tokens.js";
+import { generateMeshKey, verifyToken } from "./tokens.js";
 import type {
   FetchHandler,
   GetClaims,
@@ -239,7 +238,7 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
   // is what lets a later task's minting logic close over `privateKey`
   // without threading the node builder's internals back out through it.
   let privateKey = init.privateKey;
-  if (suppliedNode == null) privateKey ??= await generateKeyPair("Ed25519");
+  if (suppliedNode == null) privateKey ??= await generateMeshKey();
   const node = suppliedNode ?? (await createNode({ listen, privateKey }));
   const ownsNode = suppliedNode == null;
 
