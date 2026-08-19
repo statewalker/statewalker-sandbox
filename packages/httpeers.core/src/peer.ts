@@ -206,6 +206,13 @@ export interface CreatePeerInit {
    * dialing. Defaults to `DEFAULT_MAX_STREAMS` from `transport-duplex.ts`.
    */
   maxStreams?: number;
+  /**
+   * T-2's request timeout contract for this peer's outbound calls
+   * (`remote`/`call`). Defaults to `DEFAULT_REQUEST_TIMEOUT_MS` from
+   * `transport-duplex.ts` — see that constant's doc comment for the value
+   * and its relationship to `drainTimeoutMs`.
+   */
+  requestTimeoutMs?: number;
   /** Injected clock, threaded into `verifyToken`. Defaults to `Date.now`. */
   now?: () => number;
 }
@@ -248,6 +255,7 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
     protocol = PROTOCOL,
     drainTimeoutMs,
     maxStreams,
+    requestTimeoutMs,
     now,
   } = init;
 
@@ -350,7 +358,13 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
     ? async (claims: MeshClaims): Promise<string | null> => revocationCache.check(claims)
     : undefined;
 
-  const remote = createRemote({ node, protocol, drainTimeoutMs, maxOutboundStreams: maxStreams });
+  const remote = createRemote({
+    node,
+    protocol,
+    drainTimeoutMs,
+    maxOutboundStreams: maxStreams,
+    requestTimeoutMs,
+  });
 
   const dispatch: FetchHandler = createPeerRouter({
     selfPeerId,
