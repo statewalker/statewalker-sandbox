@@ -249,6 +249,13 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
         policy: init.revocations.policyVersion(),
         vocabulary: init.vocabulary.version,
       },
+      // `ttl` is unchanged context from the archive (`CHANGES-v0.8.0.txt`'s
+      // heartbeat shape `{ token, versions, meshVersion, ttl }`), not part
+      // of that delta -- unlike `meshVersion`, which WAS superseded by
+      // `versions.mesh` and correctly dropped (Ruling R31). It lets a
+      // client take its heartbeat interval from the server rather than
+      // hardcoding it.
+      ttl: presenceTtlMs,
     });
   });
 

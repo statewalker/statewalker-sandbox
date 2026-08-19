@@ -217,4 +217,76 @@ describe("A-2 end to end", () => {
     },
     40_000,
   );
+
+  // ADDITIVE, not a replacement for E6 above -- E6 is promoted from the
+  // archive verbatim (fidelity matters), including its own limit: it only
+  // shows that the refused call made no FURTHER contact with the hub, never
+  // that the hub was actually unreachable. Its comment ("last contact with
+  // the hub") admits as much, inherited from the archive. E6's *name*
+  // carries the stronger claim -- "the hub is never on the critical path" --
+  // so this sibling proves that claim directly: the hub is stopped, not
+  // merely left uncalled, before the refusal. Both exist on purpose: one
+  // preserves the promoted suite unmodified, the other closes the gap
+  // between what E6 asserts and what its name says.
+  it(
+    "E6b: enforcement continues with the hub actually stopped",
+    async () => {
+      // Self-contained hub/provider/member, independent of the shared
+      // suite fixtures above -- stopping a hub here must not affect any
+      // other test in this file.
+      const localHub = await buildTestHub();
+      const localProvider = await buildTestPeer({
+        hubPeerId: localHub.peer.peerId,
+        listen: ["/ip4/127.0.0.1/tcp/0"],
+        mounts: (ctx) => {
+          const mounts = createMounts();
+          mounts.provide("/test", createTestSurfaceHandler(ctx.peerId));
+          return mounts;
+        },
+      });
+      const eve = await buildTestPeer({ hubPeerId: localHub.peer.peerId, listen: ["/ip4/127.0.0.1/tcp/0"] });
+
+      await localProvider.libp2p.dial(multiaddr(localHub.peer.addrs()[0]!));
+      await eve.libp2p.dial(multiaddr(localHub.peer.addrs()[0]!));
+      await eve.libp2p.dial(multiaddr(localProvider.addrs()[0]!));
+
+      localHub.invitations.create("LOCAL-PROVIDER", ["member"], 60_000);
+      let localProviderToken = (
+        (await (
+          await localProvider.call(localHub.peer.peerId, "/.well-known/invite", {
+            method: "POST",
+            body: JSON.stringify({ id: "LOCAL-PROVIDER" }),
+          })
+        ).json()) as any
+      ).token;
+
+      localHub.invitations.create("EVE", ["member"], 60_000);
+      const eveToken = (
+        (await (
+          await eve.call(localHub.peer.peerId, "/.well-known/invite", {
+            method: "POST",
+            body: JSON.stringify({ id: "EVE" }),
+          })
+        ).json()) as any
+      ).token;
+
+      // Revoke Eve, then let the provider pull the change into its own
+      // cache -- this is the ONLY contact the provider will ever make
+      // about this revocation.
+      localHub.memberStore.remove(eve.peerId);
+      localHub.revocations.revoke(eve.peerId);
+      localProviderToken = await localProvider.heartbeat(localHub.peer.peerId, localProviderToken);
+
+      // Now stop the hub for real -- not "don't call it again", but
+      // "cannot be called again."
+      await localHub.stop();
+
+      const res = await eve.call(localProvider.peerId, "/test/whoami", { token: eveToken });
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as any).error).toMatch(/revoked/);
+
+      await Promise.all([localProvider.stop(), eve.stop()]);
+    },
+    40_000,
+  );
 });

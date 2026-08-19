@@ -196,6 +196,7 @@ describe("mesh view and presence", () => {
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as any;
+    expect(body.ttl).toBe(15_000);
     aliceToken = body.token;
 
     const view = await alice.call(hub.peer.peerId, "/.well-known/mesh", { token: aliceToken });
