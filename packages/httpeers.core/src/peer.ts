@@ -24,6 +24,7 @@
  * directly on the request `serveTransport`'s per-stream closure registered
  * the peer on, with nothing re-constructing it in between.
  */
+import { generateKeyPair } from "@libp2p/crypto/keys";
 import { DEFAULT_ACCESS_TREE } from "./access-tree.js";
 import type { AccessTree } from "./access-tree.js";
 import { withAccessTree } from "./access-tree.js";
@@ -31,7 +32,7 @@ import { cacheClaims, lookupClaims, lookupPeer } from "./peer-context.js";
 import { newPeerHandlers } from "./peer-handlers.js";
 import type { RevocationCache } from "./revocation.js";
 import { createMounts, createPeerRouter } from "./router.js";
-import type { Libp2p } from "./transport-duplex.js";
+import type { Ed25519PrivateKey, Libp2p } from "./transport-duplex.js";
 import { createNode, createRemote, PROTOCOL, serveTransport } from "./transport-duplex.js";
 import { verifyToken } from "./tokens.js";
 import type {
@@ -83,6 +84,19 @@ export interface CreatePeerInit {
    * connections — a legitimate shape, e.g. an edge client.
    */
   listen?: string[];
+  /**
+   * This peer's own signing key, for a self-constructed node. Ignored when
+   * `node` is supplied (that node's identity is already fixed). Omit to
+   * have `createPeer` generate one and retain it — `createLibp2p` never
+   * hands a generated key back out, so if nothing above it keeps the
+   * reference before the node is built, it is gone for good, and this peer
+   * could never later mint a token that self-certifies as its own peerId
+   * (`mintToken`/`verifyToken`'s self-certification check in `tokens.ts`
+   * ties a valid token's `mesh` to the actual signing key's peerId). Not
+   * exposed on the returned `Peer` — retaining it here, for a later task's
+   * minting logic to close over, is the point; publishing it is not.
+   */
+  privateKey?: Ed25519PrivateKey;
   /** Defaults to the node's own peerId (caller- or self-constructed). */
   selfPeerId?: PeerIdStr;
   /**
@@ -91,9 +105,22 @@ export interface CreatePeerInit {
    * policy end to end without depending on Task 7's hub endpoints.
    */
   mounts?: Mounts;
-  /** Defaults to `DEFAULT_ACCESS_TREE`. */
+  /**
+   * Defaults to `DEFAULT_ACCESS_TREE`, but only paired with `vocabulary`
+   * defaulting too — see `vocabulary` below.
+   */
   accessTree?: AccessTree;
-  /** Defaults to `DEFAULT_VOCABULARY`. */
+  /**
+   * Defaults to `DEFAULT_VOCABULARY`, but ONLY when `accessTree` is also
+   * omitted (and vice versa): `createPeer` throws at construction if
+   * exactly one of `accessTree`/`vocabulary` is supplied. A custom
+   * `accessTree` evaluated against the wrong vocabulary (or vice versa) is
+   * the exact fail-open `withAccessTree`'s required `vocabulary` field was
+   * introduced to rule out — a tree that validates fine, then evaluates
+   * every request against a role→capability mapping the caller never
+   * intended. Defaulting both together, as a matched pair, does not
+   * reintroduce that; inheriting one while defaulting the other would.
+   */
   vocabulary?: Vocabulary;
   /**
    * The mesh (hub) peerId membership tokens must self-certify against —
@@ -176,8 +203,6 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
     node: suppliedNode,
     listen,
     mounts = defaultMounts(),
-    accessTree = DEFAULT_ACCESS_TREE,
-    vocabulary = DEFAULT_VOCABULARY,
     usesTransportIdentity = async () => false,
     revocationCache,
     allowRelay = false,
@@ -187,12 +212,35 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
     now,
   } = init;
 
+  // Defaulted together, as a matched pair, or not at all — see the doc
+  // comment on `vocabulary` above for why inheriting one while defaulting
+  // the other is exactly the fail-open `withAccessTree`'s required
+  // `vocabulary` field was introduced to rule out.
+  if ((init.accessTree == null) !== (init.vocabulary == null)) {
+    throw new Error(
+      "createPeer: accessTree and vocabulary must be supplied together or not at all -- " +
+        "defaulting one while inheriting the other risks evaluating a custom access tree " +
+        "against a vocabulary it was never validated against (or vice versa).",
+    );
+  }
+  const accessTree = init.accessTree ?? DEFAULT_ACCESS_TREE;
+  const vocabulary = init.vocabulary ?? DEFAULT_VOCABULARY;
+
   // A caller-supplied node is used as-is and never stopped by us — it was
   // never ours to build, so it is never ours to tear down either. A
   // self-built one (via `createNode`, the one place in this package that
   // touches libp2p besides `transport-duplex.ts` itself) is fully ours,
   // `listen`-configured, and stopped in `stop()`.
-  const node = suppliedNode ?? (await createNode({ listen }));
+  //
+  // The signing key for a self-built node is generated and retained HERE,
+  // not inside `createNode` — `createLibp2p` never hands a generated key
+  // back out, so generating it inside the node builder would make it
+  // unreachable the moment that call returns. Generating it in this scope
+  // is what lets a later task's minting logic close over `privateKey`
+  // without threading the node builder's internals back out through it.
+  let privateKey = init.privateKey;
+  if (suppliedNode == null) privateKey ??= await generateKeyPair("Ed25519");
+  const node = suppliedNode ?? (await createNode({ listen, privateKey }));
   const ownsNode = suppliedNode == null;
 
   const selfPeerId = init.selfPeerId ?? node.peerId.toString();

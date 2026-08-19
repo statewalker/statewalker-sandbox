@@ -185,4 +185,37 @@ describe("createPeer: identity by closure over the shipped transport", () => {
     expect(results[0]).toBe(clientId);
     expect(results).toHaveLength(20);
   }, 30_000);
+
+  // --- accessTree/vocabulary: default together, or not at all ---------------
+
+  it("throws when accessTree is supplied without vocabulary", async () => {
+    await expect(createPeer({ node: clientA, accessTree: DEFAULT_ACCESS_TREE })).rejects.toThrow(
+      /accessTree and vocabulary must be supplied together/,
+    );
+  });
+
+  it("throws when vocabulary is supplied without accessTree", async () => {
+    await expect(createPeer({ node: clientA, vocabulary: DEFAULT_VOCABULARY })).rejects.toThrow(
+      /accessTree and vocabulary must be supplied together/,
+    );
+  });
+
+  it("defaults mounts/accessTree/vocabulary together when none are supplied, and the default /test/whoami mount answers", async () => {
+    const freshServer = await node(true);
+    let defaultsPeer: Peer | undefined;
+    try {
+      // No mounts/accessTree/vocabulary at all -- exercises defaultMounts()
+      // and the DEFAULT_ACCESS_TREE/DEFAULT_VOCABULARY pair together.
+      defaultsPeer = await createPeer({ node: freshServer, hubPeerId });
+      const addr = freshServer.getMultiaddrs()[0];
+      if (addr == null) throw new Error("fresh server has no listen address");
+
+      const clientId = clientA.peerId.toString();
+      const token = await tokenFor(clientId);
+      const seen = await whoami(clientA, addr, { authorization: `Bearer ${token}` });
+      expect(seen).toBe(clientId);
+    } finally {
+      await Promise.allSettled([defaultsPeer?.stop(), freshServer.stop()]);
+    }
+  }, 20_000);
 });

@@ -467,7 +467,7 @@ was never run.
 | `src/peer.ts` | Also the grade-C reference's shape and composition order (transport → `registerPeer` → binding middleware → access policy → router → mounts; binding outside, policy inside; the deliberate non-null `lookupPeer(req)!` in `getPeerId` preserved verbatim, per explicit instruction not to "improve" it into `?? ANONYMOUS`). Its imports already named the shipped API (`withAccessTree`, `DEFAULT_ACCESS_TREE`, `usesTransportIdentity`) rather than the superseded names the dispatch warned about (`withAccessPolicy`/`DEFAULT_ACCESS_RULES`/`isTrustedPath`) — nothing to replace there. Rewritten on top of that shape per the team lead's follow-up "interface contract" message (see below): `CreatePeerInit` gained `node?`, `listen?`, `selfPeerId?`, `mounts?`, `accessTree?`, `vocabulary?`, `hubPeerId?`, `isHub?` — all optional, matching the four example calls (`{isHub:true, listen}`, `{hubPeerId, listen}`, `{hubPeerId, listen, allowRelay:true}`, `{hubPeerId}` with no listen) a later task's promoted suites are written against. `Peer` gained `peerId`, `libp2p`, `addrs()`, `call(targetPeerId, path, {token, ...RequestInit})` alongside the original `dispatch`/`remote`/`stop`. `mounts`/`accessTree`/`vocabulary` default to a new `defaultMounts()` (one diagnostic `/test/whoami` handler), `DEFAULT_ACCESS_TREE`, `DEFAULT_VOCABULARY` respectively — inferred, not dictated verbatim; see "Open question" below. | Team lead's dispatch (composition order, non-null assertion, `isRevoked` sync wrap, `allowForward` policy) plus a follow-up "interface contract" message giving the exact `createPeer(init)`/`Peer` shape two not-yet-promoted archived suites are written against. |
 | `src/index.ts` | Two-line addition: `export * from "./transport-duplex.js";` and `export * from "./peer.js";`. | Mechanical — same barrel-export convention as every prior task. |
 | `tests/peer.test.ts` | Not a promotion. Re-derived from folder `26`'s `duplex-identity.test.ts` (D6/D7/D8, "is the recovered identity trustworthy — under concurrency, and against a forged header") against the shipped API rather than that prototype's `vendor/` copies, driven through `createPeer` rather than a bespoke `httpOverLibp2p` helper so it also proves the composition (binding + policy), not just the transport. Two composition-only cases added beyond D6-D8: a valid token reaching the mounted handler, and a `claims.sub` naming a different peer than the connection proved getting 403. The full node↔node suite (headers, query strings, streaming, 40-concurrent, bodiless statuses, non-ASCII) is Task 6c's promoted `integration.test.ts` — deliberately a different filename so that promotion lands without a name collision. | Team lead's dispatch: "re-derive D6, D7, D8" against the shipped API; folder `26`'s test file read for the properties, not promoted (it imports non-existent `vendor/` paths). |
-| `package.json` | Added `@multiformats/multiaddr`, `@statewalker/webrun-http-streams` (workspace:*), `@statewalker/webrun-streams-libp2p` (workspace:*) plus the full libp2p family (`libp2p`, `@libp2p/tcp`, `@chainsafe/libp2p-noise`, `@chainsafe/libp2p-yamux`, `@libp2p/identify`) as **dependencies** (not devDependencies) — `transport-duplex.ts`'s `createNode` constructs a real node at runtime, not just under test. `@libp2p/crypto` stayed a devDependency; it is only used by `tests/peer.test.ts` for `generateKeyPair`. | Dispatch's exact-pinned version list; moved to `dependencies` once `createNode` became load-bearing rather than test-only (see the interface-contract addition above). |
+| `package.json` | Added `@multiformats/multiaddr`, `@statewalker/webrun-http-streams` (workspace:*), `@statewalker/webrun-streams-libp2p` (workspace:*) plus the full libp2p family (`libp2p`, `@libp2p/tcp`, `@chainsafe/libp2p-noise`, `@chainsafe/libp2p-yamux`, `@libp2p/identify`) as **dependencies** (not devDependencies) — `transport-duplex.ts`'s `createNode` constructs a real node at runtime, not just under test. `@libp2p/crypto` moved from dev- to a runtime **dependency** in the follow-up once `peer.ts` itself started calling `generateKeyPair` (for the key-retention fix — see below), not just `tests/peer.test.ts`. | Dispatch's exact-pinned version list; moved to `dependencies` once `createNode` became load-bearing rather than test-only (see the interface-contract addition above), and again for `@libp2p/crypto` once `peer.ts` needed it directly. |
 
 ### The `createPeer` contract: two dispatches, not one
 
@@ -489,18 +489,33 @@ peerId. `hubPeerId` replaces `issuer` as the field name (same semantics: `verify
 `issuer`, defaulting to `selfPeerId`); `isHub` is accepted and documents that default
 explicitly but has no additional runtime effect.
 
-### Open question, not resolved in this task: minting for a self-built hub
+### Resolved: minting for a self-built hub, and the accessTree/vocabulary pairing guard
 
-`createPeer({ isHub: true, listen: [...] })` builds its own node with an
-internally-generated, inaccessible-from-outside private key (`createLibp2p` does not hand
-it back). If a later task's promoted suite needs to mint tokens whose `mesh` is that hub's
-own peerId — required by `verifyToken`'s self-certification check — there is currently no
-way to extract that key from a self-built `Peer`. Flagged to the team lead rather than
-guessed at: possible closes are a `CreatePeerInit.privateKey` passthrough to `createNode`
-(so a test can mint directly via `tokens.ts`, mirroring how this task's own
-`tests/peer.test.ts` mints — with a separately-tracked `hubKey`, independent of any
-`createPeer` instance) or a `Peer` minting convenience. Neither exists yet; this task did
-not invent API surface beyond what was specified.
+Two follow-ups from the team lead, both applied:
+
+**Key retention.** `CreatePeerInit` gained `privateKey?: Ed25519PrivateKey`. When `node`
+is not supplied and no `privateKey` is given, `createPeer` — not `createNode` — generates
+one via `generateKeyPair("Ed25519")` and passes it to `createNode({ listen, privateKey })`.
+The team lead's own read of the archived `29/peer.ts` confirmed this is the only place it
+can happen: `createLibp2p` never hands a generated key back out, so generating it inside
+`createNode` would make it unreachable the instant that call returns — the exact loss this
+task's first pass had. Generating it one scope higher, in `createPeer`, is what will let a
+later task's minting logic (Task 7, wiring `createEndpoints`) close over `privateKey`
+without threading `createNode`'s internals back out. Per explicit instruction, the key is
+**not** exposed on the returned `Peer`, and no `Peer.mint()` convenience was added —
+that API belongs with Task 7's endpoint design, not pre-empted here. This is the one
+change that adds a fourth import-line hit to the isolation grep — see "Verification"
+below; it is the same class of exception already established for `tokens.ts`.
+
+**accessTree/vocabulary pairing.** `createPeer` now throws at construction if exactly one
+of `accessTree`/`vocabulary` is supplied — defaulting both together (a matched pair) is
+safe and is what the follow-up confirmed is the archive's own design, but inheriting one
+while defaulting the other reintroduces the exact fail-open `withAccessTree`'s required
+`vocabulary` field was built to rule out (a custom tree evaluated against the wrong
+role→capability mapping, valid at construction, silently wrong at runtime). Both cases
+(`accessTree` alone, `vocabulary` alone) and the "neither supplied, both default" case are
+now covered by `tests/peer.test.ts` — the latter also exercises `defaultMounts()` end to
+end for the first time (every other test in this file supplies its own `mounts`).
 
 ### `typecheck` — known-blocked, not by this task's own files
 
@@ -546,14 +561,19 @@ deliberately, not a chore to rush.
 
 ```
 $ grep -rlE "^import.*libp2p" src/
+src/peer.ts
 src/tokens.ts
 src/transport-duplex.ts
 ```
 
 `tokens.ts`'s hit predates this task (Task 1: `@libp2p/peer-id`/`@libp2p/interface` for
-Ed25519 peerId derivation, not the transport itself) — unrelated to `createPeer`/
-`serveTransport`/`node.handle` and not something this pass introduced or could remove
-without touching Task 1's file.
+Ed25519 peerId derivation, not the transport itself). `peer.ts`'s hit is new in this
+follow-up — `import { generateKeyPair } from "@libp2p/crypto/keys"` for the key-retention
+fix above — and is the same class of exception: `@libp2p/crypto` is Ed25519 key material,
+not the libp2p transport (`node.handle`, `createLibp2p`, stream muxing), which stays
+confined to `transport-duplex.ts` alone. Both hits are substring matches on the literal
+grep pattern (`"libp2p"` inside `@libp2p/peer-id` and `@libp2p/crypto`), not violations of
+the isolation constraint's actual intent.
 
 ```
 $ pnpm install   # from the umbrella root
@@ -567,19 +587,20 @@ $ pnpm run typecheck:tests
 
 $ pnpm vitest run --no-file-parallelism
  Test Files  10 passed (10)
-      Tests  120 passed (120)
+      Tests  123 passed (123)
 
 $ pnpm vitest run --no-file-parallelism tests/peer.test.ts
  Test Files  1 passed (1)
-      Tests  5 passed (5)
+      Tests  8 passed (8)
 
 $ npx biome check src/ tests/ package.json
 (clean, no output; no formatting changes needed)
 ```
 
-Test count moved from 115/115 (end of Task 5) to **120/120** — 5 new cases, all in
-`tests/peer.test.ts`: the two composition proofs and D6/D7/D8, all against two real
-libp2p nodes over loopback TCP.
+Test count moved from 115/115 (end of Task 5) to **123/123** — 8 new cases, all in
+`tests/peer.test.ts`: the two composition proofs, D6/D7/D8 (all against two real libp2p
+nodes over loopback TCP), and three added in this follow-up — the two accessTree/
+vocabulary pairing-guard throws, and the neither-supplied defaults case.
 
 ### `DEFAULT_MAX_STREAMS` / `DEFAULT_DRAIN_TIMEOUT_MS`: why this pair
 
