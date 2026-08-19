@@ -176,12 +176,14 @@ describe("A-1: withAccessTree as middleware", () => {
 
   function subject(usesTransportIdentity: () => boolean = () => false) {
     let reached = false;
-    const handler = withAccessTree({ tree, usesTransportIdentity: async () => usesTransportIdentity() })(
-      async () => {
-        reached = true;
-        return new Response("ok");
-      },
-    );
+    const handler = withAccessTree({
+      tree,
+      vocabulary: DEFAULT_VOCABULARY,
+      usesTransportIdentity: async () => usesTransportIdentity(),
+    })(async () => {
+      reached = true;
+      return new Response("ok");
+    });
     return { handler, reached: () => reached };
   }
 
