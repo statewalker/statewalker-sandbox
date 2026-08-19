@@ -65,7 +65,9 @@ describe("newPeerHandlers", () => {
 
   it("rejects a missing token on an ordinary path", async () => {
     const s = subject({ peer: ALICE, claims: null });
-    expect((await s.handler(req())).status).toBe(401);
+    const res = await s.handler(req());
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "membership token required" });
   });
 
   it("admits a bootstrap request with no token, identity taken from the transport", async () => {
@@ -82,7 +84,13 @@ describe("newPeerHandlers", () => {
 
   it("rejects ANONYMOUS on an ordinary path — distinct from a lost binding", async () => {
     const s = subject({ peer: ANONYMOUS, claims: claimsFor(ALICE) });
-    expect((await s.handler(req())).status).toBe(401);
+    const res = await s.handler(req());
+    expect(res.status).toBe(401);
+    // A different reason than the missing-token case above: this caller DID
+    // present a token, but the transport proved nobody. Pinning the body,
+    // not just the status, keeps the two 401s from silently collapsing into
+    // one generic "unauthorized" if a later refactor merges the branches.
+    expect(await res.json()).toEqual({ error: "possession unproven" });
   });
 
   it("THROWS when the binding was lost, rather than denying", async () => {
