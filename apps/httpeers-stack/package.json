@@ -1,0 +1,29 @@
+{
+  "name": "@statewalker/httpeers-stack",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The installable reference deployment of the httpeers mesh design.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+  },
+  "scripts": {
+    "test": "pnpm run typecheck:tests && vitest run --no-file-parallelism",
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit",
+    "lint": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "@statewalker/httpeers.core": "workspace:*",
+    "hono": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
