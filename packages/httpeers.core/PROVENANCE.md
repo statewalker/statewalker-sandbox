@@ -740,9 +740,11 @@ relay-limit, request-timeout, binding-lost as six. This table has 10 rows resolv
 those six typed classes plus the fallback contract — the **additional, source-derived**
 rows are 1b (single-address unwrap, no libp2p class at all), 1c (the genuine
 `AggregateError` case, distinct code path from 1b, closed with a real test on review), 3a
-(the synchronous outbound-cap throw, a different code path from the inbound-cap reset 3b
-already names — left inspection-backed and explicitly deferred to Task 18's own
-concurrency harness), 3c (the zero-bytes-written reset signature, found only by running
+(the outbound-cap throw — an async rejection, not the synchronous throw an earlier draft of
+this row called it, see the Task 18 section below — a different code path from the
+inbound-cap reset 3b already names — left inspection-backed and explicitly deferred to Task
+18's own concurrency harness at the time this paragraph was first written), 3c (the
+zero-bytes-written reset signature, found only by running
 the test), and the `UnknownPeerCallError` fallback contract — **5 rows beyond the
 minimum**, three of which (1b, 3c, and the general lesson that reading predicted the
 wrong shape for 1b) were only found by running real nodes, not by reading source.
@@ -990,9 +992,18 @@ investigation's variants did not happen to hit (a specific interleaving of Node'
 loop, OS socket buffering, or Yamux frame boundaries the original run encountered).
 **Reproduce it, or establish it does not reproduce, was the assignment; this investigation
 did the latter, under the exact dial-burst framing the reviewer specified rather than the
-cap-exhaustion framing originally (and incorrectly) assigned.** The debug script was removed
-after use (`dial-burst-repro.mjs`, `git status --porcelain` confirms it is not part of this
-diff), matching Task 6a's own precedent.
+cap-exhaustion framing originally (and incorrectly) assigned.**
+
+**Fix round 1 (review):** the debug script was originally deleted after use, matching Task
+6a's own `debug-stream*.mjs` precedent — review correctly flagged that precedent as one
+worth not repeating (a negative result nobody can re-run or vary from a script that no
+longer exists is a narrative, not evidence), so it has been reconstructed and committed at
+`scripts/dial-burst-repro.mjs`, with a header documenting what it looks for, both variants,
+how to run it, and which parameters to vary. See the Task 18 report's "Review follow-up"
+section for exactly what differs between the reconstruction and the original (an import
+switched from a relative disk path to the `@statewalker/webrun-streams-libp2p` package
+specifier; `identify()` parameterized via one constant instead of being a second copy of the
+file) and the sanity re-run performed after reconstruction.
 
 **Consequence for this task's own design:** the semaphore built here does not, and cannot,
 fully close this risk — it only throttles ONE `Remote`'s own OUTBOUND concurrency (this
@@ -1014,7 +1025,9 @@ itself, both outside this task's fragment.
 | `src/errors.ts` | `PeerStreamResetError`'s doc comment: row 3a's "SYNCHRONOUSLY" wording corrected, with the distinction from the dial-burst investigation's genuinely synchronous throw spelled out; cross-references to the new semaphore and to `tests/concurrency.test.ts`. |
 | `src/peer.ts` | `CreatePeerInit` gained `maxConcurrentOutbound`, threaded straight to `createRemote`. No other change. |
 | `tests/concurrency.test.ts` (new) | 4 tests, all against real libp2p nodes: graceful degradation under load past the width (the brief's required Step 4 test), permit release after a failed call, row 3a proven end to end, and the at-limit contract (bounded wait, typed rejection, never ~2x `requestTimeoutMs`). |
-| `PROVENANCE.md` | This section. |
+| `tests/errors.test.ts` | Fix round 1 (review): module header's row 3a description corrected to drop "synchronous" and cross-reference `tests/concurrency.test.ts` and `errors.ts`'s corrected doc comment. No test assertion touched. |
+| `scripts/dial-burst-repro.mjs` (new, fix round 1) | The dial-burst investigation harness, reconstructed and committed rather than left deleted — see "The dial-burst investigation" above and the Task 18 report's "Review follow-up" section. Not a test: outside `tests/`, not matched by `vitest.config.ts`'s `include`, run manually via `pnpm exec tsx scripts/dial-burst-repro.mjs [rounds] [N]`. |
+| `PROVENANCE.md` | This section, plus fix-round-1 amendments to the dial-burst investigation's "Method"/result prose and row 3a's earlier table entry / "rows beyond the minimum" paragraph. |
 
 ### Verification
 
@@ -1040,3 +1053,36 @@ Test count moved from 134/134 to **138/138** — 4 new cases, all in
 observed on a single run of `tests/revocation-e2e.test.ts`'s "E6b" — a hub-stop-then-check
 timing test unrelated to this task's own files; reran clean 3/3 times afterward, and this
 task never touches `apps/httpeers-stack` or that test's own files).
+
+### Fix round 1 (review) — verification
+
+```
+$ pnpm run typecheck
+(clean)
+
+$ pnpm run typecheck:tests
+(clean)
+
+$ npx biome check src/ tests/ scripts/ package.json
+(clean, no output)
+
+$ pnpm vitest run --no-file-parallelism
+ Test Files  12 passed (12)
+      Tests  138 passed (138)
+
+$ grep -rlE "^import.*libp2p" src/
+src/tokens.ts
+src/transport-duplex.ts
+
+$ pnpm exec tsx scripts/dial-burst-repro.mjs 3 30
+[dial-burst-repro] Variant A (separate fresh clients): 3 rounds x 30 concurrent, zero stagger, identify=true
+[dial-burst-repro] Variant B (one connection, N conn.call()): 3 rounds x 30 concurrent, zero stagger, identify=true
+
+[dial-burst-repro] TOTAL uncaught synchronous exceptions observed: 0
+```
+
+138/138 unchanged, exactly as expected — committing the harness and sweeping stale wording
+touch no runtime behavior. The sanity re-run of the reconstructed script (last command
+above) confirms it still exhibits the same shape reported earlier (both variants run, zero
+uncaught exceptions); the full 600-round sweep was not re-run against the committed bytes —
+see the Task 18 report's "Review follow-up" for that judgment call.

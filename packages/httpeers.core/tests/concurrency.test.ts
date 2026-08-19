@@ -159,7 +159,7 @@ describe("T-3: the outbound semaphore", () => {
   );
 
   it(
-    "row 3a: this client's own outbound cap trips synchronously-in-effect (not queued) and surfaces as PeerStreamResetError",
+    "row 3a: this client's own outbound cap trips (rejects without queueing) and surfaces as PeerStreamResetError",
     async () => {
       // Proves Task 17's row 3a end to end (previously inspection-backed
       // only, deferred here): the OUTBOUND cap is `maxOutboundStreams`

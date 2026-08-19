@@ -12,12 +12,14 @@
  * task-17-report.md`) for the full failure -> observation table this file
  * implements, including the rows this file deliberately does NOT test:
  * relay data-limit exceeded (no relay transport in this stack, so
- * unprovokable in-process), the synchronous outbound-stream-cap throw
- * (row 3a -- inspection-backed only, sharing `mapPeerCallError`'s branch
- * with row 3b below, deferred to Task 18's concurrency harness rather than
- * built here), and the concurrency cliff at N=512 itself (Task 18's job,
- * not this one's -- row 3b below proves the same code path at a small,
- * fast N instead).
+ * unprovokable in-process), the outbound-stream-cap throw (row 3a --
+ * this file's own row 3 below proves only the INBOUND cap, row 3b; row 3a
+ * shares `mapPeerCallError`'s branch but is a different libp2p code path,
+ * an async rejection rather than a synchronous throw -- see
+ * `PeerStreamResetError`'s doc comment in `errors.ts` -- and is proven
+ * separately in `tests/concurrency.test.ts` "row 3a", Task 18), and the
+ * concurrency cliff at N=512 itself (Task 18's job, not this one's -- row
+ * 3b below proves the same code path at a small, fast N instead).
  */
 import { generateKeyPair } from "@libp2p/crypto/keys";
 import { identify } from "@libp2p/identify";
