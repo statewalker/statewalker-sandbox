@@ -58,7 +58,7 @@ describe("setup: a clean directory", () => {
     expect(config.relayAddrs[0]).toMatch(/^\/ip4\/127\.0\.0\.1\/tcp\/9090\/ws\/p2p\//);
   });
 
-  it("derives relayAddrs from RELAY_HOST/RELAY_PORT", async () => {
+  it("derives relayAddrs from RELAY_HOST/RELAY_PORT -- an IPv4 literal host stays /ip4/", async () => {
     const { relayKeyPath, hubKeyPath, configPath } = paths(workDir);
     const result = await runSetup({
       relayKeyPath,
@@ -76,6 +76,57 @@ describe("setup: a clean directory", () => {
     const result = await runSetup({ relayKeyPath, hubKeyPath, configPath, relayTls: true });
 
     expect(result.config.relayAddrs[0]).toMatch(/^\/ip4\/127\.0\.0\.1\/tcp\/9090\/wss\/p2p\//);
+  });
+
+  it("a RELAY_HOST hostname produces a /dns4/ relay address, not /ip4/", async () => {
+    // `net.isIP("relay.example.com")` is 0 (not an IP literal), so
+    // `relayAddrFamily` must fall through to `dns4` -- the branch this
+    // test pins directly, independent of TLS.
+    const { relayKeyPath, hubKeyPath, configPath } = paths(workDir);
+    const result = await runSetup({
+      relayKeyPath,
+      hubKeyPath,
+      configPath,
+      relayHost: "relay.example.com",
+    });
+
+    expect(result.config.relayAddrs[0]).toMatch(
+      /^\/dns4\/relay\.example\.com\/tcp\/9090\/ws\/p2p\//,
+    );
+  });
+
+  it("a hostname RELAY_HOST combined with TLS produces /dns4/.../wss -- the shape a server deployment actually needs", async () => {
+    // This is the deployment-relevant combination: a browser cannot dial a
+    // bare IP literal over TLS (the certificate would not match it), so a
+    // server run's relay address must be BOTH /dns4/ (not /ip4/) AND /wss/
+    // (not /ws/) for the "set TLS_CERT/TLS_KEY, no other change" acceptance
+    // criterion to actually hold. Matches the design record's own
+    // `/dns4/host/tcp/443/wss` example.
+    const { relayKeyPath, hubKeyPath, configPath } = paths(workDir);
+    const result = await runSetup({
+      relayKeyPath,
+      hubKeyPath,
+      configPath,
+      relayHost: "relay.example.com",
+      relayPort: 443,
+      relayTls: true,
+    });
+
+    expect(result.config.relayAddrs[0]).toMatch(
+      /^\/dns4\/relay\.example\.com\/tcp\/443\/wss\/p2p\//,
+    );
+  });
+
+  it("an IPv6 literal RELAY_HOST produces /ip6/ -- falls out of net.isIP for free, not a general address layer", async () => {
+    const { relayKeyPath, hubKeyPath, configPath } = paths(workDir);
+    const result = await runSetup({
+      relayKeyPath,
+      hubKeyPath,
+      configPath,
+      relayHost: "::1",
+    });
+
+    expect(result.config.relayAddrs[0]).toMatch(/^\/ip6\/::1\/tcp\/9090\/ws\/p2p\//);
   });
 });
 

@@ -769,11 +769,17 @@ against the real installed `@libp2p/crypto`, not hand-typed.
 
 `runSetup(init)` calls `loadOrGenerateKey` for both roles, derives each peerId
 (`peerIdFromPrivateKey` — the same computation `httpeers.core`'s `tokens.ts` uses for
-`mintToken`), and writes `{ relayAddrs: ["/ip4/<RELAY_HOST>/tcp/<RELAY_PORT>/<ws|wss>/p2p/<relayPeerId>"], hubPeerId }`.
-`RELAY_HOST` defaults to `127.0.0.1` (matching the design record's own example — no `dns4`
-addressing or hostname handling was added; only ever consumed as a literal IPv4 host
-string, which is what every existing invocation of this stack uses). The `ws`/`wss`
-scheme switches on whether both `TLS_CERT` and `TLS_KEY` are set — the CLI's own
+`mintToken`), and writes `{ relayAddrs: ["/<family>/<RELAY_HOST>/tcp/<RELAY_PORT>/<ws|wss>/p2p/<relayPeerId>"], hubPeerId }`.
+`RELAY_HOST` defaults to `127.0.0.1` (matching the design record's own example). The
+multiaddr protocol segment (`<family>`) is **not** hardcoded to `ip4` — `relayAddrFamily(host)`
+picks `ip4`/`ip6` for an IP literal (`node:net`'s `isIP`) and `dns4` for anything else (a
+hostname), because a browser cannot dial a bare IP literal over TLS (the certificate would
+not match it): a server deployment's `wss` relay address must be `/dns4/host/tcp/443/wss`,
+per the design record's own local-vs-server table, or it is undialable from the very peers
+the deployment exists to serve. This was found missing on first review (an earlier version
+of this section documented IPv4-only address building as an accepted deviation) and fixed
+before landing — see "Deviations from the brief, and why" below, corrected accordingly. The
+`ws`/`wss` scheme switches on whether both `TLS_CERT` and `TLS_KEY` are set — the CLI's own
 `relayTls: boolean` flag, not the cert/key content itself, since `httpeers.json` only
 ever needs to know which scheme to write, never the certificate material.
 
@@ -853,13 +859,16 @@ now boots with the SAME peerId `httpeers.json` names —
 `12D3KooWCXYEeYzHWgTw3mqQpaYxWmWZeqPNRvLrrfjXz5QxYtu9` on both sides, captured directly
 from the two processes' own output, a fresh run distinct from the pre-fix capture above.
 
-### Step 5: the tests (`tests/setup.test.ts`, 14 cases)
+### Step 5: the tests (`tests/setup.test.ts`, 17 cases)
 
 | Test | Proves |
 | --- | --- |
 | "writes both keys and a config whose hubPeerId matches the hub key" | The brief's baseline case — both key files decode as Ed25519, `httpeers.json`'s `hubPeerId` matches the hub key's derived peerId. |
-| "derives relayAddrs from RELAY_HOST/RELAY_PORT" | The address-derivation rule, independent of TLS. |
+| "derives relayAddrs from RELAY_HOST/RELAY_PORT -- an IPv4 literal host stays /ip4/" | The address-derivation rule for an IPv4 literal, independent of TLS. |
 | "TLS env produces a wss relay address" | `relayTls: true` → `wss` scheme, no second code path. |
+| "a RELAY_HOST hostname produces a /dns4/ relay address, not /ip4/" | `relayAddrFamily`'s hostname branch — added on review, see "Deviations" below. |
+| "a hostname RELAY_HOST combined with TLS produces /dns4/.../wss..." | The deployment-relevant combination the final task's acceptance criterion actually names. |
+| "an IPv6 literal RELAY_HOST produces /ip6/..." | The one-line IPv6 branch that fell out of `node:net`'s `isIP` for free. |
 | "does not change either key or the config" (idempotence) | `Buffer.equals` on all three files across two `runSetup` calls — not "no error." |
 | "a third run, with different relayHost/relayPort, still reuses the same keys" | The mesh identity survives a config-only re-run. |
 | "HUB_SEED produces a deterministic, documented peerId" / "RELAY_SEED produces a deterministic, documented peerId..." | Fixed seed strings pinned to real, computed peerIds (see Step 1). |
@@ -882,11 +891,21 @@ are verified by running the real script as a subprocess instead (`tsx src/hub/ma
 - **`src/hub/main.ts` modified** — not in the brief's file list. Required, escalated
   before writing any code, and confirmed by the team lead; see Step 4 above for the full
   reasoning and the defect it closes.
-- **`RELAY_HOST` is only ever treated as a literal IPv4 host string** (`/ip4/<host>/...`)
-  — the brief names the env var but not whether it might carry a hostname needing
-  `/dns4/`. Not needed by anything in this task or the design record's own example
-  (`/ip4/127.0.0.1/...`); flagged here in case a later task's deployment target is a real
-  hostname rather than an IP.
+- **`RELAY_HOST` address-family handling was flagged, then corrected before landing** —
+  the first pass treated `RELAY_HOST` as a literal IPv4 host string only
+  (`/ip4/<host>/...`) and flagged this as a possible gap. Review found it was a real
+  defect, not a note: a `wss` relay address built as `/ip4/<hostname>/...` is undialable
+  from a browser (a TLS certificate cannot match a bare IP literal), and it broke the
+  final task's stated acceptance criterion (setting `TLS_CERT`/`TLS_KEY` alone should
+  produce a working `wss` relay address, with no other change). Fixed:
+  `relayAddrFamily(host)` (`node:net`'s `isIP`) now picks `dns4` for a hostname, `ip4`
+  for an IPv4 literal (the existing local default, `127.0.0.1`, is unaffected), and `ip6`
+  for an IPv6 literal (included because it fell out of `isIP` as a one-line branch, not
+  because a general address-parsing layer was built — no other address form was added).
+  Three tests added (hostname → `/dns4/`, hostname+TLS → `/dns4/.../wss` — the
+  deployment-relevant combination — and an IPv6 literal → `/ip6/`); no existing assertion
+  changed. See `.superpowers/sdd/2026-08-18-httpeers-stack/task-10-report.md`'s addendum
+  for the full before/after evidence.
 - **The seed-derivation algorithm (SHA-256 expansion to 32 bytes) is this task's own
   choice** — the brief specifies the env vars and the "deterministic, documented peerId"
   requirement but not the derivation itself. Documented in `keys.ts`'s module comment and
@@ -915,7 +934,7 @@ $ pnpm run typecheck && pnpm run typecheck:tests
 (clean, both)
 $ pnpm exec vitest run --no-file-parallelism
  Test Files  8 passed (8)
-      Tests  83 passed (83)
+      Tests  86 passed (86)
 $ grep -rlE 'from "(@chainsafe/libp2p|@libp2p/|libp2p)' src/
 src/hub/main.ts
 src/setup/keys.ts
@@ -924,7 +943,8 @@ $ grep -rlE 'from "(@chainsafe/libp2p|@libp2p/|libp2p)' tests/
 tests/setup.test.ts
 ```
 
-**146 core (unchanged) / 69 → 83 app** (14 new, all in `tests/setup.test.ts`; the seven
+**146 core (unchanged) / 69 → 86 app** (17 new, all in `tests/setup.test.ts` — 14 from
+the initial pass plus 3 more from the `RELAY_HOST` address-family fix; the seven
 previously-passing files — `admin.test.ts`, `chain.test.ts`, `hub.test.ts`,
 `integration.test.ts`, `revocation-e2e.test.ts`, `search.test.ts`,
 `static-server.test.ts` — are unmodified and still passing).

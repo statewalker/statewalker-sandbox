@@ -19,12 +19,43 @@
  * with DIFFERENT `RELAY_HOST`/`RELAY_PORT`/TLS env still reuses the same
  * keys and only the config's addresses change -- the mesh identity itself
  * never moves.
+ *
+ * ADDRESS FAMILY MATTERS FOR TLS, NOT JUST COSMETICALLY. A browser cannot
+ * dial a bare IP literal over TLS -- the certificate will not match it --
+ * so a server deployment's `wss` relay address MUST be built as
+ * `/dns4/<host>/...`, never `/ip4/<host>/...`, or it is undialable from the
+ * very peers the deployment exists to serve (design note's local-vs-server
+ * table: `/ip4/0.0.0.0/tcp/9090/ws` locally, `/dns4/host/tcp/443/wss` on a
+ * server, same env/cert). `relayAddrFamily` below is the one place that
+ * decides this, via `node:net`'s own `isIP` -- not a general address-
+ * parsing layer, just the one branch this invitation payload needs.
  */
+
 import { mkdirSync, writeFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { dirname, resolve } from "node:path";
 import { DEFAULT_HUB_KEY_PATH } from "../hub/main.js";
 import { DEFAULT_RELAY_KEY_PATH, DEFAULT_RELAY_PORT } from "../relay/main.js";
 import { loadOrGenerateKey, peerIdOf } from "./keys.js";
+
+/**
+ * The multiaddr protocol segment for `host`: `ip4`/`ip6` for an IP literal
+ * (`node:net`'s `isIP` -- 4 or 6), `dns4` for anything else (a hostname).
+ * `dns4` rather than a bare `dns` because every consumer here dials over
+ * IPv4-resolving infrastructure (matches the design record's own
+ * `/dns4/host/tcp/443/wss` example) -- if a deployment ever needs `dns6`,
+ * that is a real, separate decision, not implied by this function's name.
+ */
+function relayAddrFamily(host: string): "ip4" | "ip6" | "dns4" {
+  switch (isIP(host)) {
+    case 4:
+      return "ip4";
+    case 6:
+      return "ip6";
+    default:
+      return "dns4";
+  }
+}
 
 /** Where `pnpm setup` writes the invitation payload -- matches `../static-server/main.ts`'s `DEFAULT_HTTPEERS_CONFIG_PATH`. */
 export const DEFAULT_CONFIG_PATH = "./httpeers.json";
@@ -44,7 +75,14 @@ export interface SetupInit {
   hubKeyPath?: string;
   /** Defaults to `DEFAULT_CONFIG_PATH`. */
   configPath?: string;
-  /** Defaults to `DEFAULT_RELAY_HOST` ("127.0.0.1"). The host peers dial the relay at -- not necessarily where the relay binds (that is always `0.0.0.0`, see `relay/main.ts`). */
+  /**
+   * Defaults to `DEFAULT_RELAY_HOST` ("127.0.0.1"). The host peers dial the
+   * relay at -- not necessarily where the relay binds (that is always
+   * `0.0.0.0`, see `relay/main.ts`). May be an IPv4/IPv6 literal or a
+   * hostname; `relayAddrFamily` picks the right multiaddr protocol segment
+   * for whichever is given (see the module comment's "ADDRESS FAMILY"
+   * note) -- callers never need to say which kind of host this is.
+   */
   relayHost?: string;
   /** Defaults to `DEFAULT_RELAY_PORT` (9090). */
   relayPort?: number;
@@ -81,7 +119,7 @@ export async function runSetup(init: SetupInit = {}): Promise<SetupResult> {
   const port = init.relayPort ?? DEFAULT_RELAY_PORT;
 
   const config: HttpeersConfig = {
-    relayAddrs: [`/ip4/${host}/tcp/${port}/${scheme}/p2p/${relayPeerId}`],
+    relayAddrs: [`/${relayAddrFamily(host)}/${host}/tcp/${port}/${scheme}/p2p/${relayPeerId}`],
     hubPeerId,
   };
 
