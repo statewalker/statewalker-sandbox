@@ -39,11 +39,14 @@ import {
   lookupPeer,
 } from "@statewalker/httpeers.core";
 import { Hono } from "hono";
+import { createAdminEndpoints } from "./admin.js";
 import type { AdvertisementPayload } from "./mesh-view.js";
 import { buildMeshView } from "./mesh-view.js";
 import type { InvitationStore } from "./persist.js";
+import { createSearchEndpoint, fixtureUpstream } from "../services/search.js";
+import type { SearchUpstream } from "../services/search.js";
 
-/** The capability that grants admin visibility — sees `hidden` members and, in a later task, `/admin/*`. */
+/** The capability that grants admin visibility — sees `hidden` members and gates `/admin/*` (Task 8's `DELETE /admin/members/{peerId}` included). */
 export const ADMIN_CAPABILITY = "std:mesh.admin";
 
 /** Presence TTL: an entry not refreshed within this window is swept. */
@@ -106,6 +109,8 @@ export interface HubEndpointsInit {
   advertisementAccess?: Record<string, string>;
   presenceTtlMs?: number;
   now?: () => number;
+  /** Where `GET /search` gets its results. Defaults to `fixtureUpstream` (`services/search.ts`) — no network egress, deterministic. */
+  searchUpstream?: SearchUpstream;
 }
 
 export interface HubEndpoints {
@@ -341,6 +346,42 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
   mounts.provide("/.well-known", app.fetch as FetchHandler);
   mounts.provide("/test", createTestSurfaceHandler(init.selfPeerId));
   mounts.provide("/admin", app.fetch as FetchHandler);
+  // Longer prefix wins (R-1): "/admin/members" is more specific than the
+  // "/admin" mount above, so DELETE /admin/members/{peerId} reaches
+  // admin.ts's handler while GET /admin/invitations keeps hitting `app`.
+  mounts.provide(
+    "/admin/members",
+    createAdminEndpoints({ memberStore: init.memberStore, revocations: init.revocations }),
+  );
+  // `/search`'s `.access` entry (`policy.ts`) only checks the CAPABILITY a
+  // token's roles expand to -- and a revoked member's already-issued token
+  // is still cryptographically valid, still carries "member", until it
+  // expires on its own. Revocation therefore needs an EXTRA check here,
+  // same idea as the bootstrap presence handler's `memberStore.get`
+  // above but reused for a non-bootstrap, capability-gated route: is the
+  // caller still a current member RIGHT NOW, not just "was one when this
+  // token was minted." `"membership revoked"` deliberately echoes
+  // `RevocationCache.check`'s own wording (`revocation.ts`) for a caller
+  // that greps for that phrase, even though this is a direct, synchronous
+  // check against this hub's own live `memberStore` -- correct specifically
+  // BECAUSE this handler runs on the hub itself, which holds the source of
+  // truth directly and has no reason to wait for a pulled cache the way a
+  // remote provider does. Deliberately scoped to `/search` only: no other
+  // route in this task's brief needs it, and adding it everywhere is a
+  // bigger change than this task asked for.
+  const requireCurrentMembership =
+    (handler: FetchHandler): FetchHandler =>
+    async (req) => {
+      const claims = claimsOf(req);
+      if (claims != null && init.memberStore.get(claims.sub) == null) {
+        return json({ error: "membership revoked" }, 403);
+      }
+      return handler(req);
+    };
+  mounts.provide(
+    "/search",
+    requireCurrentMembership(createSearchEndpoint({ upstream: init.searchUpstream ?? fixtureUpstream })),
+  );
 
   return {
     mounts,
