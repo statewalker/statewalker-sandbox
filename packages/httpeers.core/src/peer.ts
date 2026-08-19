@@ -23,17 +23,26 @@
  * it has re-created the `Request` (note 07 §4): `newPeerHandlers` runs
  * directly on the request `serveTransport`'s per-stream closure registered
  * the peer on, with nothing re-constructing it in between.
+ *
+ * MOUNTS MAY BE A FACTORY, NOT ONLY A VALUE. A hub mints tokens with the
+ * signing key `createPeer` retains (see `privateKey` below); its endpoints
+ * need that capability, but this package must never learn what a "hub" is —
+ * that would make the library import the application. So `mounts` may be a
+ * function `(ctx) => Mounts`, called once construction has a `privateKey`
+ * and a `selfPeerId`, receiving only a scoped `mintToken(sub, roles, ttlMs?)`
+ * closure — never the key itself. An application builds whatever endpoints
+ * it needs against that one capability; `createPeer` stays hub-agnostic.
  */
-import { DEFAULT_ACCESS_TREE } from "./access-tree.js";
+
 import type { AccessTree } from "./access-tree.js";
-import { withAccessTree } from "./access-tree.js";
+import { DEFAULT_ACCESS_TREE, withAccessTree } from "./access-tree.js";
 import { cacheClaims, lookupClaims, lookupPeer } from "./peer-context.js";
 import { newPeerHandlers } from "./peer-handlers.js";
 import type { RevocationCache } from "./revocation.js";
 import { createMounts, createPeerRouter } from "./router.js";
+import { generateMeshKey, mintToken, verifyToken } from "./tokens.js";
 import type { Ed25519PrivateKey, Libp2p } from "./transport-duplex.js";
 import { createNode, createRemote, PROTOCOL, serveTransport } from "./transport-duplex.js";
-import { generateMeshKey, verifyToken } from "./tokens.js";
 import type {
   FetchHandler,
   GetClaims,
@@ -46,8 +55,33 @@ import type {
   UsesTransportIdentity,
 } from "./types.js";
 import { ANONYMOUS, json } from "./types.js";
-import { DEFAULT_VOCABULARY } from "./vocabulary.js";
 import type { Vocabulary } from "./vocabulary.js";
+import { DEFAULT_VOCABULARY } from "./vocabulary.js";
+
+/**
+ * Default token lifetime for `MountsFactoryContext.mintToken` when a caller
+ * omits `ttlMs`. `mintToken` in `tokens.ts` requires it explicitly (a
+ * security-sensitive primitive should never guess); this is the one default
+ * an *application* built on top of it may reasonably want. No note or spec
+ * fixes a number, so this is chosen for this package: an order of magnitude
+ * above a 5-second heartbeat interval, enough slack for a few missed beats
+ * before a member-minted token itself expires (independent of revocation,
+ * which is enforced separately via the pulled version vector).
+ */
+export const DEFAULT_MINT_TTL_MS = 60_000;
+
+/**
+ * What a `mounts` factory receives: this peer's own `peerId`, and a
+ * capability to mint membership tokens that self-certify against it — never
+ * the signing key itself. See the module comment's "MOUNTS MAY BE A
+ * FACTORY" note for why this exists instead of exposing `privateKey`
+ * directly.
+ */
+export interface MountsFactoryContext {
+  peerId: PeerIdStr;
+  /** Defaults `ttlMs` to `DEFAULT_MINT_TTL_MS` when omitted. */
+  mintToken: (sub: string, roles: string[], ttlMs?: number) => Promise<string>;
+}
 
 /**
  * The default mount when the caller supplies no `mounts` table of its own:
@@ -101,9 +135,14 @@ export interface CreatePeerInit {
   /**
    * Defaults to a mount table with a single diagnostic `/test/whoami`
    * handler (see `defaultMounts`) — enough to prove routing, identity and
-   * policy end to end without depending on Task 7's hub endpoints.
+   * policy end to end without depending on an application's own endpoints.
+   *
+   * May be a plain `Mounts`, or a factory `(ctx: MountsFactoryContext) =>
+   * Mounts` called once this peer's signing key and peerId are settled — the
+   * shape an application that needs to mint tokens (e.g. a mesh's hub) must
+   * use, since the key itself is never exposed. See `MountsFactoryContext`.
    */
-  mounts?: Mounts;
+  mounts?: Mounts | ((ctx: MountsFactoryContext) => Mounts);
   /**
    * Defaults to `DEFAULT_ACCESS_TREE`, but only paired with `vocabulary`
    * defaulting too — see `vocabulary` below.
@@ -124,13 +163,10 @@ export interface CreatePeerInit {
   /**
    * The mesh (hub) peerId membership tokens must self-certify against —
    * `verifyToken`'s `issuer` option. Defaults to `selfPeerId`: a peer that
-   * names no other mesh trusts only tokens it minted itself. `isHub` is the
-   * same default spelled out explicitly, for a caller that wants the call
-   * site to say so; passing both is fine as long as they agree.
+   * names no other mesh trusts only tokens it minted itself — which is
+   * exactly the mesh's own hub, with no separate flag needed to say so.
    */
   hubPeerId?: PeerIdStr;
-  /** Documents "this peer trusts only its own tokens" — the default when `hubPeerId` is omitted. See `hubPeerId`. */
-  isHub?: boolean;
   /**
    * Does a given request bootstrap identity from the transport handshake
    * alone, with no token expected yet? Defaults to "never" — Task 6 mounts
@@ -189,7 +225,11 @@ export interface Peer {
    * peer prefix (`/​{otherPeerId}/...`) to ask `targetPeerId` to forward —
    * subject to *its* `allowRelay`/`allowForward` policy, not this peer's.
    */
-  call: (targetPeerId: PeerIdStr, path: string, init?: RequestInit & { token?: string }) => Promise<Response>;
+  call: (
+    targetPeerId: PeerIdStr,
+    path: string,
+    init?: RequestInit & { token?: string },
+  ) => Promise<Response>;
   /** The composed router: transport hands every inbound request here. */
   dispatch: FetchHandler;
   /** Dial another peer and get its response. Outbound, identity-free. */
@@ -201,7 +241,7 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
   const {
     node: suppliedNode,
     listen,
-    mounts = defaultMounts(),
+    mounts: mountsInit,
     usesTransportIdentity = async () => false,
     revocationCache,
     allowRelay = false,
@@ -243,10 +283,37 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
   const ownsNode = suppliedNode == null;
 
   const selfPeerId = init.selfPeerId ?? node.peerId.toString();
-  // `hubPeerId` (or its `isHub`-spelled default) is `verifyToken`'s
-  // `issuer`: the mesh this peer's tokens must self-certify against.
-  // Defaulting to `selfPeerId` means "trust only tokens I minted myself."
+  // `hubPeerId` is `verifyToken`'s `issuer`: the mesh this peer's tokens
+  // must self-certify against. Defaulting to `selfPeerId` means "trust only
+  // tokens I minted myself."
   const issuer = init.hubPeerId ?? selfPeerId;
+
+  // Resolve `mounts` now that `privateKey`/`selfPeerId` are settled: a
+  // factory gets a `mintToken` closure over the retained key (never the key
+  // itself), so an application can mint tokens without this package ever
+  // learning what a "hub" is. `privateKey` is only actually missing here for
+  // a caller-supplied `node` with no key handed to us — the closure throws
+  // lazily, only if a factory that needed it is actually called, rather than
+  // failing every plain-`Mounts` or non-minting caller up front.
+  const mintTokenForMounts = async (
+    sub: string,
+    roles: string[],
+    ttlMs = DEFAULT_MINT_TTL_MS,
+  ): Promise<string> => {
+    if (privateKey == null) {
+      throw new Error(
+        "createPeer: a mounts factory called mintToken, but no signing key is available -- " +
+          "supply `privateKey`, or omit `node` so createPeer generates and retains one itself.",
+      );
+    }
+    return mintToken({ privateKey, sub, roles, ttlMs });
+  };
+  const mounts =
+    mountsInit == null
+      ? defaultMounts()
+      : typeof mountsInit === "function"
+        ? mountsInit({ peerId: selfPeerId, mintToken: mintTokenForMounts })
+        : mountsInit;
 
   // --- seams ---------------------------------------------------------------
 
@@ -295,7 +362,9 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
         usesTransportIdentity,
         getClaims,
         isRevoked,
-        handleEndpoints: withAccessTree({ tree: accessTree, vocabulary, usesTransportIdentity })(local),
+        handleEndpoints: withAccessTree({ tree: accessTree, vocabulary, usesTransportIdentity })(
+          local,
+        ),
       }),
     allowForward: async (req) => {
       // `undefined` (no binding at all) means this request never passed

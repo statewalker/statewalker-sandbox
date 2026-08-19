@@ -661,3 +661,41 @@ low bandwidth, short enough that the worst case — all 512 streams held open by
 never reads any of them — caps out at `512 * 15_000ms` ≈ **2.1 stream-hours**, recoverable
 within one operational window rather than requiring intervention. The two constants are
 chosen together, against that one product, not independently.
+
+## Task 7a — one additive change: `mounts` may be a factory
+
+The team lead's original dispatch for Task 7a asked `createPeer` to construct the hub's
+own endpoints internally, gated by the already-declared-but-inert `isHub` flag. That was
+corrected before implementation started: it would have made the *library* import the
+*application* and know what a hub is, which collapses the library/application split the
+whole design rests on (spec §5.2: the hub is an ordinary peer, not a special type). The
+corrected design, implemented here, is additive rather than that reversal:
+
+| File | Change | Why |
+| --- | --- | --- |
+| `src/peer.ts` | `CreatePeerInit.mounts` widened from `Mounts` to `Mounts \| ((ctx: MountsFactoryContext) => Mounts)`. New exports `MountsFactoryContext` (`{ peerId, mintToken }`) and `DEFAULT_MINT_TTL_MS` (`60_000`). `createPeer` resolves `mounts` after `privateKey`/`selfPeerId` are settled, and — only when `mounts` is a function — calls it with a `mintToken(sub, roles, ttlMs?)` closure over the retained signing key. The key itself is never exposed. | Lets an application (the hub, in `apps/httpeers-stack`) mint tokens without this package ever learning what a "hub" is. `mintToken`'s default `ttlMs` lives here, not in `tokens.ts`, because a security primitive should never guess a default — that stays this *application-facing* convenience's job. |
+| `src/peer.ts` | `CreatePeerInit.isHub` removed. | Confirmed unread anywhere (`grep -rn isHub src/ tests/` before removal matched only its own three doc-comment mentions). Task 6b's review had already flagged it as "declared but never read... an inert-but-typed field is easy to later assume does something" and deferred the question to this task. Under the corrected (factory) design it has no remaining role: "is this peer a hub" is now simply "did the caller supply a minting `mounts` factory," which needs no separate flag to say so. Removing dead API surface beats leaving it mean nothing, especially after review had already named the risk. |
+
+No other file in this package changed for Task 7a — everything else (hub endpoints, the
+mesh view, invitations, persistence, the two CHANGES deltas) lives in the new
+`apps/httpeers-stack` app; see `apps/httpeers-stack/PROVENANCE.md`.
+
+```
+$ pnpm run typecheck
+(clean)
+
+$ pnpm run typecheck:tests
+(clean)
+
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  10 passed (10)
+      Tests  124 passed (124)
+
+$ grep -rlE "^import.*libp2p" src/
+src/tokens.ts
+src/transport-duplex.ts
+```
+
+Test count unchanged at 124/124 — this task added no new core tests (Step 8b's tests
+exercise the app, over the real `createPeer` composition, in `apps/httpeers-stack/tests/
+hub.test.ts`).

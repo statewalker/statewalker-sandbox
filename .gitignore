@@ -7,3 +7,5 @@ coverage/
 .DS_Store
 .env
 .env.local
+# httpeers-stack: generated signing keys and the hub's persisted state snapshot.
+.httpeers/
