@@ -447,3 +447,161 @@ $ npx biome check src/revocation.ts tests/revocation.test.ts src/index.ts
 
 Test count moved from 105/105 (end of Task 4) to **115/115** — 10 new cases, all in
 `tests/revocation.test.ts`, all promoted from the archive's unit-test block.
+
+## Task 6b — transport adapter and peer assembly over the shared stack
+
+Second of three passes over Task 6 (`task-6-brief.md`'s Steps 1 and 2). Step 0 (null-body
+statuses over `Duplex`, in `webrun-wire`) landed separately at `e73717c`. Steps 3a/3b
+(promoting `chain.test.ts`'s C1-C7 and the Node↔Node `integration.test.ts`) are Task 6c —
+out of scope here, deliberately not written.
+
+A previous, undifferentiated attempt at all of Task 6 timed out; its work survives as a
+grade-C reference at `.superpowers/sdd/2026-08-18-httpeers-stack/task-6-wip-gradeC/`
+(`transport-duplex.ts`, `peer.ts`). It predates Task 6a (`webrun-streams-libp2p`'s
+`maxInboundStreams`/`maxOutboundStreams`/`runOnLimitedConnection`, landed at `837ed72`) and
+was never run.
+
+| File | Actual basis | How resolved |
+| --- | --- | --- |
+| `src/transport-duplex.ts` | The grade-C reference's shape (`serveTransport`/`createRemote` over `serveConnections`/`connect` from `@statewalker/webrun-streams-libp2p`, `PROTOCOL = "/httpeers/1.0.0"`, identity registered per-inbound-stream before `dispatch` runs) is sound and was kept. What it lacked — and what made it untested against Task 6a — was added: `maxInboundStreams`/`maxOutboundStreams` threaded into both `serveConnections` (server) and `connect` (client) from a new `DEFAULT_MAX_STREAMS = 512` constant, and an explicit `DEFAULT_DRAIN_TIMEOUT_MS = 15_000` replacing `webrun-streams-libp2p`'s 5-minute default. Later (after the team lead's second dispatch establishing the `createPeer` contract other archived suites are written against — see below), this file also gained `createNode({ listen })`: a small `createLibp2p` wrapper (TCP + Noise + Yamux + identify) so `peer.ts` can build its own node when the caller doesn't supply one, keeping this file the only one in the package that imports libp2p transport machinery. | Team lead's dispatch: "quarry, not adopt" the grade-C reference; Task 6a's landed commit for the stream-limit fields; team lead's follow-up message establishing `listen`/`createPeer`-owns-its-node. |
+| `src/peer.ts` | Also the grade-C reference's shape and composition order (transport → `registerPeer` → binding middleware → access policy → router → mounts; binding outside, policy inside; the deliberate non-null `lookupPeer(req)!` in `getPeerId` preserved verbatim, per explicit instruction not to "improve" it into `?? ANONYMOUS`). Its imports already named the shipped API (`withAccessTree`, `DEFAULT_ACCESS_TREE`, `usesTransportIdentity`) rather than the superseded names the dispatch warned about (`withAccessPolicy`/`DEFAULT_ACCESS_RULES`/`isTrustedPath`) — nothing to replace there. Rewritten on top of that shape per the team lead's follow-up "interface contract" message (see below): `CreatePeerInit` gained `node?`, `listen?`, `selfPeerId?`, `mounts?`, `accessTree?`, `vocabulary?`, `hubPeerId?`, `isHub?` — all optional, matching the four example calls (`{isHub:true, listen}`, `{hubPeerId, listen}`, `{hubPeerId, listen, allowRelay:true}`, `{hubPeerId}` with no listen) a later task's promoted suites are written against. `Peer` gained `peerId`, `libp2p`, `addrs()`, `call(targetPeerId, path, {token, ...RequestInit})` alongside the original `dispatch`/`remote`/`stop`. `mounts`/`accessTree`/`vocabulary` default to a new `defaultMounts()` (one diagnostic `/test/whoami` handler), `DEFAULT_ACCESS_TREE`, `DEFAULT_VOCABULARY` respectively — inferred, not dictated verbatim; see "Open question" below. | Team lead's dispatch (composition order, non-null assertion, `isRevoked` sync wrap, `allowForward` policy) plus a follow-up "interface contract" message giving the exact `createPeer(init)`/`Peer` shape two not-yet-promoted archived suites are written against. |
+| `src/index.ts` | Two-line addition: `export * from "./transport-duplex.js";` and `export * from "./peer.js";`. | Mechanical — same barrel-export convention as every prior task. |
+| `tests/peer.test.ts` | Not a promotion. Re-derived from folder `26`'s `duplex-identity.test.ts` (D6/D7/D8, "is the recovered identity trustworthy — under concurrency, and against a forged header") against the shipped API rather than that prototype's `vendor/` copies, driven through `createPeer` rather than a bespoke `httpOverLibp2p` helper so it also proves the composition (binding + policy), not just the transport. Two composition-only cases added beyond D6-D8: a valid token reaching the mounted handler, and a `claims.sub` naming a different peer than the connection proved getting 403. The full node↔node suite (headers, query strings, streaming, 40-concurrent, bodiless statuses, non-ASCII) is Task 6c's promoted `integration.test.ts` — deliberately a different filename so that promotion lands without a name collision. | Team lead's dispatch: "re-derive D6, D7, D8" against the shipped API; folder `26`'s test file read for the properties, not promoted (it imports non-existent `vendor/` paths). |
+| `package.json` | Added `@multiformats/multiaddr`, `@statewalker/webrun-http-streams` (workspace:*), `@statewalker/webrun-streams-libp2p` (workspace:*) plus the full libp2p family (`libp2p`, `@libp2p/tcp`, `@chainsafe/libp2p-noise`, `@chainsafe/libp2p-yamux`, `@libp2p/identify`) as **dependencies** (not devDependencies) — `transport-duplex.ts`'s `createNode` constructs a real node at runtime, not just under test. `@libp2p/crypto` stayed a devDependency; it is only used by `tests/peer.test.ts` for `generateKeyPair`. | Dispatch's exact-pinned version list; moved to `dependencies` once `createNode` became load-bearing rather than test-only (see the interface-contract addition above). |
+
+### The `createPeer` contract: two dispatches, not one
+
+The team lead's original dispatch specified `createPeer({ node, selfPeerId, mounts,
+accessTree, vocabulary, allowRelay?, maxStreams? })` — `node` required, caller-built.
+Partway through this task, the team lead sent a second message: two archived test suites
+not yet promoted (a later task) were originally written against a **different**
+`createPeer` shape — `{ isHub?, hubPeerId?, listen?, allowRelay? }`, all optional, and a
+`Peer` with `.peerId`, `.libp2p`, `.addrs()`, `.call(target, path, {token})`, `.stop()` —
+and asked that this task's `createPeer` match it, so that later promotion lands cleanly
+rather than rediscovering the drift.
+
+Both shapes are satisfied simultaneously: `node` is still accepted (and still what
+`tests/peer.test.ts` in this task passes — the team lead was explicit that pass's own
+tests do not change), but is now optional. When omitted, `createPeer` builds one itself
+via `transport-duplex.ts`'s new `createNode({ listen })`. A caller-supplied node is never
+stopped by `Peer.stop()`; a self-built one is. `selfPeerId` now defaults to the node's own
+peerId. `hubPeerId` replaces `issuer` as the field name (same semantics: `verifyToken`'s
+`issuer`, defaulting to `selfPeerId`); `isHub` is accepted and documents that default
+explicitly but has no additional runtime effect.
+
+### Open question, not resolved in this task: minting for a self-built hub
+
+`createPeer({ isHub: true, listen: [...] })` builds its own node with an
+internally-generated, inaccessible-from-outside private key (`createLibp2p` does not hand
+it back). If a later task's promoted suite needs to mint tokens whose `mesh` is that hub's
+own peerId — required by `verifyToken`'s self-certification check — there is currently no
+way to extract that key from a self-built `Peer`. Flagged to the team lead rather than
+guessed at: possible closes are a `CreatePeerInit.privateKey` passthrough to `createNode`
+(so a test can mint directly via `tokens.ts`, mirroring how this task's own
+`tests/peer.test.ts` mints — with a separately-tracked `hubKey`, independent of any
+`createPeer` instance) or a `Peer` minting convenience. Neither exists yet; this task did
+not invent API surface beyond what was specified.
+
+### `typecheck` — known-blocked, not by this task's own files
+
+`pnpm run typecheck` and `pnpm run typecheck:tests` both fail — identically, since the
+tests config only adds `./tests` to `./src`'s root file set and surfaces no new errors of
+its own. **Zero of the 25 errors are in this task's files** (`src/transport-duplex.ts`,
+`src/peer.ts`, `src/index.ts`, `tests/peer.test.ts`, or any file from Tasks 1-5). All 25
+are inside `webrun-wire`'s own source, reached transitively because
+`@statewalker/webrun-http-streams` and `@statewalker/webrun-streams-libp2p` export raw
+`.ts` (`"exports": {".": "./src/index.ts"}`, no built-declarations fallback), so `tsc`
+type-checks their actual files under **this package's** stricter compiler options —
+specifically `noUncheckedIndexedAccess` and `noUnusedParameters`, neither of which
+`webrun-wire`'s own `tsconfig.base.json` sets. Confirmed by locally toggling
+`noUncheckedIndexedAccess` off (scratch tsconfig, not committed): all but one error
+disappear; the survivor is the `noUnusedParameters` one.
+
+Per the team lead's explicit instruction: **not** fixed by loosening this package's
+tsconfig (it has caught real defects across Tasks 1-5 and would soften scrutiny for every
+task still to come), and **not** worked around with a hand-maintained `.d.ts` shim (a
+second, driftable source of truth for an API this package doesn't own — the project has
+already lost work once to exactly that pattern). The fix is Task 2 of `webrun-wire`'s own
+options in a separate pass, in that fragment, its own commit — not folded into this one,
+which is the mistake that made the original undifferentiated Task 6 attempt time out.
+
+Full itemised list (file, line, flag violated):
+
+| File | Lines | Flag | Count |
+| --- | --- | --- | --- |
+| `webrun-http-streams/src/bytes.ts` | 42 | `noUncheckedIndexedAccess` (`parts[0]`) | 1 |
+| `webrun-http-streams/src/http1/decode.ts` | 103, 104, 113, 122, 129, 130, 146, 147 | `noUncheckedIndexedAccess` (array-destructured `parts`, `hosts[0]`) | 8 |
+| `webrun-http-streams/src/http1/encode.ts` | 57, 58, 59, 62, 63, 64 (×2), 75 | `noUncheckedIndexedAccess` (`match[1]`/`match[2]`, `[...unique][0]`) | 8 |
+| `webrun-http-streams/src/http1/encode.ts` | 145 | `noUnusedParameters` (`opts` param of `encodeResponse`, unused) | 1 |
+| `webrun-http-streams/src/http1/headers.ts` | 32, 218 | `noUncheckedIndexedAccess` (`bytes[i]`, `[...values][0]`) | 2 |
+| `webrun-streams-libp2p/src/duplex-over-stream.ts` | 282, 345, 346 | `noUncheckedIndexedAccess` (`buf[0]`, `buf[i++]` ×2) | 3 |
+| `webrun-streams/src/emulate-mux.ts` | 482, 483 | `noUncheckedIndexedAccess` (`buf[i++]` ×2, duplicate `decodeVarint`) | 2 |
+
+**Total: 25 errors, 6 files, 3 packages** (`webrun-http-streams`, `webrun-streams-libp2p`,
+`webrun-streams`) — 24 `noUncheckedIndexedAccess`, 1 `noUnusedParameters`. The team lead
+noted this class of error is often a latent unchecked-index bug worth finding
+deliberately, not a chore to rush.
+
+### Verification
+
+```
+$ grep -rlE "^import.*libp2p" src/
+src/tokens.ts
+src/transport-duplex.ts
+```
+
+`tokens.ts`'s hit predates this task (Task 1: `@libp2p/peer-id`/`@libp2p/interface` for
+Ed25519 peerId derivation, not the transport itself) — unrelated to `createPeer`/
+`serveTransport`/`node.handle` and not something this pass introduced or could remove
+without touching Task 1's file.
+
+```
+$ pnpm install   # from the umbrella root
+Already up to date
+
+$ pnpm run typecheck
+(25 errors, all in webrun-wire — see table above. KNOWN-BLOCKED, not this task's files.)
+
+$ pnpm run typecheck:tests
+(same 25 errors — the tests config adds no new ones.)
+
+$ pnpm vitest run --no-file-parallelism
+ Test Files  10 passed (10)
+      Tests  120 passed (120)
+
+$ pnpm vitest run --no-file-parallelism tests/peer.test.ts
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+
+$ npx biome check src/ tests/ package.json
+(clean, no output; no formatting changes needed)
+```
+
+Test count moved from 115/115 (end of Task 5) to **120/120** — 5 new cases, all in
+`tests/peer.test.ts`: the two composition proofs and D6/D7/D8, all against two real
+libp2p nodes over loopback TCP.
+
+### `DEFAULT_MAX_STREAMS` / `DEFAULT_DRAIN_TIMEOUT_MS`: why this pair
+
+`DEFAULT_MAX_STREAMS = 512` — the recorded precedent from Task 6a's own regression tests
+(`webrun-streams-libp2p/tests/stream-limits.test.ts`), comfortably above libp2p's default
+32-inbound cap that resets a connection's 33rd concurrent request rather than queueing it.
+Applied to both `maxInboundStreams` and `maxOutboundStreams`, on both the serving side
+(`serveConnections`) and the dialing side (`connect`) — a peer both serves and dials (a
+relay forwards by dialing out), so the outbound cap needs the same headroom the inbound
+one does.
+
+`DEFAULT_DRAIN_TIMEOUT_MS = 15_000` — not left at `webrun-streams-libp2p`'s 5-minute
+default, because that default **multiplies** with the stream cap: it is the only bound on
+a peer that requests something and then stops reading without closing (the serving side
+has no `.return`/abort escape the way `connect`'s caller side does), so a peer that opens
+the full stream cap and never reads any of them pins `maxStreams * drainTimeoutMs`
+stream-milliseconds of server-side buffer before the last one is finally dropped. At the
+library default that product is `512 * 300_000ms` ≈ **42.7 stream-hours** of exposure —
+too generous once the cap itself has been raised 16× past libp2p's own default. 15 seconds
+was chosen against that same product: long enough that a legitimate reader on a slow or
+lossy link still has multiple seconds of headroom to drain a response chunk even at very
+low bandwidth, short enough that the worst case — all 512 streams held open by a peer that
+never reads any of them — caps out at `512 * 15_000ms` ≈ **2.1 stream-hours**, recoverable
+within one operational window rather than requiring intervention. The two constants are
+chosen together, against that one product, not independently.

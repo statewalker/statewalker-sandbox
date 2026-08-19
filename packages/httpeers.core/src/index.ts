@@ -7,3 +7,5 @@ export * from "./router.js";
 export * from "./vocabulary.js";
 export * from "./access-tree.js";
 export * from "./revocation.js";
+export * from "./transport-duplex.js";
+export * from "./peer.js";
