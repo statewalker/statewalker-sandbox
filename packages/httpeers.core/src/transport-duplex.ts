@@ -57,13 +57,29 @@ import type { FetchHandler, PeerIdStr, Remote } from "./types.js";
 export const PROTOCOL = "/httpeers/1.0.0";
 
 /**
- * Per-connection concurrent stream cap, applied to both directions. libp2p's
- * own default is 32 inbound / 64 outbound streams per protocol per
- * connection; past the inbound default, a new stream is RESET rather than
- * queued (ledger note 18), so a caller that opens one stream per in-flight
- * request starts seeing its 33rd concurrent request fail with no way to
- * recover it. 512 is the recorded precedent from the stream-limits task
- * (6a) and its regression tests in `webrun-streams-libp2p`.
+ * Per-connection concurrent stream cap, applied to both directions — THE
+ * SERVER-SIDE CONTRACT (ledger note 18 §6, T-3/Task 18 step 3): libp2p's own
+ * default is 32 inbound / 64 outbound streams per protocol per connection;
+ * past the inbound number, a new stream is RESET, not queued, and the caller
+ * observes that reset as `PeerStreamResetError` (`kind: "stream-reset"`,
+ * `errors.ts` row 3b, `mapPeerCallError`'s `TooManyInboundProtocolStreamsError`
+ * branch) — never a raw libp2p exception, but still a rejected call with no
+ * retry or backoff of its own. 512 is the recorded precedent from the
+ * stream-limits task (6a) and its regression tests in
+ * `webrun-streams-libp2p`. Raising it moves this cliff outward; it does not
+ * remove it, which is why `DEFAULT_MAX_CONCURRENT_OUTBOUND` below exists —
+ * see that constant's doc comment for the client-side half of this contract.
+ *
+ * THE EXPOSURE WINDOW this cap forms together with `DEFAULT_DRAIN_TIMEOUT_MS`
+ * (the OTHER half of the same contract, Task 18 step 3): a peer that opens
+ * every one of its 512 allowed streams and then stops reading pins
+ * `DEFAULT_MAX_STREAMS * DEFAULT_DRAIN_TIMEOUT_MS` = 512 * 15s ≈ 2.1
+ * stream-hours of this node's buffer before the last one is dropped. See
+ * `DEFAULT_DRAIN_TIMEOUT_MS`'s own doc comment for why 15s (not
+ * `webrun-streams-libp2p`'s 5-minute default) was chosen once this cap was
+ * raised past libp2p's own default. Both numbers are stated here as ONE
+ * contract, not two independently-tunable knobs: changing either without
+ * re-deriving this product reopens a cliff of a different shape.
  */
 export const DEFAULT_MAX_STREAMS = 512;
 
@@ -90,11 +106,18 @@ export const DEFAULT_DRAIN_TIMEOUT_MS = 15_000;
 
 /**
  * T-2's request timeout contract: how long `Peer.call()` / `Remote` wait —
- * across dialing, protocol negotiation, and the response itself — before
- * giving up and rejecting with `PeerRequestTimeoutError`. This is a
- * CONTRACT, not a tuning knob picked in isolation: no caller of this
- * package may assume an unbounded wait for a response, ever, and this is
- * the number that bounds it by default.
+ * across queueing for a local concurrency slot (T-3/Task 18, see
+ * `DEFAULT_MAX_CONCURRENT_OUTBOUND` below), dialing, protocol negotiation,
+ * and the response itself — before giving up and rejecting with
+ * `PeerRequestTimeoutError`. This is a CONTRACT, not a tuning knob picked in
+ * isolation: no caller of this package may assume an unbounded wait for a
+ * response, ever, and this is the number that bounds it by default.
+ *
+ * T-3 DELIBERATELY DID NOT ADD A SEPARATE QUEUE TIMEOUT. When Task 18 added
+ * the outbound semaphore, the queue wait it introduces was placed INSIDE
+ * this same race rather than behind its own timer — see
+ * `DEFAULT_MAX_CONCURRENT_OUTBOUND`'s doc comment for the reasoning and the
+ * worst-case arithmetic that decision avoids.
  *
  * CHOSEN BELOW `DEFAULT_DRAIN_TIMEOUT_MS` (15s) AND `PROTOCOL_NEGOTIATION_TIMEOUT`
  * (10s, libp2p's own default for how long protocol negotiation may take —
@@ -118,6 +141,131 @@ export const DEFAULT_DRAIN_TIMEOUT_MS = 15_000;
  * Override via `requestTimeoutMs` when a deployment knows better.
  */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 8_000;
+
+/**
+ * T-3 (Task 18): the CLIENT-SIDE half of the concurrency contract
+ * `DEFAULT_MAX_STREAMS` states the server-side half of. Ledger note 18 §6 is
+ * explicit that raising `maxInboundStreams`/`maxOutboundStreams` to 512
+ * (Task 6a) MOVED the cliff rather than removing it: past the cap, libp2p
+ * RESETS the stream instead of queueing it, so a caller sees a rejected
+ * promise instead of latency, and nothing retries or backs off. This
+ * constant bounds `createRemote`'s own concurrency instead, so a well-behaved
+ * `Remote` never has to find that cliff at all: `createRemote` runs every
+ * outbound call through a private, in-process semaphore of this width before
+ * it ever calls `connect()` (which is what triggers libp2p's own
+ * `maxOutboundStreams` check, `TooManyOutboundProtocolStreamsError` --
+ * `errors.ts` row 3a). Excess calls QUEUE, in FIFO order, rather than racing
+ * each other into that cap.
+ *
+ * DEFAULTED TO `DEFAULT_MAX_STREAMS`, NOT SOME OTHER NUMBER, DELIBERATELY:
+ * this is a per-`Remote` (i.e. per-`Peer`) budget, not per-target-peer, so a
+ * `Peer` that only ever calls ONE target sees IDENTICAL admitted concurrency
+ * to before -- it will now queue instead of reset at the same threshold,
+ * never tighter -- while a `Peer` fanning calls out to MANY targets at once
+ * (a relay/hub forwarding on behalf of several callers) gets an additional,
+ * new global ceiling on its own total outbound fan-out that did not exist
+ * before this task. That second effect is intentional: `DEFAULT_MAX_STREAMS`
+ * is a PER-CONNECTION cap, so nothing previously bounded how many
+ * connections' worth of streams one `Remote` could have open at once: a
+ * `Peer` calling 20 different targets at 512 streams apiece could reach
+ * 10,240 concurrent outbound streams without ever touching any single
+ * connection's cap. That is exactly the kind of local resource exhaustion a
+ * DoS-adjacent control (see `DEFAULT_MAX_STREAMS`'s own doc comment) should
+ * not leave open just because it happens to fan out across many peers
+ * instead of one.
+ *
+ * THE AT-LIMIT CONTRACT (the decision ledger note 18 §6 left open --
+ * "queue, reject fast, or apply backpressure to the caller"): QUEUE, with a
+ * BOUNDED wait, then REJECT with a typed error from Task 17's taxonomy --
+ * never a silent reset (that would just be `DEFAULT_MAX_STREAMS`'s cliff
+ * again, moved one layer up), and never an unbounded queue (an unfailing
+ * queue under sustained overload is a slow-motion version of the same
+ * failure the timeout policy already rules out for every other kind of
+ * hang). Concretely: the bound is `DEFAULT_REQUEST_TIMEOUT_MS`, not a
+ * second, independent timer. `createRemote`'s `withRequestTimeout` race
+ * already covers "dial, negotiate, respond"; queueing for a `Semaphore`
+ * permit is placed INSIDE that same race (before `connect()` is even
+ * called), not layered outside it, specifically so a queued call that never
+ * gets a permit rejects with the SAME `PeerRequestTimeoutError` an
+ * unresponsive peer would produce, and within the SAME bound. The
+ * alternative -- a queue timeout on top of the existing request timeout --
+ * was considered and rejected: a caller that waits `requestTimeoutMs` in the
+ * queue and then gets a fresh `requestTimeoutMs` for the call itself sees up
+ * to 2 * `DEFAULT_REQUEST_TIMEOUT_MS` (16s) worst case, silently doubling a
+ * contract Task 17 wrote down as an 8-second promise. Sharing one budget
+ * keeps that promise: `Peer.call()` / `Remote` never wait longer than
+ * `requestTimeoutMs` for ANY reason, queueing included. Whichever reason
+ * wins the race, `mapPeerCallError`'s `if (err instanceof PeerCallError)
+ * return err` passes it through unchanged, so this never becomes a new
+ * taxonomy row -- `PeerRequestTimeoutError`'s trigger set simply grows to
+ * include "gave up waiting for a local concurrency slot," alongside its
+ * existing "gave up waiting for a response."
+ *
+ * A held permit is released in a `finally` (see `createRemote`) regardless
+ * of how the call ends -- success, a mapped `PeerCallError`, or the timeout
+ * race itself -- so one failing call can never permanently strand a slot.
+ */
+export const DEFAULT_MAX_CONCURRENT_OUTBOUND = DEFAULT_MAX_STREAMS;
+
+/**
+ * A minimal FIFO counting semaphore -- `acquire()` resolves immediately
+ * while a permit is free, otherwise queues the caller until `release()` (or
+ * an earlier grant to it) frees one. Not exported: this is `createRemote`'s
+ * own T-3 admission control, not a general-purpose utility this package
+ * offers callers -- see `DEFAULT_MAX_CONCURRENT_OUTBOUND`'s doc comment for
+ * the contract it implements.
+ *
+ * `acquire(signal)` accepts an `AbortSignal` so a queued (not yet granted)
+ * wait can be cancelled -- `createRemote` aborts it from the SAME
+ * `onTimeout` callback that already cancels a partially-opened stream, so a
+ * call that loses the `requestTimeoutMs` race while still queued stops
+ * waiting immediately rather than eventually consuming a permit nothing will
+ * ever release.
+ */
+class Semaphore {
+  #available: number;
+  readonly #waiting: Array<{ grant: () => void }> = [];
+
+  constructor(width: number) {
+    this.#available = width;
+  }
+
+  acquire(signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) return Promise.reject(signal.reason);
+    if (this.#available > 0) {
+      this.#available--;
+      return Promise.resolve(() => this.#release());
+    }
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        grant: () => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve(() => this.#release());
+        },
+      };
+      const onAbort = (): void => {
+        const index = this.#waiting.indexOf(waiter);
+        // Already granted (removed from the queue, permit handed out) --
+        // the abort lost the race; nothing to cancel, the caller must
+        // release the permit it already has instead.
+        if (index === -1) return;
+        this.#waiting.splice(index, 1);
+        reject(signal?.reason);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.#waiting.push(waiter);
+    });
+  }
+
+  #release(): void {
+    const next = this.#waiting.shift();
+    if (next) {
+      next.grant();
+    } else {
+      this.#available++;
+    }
+  }
+}
 
 /**
  * Node.js `net`'s own connection-establishment errno codes -- structured,
@@ -212,7 +360,14 @@ export function mapPeerCallError(err: unknown, peerId: PeerIdStr): PeerCallError
     case "UnsupportedProtocolError":
       return new PeerProtocolUnsupportedError(peerId, PROTOCOL, cause);
     // A remote reset, a local abort, or our own outbound stream cap tripped
-    // synchronously inside libp2p's Connection#newStream -- @libp2p/interface.
+    // inside libp2p's Connection#newStream, rejecting before the stream is
+    // handed back rather than queueing it -- @libp2p/interface. CORRECTED
+    // ON REVIEW (Task 18): this is an async rejection (the throw happens
+    // after `await mss.select(...)` inside `newStream`'s own async body,
+    // `connection.js:118` in `libp2p@3.3.8`), not a synchronous throw
+    // escaping outside a promise chain -- see `PeerStreamResetError`'s doc
+    // comment in `errors.ts` (row 3a) for why that distinction matters here
+    // specifically.
     case "StreamResetError":
     case "StreamAbortedError":
     case "TooManyOutboundProtocolStreamsError":
@@ -239,7 +394,9 @@ export function mapPeerCallError(err: unknown, peerId: PeerIdStr): PeerCallError
 /**
  * Race `attempt()` against `timeoutMs`. On timeout, calls `onTimeout()` for
  * best-effort cleanup (closing whatever streams a partially-established
- * call already opened) and rejects with `PeerRequestTimeoutError`.
+ * call already opened, and -- T-3/Task 18 -- aborting a still-queued
+ * `Semaphore` wait so it does not later consume a permit nobody will
+ * release) and rejects with `PeerRequestTimeoutError`.
  *
  * KNOWN LIMITATION, stated rather than silently accepted: `connect()`
  * (`@statewalker/webrun-streams-libp2p`) accepts no `AbortSignal` for the
@@ -376,6 +533,15 @@ export interface CreateRemoteInit {
    * `drainTimeoutMs`.
    */
   requestTimeoutMs?: number;
+  /**
+   * T-3 (Task 18): the width of this `Remote`'s outbound admission
+   * semaphore. Defaults to `DEFAULT_MAX_CONCURRENT_OUTBOUND`. See that
+   * constant's doc comment for the full contract -- what "width" bounds
+   * (this `Remote`'s total in-flight calls, across every target peer, not
+   * per-connection), and why queueing past it shares `requestTimeoutMs`
+   * rather than getting its own timer.
+   */
+  maxConcurrentOutbound?: number;
 }
 
 /**
@@ -387,8 +553,17 @@ export interface CreateRemoteInit {
  *
  * Every rejection from the returned function is a `PeerCallError` (see
  * `errors.ts` and `mapPeerCallError` above) — never a raw libp2p exception,
- * and never an unbounded wait: the whole dial-negotiate-respond sequence is
- * raced against `requestTimeoutMs`.
+ * and never an unbounded wait: the whole queue-dial-negotiate-respond
+ * sequence (T-3/Task 18 added the queueing step) is raced against
+ * `requestTimeoutMs`.
+ *
+ * ONE `Semaphore` PER `Remote`, NOT PER CALL: `createRemote` is called once
+ * per `Peer` (see `peer.ts`'s `createPeer`), so the semaphore built here is
+ * that peer's single, shared outbound admission gate for as long as the
+ * `Peer` lives -- every call through this `Remote`, to every target,
+ * competes for the same `maxConcurrentOutbound` permits. See
+ * `DEFAULT_MAX_CONCURRENT_OUTBOUND`'s doc comment for why that scope (global
+ * to this `Remote`, not per-target-peer) was chosen.
  */
 export function createRemote(init: CreateRemoteInit): Remote {
   const {
@@ -397,28 +572,51 @@ export function createRemote(init: CreateRemoteInit): Remote {
     drainTimeoutMs = DEFAULT_DRAIN_TIMEOUT_MS,
     maxOutboundStreams = DEFAULT_MAX_STREAMS,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    maxConcurrentOutbound = DEFAULT_MAX_CONCURRENT_OUTBOUND,
   } = init;
+  const semaphore = new Semaphore(maxConcurrentOutbound);
   return async (target: PeerIdStr, req: Request): Promise<Response> => {
     let opened: { close: () => Promise<void> } | undefined;
+    // Ties a still-queued `Semaphore.acquire()` wait to the SAME timeout
+    // that already bounds this whole call -- see `onTimeout` below and
+    // `DEFAULT_MAX_CONCURRENT_OUTBOUND`'s doc comment for why there is no
+    // second, independent queue timer.
+    const abortQueue = new AbortController();
     try {
       return await withRequestTimeout(
         async () => {
-          const conn = await connect({
-            node,
-            peer: multiaddr(`/p2p/${target}`),
-            protocol,
-            drainTimeoutMs,
-            maxOutboundStreams,
-          });
-          opened = conn;
-          return fetchOverDuplex(conn.call, req);
+          const release = await semaphore.acquire(abortQueue.signal);
+          try {
+            const conn = await connect({
+              node,
+              peer: multiaddr(`/p2p/${target}`),
+              protocol,
+              drainTimeoutMs,
+              maxOutboundStreams,
+            });
+            opened = conn;
+            return await fetchOverDuplex(conn.call, req);
+          } finally {
+            // Always released -- success, a mapped failure, or the timeout
+            // race itself all reach this `finally`. Never held past this
+            // one call, so a failing call can never permanently strand a
+            // permit for every call after it.
+            release();
+          }
         },
         requestTimeoutMs,
         target,
         () => {
           // Best-effort cleanup on timeout -- see `withRequestTimeout`'s doc
           // comment for the interleaving this cannot cover (a timeout that
-          // fires before `connect()` has resolved at all).
+          // fires before `connect()` has resolved at all). Aborting the
+          // queue wait here matters specifically when the call is STILL
+          // QUEUED (never reached `connect()` at all): without this, the
+          // queued `acquire()` would eventually resolve once a permit frees
+          // up, grab a permit for a call nobody is waiting on any more, and
+          // never release it back (nothing downstream would ever call the
+          // `release` this path returns).
+          abortQueue.abort(new PeerRequestTimeoutError(target, requestTimeoutMs));
           void opened?.close();
         },
       );

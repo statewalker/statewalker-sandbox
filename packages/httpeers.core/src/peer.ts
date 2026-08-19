@@ -213,6 +213,16 @@ export interface CreatePeerInit {
    * and its relationship to `drainTimeoutMs`.
    */
   requestTimeoutMs?: number;
+  /**
+   * T-3 (Task 18): the width of this peer's outbound admission semaphore —
+   * how many of this peer's own `call`/`remote` invocations, across every
+   * target peer, may be dialing/negotiating/awaiting a response at once
+   * before further calls queue. Defaults to `DEFAULT_MAX_CONCURRENT_OUTBOUND`
+   * from `transport-duplex.ts` — see that constant's doc comment for the
+   * full contract, including why queueing past it shares `requestTimeoutMs`
+   * rather than getting its own timer.
+   */
+  maxConcurrentOutbound?: number;
   /** Injected clock, threaded into `verifyToken`. Defaults to `Date.now`. */
   now?: () => number;
 }
@@ -256,6 +266,7 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
     drainTimeoutMs,
     maxStreams,
     requestTimeoutMs,
+    maxConcurrentOutbound,
     now,
   } = init;
 
@@ -364,6 +375,7 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
     drainTimeoutMs,
     maxOutboundStreams: maxStreams,
     requestTimeoutMs,
+    maxConcurrentOutbound,
   });
 
   const dispatch: FetchHandler = createPeerRouter({

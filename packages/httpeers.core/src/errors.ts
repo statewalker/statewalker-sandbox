@@ -157,8 +157,22 @@ export class PeerProtocolUnsupportedError extends PeerCallError {
  * `libp2p`'s `Connection` (`connection.js`):
  *
  *  - our own OUTBOUND cap (`TooManyOutboundProtocolStreamsError`): thrown
- *    SYNCHRONOUSLY inside `newStream`, before the stream is ever handed
- *    back — rejects the call, does not queue it;
+ *    inside `newStream`'s own async body, AFTER `await mss.select(...)` has
+ *    resolved (`connection.js:118` in `libp2p@3.3.8`) — rejects the call
+ *    before the stream is ever handed back, and does not queue it. CORRECTED
+ *    ON REVIEW (Task 18): earlier drafts of this comment (and of
+ *    `PROVENANCE.md`'s row 3a) called this throw "SYNCHRONOUS". It is not,
+ *    in the sense that matters here — it is an ordinary async rejection
+ *    from inside a promise chain, not a throw that escapes synchronously
+ *    to an unrelated caller with nothing able to catch it. That distinction
+ *    is exactly what separates this row from the genuinely synchronous,
+ *    UNCATCHABLE throw Task 18 also investigated (`YamuxStream.onRemoteReset`
+ *    dispatching a `StreamResetEvent` synchronously out of a dial burst,
+ *    outside any promise this package's own `try`/`catch` can reach) — see
+ *    the Task 18 report for that investigation's result. The two must not be
+ *    conflated: this row rejects a promise `mapPeerCallError` can map, same
+ *    as every other row in this file; the other is a process-killing defect
+ *    in a dependency, unrelated to this taxonomy;
  *  - the remote's INBOUND cap (`TooManyInboundProtocolStreamsError`):
  *    thrown on the SERVING side inside `onIncomingStream`, which the server
  *    turns into `muxedStream.abort(err)` — the caller never sees that
@@ -166,15 +180,25 @@ export class PeerProtocolUnsupportedError extends PeerCallError {
  *    `StreamResetError`/close event on its own end of the stream).
  *
  * This is the mechanism behind ledger note 18's "concurrency cliff": one
- * libp2p stream per in-flight request, `maxInboundStreams` reset rather than
- * queued past the cap. `DEFAULT_MAX_STREAMS` (512, see `transport-duplex.ts`)
- * raises the ceiling; it does not remove this failure mode, and cannot —
- * client-side concurrency bounding is the only thing that would, and it does
- * not exist yet (ledger note 18 §6, "open threads"). Reproducing the cliff
- * itself, and any hardening around it, is Task 18's job; this class and its
- * test (`tests/errors.test.ts`) only prove that whenever a reset happens —
- * at N=1 or at N=512, same code path — the caller observes this typed error,
- * not a raw `StreamResetError`.
+ * libp2p stream per in-flight request, `maxInboundStreams`/`maxOutboundStreams`
+ * reset rather than queued past the cap. `DEFAULT_MAX_STREAMS` (512, see
+ * `transport-duplex.ts`) raises the ceiling; it does not remove this failure
+ * mode by itself. Task 18 (T-3) closes the outbound half: `createRemote`
+ * now queues excess outbound calls behind an in-process semaphore
+ * (`DEFAULT_MAX_CONCURRENT_OUTBOUND`, `transport-duplex.ts`) so a
+ * well-behaved `Remote` reaches this OUTBOUND branch only if
+ * `maxConcurrentOutbound` is configured wider than `maxOutboundStreams` —
+ * `tests/concurrency.test.ts` proves the branch still maps correctly when
+ * that happens, closing what had been row 3a's inspection-backed-only
+ * status. The INBOUND branch (row 3b below) has no client-side mitigation
+ * by design — a server cannot bound how many DIFFERENT peers dial it at
+ * once, only how long each one may hold a stream open
+ * (`DEFAULT_DRAIN_TIMEOUT_MS`) and how many it may hold at all
+ * (`DEFAULT_MAX_STREAMS`). This class and its tests
+ * (`tests/errors.test.ts`, `tests/concurrency.test.ts`) prove that whenever
+ * a reset happens — inbound or outbound, at N=1 or at N=512, same code
+ * family — the caller observes this typed error, not a raw
+ * `StreamResetError`.
  *
  * A THIRD, non-obvious source, found only by running the reset test rather
  * than by reading source (see the Task 17 report): a reset that lands

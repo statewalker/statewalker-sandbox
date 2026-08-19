@@ -724,7 +724,7 @@ different from what the source alone predicted; see rows 1 and 3 below.
 | 1b | A previously-reachable peer has since gone offline, ONE address tried | `dial-queue.js`'s `dialPeer`: `if (errors.length === 1) throw errors[0]` — the raw, unwrapped `@libp2p/tcp` `net.connect` error (`.name === "Error"`, `.code === "ECONNREFUSED"`). **Not predicted by reading alone** — the source suggested `AggregateError` always; running it against a real stopped server showed the single-address unwrap. `mapPeerCallError` matches Node's own `.code` (`CONNECTION_ESTABLISHMENT_ERRNO`), not a message string. | `PeerUnreachableError` | Yes, with backoff | `tests/errors.test.ts` "row 1b" |
 | 1c | Every address failed, 2+ addresses tried | `dial-queue.js`: `AggregateError(errors, 'All multiaddr dials failed')` | `PeerUnreachableError` | Yes, with backoff | `tests/errors.test.ts` "row 1c" — a real two-listener peer, both addresses genuinely dialed and refused; closed post-review after row 1b/3c's own mispredictions showed "shares a branch with a proven row" is not proof the library produces this shape in this situation. |
 | 2 | Protocol unsupported by the remote | `@libp2p/multistream-select`'s `select.js`: `UnsupportedProtocolError` (`@libp2p/interface`) when no offered protocol is acknowledged | `PeerProtocolUnsupportedError` (`kind: "protocol-unsupported"`) | Never — the remote's protocol table does not change between calls | `tests/errors.test.ts` "row 2" |
-| 3a | Stream reset: this peer's own outbound cap tripped | `libp2p/dist/src/connection.js`'s `newStream`: `TooManyOutboundProtocolStreamsError`, thrown SYNCHRONOUSLY, rejects before the stream is handed back | `PeerStreamResetError` (`kind: "stream-reset"`) | Only for a known-idempotent request | **STATUS: inspection-backed only, deferred to Task 18.** Not proven by a running test here — provoking it needs the concurrency harness (hundreds of simultaneous outbound calls) Task 18 is already building to chase an uncatchable `StreamResetError` out of `@libp2p/utils`'s reset path; this row belongs to that investigation rather than a duplicate harness in this task. |
+| 3a | Stream reset: this peer's own outbound cap tripped | `libp2p/dist/src/connection.js`'s `newStream`: `TooManyOutboundProtocolStreamsError`, thrown inside `newStream`'s own async body AFTER `await mss.select(...)` (`connection.js:118` in `libp2p@3.3.8`), rejecting before the stream is handed back rather than queueing it. **CORRECTED ON REVIEW (carried from Task 17 into Task 18, see that task's dispatch): earlier drafts of this row (and of `errors.ts`'s doc comment) called this throw "SYNCHRONOUSLY". Confirmed on review of the installed source: it is an async rejection from inside a promise chain, not a throw that escapes synchronously with nothing able to catch it — the substance ("rejects before the stream is handed back, does not queue") holds, only the word was too strong.** That correction matters here specifically because Task 18 separately investigated a genuinely synchronous, uncatchable throw elsewhere (`YamuxStream.onRemoteReset`) — see Task 18's own section below — and conflating the two would have misdirected that investigation. | `PeerStreamResetError` (`kind: "stream-reset"`) | Only for a known-idempotent request | `tests/concurrency.test.ts` "row 3a" (Task 18) — previously inspection-backed only; now proven end to end by setting `maxOutboundStreams: 1` (the libp2p cap under test) with `maxConcurrentOutbound` wide open (so Task 18's own semaphore is not what trips it) and two concurrent calls to the same peer. |
 | 3b | Stream reset: the remote's inbound cap tripped (the concurrency cliff, ledger note 18) | `connection.js`'s `onIncomingStream`: `TooManyInboundProtocolStreamsError`, caught internally and turned into `muxedStream.abort(err)` — the caller never sees that class, only the reset it causes | `PeerStreamResetError` | Only for a known-idempotent request | `tests/errors.test.ts` "row 3" — reproduces the exact code path at `maxInboundStreams: 1` for a fast, deterministic test; N=512 itself is Task 18's job (see brief) |
 | 3c | Stream reset with zero response bytes ever written | **Found only by running row 3b's test, not predicted by reading**: `duplexOverStream` (`webrun-streams-libp2p`) does not distinguish "reset" from "closed with nothing written" at its own layer — both end the read loop with zero frames. The observable symptom by the time it reaches this package is `HttpParseError("sniff: stream ended before any bytes arrived")` from `sniff.ts` (`@statewalker/webrun-http-streams`), not any stream-error class. `mapPeerCallError` matches this exact message. | `PeerStreamResetError` | Only for a known-idempotent request | Covered by the same "row 3" test — it is what that test actually observed before the mapping was corrected (see the Task 17 report) |
 | 4 | Relay data-limit exceeded | `@libp2p/circuit-relay-v2`'s `utils.js`: `TransferLimitError('data limit of <n> bytes exceeded')`, thrown relay-side once a relayed stream's byte count passes the reservation's `dataLimit` | `PeerRelayLimitExceededError` (`kind: "relay-limit-exceeded"`) | Never (same reservation) | **Not tested.** `createNode` (`transport-duplex.ts`) configures TCP direct dialing only; this package has no `@libp2p/circuit-relay-v2` dependency and no relay transport in its stack, so this condition cannot be provoked in-process. The class and its `mapPeerCallError` branch (matched by `.name === "TransferLimitError"`, a string check since the class cannot be imported from a dependency this package doesn't have) exist as grounded, forward-compatible plumbing — real library behaviour, cited from source — but are themselves unexercised. No synthetic/mocked test was written for this row; per the team lead's Step 4, "an error taxonomy whose rows are asserted against mocks of themselves proves nothing." |
@@ -830,3 +830,213 @@ No existing assertion was weakened or altered; `apps/httpeers-stack`'s 42/42 als
 verified unaffected (`pnpm run typecheck && pnpm run typecheck:tests && pnpm exec vitest
 run --no-file-parallelism`, all clean) — the new `DEFAULT_REQUEST_TIMEOUT_MS` (8s) is far
 above anything that suite's handlers take, so no existing test's timing was at risk.
+
+## Task 18 (T-3) — client-side concurrency bound
+
+Task 6a raised `maxInboundStreams`/`maxOutboundStreams` from libp2p's own default (32) to
+`DEFAULT_MAX_STREAMS` (512). Ledger note 18 §6 was explicit that this MOVES the
+concurrency cliff, it does not remove it: past the cap, libp2p RESETS a stream rather than
+queueing it, so a caller sees a rejected promise instead of latency, and nothing retries or
+backs off. This task closes that gap from the CALLER's side, and turns the server-side cap
+into a stated, cross-referenced contract rather than a bare constant.
+
+### The semaphore
+
+`createRemote` (`transport-duplex.ts`) now builds one private `Semaphore` per `Remote` (one
+per `Peer`, since `createPeer` calls `createRemote` exactly once — see `peer.ts`) and runs
+every outbound call through it BEFORE `connect()` is ever invoked. Excess calls queue in
+FIFO order rather than racing each other into libp2p's own `maxOutboundStreams` cap. Width
+is configurable (`CreateRemoteInit.maxConcurrentOutbound` / `CreatePeerInit.maxConcurrentOutbound`),
+defaulting to `DEFAULT_MAX_CONCURRENT_OUTBOUND = DEFAULT_MAX_STREAMS` (512).
+
+**Why that default, and why that scope (per-`Remote`, not per-target-peer):** `DEFAULT_MAX_STREAMS`
+is a PER-CONNECTION cap; nothing previously bounded how many connections' worth of streams
+one `Remote` could have open across DIFFERENT target peers at once. Defaulting the
+semaphore's width to the same number means a `Peer` that only ever calls one target sees
+IDENTICAL admitted concurrency to before (queueing instead of resetting at the same
+threshold, never tighter), while a `Peer` fanning out to many targets at once (a relay/hub
+forwarding for several callers) gets a new global ceiling on its own total outbound
+fan-out — closing a real, previously-open local-resource-exhaustion gap (20 targets x 512
+streams apiece = 10,240 concurrent outbound streams, unbounded before this task).
+
+### The at-limit contract (ledger note 18 §6's open decision, now made)
+
+**Queue, with a bounded wait, then reject with a typed error from Task 17's taxonomy —
+never a silent reset, and never an unbounded queue.** Concretely: the bound is
+`DEFAULT_REQUEST_TIMEOUT_MS` itself, not a second, independent timer. `Semaphore.acquire()`
+is called INSIDE the same `withRequestTimeout` race that already covers dial, negotiate,
+and respond — placed there deliberately rather than layered outside it.
+
+**Inside vs. outside `requestTimeoutMs`, and the worst case a caller sees:** the queue wait
+is INSIDE the existing budget. The alternative — a queue timeout on top of the existing
+request timeout — was considered and rejected: a caller that waits `requestTimeoutMs` in
+the queue and then gets a FRESH `requestTimeoutMs` for the call itself would see up to
+`2 * DEFAULT_REQUEST_TIMEOUT_MS` (16s) worst case, silently doubling the 8-second promise
+Task 17 wrote down. Sharing one budget keeps that promise exactly: `Peer.call()` / `Remote`
+never wait longer than `requestTimeoutMs` for ANY reason, queueing included. A queued call
+that never gets a permit in time rejects with the SAME `PeerRequestTimeoutError` an
+unresponsive peer would produce — `PeerRequestTimeoutError`'s trigger set simply grows to
+include "gave up waiting for a local concurrency slot," alongside its existing "gave up
+waiting for a response." This is deliberately NOT a new taxonomy row: `mapPeerCallError`'s
+`if (err instanceof PeerCallError) return err` passes either origin through unchanged, and
+Task 18 was explicitly told to build on Task 17's classes rather than invent a parallel set.
+
+A held permit is released in a `finally` regardless of how the call ends — success, a
+mapped `PeerCallError`, or the timeout race itself — proven by
+`tests/concurrency.test.ts`'s "a permit is released after a failed call" test: one failing
+call (an unreachable peer) does not strand a permit for the call after it.
+
+### The server-side cap, now a documented contract
+
+`DEFAULT_MAX_STREAMS`'s doc comment (`transport-duplex.ts`) now names the exact error a
+caller observes at that cap (`PeerStreamResetError`, `errors.ts` row 3b) and restates the
+exposure-window arithmetic together with `DEFAULT_DRAIN_TIMEOUT_MS`: a peer that opens
+every one of its 512 allowed streams and never reads pins
+`DEFAULT_MAX_STREAMS * DEFAULT_DRAIN_TIMEOUT_MS` = 512 * 15s ≈ **2.1 stream-hours** of this
+node's buffer before the last one is dropped. Both constants are stated as ONE contract now,
+not two independently-tunable numbers — changing either without re-deriving this product
+reopens a cliff of a different shape. The client-side semaphore does not shrink this window:
+it only stops a WELL-BEHAVED `Remote` from ever needing to find the cap itself; it does
+nothing to protect this node's INBOUND side from many DIFFERENT peers each opening their
+own connections, which is exactly what `DEFAULT_MAX_STREAMS`/`DEFAULT_DRAIN_TIMEOUT_MS`
+still have to bound alone.
+
+### Row 3a, proven (previously inspection-backed only)
+
+Task 17 left `errors.ts` row 3a (`TooManyOutboundProtocolStreamsError`, the OUTBOUND-cap
+throw) inspection-backed only, explicitly deferred to this task's own concurrency harness —
+distinct from row 3b (the INBOUND-cap reset), which Task 17 already tested.
+`tests/concurrency.test.ts`'s "row 3a" test proves it end to end: `maxOutboundStreams: 1`
+(libp2p's own per-connection cap, the thing under test) with `maxConcurrentOutbound: 10`
+(this task's semaphore, deliberately wide open so it is not what trips the assertion) and
+two concurrent calls to the same peer. One succeeds; one rejects as `PeerStreamResetError`
+(`kind: "stream-reset"`) — the same class row 3b already proves, same taxonomy, different
+libp2p code path.
+
+### The "SYNCHRONOUSLY" correction (Task 17's deferred minor, resolved here)
+
+Task 17's review flagged, and deferred into this task's dispatch, that `errors.ts`'s doc
+comment and this file's row 3a called `TooManyOutboundProtocolStreamsError`'s throw
+"SYNCHRONOUSLY". **Confirmed on review of the installed source** (`libp2p@3.3.8`,
+`node_modules/.pnpm/libp2p@3.3.8/.../dist/src/connection.js:118`): the throw happens inside
+`newStream`'s own async function body, AFTER `await mss.select(muxedStream, protocols,
+options)` has resolved. The SUBSTANCE the earlier wording was reaching for is correct — it
+rejects before the stream is handed back to the caller, and it does not queue — but "SYNCHRONOUSLY"
+overstates it: this is an ordinary async rejection from inside a promise chain, not a throw
+that escapes synchronously with nothing able to catch it. Fixed in both `errors.ts`
+(`PeerStreamResetError`'s doc comment) and this file's row 3a above. The correction matters
+specifically because of the investigation below: conflating this row with a genuinely
+synchronous throw would have misdirected it.
+
+### The dial-burst investigation
+
+Ledger context: while building Task 6a's stream-limit test, a naive "fire 40 concurrent
+calls in one tick" harness once **crashed the whole Node process** with an uncaught
+`StreamResetError` thrown SYNCHRONOUSLY out of `YamuxStream.onRemoteReset` (`@libp2p/utils`)
+— not a promise rejection, so nothing in this package's (or any user) code could have caught
+it. A reviewer established, from source, that `serveConnections`' `onStream`
+(`webrun-streams-libp2p`) already wraps its async work in `try`/`finally` plus an outer
+`.catch` — the crash fires BEFORE any of that runs, because `onRemoteReset` dispatches a
+`StreamResetEvent` SYNCHRONOUSLY (`abstract-message-stream.js`'s `dispatchEvent`) from
+inside frame processing, outside any promise this package's own error handling can reach.
+The reviewer's refinement: the trigger is **many real TCP/Noise/Yamux handshakes negotiated
+in one synchronous tick — a dial burst**, NOT cap exhaustion; raising `maxInboundStreams`
+actually REDUCES the chance of hitting it (fewer streams get reset when more are admitted
+instead).
+
+**Method.** A standalone script (`dial-burst-repro.mjs`, run with `tsx`, not inside vitest —
+same discipline as Task 6a's own removed `debug-stream*.mjs`, to iterate fast and get full
+stack traces without vitest's formatting in the way, and so a genuine crash would not take
+the rest of this task's own test run down with it) tried two variants of the described
+condition, each repeated many times, with a `process.on("uncaughtException", ...)` handler
+installed so a synchronous throw that would otherwise kill the process is instead recorded
+and the run continues — this still proves the fact under investigation (an uncaught
+exception reached process-top, uncatchable by any promise-based `try`/`catch`), it just lets
+counting continue across many rounds instead of losing the process on the very first hit:
+
+- **Variant A** — N genuinely separate, freshly-created client nodes, each independently
+  dialing the SAME server, all fired via `Promise.all` with ZERO stagger: the most literal
+  reading of "many real TCP/Noise/Yamux handshakes negotiated in one synchronous tick."
+- **Variant B** — one client, one `connect()` call, N `conn.call()`s fired with no stagger
+  at all against a single not-yet-established connection: the shape of Task 6a's very first
+  (replaced) draft, which is what originally produced the crash.
+
+Both variants used real TCP/Noise/Yamux nodes, `services: { identify: identify() }` matching
+`createNode` (`transport-duplex.ts`) exactly on the final run (an earlier pass omitted
+`identify()`, closer to the bare `webrun-streams-libp2p` test suite's own `node()` helper,
+and is reported separately below for completeness).
+
+**RESULT: DID NOT REPRODUCE under these conditions.**
+
+| Run | Variant(s) | Rounds | N (concurrent) | `identify()` | Uncaught exceptions observed |
+| --- | --- | --- | --- | --- | --- |
+| 1 | A, B | 80 each | 40 | no | 0 / 160 rounds |
+| 2 | A, B | 120 each | 60 | no | 0 / 240 rounds |
+| 3 | A, B | 100 each | 80 | yes (matches `createNode`) | 0 / 200 rounds |
+
+Total: **0 uncaught synchronous exceptions across 600 rounds**, **36,800 individual
+concurrent-dial/call attempts** (`160*40 + 240*60 + 200*80`, rounds summed across both
+variants per run, times that run's N). Variant A did surface real, expected TCP-level
+contention as ordinary PROMISE REJECTIONS (`ECONNRESET` on some fraction of the N clients
+under the heaviest bursts) — proving the burst condition itself is genuinely being
+exercised — but every one of those surfaced as a normal rejected promise, never as an
+uncaught synchronous exception.
+
+**This is a negative result, stated as such, not as proof of absence.** The original crash
+was itself flaky (task-6a-report.md: "one run" hit it, out of an unspecified but small
+number of attempts under `Promise.all`/`allSettled`-fired bursts) — 600 rounds not
+reproducing it narrows the likely trigger conditions without ruling out a narrower race this
+investigation's variants did not happen to hit (a specific interleaving of Node's event
+loop, OS socket buffering, or Yamux frame boundaries the original run encountered).
+**Reproduce it, or establish it does not reproduce, was the assignment; this investigation
+did the latter, under the exact dial-burst framing the reviewer specified rather than the
+cap-exhaustion framing originally (and incorrectly) assigned.** The debug script was removed
+after use (`dial-burst-repro.mjs`, `git status --porcelain` confirms it is not part of this
+diff), matching Task 6a's own precedent.
+
+**Consequence for this task's own design:** the semaphore built here does not, and cannot,
+fully close this risk — it only throttles ONE `Remote`'s own OUTBOUND concurrency (this
+node's own calls out), which incidentally also reduces how large a burst of FIRST-TIME
+dials this package's own `Remote` will ever fire in one tick (each queued call now waits
+for a permit before calling `connect()`, so a caller firing many `Peer.call()`s at once no
+longer sends them all into `dialProtocol` simultaneously). It does nothing for the INBOUND
+side: many DIFFERENT peers each opening their own connection to this node's `serveTransport`
+remains exactly as exposed to this class of risk (if it exists at all, which this
+investigation did not confirm) as before this task. That is a genuine, stated limitation,
+not an oversight — a general defense would live in `webrun-streams-libp2p` or `libp2p`
+itself, both outside this task's fragment.
+
+### Files changed
+
+| File | Change |
+| --- | --- |
+| `src/transport-duplex.ts` | New `DEFAULT_MAX_CONCURRENT_OUTBOUND` constant and private `Semaphore` class (not exported — `createRemote`'s own admission control, not a general-purpose utility). `CreateRemoteInit` gained `maxConcurrentOutbound`. `createRemote`'s returned function now acquires a semaphore permit (via an `AbortController` tied to the existing `onTimeout` callback) before calling `connect()`, releasing it in a `finally`. `DEFAULT_MAX_STREAMS`'s and `DEFAULT_REQUEST_TIMEOUT_MS`'s doc comments extended to state the server-side contract and the queue-inside-the-timeout decision. The "SYNCHRONOUSLY" wording fixed in `mapPeerCallError`'s own comment. |
+| `src/errors.ts` | `PeerStreamResetError`'s doc comment: row 3a's "SYNCHRONOUSLY" wording corrected, with the distinction from the dial-burst investigation's genuinely synchronous throw spelled out; cross-references to the new semaphore and to `tests/concurrency.test.ts`. |
+| `src/peer.ts` | `CreatePeerInit` gained `maxConcurrentOutbound`, threaded straight to `createRemote`. No other change. |
+| `tests/concurrency.test.ts` (new) | 4 tests, all against real libp2p nodes: graceful degradation under load past the width (the brief's required Step 4 test), permit release after a failed call, row 3a proven end to end, and the at-limit contract (bounded wait, typed rejection, never ~2x `requestTimeoutMs`). |
+| `PROVENANCE.md` | This section. |
+
+### Verification
+
+```
+$ pnpm run typecheck
+(clean)
+
+$ pnpm run typecheck:tests
+(clean)
+
+$ pnpm vitest run --no-file-parallelism
+ Test Files  12 passed (12)
+      Tests  138 passed (138)
+
+$ grep -rlE "^import.*libp2p" src/
+src/tokens.ts
+src/transport-duplex.ts
+```
+
+Test count moved from 134/134 to **138/138** — 4 new cases, all in
+`tests/concurrency.test.ts`. No existing assertion was weakened or altered.
+`apps/httpeers-stack`'s 42/42 also verified unaffected (one flaky, unrelated failure
+observed on a single run of `tests/revocation-e2e.test.ts`'s "E6b" — a hub-stop-then-check
+timing test unrelated to this task's own files; reran clean 3/3 times afterward, and this
+task never touches `apps/httpeers-stack` or that test's own files).
