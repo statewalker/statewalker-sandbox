@@ -4,7 +4,7 @@ import { peerIdFromPrivateKey } from "@libp2p/peer-id";
 import { base58btc } from "multiformats/bases/base58";
 import { sha256 } from "multiformats/hashes/sha2";
 import { beforeAll, describe, expect, it } from "vitest";
-import { mintToken, verifyToken } from "../src/tokens.js";
+import { mintToken, TokenVerificationError, verifyToken } from "../src/tokens.js";
 
 const TYP = "httpeers-membership+jwt";
 const ALG = "EdDSA";
@@ -168,6 +168,50 @@ describe("tokens", () => {
 
     await expect(verifyToken(token, { issuer: hubPeerId, now })).rejects.toThrow(
       /type or algorithm/,
+    );
+  });
+
+  it("rejects a token whose signature segment is malformed base64url, without leaking a raw exception", async () => {
+    const now = () => 1_000_000;
+    const payload = {
+      sub: "member-peer-id",
+      iss: hubPeerId,
+      mesh: hubPeerId,
+      roles: [],
+      iat: now(),
+      exp: now() + 60_000,
+    };
+    const encodedHeader = b64url(new TextEncoder().encode(JSON.stringify({ alg: ALG, typ: TYP })));
+    const encodedPayload = b64url(new TextEncoder().encode(JSON.stringify(payload)));
+    // "!!!" is not valid base64url — atob() throws a raw DOMException/SyntaxError
+    // on input like this if it isn't caught.
+    const malformed = `${encodedHeader}.${encodedPayload}.!!!not-base64!!!`;
+
+    await expect(verifyToken(malformed, { issuer: hubPeerId, now })).rejects.toBeInstanceOf(
+      TokenVerificationError,
+    );
+    await expect(verifyToken(malformed, { issuer: hubPeerId, now })).rejects.toThrow(
+      /malformed signature/,
+    );
+  });
+
+  it("rejects a token whose iss does not match its mesh", async () => {
+    const now = () => 1_000_000;
+    const payload = {
+      sub: "member-peer-id",
+      iss: otherPeerId, // the signer claims to be otherPeerId...
+      mesh: hubPeerId, // ...but claims membership in the hub's mesh
+      roles: [],
+      iat: now(),
+      exp: now() + 60_000,
+    };
+    // Signed with the hub's own key, so the signature itself would verify
+    // fine against `mesh` (hubPeerId) — only the mesh === iss invariant
+    // should catch this.
+    const token = await buildRawToken({ alg: ALG, typ: TYP }, payload, hubKey);
+
+    await expect(verifyToken(token, { issuer: hubPeerId, now })).rejects.toThrow(
+      /mesh does not match issuer/,
     );
   });
 });

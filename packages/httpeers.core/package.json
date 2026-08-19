@@ -29,11 +29,11 @@
     "format": "biome format --write ."
   },
   "dependencies": {
-    "@libp2p/crypto": "5.1.22",
     "@libp2p/interface": "3.2.5",
     "@libp2p/peer-id": "6.0.14"
   },
   "devDependencies": {
+    "@libp2p/crypto": "5.1.22",
     "@types/node": "catalog:",
     "multiformats": "14.0.5",
     "rimraf": "catalog:",
