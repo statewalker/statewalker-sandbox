@@ -85,3 +85,63 @@ promotion, not reconstruction from a missing tree.
   says is supplied by the caller. `router.test.ts`'s new tests exercise the
   router's actual default (unconditional deny) plus an explicitly supplied
   `allowForward`, not the ANONYMOUS-aware policy — that belongs with `peer.ts`.
+
+## Task 3 — the binding middleware
+
+Source material for Task 3 exists at the umbrella root, same location as Task 2's:
+`notes/2026/2026-08/2026-08-16/httpeers-plan/prototypes/`. Two candidate
+`peer-handlers.ts` files exist there; the team lead's dispatch message identified
+which one to promote and why (folder `33` postdates the deletion of the policy half
+that folder `12` still carries).
+
+| File | Actual basis | How resolved |
+| --- | --- | --- |
+| `src/peer-handlers.ts` | Promoted from `33-httpeers-prototype-v0.7.0-access-tree/peer-handlers.ts` (45 lines, binding-only), not the older `12-httpeers-prototype-validated/src/peer-handlers.ts` (84 lines, which still carries `withAccessPolicy` and a flat rules-array policy deleted after A-1 proved decision-for-decision equivalence with the walked access tree). Folder `12`'s `binding.test.ts` was read for the seven archived test bodies (all promoted, see below) since folder `33` ships no test file of its own. `isTrustedPath` renamed to `usesTransportIdentity` throughout (function, interface field, and the `IsTrustedPath` type in `types.ts`, renamed to `UsesTransportIdentity`) per the team lead's explicit instruction. The `isRevoked` seam is new — no archived `peer-handlers.ts` has it, since revocation shipped standalone in a later folder (`35-httpeers-prototype-v0.8.0-revocation`) that this task does not promote from; added per the team lead's spec as a fifth optional seam, `(claims: MeshClaims) => Promise<string | null>`, checked after the subject-match check and before `handleEndpoints`, defaulting to `async () => null` when omitted. Prose converted to house style (doc comments explaining the "why," double quotes, semicolons) — logic is otherwise the same algorithm as the archive: resolve `getPeerId`, throw `PeerBindingLostError` on `undefined`, branch on `usesTransportIdentity`, then check claims presence / ANONYMOUS / subject match on the ordinary path. | Team lead's dispatch message: promote folder `33`, not folder `12`; add `isRevoked` and the rename as the two things the archive does not have. |
+| `src/types.ts` additions | `GetPeerId`, `GetClaims`, and `UsesTransportIdentity` (renamed from folder `12`'s `IsTrustedPath`) taken from `12-httpeers-prototype-validated/src/types.ts`'s shapes, added alongside Task 1/2's existing types (untouched). `GetPeerId`'s doc comment records the never-`undefined` contract and why the middleware still defends against a caller that violates it. `UsesTransportIdentity`'s doc comment records the rename rationale and the request-level (not path-level) requirement, matching the team lead's message near-verbatim since it stated the reasoning precisely. | Team lead's dispatch message, explicit type list and shapes. |
+| `tests/binding.test.ts` | Promoted from `12-httpeers-prototype-validated/src/binding.test.ts`'s seven cases (matching peer+token passes; confused-deputy replay refused; ANONYMOUS-with-valid-token refused; missing token on an ordinary path refused; bootstrap path with no token admitted; bootstrap path from ANONYMOUS refused; lost binding throws), converted from the archive's `isTrustedPath`/`trusted` naming to `usesTransportIdentity`/`bootstrap`, and its `claimsFor` helper updated to include `iat` (this package's `MeshClaims` requires it; the archive's did not). Three cases added, per the team lead's message, for the two pieces the archive does not have: `isRevoked` returning a reason refuses the request and the reason reaches the JSON response body; `isRevoked` omitted from `PeerHandlersInit` entirely (not just `undefined`) still compiles and admits the request, proving the seam is genuinely optional at the type level; and a same-path, method-discriminated case (`usesTransportIdentity` keyed on `req.method`) proving the predicate is request-level, not path-level. Ten cases total (`grep -c '  it('` confirms), not the archive's seven — see "Not promoted" below for the one archived-brief case deliberately left out. | Team lead's dispatch message, required-case list. |
+| `src/index.ts` | One-line addition: `export * from "./peer-handlers.js";`, alongside Task 2's existing barrel exports. | Mechanical — new module needs a barrel export like every other `src/*.ts`. |
+
+### Not promoted, and why
+
+- **The 84-line `12-httpeers-prototype-validated/src/peer-handlers.ts`.** Read for
+  context only, per the team lead's explicit instruction. Nothing from its
+  `AccessRule`/`AccessPolicyInit`/`withAccessPolicy` half came forward — that policy
+  logic is superseded by the walked access tree (a later task), and folder `33`'s
+  version already reflects its removal.
+- **A "forged `x-httpeers-peer` header cannot override the proven peer" test.**
+  The auto-extracted `task-3-brief.md` lists this as a required case, but the team
+  lead's dispatch message gives an explicit ten-item list that does not include it,
+  and no archived `binding.test.ts` (folder `12`, the only one that exists) contains
+  it either. Nothing in `peer-handlers.ts` reads request headers — `getPeerId` is a
+  fully injected seam, so there is no code path in this file for a forged header to
+  reach. A test asserting header-forgery resistance belongs with whatever future
+  implementation of `GetPeerId` actually parses transport state (a later task, not
+  this one); adding it here would test a stub's own hardcoded return value, not this
+  middleware. Followed the team lead's explicit list over the auto-extracted brief's
+  stale one, per the dispatch message's own framing ("the brief is auto-extracted
+  from the plan and is stale in one respect") — treating the enumerated seven-vs-ten
+  case list in the dispatch message itself as the authoritative, current instruction.
+
+### Verification
+
+- `grep -nE "^import.*libp2p" src/peer-handlers.ts src/types.ts` — no matches.
+- `pnpm run typecheck` and `pnpm run typecheck:tests` both pass clean (zero errors),
+  including on the pre-existing Task 1/2 files.
+- `pnpm vitest run --no-file-parallelism` — 6 test files, 60 tests, all passing;
+  `tests/binding.test.ts` alone: 10 tests, all passing.
+- `npx biome check` on the four touched/added files (`src/peer-handlers.ts`,
+  `src/types.ts`, `src/index.ts`, `tests/binding.test.ts`) — no issues.
+
+### Design notes not in the dispatch message
+
+- **The `peer === undefined` check under `strict`.** `ProvenPeer` (`PeerIdStr |
+  Anonymous`, i.e. `string | symbol`) has no overlap with `undefined`, so comparing
+  a value statically typed `ProvenPeer` to `undefined` trips TS2367 ("this condition
+  will always return false") under this package's `strict: true`. The archive's own
+  `tsconfig` evidently did not hit this. Resolved by declaring the local binding as
+  `const peer: ProvenPeer | undefined = await getPeerId(req);` — a legal widening
+  assignment, not a cast — so the runtime defense against a contract-violating
+  `GetPeerId` implementation survives strict mode without weakening the seam's
+  declared type. The test file's stubs do the mirror-image widening the other way
+  (`opts.peer as ProvenPeer`), matching the archive's own test technique, to let a
+  test deliberately construct the contract-violating case.

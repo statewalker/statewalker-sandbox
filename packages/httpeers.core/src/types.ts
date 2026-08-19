@@ -170,6 +170,42 @@ export interface AdvertisementStore {
  */
 export type Remote = (peerId: PeerIdStr, req: Request) => Promise<Response>;
 
+/**
+ * Resolve the transport-proven peer for a request — the identity the
+ * handshake itself established, never anything the caller merely claims.
+ *
+ * Returns `ProvenPeer`, and by contract *never* `undefined`: a real
+ * implementation built on `lookupPeer` (`peer-context.ts`) that finds no
+ * binding is looking at a bug — something re-created the `Request` above
+ * the binding middleware — not a legitimate "nobody" value. `ANONYMOUS` is
+ * the legitimate value for "proven, deliberately, to be nobody." The
+ * binding middleware (`peer-handlers.ts`) still guards against a caller
+ * that violates this contract, by throwing `PeerBindingLostError` rather
+ * than silently treating a stray `undefined` as `ANONYMOUS`.
+ */
+export type GetPeerId = (req: Request) => Promise<ProvenPeer>;
+
+/** Verify and return a request's membership claims, or `null` if none are present or valid. */
+export type GetClaims = (req: Request) => Promise<MeshClaims | null>;
+
+/**
+ * Does this request bootstrap identity from the transport handshake alone,
+ * with no JWT expected yet?
+ *
+ * Renamed from an earlier `isTrustedPath`: that name read as "a path we
+ * trust," which invites new entries for the wrong reason. What it actually
+ * means is narrower — no token exists yet, so the transport identity is the
+ * *sole* source of truth for this one request. True of exactly two requests
+ * in the whole system, both on the hub: `POST /.well-known/invite` and the
+ * `POST /.well-known/presence` check-in that mints the token.
+ *
+ * Deliberately request-level, not path-level: a presence *write* is
+ * bootstrap, but a presence *read* on the same path is an ordinary,
+ * token-bearing request, so this must be able to discriminate by method
+ * (or any other request property) — not just by URL.
+ */
+export type UsesTransportIdentity = (req: Request) => Promise<boolean>;
+
 /** The router's local mount table: longest-prefix match, or nothing. */
 export interface Mounts {
   match: (path: string) => FetchHandler | null;
