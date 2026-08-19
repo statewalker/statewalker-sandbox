@@ -14,7 +14,12 @@
     "typecheck": "tsc --noEmit",
     "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit",
     "lint": "biome check --write .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "setup": "tsx src/setup/main.ts",
+    "start": "bash scripts/start.sh",
+    "start:relay": "tsx src/relay/main.ts",
+    "start:hub": "tsx src/hub/main.ts",
+    "start:static": "tsx src/static-server/main.ts"
   },
   "dependencies": {
     "@chainsafe/libp2p-noise": "17.0.0",
@@ -23,6 +28,7 @@
     "@libp2p/crypto": "5.1.22",
     "@libp2p/identify": "4.1.12",
     "@libp2p/interface": "3.2.5",
+    "@libp2p/peer-id": "6.0.14",
     "@libp2p/websockets": "10.1.19",
     "@statewalker/httpeers.core": "workspace:*",
     "hono": "catalog:",

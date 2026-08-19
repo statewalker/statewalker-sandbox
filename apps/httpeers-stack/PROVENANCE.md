@@ -728,3 +728,212 @@ run only via `import.meta.url === file://...` guard is otherwise unexercised by
   `APP_PORT`/`IMAGE_PEER_PORT` constants — the override exists for testability only, not
   as a configuration surface anyone is expected to use in the real deployment.
 - No existing assertion in any of the six previously-passing test files was touched.
+
+## Task 10: the setup CLI — keys and the invitation payload
+
+The CLI that turns a fresh checkout into a runnable stack: `pnpm setup` generates (or,
+on a later run, simply reads back) this deployment's persistent identity, and writes
+`httpeers.json` — the invitation payload note 07 §4 describes, and the shape
+`../static-server/main.ts` (Task 9) already serves with its own distinct 503 when it is
+missing.
+
+### Step 1: key management (`src/setup/keys.ts`)
+
+`loadOrGenerateKey({ keyPath, seed? })`: Ed25519-only (design note 05 §2), reads the key
+at `keyPath` if it exists, otherwise generates one (from `RELAY_SEED`/`HUB_SEED` via
+`generateKeyPairFromSeed` when a seed is given, `generateKeyPair` otherwise) and persists
+it. **File format**: the protobuf encoding `@libp2p/crypto/keys`'s own
+`privateKeyToProtobuf`/`privateKeyFromProtobuf` round-trip through — exactly the format
+`../relay/main.ts`'s `loadRelayKey` (Task 9) reads back, per that module's own "Task 10
+must produce exactly that shape" instruction.
+
+**Idempotence — the property the brief calls out as the one that matters most — is
+structural, not a special case**: there is no code path in `loadOrGenerateKey` that writes
+to `keyPath` once `existsSync(keyPath)` is true. A seed is only ever consulted the first
+time a key is written; an existing file always wins on a later call, even with a
+different seed passed (`tests/setup.test.ts`'s "a seed is only consulted the first time a
+key is written" case).
+
+**Seed derivation**: `generateKeyPairFromSeed("Ed25519", seed)` requires exactly a 32-byte
+seed (verified against the installed `@libp2p/crypto@5.1.22` source,
+`keys/ed25519/index.js`'s `generateKeyFromSeed`, which throws `TypeError` on any other
+length) — `RELAY_SEED`/`HUB_SEED` are arbitrary-length env strings, so `deriveSeedBytes`
+expands them via SHA-256 (deterministic, fixed-length, and any single-character change
+in the input yields an unrelated key — exactly what "name a peerId as a constant" needs).
+`HUB_SEED="httpeers-test-hub-seed"` → `12D3KooWRkdxQyt33uJAw6KNQYcVWh7HdH116eCvdZYcMBSUKrsM`;
+`RELAY_SEED="httpeers-test-relay-seed"` → `12D3KooWAAaLaGEV867vPJ1WGQB9RmFCKcK2abFyMsFkR9uwEXAU`
+— both pinned as constants in `tests/setup.test.ts`, computed once via a scratch script
+against the real installed `@libp2p/crypto`, not hand-typed.
+
+### Step 2: `httpeers.json` (`src/setup/main.ts`)
+
+`runSetup(init)` calls `loadOrGenerateKey` for both roles, derives each peerId
+(`peerIdFromPrivateKey` — the same computation `httpeers.core`'s `tokens.ts` uses for
+`mintToken`), and writes `{ relayAddrs: ["/ip4/<RELAY_HOST>/tcp/<RELAY_PORT>/<ws|wss>/p2p/<relayPeerId>"], hubPeerId }`.
+`RELAY_HOST` defaults to `127.0.0.1` (matching the design record's own example — no `dns4`
+addressing or hostname handling was added; only ever consumed as a literal IPv4 host
+string, which is what every existing invocation of this stack uses). The `ws`/`wss`
+scheme switches on whether both `TLS_CERT` and `TLS_KEY` are set — the CLI's own
+`relayTls: boolean` flag, not the cert/key content itself, since `httpeers.json` only
+ever needs to know which scheme to write, never the certificate material.
+
+**Idempotence end to end**: `runSetup` does nothing but call `loadOrGenerateKey` (which
+never rewrites an existing key) and re-derive `httpeers.json` from whatever came back —
+so running it twice with the same env produces byte-identical output on both keys AND the
+config (`tests/setup.test.ts`'s "does not change either key or the config" compares
+`Buffer.equals`, not merely "no error" or "no throw"). Running it a third time with
+*different* `RELAY_HOST`/`RELAY_PORT` still reuses the same keys; only the config's
+addresses change.
+
+### Step 3: the scripts
+
+`package.json` gained `setup`, `start` (`bash scripts/start.sh`), `start:relay`,
+`start:hub`, `start:static` — verbatim as briefed.
+
+`scripts/start.sh` boots relay → hub → static server and tears all three down on
+Ctrl-C. **Does not scrape stdout for a multiaddr** — deliberately, unlike
+`webrun-wire/apps/p2p-demo/scripts/start.sh`, whose relay identity is ephemeral every
+run, making its own multiaddr log line the only way to hand the address to the other
+processes it boots. This stack's identities are not ephemeral (Task 9's relay,
+now Task 10's hub too — see Step 4 below): everything a dialer needs already sits in
+`httpeers.json`, a durable file written once by `pnpm setup`. Only the trap/cleanup shape
+(`pids=()`, `trap cleanup EXIT INT TERM`, `kill -- "-$pid"` against each child's process
+group) is copied from that script's pattern; its stdout-parsing loop is not.
+
+Ordering: the relay is TCP-polled on `127.0.0.1:$RELAY_PORT` (a plain reachability probe,
+not a read of anything the relay sends) before the hub is started — the hub reserves a
+slot through the relay rather than binding a fixed, externally-knowable port of its own
+(`httpeers.json`'s own shape has no hub port to poll), so a short fixed pause after
+starting it, checking only that the process is still alive, is what stands in for
+"ready" there. `httpeers.json`'s absence is checked before anything is started, and the
+script exits 1 with `run "pnpm setup" first` — not a partial boot.
+
+### Step 4: `src/hub/main.ts` was also modified — the one deviation from the brief's file list, made in scope after asking
+
+**Not in Task 10's file list, but required for the setup CLI's work to have any effect on
+the running hub.** `src/hub/main.ts`'s own module comment (written in Task 7a) explicitly
+deferred key persistence to "the setup CLI (a later task)" and left `createPeer`'s
+optional `privateKey` as the seam for it — this is that task. Flagged to the team lead
+before writing the change (`.superpowers/sdd/2026-08-18-httpeers-stack/task-10-report.md`
+carries the full exchange); confirmed in scope, with the reasoning restated even more
+sharply than the brief's own framing: **without this wiring, `pnpm start:hub` mints a
+fresh key on every run, so the peerId `httpeers.json` names is not the peerId the process
+that actually boots uses — not a stale config (which would at least be internally
+consistent), but a config that describes a mesh that no longer exists the moment the hub
+restarts.**
+
+Confirmed as a real, live defect before fixing it, not inferred from the comment alone:
+booted the stack (`pnpm setup` then `tsx src/hub/main.ts`) before this change and
+captured two different peerIds — `httpeers.json` named
+`12D3KooWEEh6igGmzfhZ8Eq6jLiCLvWnFyWkQxsHANdXUJyRSNoE`, the hub that actually started was
+`12D3KooWC8z5ws5M3Kv9zRPm6LgmVT4Uh4koHcyMztDCSivAytgu` — different on every run.
+
+**The fix mirrors the relay's contract exactly, not a new one**: `loadHubKey(keyPath)`
+in `hub/main.ts`, structurally identical to `../relay/main.ts`'s `loadRelayKey` — reads
+`.httpeers/hub.key` (`DEFAULT_HUB_KEY_PATH`, now the canonical constant `setup/main.ts`
+imports rather than re-declaring, so the path can't drift between the writer and the two
+readers), decodes via `privateKeyFromProtobuf`, type-guards to `Ed25519`, and on `ENOENT`
+prints a "run `pnpm setup` first" message to stderr and calls `process.exit(1)` — same
+shape as the relay's message, worded for the hub's own stakes (identity, not just
+address). `startHub` now threads the loaded key through to `createPeer({ privateKey,
+... })`, the exact seam Task 7a left for this. `StartHubInit` gained an optional
+`keyPath` (defaulting to `DEFAULT_HUB_KEY_PATH`), matching `StartRelayInit`'s own shape.
+
+**Verified this does not affect any existing suite, rather than assumed**: `grep -rn
+"startHub\b" tests/ src/` before making the change found exactly two lines, both inside
+`hub/main.ts` itself (the export and its own run-if-main call) — no test file imports
+`startHub` or `hub/main.ts` at all. Every existing suite (`chain.test.ts`, `hub.test.ts`,
+`integration.test.ts`, `revocation-e2e.test.ts`, `admin.test.ts`, `search.test.ts`,
+`tests/support/mesh.ts`) builds its own hub directly via `createPeer`/
+`createHubEndpoints`, bypassing `main.ts` entirely — confirmed by the full suite still
+passing unchanged (see counts below), not merely by this grep.
+
+**End-to-end re-verification after the fix**: `pnpm setup` then `tsx src/hub/main.ts`
+now boots with the SAME peerId `httpeers.json` names —
+`12D3KooWCXYEeYzHWgTw3mqQpaYxWmWZeqPNRvLrrfjXz5QxYtu9` on both sides, captured directly
+from the two processes' own output, a fresh run distinct from the pre-fix capture above.
+
+### Step 5: the tests (`tests/setup.test.ts`, 14 cases)
+
+| Test | Proves |
+| --- | --- |
+| "writes both keys and a config whose hubPeerId matches the hub key" | The brief's baseline case — both key files decode as Ed25519, `httpeers.json`'s `hubPeerId` matches the hub key's derived peerId. |
+| "derives relayAddrs from RELAY_HOST/RELAY_PORT" | The address-derivation rule, independent of TLS. |
+| "TLS env produces a wss relay address" | `relayTls: true` → `wss` scheme, no second code path. |
+| "does not change either key or the config" (idempotence) | `Buffer.equals` on all three files across two `runSetup` calls — not "no error." |
+| "a third run, with different relayHost/relayPort, still reuses the same keys" | The mesh identity survives a config-only re-run. |
+| "HUB_SEED produces a deterministic, documented peerId" / "RELAY_SEED produces a deterministic, documented peerId..." | Fixed seed strings pinned to real, computed peerIds (see Step 1). |
+| "the same seed always derives the same key, across separate directories" | The derivation is a pure function of the seed, not of anything ambient. |
+| "a seed is only consulted the first time a key is written" | An existing key file wins over a later, different seed — see Step 1's idempotence note. |
+| "startRelay ... boots with exactly the peerId setup wrote into httpeers.json" | **Not a file-existence check**: boots the relay's own real entry point (`startRelay`, which internally calls the private `loadRelayKey`) against the generated key and asserts the booted node's peerId. `loadRelayKey` itself is not exported (by design — see its module comment), so this is the strongest assertion reachable through the public surface. |
+| "also round-trips directly through privateKeyFromProtobuf..." | The same decode `loadRelayKey` performs, asserted directly. |
+| "the peerId startHub boots with equals httpeers.json's hubPeerId" | **The regression test for the Step 4 gap** — boots the real `startHub` against the generated hub key and asserts its peerId equals both `runSetup`'s return value and the written config. This is the automated form of the manual check that found the defect; see its own comment for why the pre-fix version of this exact assertion would have failed. |
+| "generates a key on first call and reuses the exact same key on a second call" / "rejects a non-Ed25519 key file..." | `keys.ts`'s `loadOrGenerateKey` exercised directly, including against a real secp256k1 key (`generateKeyPair("secp256k1")`) to prove the type guard, not merely documented. |
+
+**Not automated**: the hub's and relay's `ENOENT` → `process.exit(1)` paths. Calling
+either in-process would kill the vitest worker itself, so — matching the precedent
+already set for the relay in Task 9's own PROVENANCE.md ("Manual verification") — both
+are verified by running the real script as a subprocess instead (`tsx src/hub/main.ts`
+/`tsx src/relay/main.ts` with no key file present; both printed their guidance and exited
+1, confirmed above and in Task 9's own record for the relay).
+
+### Deviations from the brief, and why
+
+- **`src/hub/main.ts` modified** — not in the brief's file list. Required, escalated
+  before writing any code, and confirmed by the team lead; see Step 4 above for the full
+  reasoning and the defect it closes.
+- **`RELAY_HOST` is only ever treated as a literal IPv4 host string** (`/ip4/<host>/...`)
+  — the brief names the env var but not whether it might carry a hostname needing
+  `/dns4/`. Not needed by anything in this task or the design record's own example
+  (`/ip4/127.0.0.1/...`); flagged here in case a later task's deployment target is a real
+  hostname rather than an IP.
+- **The seed-derivation algorithm (SHA-256 expansion to 32 bytes) is this task's own
+  choice** — the brief specifies the env vars and the "deterministic, documented peerId"
+  requirement but not the derivation itself. Documented in `keys.ts`'s module comment and
+  pinned as test constants so a future change to the algorithm is caught immediately.
+- No existing assertion in any of the eight previously-passing test files (across both
+  `apps/httpeers-stack` and `packages/httpeers.core`) was touched.
+
+### Counts and verification
+
+```
+$ pnpm install                              # from the umbrella root, never from workspaces/statewalker-sandbox
+Already up to date
+
+# packages/httpeers.core (untouched by this task -- re-run as a baseline check)
+$ pnpm run typecheck && pnpm run typecheck:tests
+(clean, both)
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  12 passed (12)
+      Tests  146 passed (146)
+$ grep -rlE "^import.*libp2p" src/
+src/tokens.ts
+src/transport-duplex.ts
+
+# apps/httpeers-stack
+$ pnpm run typecheck && pnpm run typecheck:tests
+(clean, both)
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  8 passed (8)
+      Tests  83 passed (83)
+$ grep -rlE 'from "(@chainsafe/libp2p|@libp2p/|libp2p)' src/
+src/hub/main.ts
+src/setup/keys.ts
+src/relay/main.ts
+$ grep -rlE 'from "(@chainsafe/libp2p|@libp2p/|libp2p)' tests/
+tests/setup.test.ts
+```
+
+**146 core (unchanged) / 69 → 83 app** (14 new, all in `tests/setup.test.ts`; the seven
+previously-passing files — `admin.test.ts`, `chain.test.ts`, `hub.test.ts`,
+`integration.test.ts`, `revocation-e2e.test.ts`, `search.test.ts`,
+`static-server.test.ts` — are unmodified and still passing).
+
+**Where libp2p imports live in `apps/httpeers-stack` now**: `src/relay/main.ts` (Task 9,
+unchanged), `src/setup/keys.ts` (new — key generation/derivation needs
+`@libp2p/crypto`/`@libp2p/peer-id` directly, exactly the surface the team lead's brief
+authorized), and `src/hub/main.ts` (new as of this task's Step 4 — the same
+`@libp2p/crypto`/`@libp2p/interface` surface `relay/main.ts` already used for its own key
+loader, extended to the hub for the same reason). `httpeers.core`'s own isolation grep
+(`src/tokens.ts`, `src/transport-duplex.ts`) is untouched — nothing in
+`packages/httpeers.core` was modified by this task.
