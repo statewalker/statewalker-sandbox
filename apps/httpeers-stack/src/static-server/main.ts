@@ -135,7 +135,17 @@ export function resolveDistFile(distDir: string, pathname: string): string | nul
   return target;
 }
 
-/** Writes `body` as the response, except for a `HEAD` request, which gets the same status/headers with no body -- Node does not strip a body from a `HEAD` response on its own. */
+/**
+ * Writes `body` as the response, except for a `HEAD` request, which gets
+ * the same status/headers with no body passed to `.end()`. Node's
+ * `http.ServerResponse` already suppresses a `HEAD` response's body
+ * unconditionally on its own (verified directly: a raw TCP capture shows
+ * zero body bytes on the wire even when `.end(body)` is called
+ * unconditionally, with no `isHead` check anywhere) -- `isHead` is
+ * threaded through explicitly anyway so that guarantee is visible in this
+ * code, rather than resting on a reader already knowing an uncited Node
+ * runtime behaviour.
+ */
 function respond(
   res: ServerResponse,
   isHead: boolean,
