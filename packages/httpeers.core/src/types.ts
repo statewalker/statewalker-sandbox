@@ -9,6 +9,9 @@
 /** A libp2p `fetch` handler: the shape every peer serves and calls. */
 export type FetchHandler = (req: Request) => Promise<Response>;
 
+/** A peerId, in whatever string encoding the transport uses (base58 or base36). */
+export type PeerIdStr = string;
+
 /**
  * The sentinel for "no member was proven for this call."
  *
@@ -26,6 +29,17 @@ export type FetchHandler = (req: Request) => Promise<Response>;
  * is `===` to each other, or an identity check fails silently.
  */
 export const ANONYMOUS: unique symbol = Symbol.for("httpeers.anonymous");
+
+/** The type of the `ANONYMOUS` sentinel. */
+export type Anonymous = typeof ANONYMOUS;
+
+/**
+ * Who a request is bound to, once identity has been resolved: either a
+ * peerId that was actually proven (by the transport handshake), or
+ * `ANONYMOUS` — proven, deliberately, to be nobody. See `ANONYMOUS` above
+ * for why this is never `undefined`.
+ */
+export type ProvenPeer = PeerIdStr | Anonymous;
 
 /**
  * A signed membership claim, minted by a mesh's hub.
@@ -147,4 +161,24 @@ export interface AdvertisementStore {
   get(peerId: string, key: string): Advertisement | undefined;
   /** All advertisements, optionally filtered to one peer. */
   list(peerId?: string): Advertisement[];
+}
+
+/**
+ * Dial another peer and get its response. Injected by the transport — the
+ * core never imports a transport package, so it never constructs one of
+ * these itself.
+ */
+export type Remote = (peerId: PeerIdStr, req: Request) => Promise<Response>;
+
+/** The router's local mount table: longest-prefix match, or nothing. */
+export interface Mounts {
+  match: (path: string) => FetchHandler | null;
+}
+
+/** Build a JSON `Response` with the right content-type header. */
+export function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
