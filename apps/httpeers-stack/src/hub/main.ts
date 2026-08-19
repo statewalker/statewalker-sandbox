@@ -17,13 +17,8 @@
  * "leaves the view within one TTL" tight rather than adding a second timer
  * period on top of the 15 s TTL itself.
  */
-import {
-  createMemberStore,
-  createPeer,
-  DEFAULT_ACCESS_TREE,
-  DEFAULT_VOCABULARY,
-  RevocationRegistry,
-} from "@statewalker/httpeers.core";
+import { createMemberStore, createPeer, RevocationRegistry } from "@statewalker/httpeers.core";
+import { HUB_ACCESS, VOCABULARY } from "../policy.js";
 import { createHubEndpoints, DEFAULT_PRESENCE_TTL_MS, usesTransportIdentity } from "./endpoints.js";
 import { createPersistentHub } from "./persist.js";
 
@@ -43,7 +38,11 @@ export interface StartHubInit {
 
 export async function startHub(init: StartHubInit = {}) {
   const stateFilePath = init.stateFilePath ?? "./.httpeers/hub-state.json";
-  const vocabulary = DEFAULT_VOCABULARY;
+  // This application's own vocabulary (`policy.ts`), not `httpeers.core`'s
+  // generic library default -- `DEFAULT_VOCABULARY` has no `app:` capability
+  // at all, so `/search` could never be granted under it. See `policy.ts`'s
+  // module comment.
+  const vocabulary = VOCABULARY;
   const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS });
 
   const persistent = createPersistentHub({
@@ -56,7 +55,7 @@ export async function startHub(init: StartHubInit = {}) {
 
   const peer = await createPeer({
     listen: init.listen,
-    accessTree: DEFAULT_ACCESS_TREE,
+    accessTree: HUB_ACCESS,
     vocabulary,
     usesTransportIdentity: usesTransportIdentity(),
     mounts: (ctx) => {

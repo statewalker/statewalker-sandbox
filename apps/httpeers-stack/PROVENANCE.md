@@ -144,8 +144,8 @@ bulletin board with no TTL of its own.
 
 ## Not in this task (Task 7a's) — done in Task 7b, see below
 
-- `DELETE /admin/members/{peerId}`, `GET /search`, and their `.access` entries — Task 8, still
-  not done.
+- `DELETE /admin/members/{peerId}`, `GET /search`, and their `.access` entries — done in
+  Task 8, see below.
 
 ## Task 7b: the four routes Task 7a's mount table omitted, and three promoted suites
 
@@ -278,3 +278,215 @@ The "denies an admin path to a member" assertion discussed above was updated
 (`requires one of: std:mesh.admin`, per `CHANGES-v0.9.0.txt`) and now passes; `ttl` was
 restored to the presence response and its archived assertion; `E6b` was added
 additively. All 42 tests pass.
+
+## Task 8: the admin revocation endpoint and the search service
+
+### A pre-work core fix, in its own commit
+
+Before writing any of this task's own code, the brief's example `.access` tree for the new
+`GET /search` route turned out to depend on behaviour `httpeers.core`'s `resolveAccess`
+(Task 4/9) did not actually have: an exact-path entry (`"/search": { anyOf: [...] }`) was
+dead code, never consulted, because `ancestors()` always drops the request's final path
+segment and `resolveAccess` only ever looked up ancestor DIRECTORIES. Reported to the team
+lead before any Task 8 code was written (per this task's own dispatch: "ask rather than
+guessing"), confirmed, and found to be worse than the `/search`-shaped symptom first
+reported — a targeted deny nested under a granting directory (`/admin/secret` under
+`/admin/`) was equally unreachable, which is fail-OPEN, not merely inconvenient. Fixed and
+landed as `httpeers.core` commit `835a5b9`, its own PROVENANCE.md section ("Task 8
+(pre-work)"), separate from this task's app-level commit so the two are reviewable
+independently. `resolveAccess` now checks the exact resource path as the most specific
+match; `withAccessTree`'s constructor now rejects a tree declaring both `/x` and `/x/`.
+138 → 141 core tests; the eleven-case `DEFAULT_ACCESS_TREE` equivalence table is untouched.
+
+### Step 1: `src/policy.ts` — this app's own vocabulary and `.access` tree
+
+`VOCABULARY` and `HUB_ACCESS`, matching the design record's own §8 exactly (member:
+`app:search.query` + `app:images.read`; admin: implies member, plus `std:mesh.admin` —
+reused from `httpeers.core`'s `DEFAULT_VOCABULARY`, not redeclared). This is a **new**
+vocabulary for **this application**, not an edit to `httpeers.core`'s
+`DEFAULT_VOCABULARY`/`DEFAULT_ACCESS_TREE` — those stay exactly as they were (Task
+4/5/9's library defaults, generic enough to run `createPeer` with no application behind
+it at all) and are untouched by this task.
+
+- **Why `app:` and not `std:`**: `std:` is reserved for the mesh protocol itself
+  (`vocabulary.ts`'s own module comment); `app:search.query`/`app:images.read` are this
+  *application's* capabilities, so they take the application prefix.
+- **`hidden` carried over unchanged** from `DEFAULT_VOCABULARY` (implies `member`, confers
+  nothing): `mesh-view.ts`'s `buildMeshView` (Task 7a, M-1) already consumes it, and
+  dropping it from this app's own vocabulary would make it un-grantable
+  (`MemberStore.setRoles`/`InvitationStore.create` both validate role names against
+  whichever vocabulary is in force) for no reason connected to this task.
+- **Why `/.well-known/mesh` (and every other ordinary `.well-known` read, and `/test/*`)
+  is gated by `app:search.query` rather than a separate capability**: this vocabulary
+  declares exactly two application capabilities for `member`, and `app:search.query`
+  already means "an ordinary, unrevoked member of this mesh" for every member — search is
+  the mesh's first, and so far only, real service. A third capability invented solely to
+  gate diagnostic/registry reads every member should see anyway would add a distinction
+  with no difference. `HUB_ACCESS`'s `/.well-known/` and `/test/` directory entries use it
+  for exactly that reason; `/.well-known/mesh`'s own explicit leaf entry (matching the
+  design record's snippet) grants nothing the directory default does not already grant —
+  written out anyway for fidelity to the design record.
+- **`main.ts` now wires `HUB_ACCESS`/`VOCABULARY`** (was `DEFAULT_ACCESS_TREE`/
+  `DEFAULT_VOCABULARY`) — required, not optional: without it, the production hub's
+  `/search` mount would be reachable but ungoverned by anything but root's deny-by-default
+  (`DEFAULT_ACCESS_TREE` has no `/search` entry, and `DEFAULT_VOCABULARY` does not declare
+  `app:search.query` at all, so `withAccessTree` would throw at construction the moment a
+  tree naming it was paired with that vocabulary). The three promoted E2E suites
+  (`chain.test.ts`, `integration.test.ts`, `revocation-e2e.test.ts`) and `hub.test.ts`
+  construct their own test hubs directly against `DEFAULT_ACCESS_TREE`/`DEFAULT_VOCABULARY`
+  (`tests/support/mesh.ts`, and `hub.test.ts`'s own local `buildHub`) and were not touched,
+  so this change has no effect on them.
+
+### Step 2: `DELETE /admin/members/{peerId}` (`src/hub/admin.ts`)
+
+Requires `std:mesh.admin` via `HUB_ACCESS`'s `/admin/` directory entry — unchanged from
+`DEFAULT_ACCESS_TREE`'s own `/admin/` entry, and already correctly governs a resource three
+segments deep (`ancestors("/admin/members/{peerId}")` includes `/admin/`) even before the
+exact-path fix above; this route needed no core change of its own.
+
+Mounted at a **more specific** prefix, `/admin/members`, alongside the existing `/admin`
+mount (`hub/endpoints.ts`'s longest-prefix-wins router, R-1): `DELETE /admin/members/{id}`
+reaches `admin.ts`'s handler, `GET /admin/invitations` keeps hitting the original Hono
+`app` — no change to that existing route.
+
+The handler does two things, both required, matching the archive-splitting precedent
+`tests/support/mesh.ts` already documents: `memberStore.remove(peerId)` drops membership;
+`revocations.revoke(peerId)` records the change. **The version bump needs no separate
+step** — `RevocationRegistry.revoke` (`httpeers.core`, unchanged) bumps `policyVersion()`
+internally as part of the same call; there is nothing else to wire for a remote provider's
+next pulled heartbeat to see the change (proven by `revocation-e2e.test.ts`'s pre-existing
+E3/E4, unchanged, and restated for the admin endpoint specifically by
+`admin.test.ts`'s own `revocations.policyVersion()` assertion). Removal/revocation is
+unconditional and idempotent — no 404 on an unknown `peerId`; see `admin.ts`'s own comment
+for why that is intentional, not an oversight.
+
+### Step 3: the search service, behind a seam (`src/services/search.ts`)
+
+```ts
+export type SearchUpstream = (query: string) => Promise<SearchResult[]>;
+export const fixtureUpstream: SearchUpstream = async (q) => /* case-insensitive substring
+  match over title+snippet in search-fixtures.json */;
+export function createSearchEndpoint(init: { upstream: SearchUpstream }): FetchHandler;
+```
+
+`createHubEndpoints` (`hub/endpoints.ts`) takes an optional `searchUpstream` on
+`HubEndpointsInit`, defaulting to `fixtureUpstream` — `main.ts` does not pass one, so the
+production hub runs on the fixture set too; nothing in this task builds a real backend
+(explicitly a non-goal, design record §3). The handler (`createSearchEndpoint`) never
+learns what `upstream` actually is — swapping in a real backend is a change to what gets
+passed as `init.searchUpstream`, not to this file, `admin.ts`, or `policy.ts`'s `.access`
+entry, matching the design record's "relocating it to a standalone peer later is a change
+of wiring, not of code."
+
+**Results go in the body, never a header.** `search-fixtures.json` deliberately carries an
+accented letter and an emoji in a couple of titles/snippets — proof-by-construction that a
+regression trying to hoist a result into a header would fail loudly (HTTP header values are
+latin1 by specification) rather than silently passing on ASCII-only fixtures.
+`search.test.ts`'s "returns fixture results... in the body" test asserts those characters
+survive, in the JSON body, unaltered.
+
+**Query strings work on this transport, and this handler does not guard against them being
+dropped.** `search.test.ts`'s own comment states the negative case directly: if `?q=` were
+silently dropped anywhere on the `peer.dispatch` path, every non-400 test in that file
+would already be failing.
+
+**A missing or empty `q`** (including whitespace-only, trimmed before the emptiness check)
+is a 400 naming `q` in the reason. Capability gating (`app:search.query`) is entirely
+`policy.ts`'s `.access` entry, not this handler's job — same split as every other route.
+
+**One addition beyond the brief's own text, not requested but required to make the first
+Step 4 test true**: `hub/endpoints.ts` wraps the `/search` mount in a small
+`requireCurrentMembership` middleware, checking the caller's `claims.sub` against this
+hub's own live `memberStore` and refusing with `{ error: "membership revoked" }` (403) if
+they are no longer a member. Without it, a revoked member's already-issued token — still
+cryptographically valid, still carrying role `member`, until it naturally expires — would
+continue to satisfy `HUB_ACCESS`'s capability check indefinitely: `.access` only ever checks
+what a token's roles expand to, and revocation is a *membership* fact, not something a
+token carries about itself. `httpeers.core`'s existing `isRevoked`/`RevocationCache`
+mechanism (`revocation.ts`, `peer-handlers.ts`) is real and already proven
+(`revocation-e2e.test.ts`), but it is a *pull-and-cache* mechanism built for a REMOTE
+provider with no direct access to the hub's own registry — wiring one for the hub's own
+in-process peer would mean inventing a synchronisation step (sync a same-process
+`RevocationCache` after every `revocations.revoke` call) to stand in for a network pull
+that, for the hub checking itself, never needed to exist in the first place. The direct
+`memberStore.get` check is the same pattern `POST /.well-known/presence` (Task 7a,
+unchanged) already uses for exactly the same reason — the hub holds the source of truth
+directly — reused rather than duplicated as a new mechanism, and scoped to `/search` only
+(the one route this task's brief actually tests for it) rather than applied blanket across
+every hub endpoint, which would be a bigger change than this task asked for.
+
+### Step 4: the tests
+
+`tests/admin.test.ts` (4 cases) and `tests/search.test.ts` (7 cases), in process against
+the hub app (`hub.peer.dispatch`, manufactured `Request`s via `registerPeer` — same style
+as `hub.test.ts`, not `tests/support/mesh.ts`'s real-libp2p style: `/search` is a HUB mount,
+so there is no separate dialed provider process in this scenario at all). Both files build
+their own local `buildHub`, wired to `HUB_ACCESS`/`VOCABULARY` from `policy.ts` — a
+deliberate divergence from `hub.test.ts`'s own local `buildHub` and from
+`tests/support/mesh.ts`'s `buildTestHub`, both of which keep using
+`DEFAULT_ACCESS_TREE`/`DEFAULT_VOCABULARY` unchanged.
+
+| Test | File | Proves |
+| --- | --- | --- |
+| "an admin revokes a member; that member's next /search is refused, with a reason naming revocation -- within one heartbeat" | `admin.test.ts` | The end-to-end chain: `DELETE /admin/members/{id}` (requires `std:mesh.admin`) → `memberStore.remove` + `revocations.revoke` (version bump, free) → the SAME already-issued token, no intervening heartbeat, refused on its very next `/search` call, reason matches `/revoked/`. Elapsed time asserted `< PRESENCE_TTL_MS` (well under one heartbeat interval) — bounded, not merely eventual, though the actual mechanism (`requireCurrentMembership`, a direct same-process check) makes this immediate rather than heartbeat-bounded. |
+| "a member calling DELETE /admin/... is refused 403, and the reason names the missing capability" | `admin.test.ts` | 403, reason matches `/std:mesh\.admin/`; the targeted member (`carol`) is confirmed still present in `memberStore` afterward — the handler never ran. |
+| "/search without app:search.query -> 403 carrying the tree's reason" | `admin.test.ts` | A real, current member whose token carries no role conferring `app:search.query` (invited with `roles: []`) — 403, reason matches `/app:search\.query/`. Deliberately not the no-token case (that is `newPeerHandlers`' own 401, a different layer, already covered by `hub.test.ts`'s "a caller with no proven identity..."). |
+| "the vocabulary and revocation endpoints still answer 304 on an unchanged version" | `admin.test.ts` | `GET /.well-known/vocabulary` and `GET /.well-known/revocations`, both under the new `HUB_ACCESS`, still 200 then 304 on a repeated `If-None-Match` — unchanged `endpoints.ts` behaviour, now proven under the new policy too. |
+| "returns fixture results for a matching query, in the body" | `search.test.ts` | 200, `content-type: application/json`, results present, and the non-latin1 fixture characters survive in the body. |
+| "a query with no matches returns an empty result set, not an error" | `search.test.ts` | 200 with `results: []` — no match is not an error condition. |
+| "a missing q is a 400 with a reason" / "an empty q is a 400 with a reason" / "a whitespace-only q is also a 400..." | `search.test.ts` | The `q` guard, including the trim (a whitespace-only query is not treated as a literal search term). |
+| "the fixture upstream itself is deterministic and case-insensitive" | `search.test.ts` | `fixtureUpstream` directly, independent of the HTTP layer. |
+| "query strings survive this transport..." | `search.test.ts` | Restates, explicitly, that no dropped-`?q=` guard exists or is needed — see Step 3 above. |
+
+### Counts and verification
+
+```
+$ pnpm install                              # from the umbrella root, never from workspaces/statewalker-sandbox
+Scope: all 45 workspace projects
+Lockfile is up to date, resolution step is skipped
+Already up to date
+
+# packages/httpeers.core
+$ pnpm run typecheck && pnpm run typecheck:tests
+(clean, both)
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  12 passed (12)
+      Tests  141 passed (141)
+$ grep -rlE "^import.*libp2p" src/
+src/tokens.ts
+src/transport-duplex.ts
+
+# apps/httpeers-stack
+$ pnpm run typecheck && pnpm run typecheck:tests
+(clean, both)
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  6 passed (6)
+      Tests  53 passed (53)
+$ grep -rlE "^import.*libp2p" src/ tests/
+(no output -- nothing matches)
+```
+
+**138 → 141 core** (the pre-work fix's 3 new tests; no other core test file changed).
+**42 → 53 app** (11 new: 4 in `admin.test.ts`, 7 in `search.test.ts`; every one of the
+original 42 unchanged and still passing — `chain.test.ts` 8, `hub.test.ts` 8,
+`integration.test.ts` 17, `revocation-e2e.test.ts` 7 (E1–E6, E6b), unmodified).
+
+### Deviations from the brief, and why
+
+- **`resolveAccess`/`withAccessTree` changed in `httpeers.core`** — not listed in the
+  brief's file list at all. Required: the brief's own `.access` tree example depends on
+  exact-path entries working, which they did not before this fix. Reported and authorised
+  by the team lead before any app-level code was written; landed as its own commit,
+  documented in that package's own `PROVENANCE.md`.
+- **`hub/main.ts` modified** — not listed in the brief's file list (which named
+  `endpoints.ts`, `admin.ts`, `services/search.ts`, `services/search-fixtures.json`,
+  `policy.ts`, and the two test files). Required for the production hub's `/search` mount
+  to be reachable at all outside of tests — see "Why `main.ts` now wires..." above.
+- **`requireCurrentMembership` in `hub/endpoints.ts`** — not named in the brief's Step 3
+  text. Required to make the Step 4 admin-revocation test true at all (see Step 3 above for
+  why the capability check alone cannot detect a revoked member holding a still-valid
+  token, and why a direct `memberStore` check — reusing the presence handler's own
+  established pattern — was chosen over wiring a same-process `RevocationCache` for a
+  mechanism (pull-and-cache) that exists to solve a problem (no direct access to the hub's
+  registry) the hub itself does not have).
+- No existing assertion in any of the four previously-passing test files was altered.
