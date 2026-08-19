@@ -1,0 +1,45 @@
+{
+  "name": "@statewalker/httpeers.core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared contracts, membership tokens and hub registries for the httpeers mesh.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+  },
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "files": [
+    "dist/**",
+    "src/**"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "pnpm run typecheck:tests && vitest run",
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc",
+    "clean": "rimraf dist",
+    "lint": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "@libp2p/crypto": "5.1.22",
+    "@libp2p/interface": "3.2.5",
+    "@libp2p/peer-id": "6.0.14"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "multiformats": "14.0.5",
+    "rimraf": "catalog:",
+    "tsdown": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
