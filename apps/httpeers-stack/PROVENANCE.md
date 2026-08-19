@@ -168,14 +168,15 @@ Promoted suites — all under
 | Suite | Source | Cases | Result |
 | --- | --- | --- | --- |
 | `tests/chain.test.ts` | `31-.../chain.test.ts` | 8 (C1–C7, C5b) | 8/8 pass |
-| `tests/integration.test.ts` | `12-.../src/integration.test.ts` | 17 | 16/17 pass — see below |
+| `tests/integration.test.ts` | `12-.../src/integration.test.ts` | 17 | 17/17 pass — see below |
 | `tests/revocation-e2e.test.ts` | `35-.../revocation.test.ts`, `describe('A-2 end to end', ...)` only | 6 (E1–E6) | 6/6 pass |
 
 The ten `describe('A-2 unit: ...')` tests in `35-.../revocation.test.ts` were already
 promoted by Task 5 into `packages/httpeers.core/tests/revocation.test.ts` and are **not**
 duplicated here.
 
-**No assertion was altered in any of the three files.** Construction and call sites were
+**Exactly one assertion was changed, and it was a documented delta application, not an
+accommodation — see below.** Everywhere else, construction and call sites were
 adapted — `hub.store.X(...)` (the archive's one combined `MeshStore`) became
 `hub.memberStore.X(...)` plus, where revocation must also see the change,
 `hub.revocations.X(...)` (Task 1 split membership and revocation into separate
@@ -185,20 +186,26 @@ requires; the invite body's field is `id`, not `code`. Full adaptation record, i
 why the rogue/forged-mesh and expired-token tests needed no library key exposed, is in
 `.superpowers/sdd/2026-08-18-httpeers-stack/task-7b-report.md`.
 
-**One assertion does not pass, and was left exactly as written**:
-`integration.test.ts`'s "denies an admin path to a member" expects the denial error to
-match `/requires one of: admin/`. `DEFAULT_ACCESS_TREE`'s `/admin/` entry (Task 4/9) is
-gated by the capability `std:mesh.admin`, not the role name `admin` the archive's
-`DEFAULT_ACCESS_RULES` used — so the actual message is `requires one of: std:mesh.admin`,
-which does not contain the literal substring the archive's regex requires. The *behavior*
-this test exists to pin (a member is refused `/admin/*` with 403) is intact and passes;
-only the wording of the refusal changed, for a reason external to this task (the
-capability-based rewrite of `.access`, done before Task 7 existed). Per this task's rule —
-promoted assertions are not adjusted to fit — this was reported rather than fixed. See the
-task-7b report for the full analysis.
+**One assertion was updated, on the archive's own authority — a delta application, not an
+accommodation.** `integration.test.ts`'s "denies an admin path to a member" originally
+matched `/requires one of: admin/`, which does not pass:
+`DEFAULT_ACCESS_TREE`'s `/admin/` entry (Task 4/9) is gated by the capability
+`std:mesh.admin`, not the role name `admin` the archive's `DEFAULT_ACCESS_RULES` used, so
+the actual message is `requires one of: std:mesh.admin`. This was first reported, not
+fixed, per this task's rule that promoted assertions are not adjusted to fit — but the
+archive itself documents this exact change: `37-httpeers-prototype-v0.9.0-role-vocabulary/CHANGES-v0.9.0.txt`,
+"What the switch cost", states "one integration assertion — the denial message improved
+from `requires one of: admin` to `requires one of: std:mesh.admin`." That delta's other
+three access-tree tests were already applied by an earlier task; this integration
+assertion lived in a suite that did not exist until Task 7b, so the delta had been left
+half-applied for three tasks without anyone able to see it. Updated to
+`/requires one of: std:mesh\.admin/` accordingly. The *behavior* this test exists to pin
+(a member is refused `/admin/*` with 403) was intact throughout and never changed.
 
-**E4's measured latency** (this run): **7 ms** — well under the archive's own 59 ms
-localhost figure, consistent with "the mechanism's floor, not a production figure."
+**E4's measured latency**: **7 ms** on the first run, **8 ms** on the re-run after the
+assertion update — both well under the archive's own 59 ms localhost figure. Recorded as
+measured, not as an improvement: both figures are localhost floors, not production
+numbers: the point is that revocation is bounded by one heartbeat, not that it is fast.
 
 `tests/support/mesh.ts` (new, test-only) provides `buildTestHub`/`buildTestPeer`: real,
 listening peers over loopback TCP, shared by all three suites — `buildTestHub` wires the
@@ -242,9 +249,10 @@ $ pnpm run typecheck:tests
 (clean)
 
 $ pnpm exec vitest run --no-file-parallelism
- Test Files  1 failed | 3 passed (4)
-      Tests  1 failed | 40 passed (41)
+ Test Files  4 passed (4)
+      Tests  41 passed (41)
 ```
 
-The one failure is the reported, unaltered assertion above
-("denies an admin path to a member").
+The "denies an admin path to a member" assertion discussed above was updated
+(`requires one of: std:mesh.admin`, per `CHANGES-v0.9.0.txt`) and now passes; all 41
+tests pass.
