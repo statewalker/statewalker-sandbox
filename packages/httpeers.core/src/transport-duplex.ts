@@ -25,13 +25,13 @@
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { identify } from "@libp2p/identify";
-import type { Libp2p } from "@libp2p/interface";
+import type { Ed25519PrivateKey, Libp2p } from "@libp2p/interface";
 import { tcp } from "@libp2p/tcp";
 import { multiaddr } from "@multiformats/multiaddr";
 // Re-exported so `peer.ts` (and any other consumer) can type an already-
-// constructed node without itself importing `@libp2p/interface` — this file
-// stays the only one that does.
-export type { Libp2p } from "@libp2p/interface";
+// constructed node, or a retained signing key, without itself importing
+// `@libp2p/interface` — this file stays the only one that does.
+export type { Ed25519PrivateKey, Libp2p } from "@libp2p/interface";
 import { fetchOverDuplex, serveFetchOverDuplex } from "@statewalker/webrun-http-streams";
 import { connect, type ConnectionContext, serveConnections } from "@statewalker/webrun-streams-libp2p";
 import { createLibp2p } from "libp2p";
@@ -86,6 +86,15 @@ export interface CreateNodeInit {
    * is a legitimate deployment shape (a client-only edge peer).
    */
   listen?: string[];
+  /**
+   * The node's own signing key. Omit to let libp2p generate one internally
+   * — fine for a peer that never needs to prove that key again once the
+   * node exists. `createPeer` generates and RETAINS this key itself (never
+   * here) when it needs to mint tokens later, because `createLibp2p` never
+   * hands a generated key back out; if the caller doesn't keep the
+   * reference before calling this function, it is gone for good.
+   */
+  privateKey?: Ed25519PrivateKey;
 }
 
 /**
@@ -99,8 +108,9 @@ export interface CreateNodeInit {
  * `transport-duplex.ts`; `peer.ts` calls it, never `createLibp2p` directly.
  */
 export async function createNode(init: CreateNodeInit = {}): Promise<Libp2p> {
-  const { listen = [] } = init;
+  const { listen = [], privateKey } = init;
   return createLibp2p({
+    ...(privateKey != null ? { privateKey } : {}),
     addresses: { listen },
     transports: [tcp()],
     connectionEncrypters: [noise()],
