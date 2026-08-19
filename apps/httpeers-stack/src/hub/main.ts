@@ -36,7 +36,12 @@
 import { readFileSync } from "node:fs";
 import { privateKeyFromProtobuf } from "@libp2p/crypto/keys";
 import type { Ed25519PrivateKey } from "@libp2p/interface";
-import { createMemberStore, createPeer, RevocationRegistry } from "@statewalker/httpeers.core";
+import {
+  createMemberStore,
+  createMonotonicClock,
+  createPeer,
+  RevocationRegistry,
+} from "@statewalker/httpeers.core";
 import { HUB_ACCESS, VOCABULARY } from "../policy.js";
 import { createHubEndpoints, DEFAULT_PRESENCE_TTL_MS, usesTransportIdentity } from "./endpoints.js";
 import { createPersistentHub } from "./persist.js";
@@ -106,7 +111,13 @@ export async function startHub(init: StartHubInit = {}) {
   // at all, so `/search` could never be granted under it. See `policy.ts`'s
   // module comment.
   const vocabulary = VOCABULARY;
-  const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS });
+  // ONE shared clock for this hub's minting AND its revocation registry —
+  // see `revocation.ts`'s "ONE HUB-ISSUED CLOCK, NOT TWO". Two independent
+  // `Date.now` defaults can tie (mint a token, then revoke that same peer,
+  // both well within a millisecond); a `RevocationRegistry` and a
+  // `mintToken` call drawing from the SAME monotonic instance cannot.
+  const clock = createMonotonicClock();
+  const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS, now: clock });
 
   const persistent = createPersistentHub({
     filePath: stateFilePath,
@@ -122,6 +133,7 @@ export async function startHub(init: StartHubInit = {}) {
     accessTree: HUB_ACCESS,
     vocabulary,
     usesTransportIdentity: usesTransportIdentity(),
+    now: clock,
     // The hub enforces revocation on ITS OWN endpoints by consulting its own
     // live `RevocationRegistry` directly -- no cache, no pull: it already
     // holds the source of truth in this same process. This is the SAME

@@ -20,6 +20,23 @@
  *     implementation — "is this token older than the revocation?" using
  *     `Date.now()` — quietly requires synchronised clocks across every peer.
  *
+ *     ONE HUB-ISSUED CLOCK, NOT TWO. Both timestamps being hub-issued is not
+ *     enough on its own — `Date.now()` has millisecond resolution, and
+ *     minting a token then revoking that same peer are two independent
+ *     calls that can land in the same millisecond (routinely, under load: a
+ *     round trip that normally clears by a few ms can clear by one). `<`
+ *     cannot tell which of two equal readings came first, and silently
+ *     resolves the tie as "minted after the change" — the token is
+ *     honoured, even though the hub's own call order proves the revocation
+ *     came second. `check` below still compares `iat` against `changedAt`
+ *     with ordinary `<`; what changes is that a hub mints tokens and
+ *     records revocations through `clock.ts`'s `createMonotonicClock`,
+ *     shared as ONE instance between `mintToken` and this registry (see
+ *     `mesh.ts`'s `buildTestHub` / `main.ts`'s `startHub`) — two calls
+ *     through that one instance can never return the same value, so a tie
+ *     at this comparison becomes structurally impossible rather than
+ *     merely unlikely.
+ *
  *  3. THE LIST IS SELF-PRUNING. An entry can be dropped once
  *     `changedAt + maxTokenTtl < now`: no token old enough to be affected can
  *     still be valid. The list stays bounded by "peers changed in the last
