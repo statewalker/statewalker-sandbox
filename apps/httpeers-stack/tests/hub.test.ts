@@ -232,7 +232,7 @@ describe("hub: invite, presence and the mesh view", () => {
     expect(hub.memberStore.get("grace")?.roles).toEqual(["member"]);
   });
 
-  it("check-in returns { token, versions } and not the roster", async () => {
+  it("check-in returns { token, versions, ttl } and not the roster", async () => {
     hub.invitations.create("INV-CAROL", ["member"], 60_000);
     await hub.peer.dispatch(
       requestAs("carol", "/.well-known/invite", {
@@ -248,12 +248,17 @@ describe("hub: invite, presence and the mesh view", () => {
       }),
     );
     const body = await json(res);
-    expect(Object.keys(body).sort()).toEqual(["token", "versions"]);
+    // `ttl` restored (Task 7b, R-post-review): unchanged context from the
+    // archive's `CHANGES-v0.8.0.txt` heartbeat shape, never part of the
+    // "drop the roster" delta that removed `meshVersion`. Still not the
+    // roster -- that's the property this test exists to pin.
+    expect(Object.keys(body).sort()).toEqual(["token", "ttl", "versions"]);
     expect(body.versions).toEqual({
       mesh: expect.any(Number),
       policy: expect.any(Number),
       vocabulary: expect.any(Number),
     });
+    expect(body.ttl).toBe(PRESENCE_TTL_MS);
   });
 
   it("the mesh view is filtered by capability: a caller lacking one does not see the advertisement it gates", async () => {

@@ -31,7 +31,7 @@ Source: `notes/2026/2026-08/2026-08-16/httpeers-plan/prototypes/35-httpeers-prot
 | Delta | Applied as |
 | --- | --- |
 | Heartbeat response gains `versions: { mesh, policy }` | `POST /.well-known/presence` returns `versions: { mesh, policy, vocabulary }` (the third counter is v0.9.0's, applied together since both deltas land in this one task) — see `endpoints.ts`'s presence handler. |
-| Heartbeat response also keeps `meshVersion` "for compatibility" | **Deliberately dropped**, per Ruling R31 (`progress.md`): this is a fresh application with no legacy consumer, and the note that introduced the field itself flagged that one of the two should go before anything depended on both. The response is exactly `{ token, versions }` — see the "check-in returns `{ token, versions }` and not the roster" test. |
+| Heartbeat response also keeps `meshVersion` "for compatibility" | **Deliberately dropped**, per Ruling R31 (`progress.md`): this is a fresh application with no legacy consumer, and the note that introduced the field itself flagged that one of the two should go before anything depended on both. **Corrected in Task 7b's review**: `ttl`, present in the archive's own heartbeat shape (`CHANGES-v0.8.0.txt`) as unchanged context rather than part of the `meshVersion`/`versions` delta, was mistakenly dropped along with it — this brief's Step 5 wording ("nothing more") over-reached past "no roster" into "no `ttl`" either. Restored; the response is `{ token, versions, ttl }` — see the "check-in returns `{ token, versions, ttl }` and not the roster" test. |
 | New `GET /.well-known/revocations` → `{ version, entries }`, ETag-conditional like `/mesh` | Implemented verbatim: `` etag = `"policy${version}"` ``, 304 on match, body is `{ version: revocations.policyVersion(), entries: revocations.list() }`. |
 
 ## Applied: the v0.9.0 delta (role vocabulary)
@@ -169,38 +169,59 @@ Promoted suites — all under
 | --- | --- | --- | --- |
 | `tests/chain.test.ts` | `31-.../chain.test.ts` | 8 (C1–C7, C5b) | 8/8 pass |
 | `tests/integration.test.ts` | `12-.../src/integration.test.ts` | 17 | 17/17 pass — see below |
-| `tests/revocation-e2e.test.ts` | `35-.../revocation.test.ts`, `describe('A-2 end to end', ...)` only | 6 (E1–E6) | 6/6 pass |
+| `tests/revocation-e2e.test.ts` | `35-.../revocation.test.ts`, `describe('A-2 end to end', ...)` only, plus one additive sibling | 6 promoted (E1–E6) + 1 new (E6b) | 7/7 pass |
 
 The ten `describe('A-2 unit: ...')` tests in `35-.../revocation.test.ts` were already
 promoted by Task 5 into `packages/httpeers.core/tests/revocation.test.ts` and are **not**
 duplicated here.
 
 **Exactly one assertion was changed, and it was a documented delta application, not an
-accommodation — see below.** Everywhere else, construction and call sites were
-adapted — `hub.store.X(...)` (the archive's one combined `MeshStore`) became
-`hub.memberStore.X(...)` plus, where revocation must also see the change,
-`hub.revocations.X(...)` (Task 1 split membership and revocation into separate
-registries); `mintMeshToken`/`verifyMeshToken` became this package's `mintToken`/
-`verifyToken`; a presence POST body gained the `seq` field this package's replay guard
-requires; the invite body's field is `id`, not `code`. Full adaptation record, including
-why the rogue/forged-mesh and expired-token tests needed no library key exposed, is in
-`.superpowers/sdd/2026-08-18-httpeers-stack/task-7b-report.md`.
-
-**One assertion was updated, on the archive's own authority — a delta application, not an
 accommodation.** `integration.test.ts`'s "denies an admin path to a member" originally
-matched `/requires one of: admin/`, which does not pass:
-`DEFAULT_ACCESS_TREE`'s `/admin/` entry (Task 4/9) is gated by the capability
-`std:mesh.admin`, not the role name `admin` the archive's `DEFAULT_ACCESS_RULES` used, so
-the actual message is `requires one of: std:mesh.admin`. This was first reported, not
-fixed, per this task's rule that promoted assertions are not adjusted to fit — but the
-archive itself documents this exact change: `37-httpeers-prototype-v0.9.0-role-vocabulary/CHANGES-v0.9.0.txt`,
-"What the switch cost", states "one integration assertion — the denial message improved
-from `requires one of: admin` to `requires one of: std:mesh.admin`." That delta's other
-three access-tree tests were already applied by an earlier task; this integration
-assertion lived in a suite that did not exist until Task 7b, so the delta had been left
-half-applied for three tasks without anyone able to see it. Updated to
-`/requires one of: std:mesh\.admin/` accordingly. The *behavior* this test exists to pin
-(a member is refused `/admin/*` with 403) was intact throughout and never changed.
+matched `/requires one of: admin/`, which did not pass: `DEFAULT_ACCESS_TREE`'s `/admin/`
+entry (Task 4/9) is gated by the capability `std:mesh.admin`, not the role name `admin`
+the archive's `DEFAULT_ACCESS_RULES` used, so the actual message is `requires one of:
+std:mesh.admin`. This was first reported, not fixed, per this task's rule that promoted
+assertions are not adjusted to fit — but the archive itself documents this exact change:
+`37-httpeers-prototype-v0.9.0-role-vocabulary/CHANGES-v0.9.0.txt`, "What the switch cost",
+states "one integration assertion — the denial message improved from `requires one of:
+admin` to `requires one of: std:mesh.admin`." That delta's other three access-tree tests
+were already applied by an earlier task; this integration assertion lived in a suite that
+did not exist until Task 7b, so the delta had been left half-applied for three tasks
+without anyone able to see it. Updated to `/requires one of: std:mesh\.admin/`
+accordingly. The *behavior* this test exists to pin (a member is refused `/admin/*` with
+403) was intact throughout and never changed.
+
+Everywhere else, construction and call sites were adapted — `hub.store.X(...)` (the
+archive's one combined `MeshStore`) became `hub.memberStore.X(...)` plus, where
+revocation must also see the change, `hub.revocations.X(...)` (Task 1 split membership
+and revocation into separate registries); `mintMeshToken`/`verifyMeshToken` became this
+package's `mintToken`/`verifyToken`; a presence POST body gained the `seq` field this
+package's replay guard requires; the invite body's field is `id`, not `code`. Full
+adaptation record, including why the rogue/forged-mesh and expired-token tests needed no
+library key exposed, is in `.superpowers/sdd/2026-08-18-httpeers-stack/task-7b-report.md`.
+
+**The `ttl` field, dropped in error and restored on review.** `integration.test.ts`'s
+"check-in records presence and returns a fresh token" originally omitted the archive's
+`expect(body.ttl).toBe(15_000)` — silently, not escalated — because the presence
+response had no `ttl` field to check. The root cause was Task 7a's brief (Step 5: "Return
+`{ token, versions }` and nothing more"), which correctly excluded the roster but
+over-reached into excluding `ttl` too; the archive's `CHANGES-v0.8.0.txt` lists `ttl` as
+unchanged context in the heartbeat shape, never part of the delta that superseded
+`meshVersion`. Fixed by restoring `ttl: presenceTtlMs` to `POST /.well-known/presence`'s
+response (`endpoints.ts`) and the archived assertion, unmodified, to
+`integration.test.ts`. `tests/hub.test.ts`'s own "check-in returns { token, versions } and
+not the roster" test (Task 7a's, not promoted) was updated to match the corrected shape
+(`{ token, versions, ttl }`) — its point, "not the roster," is unaffected.
+
+**E6 is promoted verbatim and stays that way; E6b is new and additive.** A review found
+that E6, exactly as archived, only proves "the refused call made no *further* contact
+with the hub" — its own comment ("last contact with the hub") says as much — not the
+stronger claim its name makes ("the hub is never on the critical path"). Rather than
+edit the promoted E6 to prove more than the archive proved, a sibling test, `E6b:
+enforcement continues with the hub actually stopped`, was added: a self-contained
+hub/provider/member, the hub genuinely `stop()`-ed (not merely left uncalled) before the
+refusal is checked. `revocation-e2e.test.ts` therefore carries 6 promoted cases (E1–E6)
+plus 1 new one (E6b), 7 total.
 
 **E4's measured latency**: **7 ms** on the first run, **8 ms** on the re-run after the
 assertion update — both well under the archive's own 59 ms localhost figure. Recorded as
@@ -250,9 +271,10 @@ $ pnpm run typecheck:tests
 
 $ pnpm exec vitest run --no-file-parallelism
  Test Files  4 passed (4)
-      Tests  41 passed (41)
+      Tests  42 passed (42)
 ```
 
 The "denies an admin path to a member" assertion discussed above was updated
-(`requires one of: std:mesh.admin`, per `CHANGES-v0.9.0.txt`) and now passes; all 41
-tests pass.
+(`requires one of: std:mesh.admin`, per `CHANGES-v0.9.0.txt`) and now passes; `ttl` was
+restored to the presence response and its archived assertion; `E6b` was added
+additively. All 42 tests pass.
