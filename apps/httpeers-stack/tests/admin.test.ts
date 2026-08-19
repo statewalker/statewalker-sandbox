@@ -1,19 +1,22 @@
 /**
  * Task 8: `DELETE /admin/members/{peerId}`, and the end-to-end proof that
- * admin revocation, `/search`, and `httpeers.core`'s existing 304-on-
- * unchanged-version endpoints all still connect correctly once this app's
- * own vocabulary/`.access` tree (`src/policy.ts`) is wired in.
+ * admin revocation, the hub's own endpoints, and `httpeers.core`'s existing
+ * 304-on-unchanged-version endpoints all still connect correctly once this
+ * app's own vocabulary/`.access` tree (`src/policy.ts`) is wired in.
  *
  * IN-PROCESS, LIKE `hub.test.ts`, NOT REAL LIBP2P LIKE `revocation-e2e
  * .test.ts`. This suite's revoked-member scenario needs no dialed
  * connection or real heartbeat round trip: the member calling `/search`
  * IS calling the hub directly (the design record's own choice — "Search is
  * a mount, not a process," §5.2), so there is no separate provider process
- * to pull a deny-list from. `hub/endpoints.ts`'s `requireCurrentMembership`
- * wrapper on `/search` checks this hub's own live `memberStore` directly —
- * see that file's comment for why that is correct specifically because
- * this handler runs on the hub, which holds the source of truth, not a
- * pulled copy of it.
+ * to pull a deny-list from. `buildHub`'s `revocationCache: revocations`
+ * (passed straight to `createPeer`, same as `hub/main.ts`'s production
+ * wiring) is what makes that enforcement REAL here: `httpeers.core`'s
+ * binding middleware (`peer-handlers.ts`) calls `isRevoked` on every
+ * non-bootstrap request, before ANY mount's handler runs — this is one
+ * mechanism applied hub-wide, not a check bolted onto one route. See
+ * `RevocationRegistry.check` (`httpeers.core/src/revocation.ts`) for why
+ * the hub needs no cache and no pull to use it: it owns the registry.
  *
  * `buildHub` below is deliberately NOT `tests/support/mesh.ts`'s
  * `buildTestHub` — that helper (and `hub.test.ts`'s own local `buildHub`,
@@ -61,6 +64,10 @@ async function buildHub(stateFilePath: string): Promise<TestHub> {
     accessTree: HUB_ACCESS,
     vocabulary: VOCABULARY,
     usesTransportIdentity: usesTransportIdentity(),
+    // Same instance `createHubEndpoints` below bumps on DELETE
+    // /admin/members/{id} -- the hub enforcing revocation against its OWN
+    // live registry, no cache, no pull. See the module comment.
+    revocationCache: revocations,
     mounts: (ctx) =>
       createHubEndpoints({
         selfPeerId: ctx.peerId,
@@ -143,6 +150,17 @@ describe("Task 8: admin revocation and the search mount", () => {
       // Bounded, not merely eventual: well under one heartbeat interval.
       expect(elapsed).toBeLessThan(PRESENCE_TTL_MS);
 
+      // NOT route-scoped: the SAME token, still on the SAME hub, is refused
+      // on a completely different mount too (`/.well-known/mesh`) -- proof
+      // the enforcement is the binding middleware's `isRevoked`, applied
+      // uniformly before any handler runs, not a check that happens to live
+      // on `/search`.
+      const meshAfter = await hub.peer.dispatch(
+        requestAs("bob", "/.well-known/mesh", { headers: bearer(bobToken) }),
+      );
+      expect(meshAfter.status).toBe(403);
+      expect(((await meshAfter.json()) as { error: string }).error).toMatch(/revoked/);
+
       // The member registry itself no longer lists bob.
       expect(hub.memberStore.list().map((m) => m.peerId)).not.toContain("bob");
       // And the policy version moved -- what makes a REMOTE provider's next
@@ -151,6 +169,38 @@ describe("Task 8: admin revocation and the search mount", () => {
     },
     20_000,
   );
+
+  it("a revoked admin cannot call DELETE /admin/members/... -- the case that justifies enforcing hub-wide, not route by route", async () => {
+    const rootToken = await invite(hub, "root-admin", "ROOT-CODE", ["admin"]);
+    const badActorToken = await invite(hub, "bad-actor", "BAD-ACTOR-CODE", ["admin"]);
+    await invite(hub, "carol", "CAROL-CODE", ["member"]);
+
+    // The root admin revokes the misbehaving admin's OWN membership --
+    // exactly the scenario note 34 §8 exists to prevent from being
+    // impossible: an admin removed for cause must not be able to keep
+    // acting as one on their old token.
+    const del = await hub.peer.dispatch(
+      requestAs("root-admin", "/admin/members/bad-actor", {
+        method: "DELETE",
+        headers: bearer(rootToken),
+      }),
+    );
+    expect(del.status).toBe(200);
+
+    // bad-actor tries to remove carol with the SAME, still-valid,
+    // still-"admin"-role-carrying token they already held.
+    const res = await hub.peer.dispatch(
+      requestAs("bad-actor", "/admin/members/carol", {
+        method: "DELETE",
+        headers: bearer(badActorToken),
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toMatch(/revoked/);
+
+    // Refused before the handler ever ran: carol is still a member.
+    expect(hub.memberStore.get("carol")).toBeDefined();
+  });
 
   it("a member calling DELETE /admin/... is refused 403, and the reason names the missing capability", async () => {
     const bobToken = await invite(hub, "bob", "BOB-CODE", ["member"]);
@@ -167,8 +217,8 @@ describe("Task 8: admin revocation and the search mount", () => {
   });
 
   it("/search without app:search.query -> 403 carrying the tree's reason", async () => {
-    // A real, current member (so `requireCurrentMembership` and token
-    // verification both pass) whose token simply carries no role that
+    // A real, current, unrevoked member (so token verification and the
+    // isRevoked check both pass) whose token simply carries no role that
     // confers `app:search.query` -- the ordinary capability check, not the
     // bootstrap/no-token case (that's `newPeerHandlers`' own 401, a
     // different layer, already covered by `hub.test.ts`'s "a caller with no

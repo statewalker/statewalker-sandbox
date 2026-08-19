@@ -394,51 +394,61 @@ would already be failing.
 is a 400 naming `q` in the reason. Capability gating (`app:search.query`) is entirely
 `policy.ts`'s `.access` entry, not this handler's job — same split as every other route.
 
-**One addition beyond the brief's own text, not requested but required to make the first
-Step 4 test true**: `hub/endpoints.ts` wraps the `/search` mount in a small
-`requireCurrentMembership` middleware, checking the caller's `claims.sub` against this
-hub's own live `memberStore` and refusing with `{ error: "membership revoked" }` (403) if
-they are no longer a member. Without it, a revoked member's already-issued token — still
-cryptographically valid, still carrying role `member`, until it naturally expires — would
-continue to satisfy `HUB_ACCESS`'s capability check indefinitely: `.access` only ever checks
-what a token's roles expand to, and revocation is a *membership* fact, not something a
-token carries about itself. `httpeers.core`'s existing `isRevoked`/`RevocationCache`
-mechanism (`revocation.ts`, `peer-handlers.ts`) is real and already proven
-(`revocation-e2e.test.ts`), but it is a *pull-and-cache* mechanism built for a REMOTE
-provider with no direct access to the hub's own registry — wiring one for the hub's own
-in-process peer would mean inventing a synchronisation step (sync a same-process
-`RevocationCache` after every `revocations.revoke` call) to stand in for a network pull
-that, for the hub checking itself, never needed to exist in the first place. The direct
-`memberStore.get` check is the same pattern `POST /.well-known/presence` (Task 7a,
-unchanged) already uses for exactly the same reason — the hub holds the source of truth
-directly — reused rather than duplicated as a new mechanism, and scoped to `/search` only
-(the one route this task's brief actually tests for it) rather than applied blanket across
-every hub endpoint, which would be a bigger change than this task asked for.
+**Revocation enforcement on the hub's own endpoints — corrected on review, see below.**
+A first pass wrapped only the `/search` mount in a bespoke `requireCurrentMembership`
+check. Review (`grep -rn "isRevoked" apps/httpeers-stack/src/` — nothing) found that was
+route-scoped: it fixed the symptom on the route being built and left every OTHER hub
+endpoint, `/admin/*` included, still honouring a revoked token until it expired — a
+revoked admin could keep calling `DELETE /admin/members/{peerId}`. Corrected to wire the
+hub's own `createPeer` with `revocationCache: revocations` (`hub/main.ts`), using
+`httpeers.core`'s `isRevoked` binding-middleware seam the way it was designed: applied
+uniformly, before ANY mount's handler runs, to every non-bootstrap request — not a check
+one route remembers to opt into. `RevocationRegistry` (the hub's own live registry, the
+same instance `DELETE /admin/members/{peerId}` bumps) gained its own `check` method in
+`httpeers.core` for exactly this — no cache, no pull, no synchronisation step: the hub
+already owns the registry directly. See that package's own `PROVENANCE.md` ("Task 8
+(review round)") for the `RevocationChecker` shape this required.
+
+**Does the registry check subsume what the removed `memberStore` check caught? Yes, for
+every removal path this codebase has, verified rather than assumed**: `admin.ts`'s
+handler is the ONLY code path that removes a member, and it always pairs
+`memberStore.remove(peerId)` with `revocations.revoke(peerId)` in the same call — so
+"no longer in `memberStore`" and "has a revocation entry with `changedAt` after the
+token's `iat`" are the same set of peers, for every token this hub could ever have
+minted. (A hypothetical future removal path that forgot to also call `revocations.revoke`
+would not be caught by the registry check — that would be a bug in that future code, a
+gap to close there, not a gap in this mechanism today.) `admin.test.ts`'s tests confirm
+this directly: a revoked member is refused on TWO different mounts with the SAME token
+(`/search` and `/.well-known/mesh`), and a revoked admin is refused on `/admin/members/…`
+itself with their own still-nominally-`admin` token.
 
 ### Step 4: the tests
 
-`tests/admin.test.ts` (4 cases) and `tests/search.test.ts` (7 cases), in process against
-the hub app (`hub.peer.dispatch`, manufactured `Request`s via `registerPeer` — same style
-as `hub.test.ts`, not `tests/support/mesh.ts`'s real-libp2p style: `/search` is a HUB mount,
-so there is no separate dialed provider process in this scenario at all). Both files build
-their own local `buildHub`, wired to `HUB_ACCESS`/`VOCABULARY` from `policy.ts` — a
-deliberate divergence from `hub.test.ts`'s own local `buildHub` and from
-`tests/support/mesh.ts`'s `buildTestHub`, both of which keep using
-`DEFAULT_ACCESS_TREE`/`DEFAULT_VOCABULARY` unchanged.
+`tests/admin.test.ts` (6 cases, after the review round) and `tests/search.test.ts`
+(7 cases), in process against the hub app (`hub.peer.dispatch`, manufactured `Request`s
+via `registerPeer` — same style as `hub.test.ts`, not `tests/support/mesh.ts`'s
+real-libp2p style: `/search` is a HUB mount, so there is no separate dialed provider
+process in this scenario at all). Both files build their own local `buildHub`, wired to
+`HUB_ACCESS`/`VOCABULARY` from `policy.ts` **and**, since the review round,
+`revocationCache: revocations` — a deliberate divergence from `hub.test.ts`'s own local
+`buildHub` and from `tests/support/mesh.ts`'s `buildTestHub`, both of which keep using
+`DEFAULT_ACCESS_TREE`/`DEFAULT_VOCABULARY` (and no `revocationCache` for the hub itself)
+unchanged.
 
 | Test | File | Proves |
 | --- | --- | --- |
-| "an admin revokes a member; that member's next /search is refused, with a reason naming revocation -- within one heartbeat" | `admin.test.ts` | The end-to-end chain: `DELETE /admin/members/{id}` (requires `std:mesh.admin`) → `memberStore.remove` + `revocations.revoke` (version bump, free) → the SAME already-issued token, no intervening heartbeat, refused on its very next `/search` call, reason matches `/revoked/`. Elapsed time asserted `< PRESENCE_TTL_MS` (well under one heartbeat interval) — bounded, not merely eventual, though the actual mechanism (`requireCurrentMembership`, a direct same-process check) makes this immediate rather than heartbeat-bounded. |
+| "an admin revokes a member; that member's next /search is refused, with a reason naming revocation -- within one heartbeat" | `admin.test.ts` | The end-to-end chain: `DELETE /admin/members/{id}` (requires `std:mesh.admin`) → `memberStore.remove` + `revocations.revoke` (version bump, free) → the SAME already-issued token, no intervening heartbeat, refused on its very next `/search` call, reason matches `/revoked/`. **Since the review round, this test also re-checks the SAME token against a second, unrelated mount (`/.well-known/mesh`)** — proof the refusal comes from the binding middleware's hub-wide `isRevoked`, not a check that happens to live on `/search`. Elapsed time asserted `< PRESENCE_TTL_MS` — bounded, not merely eventual; the actual mechanism (a direct, synchronous registry check) makes it immediate. |
+| "a revoked admin cannot call DELETE /admin/members/... -- the case that justifies enforcing hub-wide, not route by route" | `admin.test.ts` | **New in the review round**, the case that justifies it: a root admin revokes a second admin (`bad-actor`); `bad-actor`'s own still-"admin"-role-carrying token is refused (403, reason matches `/revoked/`) on its next `DELETE /admin/members/{id}` call, and the target (`carol`) is confirmed still a member — the handler never ran. Without hub-wide enforcement, a revoked admin could keep removing others until their token expired. |
 | "a member calling DELETE /admin/... is refused 403, and the reason names the missing capability" | `admin.test.ts` | 403, reason matches `/std:mesh\.admin/`; the targeted member (`carol`) is confirmed still present in `memberStore` afterward — the handler never ran. |
-| "/search without app:search.query -> 403 carrying the tree's reason" | `admin.test.ts` | A real, current member whose token carries no role conferring `app:search.query` (invited with `roles: []`) — 403, reason matches `/app:search\.query/`. Deliberately not the no-token case (that is `newPeerHandlers`' own 401, a different layer, already covered by `hub.test.ts`'s "a caller with no proven identity..."). |
-| "the vocabulary and revocation endpoints still answer 304 on an unchanged version" | `admin.test.ts` | `GET /.well-known/vocabulary` and `GET /.well-known/revocations`, both under the new `HUB_ACCESS`, still 200 then 304 on a repeated `If-None-Match` — unchanged `endpoints.ts` behaviour, now proven under the new policy too. |
+| "/search without app:search.query -> 403 carrying the tree's reason" | `admin.test.ts` | A real, current, unrevoked member whose token carries no role conferring `app:search.query` (invited with `roles: []`) — 403, reason matches `/app:search\.query/`. Deliberately not the no-token case (that is `newPeerHandlers`' own 401, a different layer, already covered by `hub.test.ts`'s "a caller with no proven identity..."). |
+| "the vocabulary and revocation endpoints still answer 304 on an unchanged version" | `admin.test.ts` | `GET /.well-known/vocabulary` and `GET /.well-known/revocations`, both under the new `HUB_ACCESS`, still 200 then 304 on a repeated `If-None-Match` — unchanged `endpoints.ts` behaviour, now proven under the new policy (and the hub-wide revocation wiring) too. |
 | "returns fixture results for a matching query, in the body" | `search.test.ts` | 200, `content-type: application/json`, results present, and the non-latin1 fixture characters survive in the body. |
 | "a query with no matches returns an empty result set, not an error" | `search.test.ts` | 200 with `results: []` — no match is not an error condition. |
 | "a missing q is a 400 with a reason" / "an empty q is a 400 with a reason" / "a whitespace-only q is also a 400..." | `search.test.ts` | The `q` guard, including the trim (a whitespace-only query is not treated as a literal search term). |
 | "the fixture upstream itself is deterministic and case-insensitive" | `search.test.ts` | `fixtureUpstream` directly, independent of the HTTP layer. |
 | "query strings survive this transport..." | `search.test.ts` | Restates, explicitly, that no dropped-`?q=` guard exists or is needed — see Step 3 above. |
 
-### Counts and verification
+### Counts and verification (after the review round)
 
 ```
 $ pnpm install                              # from the umbrella root, never from workspaces/statewalker-sandbox
@@ -451,7 +461,7 @@ $ pnpm run typecheck && pnpm run typecheck:tests
 (clean, both)
 $ pnpm exec vitest run --no-file-parallelism
  Test Files  12 passed (12)
-      Tests  141 passed (141)
+      Tests  146 passed (146)
 $ grep -rlE "^import.*libp2p" src/
 src/tokens.ts
 src/transport-duplex.ts
@@ -461,15 +471,17 @@ $ pnpm run typecheck && pnpm run typecheck:tests
 (clean, both)
 $ pnpm exec vitest run --no-file-parallelism
  Test Files  6 passed (6)
-      Tests  53 passed (53)
+      Tests  54 passed (54)
 $ grep -rlE "^import.*libp2p" src/ tests/
 (no output -- nothing matches)
 ```
 
-**138 → 141 core** (the pre-work fix's 3 new tests; no other core test file changed).
-**42 → 53 app** (11 new: 4 in `admin.test.ts`, 7 in `search.test.ts`; every one of the
-original 42 unchanged and still passing — `chain.test.ts` 8, `hub.test.ts` 8,
-`integration.test.ts` 17, `revocation-e2e.test.ts` 7 (E1–E6, E6b), unmodified).
+**138 → 141 (pre-work fix) → 146 core** (the review round's 5 new
+`RevocationRegistry.check` tests; no other core test file changed).
+**42 → 53 → 54 app** (the review round added 1: "a revoked admin cannot call DELETE
+/admin/members/..."; the original 42 remain unchanged and still passing — `chain.test.ts`
+8, `hub.test.ts` 8, `integration.test.ts` 17, `revocation-e2e.test.ts` 7 (E1–E6, E6b),
+unmodified).
 
 ### Deviations from the brief, and why
 
@@ -482,11 +494,19 @@ original 42 unchanged and still passing — `chain.test.ts` 8, `hub.test.ts` 8,
   `endpoints.ts`, `admin.ts`, `services/search.ts`, `services/search-fixtures.json`,
   `policy.ts`, and the two test files). Required for the production hub's `/search` mount
   to be reachable at all outside of tests — see "Why `main.ts` now wires..." above.
-- **`requireCurrentMembership` in `hub/endpoints.ts`** — not named in the brief's Step 3
-  text. Required to make the Step 4 admin-revocation test true at all (see Step 3 above for
-  why the capability check alone cannot detect a revoked member holding a still-valid
-  token, and why a direct `memberStore` check — reusing the presence handler's own
-  established pattern — was chosen over wiring a same-process `RevocationCache` for a
-  mechanism (pull-and-cache) that exists to solve a problem (no direct access to the hub's
-  registry) the hub itself does not have).
-- No existing assertion in any of the four previously-passing test files was altered.
+- **`RevocationChecker` added to `httpeers.core` (review round)** — not in the original
+  brief at all; a consequence of the review-round fix below. `RevocationRegistry` gained a
+  `check` method and `CreatePeerInit.revocationCache`'s type widened from the concrete
+  `RevocationCache` class to this new interface. Landed in its own commit, again separate
+  from the app-level change, documented in that package's own `PROVENANCE.md`.
+- **The `/search`-only `requireCurrentMembership` check, corrected on review to hub-wide
+  `isRevoked` wiring** — the original first-pass fix (not named in the brief's Step 3
+  text at all) covered only the route being built and left every other hub endpoint,
+  `/admin/*` included, still honouring a revoked token until it expired. Corrected: removed
+  from `hub/endpoints.ts`; `hub/main.ts` now passes `revocationCache: revocations`
+  directly to `createPeer`, so `httpeers.core`'s existing binding middleware enforces
+  revocation on every mount uniformly. See "Revocation enforcement..." above for the full
+  writeup, including the verification that the registry check subsumes what the removed
+  membership check caught.
+- No existing assertion in any of the four previously-passing test files was altered, in
+  either the original pass or the review round.
