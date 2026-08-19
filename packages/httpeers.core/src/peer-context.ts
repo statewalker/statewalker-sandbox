@@ -1,0 +1,55 @@
+/**
+ * Carries a request's proven identity alongside the `Request` object
+ * itself, rather than as a second function parameter.
+ *
+ * Why a `WeakMap` and not a field on a richer request type: the router and
+ * every handler downstream of it work in plain `Request -> Response`
+ * (`FetchHandler`), the same shape a transport's `fetch` handler or a
+ * browser `fetch` polyfill already expects. Threading identity as an extra
+ * argument would mean every handler signature in the mesh carries a
+ * parameter most of them never look at. A `WeakMap` keyed on the `Request`
+ * instance keeps the contract at one argument while still letting anything
+ * holding that exact `Request` ask "who is this from" — and it never leaks:
+ * once the `Request` is garbage-collected, so is its entry.
+ *
+ * The one place this needs help is a *deliberate* re-creation of the
+ * `Request` (the router strips a peer prefix by constructing a new
+ * `Request` with the shortened URL) — a new object has no entry of its own,
+ * so `copyPeerBinding` carries the binding across that boundary by hand.
+ */
+import { ANONYMOUS, type MeshClaims, type PeerIdStr, type ProvenPeer } from "./types.js";
+
+const peers = new WeakMap<Request, ProvenPeer>();
+const claims = new WeakMap<Request, MeshClaims | null>();
+
+/** Bind a request to a peerId that was actually proven by the transport. */
+export function registerPeer(req: Request, peerId: PeerIdStr): void {
+  peers.set(req, peerId);
+}
+
+/** Bind a request to the `ANONYMOUS` sentinel: proven, deliberately, to be nobody. */
+export function registerAnonymous(req: Request): void {
+  peers.set(req, ANONYMOUS);
+}
+
+/** `undefined` means no binding was ever made — a bug, not a value. */
+export function lookupPeer(req: Request): ProvenPeer | undefined {
+  return peers.get(req);
+}
+
+/** Carry the binding(s) across a deliberate re-creation of the Request. */
+export function copyPeerBinding(from: Request, to: Request): void {
+  const peer = peers.get(from);
+  if (peer !== undefined) peers.set(to, peer);
+  if (claims.has(from)) claims.set(to, claims.get(from) ?? null);
+}
+
+/** Cache the verified `MeshClaims` for a request (or `null`: verified absent). */
+export function cacheClaims(req: Request, value: MeshClaims | null): void {
+  claims.set(req, value);
+}
+
+/** `undefined` means claims were never looked up for this request. */
+export function lookupClaims(req: Request): MeshClaims | null | undefined {
+  return claims.get(req);
+}

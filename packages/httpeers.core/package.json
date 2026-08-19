@@ -23,7 +23,7 @@
     "dev": "tsdown --watch",
     "test": "pnpm run typecheck:tests && vitest run",
     "typecheck": "tsc --noEmit",
-    "typecheck:tests": "tsc",
+    "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit",
     "clean": "rimraf dist",
     "lint": "biome check --write .",
     "format": "biome format --write ."

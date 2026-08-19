@@ -38,3 +38,50 @@ material — those resolutions are cited below as "ledger" decisions.
   class (change-list, `policyVersion`) and `RevocationCache` are explicitly out of
   scope — the team lead's brief said a later task promotes only that logic. `store.ts`
   contains none of it.
+
+## Task 2 — the router
+
+Unlike Task 1, the source material for Task 2 actually exists in this checkout, at
+the umbrella root (not inside this submodule):
+`notes/2026/2026-08/2026-08-16/httpeers-plan/prototypes/`. This is genuine
+promotion, not reconstruction from a missing tree.
+
+| File | Actual basis | How resolved |
+| --- | --- | --- |
+| `src/router.ts` | Promoted from `31-httpeers-prototype-v0.6.0-router-hardened/router.ts`, with `createMounts()`'s matching rewritten to normalise a trailing slash (see below) and prose converted to house style (double quotes, semicolons, `import type`). Logic is otherwise unchanged: `looksLikePeerId`, the self-prefix strip + `copyPeerBinding`, the `allowForward` deny-by-default gate, and the longest-prefix mount table are all byte-for-byte the same algorithm as the archive. | Team lead's ruling (this task's dispatch message): normalise the trailing-slash trap instead of leaving it documented, following the `norm()` approach in `apps/httpeers-protos/lib/router.ts` (read for the technique only, not promoted — its own README disclaims it as a substitute for the original 135-test tree). |
+| `src/peer-context.ts` | Promoted from `12-httpeers-prototype-validated/src/peer-context.ts` in full: `registerPeer`, `registerAnonymous`, `lookupPeer`, `copyPeerBinding`, `cacheClaims`, `lookupClaims`. Logic unchanged; only formatting and doc comments differ (the archive file had no comments at all — house style in this package documents the "why", so doc comments were added explaining the WeakMap-over-second-parameter design and the re-creation problem `copyPeerBinding` solves). | Team lead's dispatch message: "Promote all of it… you are only landing the carriage" — the binding middleware that consumes this is Task 3. |
+| `src/types.ts` additions | `PeerIdStr`, `Anonymous`, `ProvenPeer`, `Remote`, `Mounts`, `json()` taken from `12-httpeers-prototype-validated/src/types.ts`, added alongside Task 1's existing `MeshClaims`/`ANONYMOUS`/store interfaces (untouched). `ProvenPeer` is defined as `PeerIdStr \| Anonymous` per the team lead's message, using Task 1's own `ANONYMOUS`/`Anonymous` rather than redeclaring a second sentinel. | Team lead's dispatch message, explicit type list. |
+| `tests/mounts.test.ts` | Promoted from `31-httpeers-prototype-v0.6.0-router-hardened/mounts.test.ts`. The archive's own README/CHANGES call it "sixteen tests"; the file as written actually contains **17** `it(...)` cases (9 in `R-1: mount matching`, 8 in `R-1: peer-prefix routing`) — the archive's prose undercounts its own file by one. All 17 are promoted; 16 unchanged, 1 rewritten (see next row). | Team lead's dispatch message: "promote the other 15 cases unchanged" (the message's own count, off by one from the actual 16 unchanged + 1 rewritten = 17 total; called out here rather than silently reconciled). |
+| `tests/mounts.test.ts` — one rewritten case | The archived case `"a trailing-slash mount does NOT match the bare prefix"` asserted `hit(['/api/'], '/api')` is `null` (the TRAP the archive's own header comment flagged and left unresolved). Rewritten as `"a trailing-slash mount is normalised — /api/ and /api are the same mount"`, asserting all three of `/api/x`, `/api/`, and `/api` now resolve to the same mount. This is the **only** promoted-test edit in this task. | Team lead's explicit ruling: normalise, and rewrite this one case to match — "altering promoted tests is otherwise forbidden," called out per the dispatch message's instruction. |
+| `tests/router.test.ts` | **Not a promotion — written fresh for this task.** `chain.test.ts` (the archive's R-2 integration suite, C1–C7/C5b, real libp2p peers via `createPeer`) is explicitly out of scope (Task 6). This file instead pins the property Step 3 of the brief asks for at the unit level: a denied forward returns 403 **and never invokes `remote`** (asserted on a `vi.fn()` spy, not just the status code), plus small local-dispatch coverage (404, the `access` wrapper applying to local traffic only) not covered by `mounts.test.ts`. Loosely informed by `12-httpeers-prototype-validated/src/router.ts`'s companion `router.test.ts` (read for contrast, not promoted — no test bodies copied) for which basic cases were worth keeping in scope. | Team lead's dispatch message, "The trailing-slash decision" section and "What is NOT in this task": stubbed `remote`, assert the stub was never called. |
+| `tsconfig.tests.json` (new), `package.json` `typecheck:tests` script | Fixes the inherited bug: `typecheck:tests` ran plain `tsc`, which resolves to `tsconfig.json`'s `include: ["./src"]` — test files were never typechecked. `packages/service-http/` (the sibling this package was scaffolded from, per Task 1's provenance row) carries the identical bug and was left alone — out of scope for this task. New `tsconfig.tests.json` extends the base config and adds `"./tests"` to `include`; the script now runs `tsc -p tsconfig.tests.json --noEmit`. Confirmed both `typecheck` (src-only) and `typecheck:tests` (src+tests) pass clean, with zero pre-existing Task 1 type errors surfaced. | Team lead's dispatch message, "One additional fix, unrelated to the router." |
+
+### Design notes not in the dispatch message
+
+- **The `libp2p` grep constraint, read literally vs. in substance.** `grep -l libp2p
+  src/router.ts src/peer-context.ts src/types.ts` still matches `src/types.ts`:
+  two prose comments from **Task 1** (`"A libp2p `fetch` handler…"` and a
+  "pulling in libp2p" mention) describe the module's audience, not an import.
+  There is no `import` statement referencing `libp2p` or any `@libp2p/*` package
+  in any of the three files — confirmed with `grep -n "^import"`. Task 2's own two
+  new doc-comment mentions of "libp2p" (in `router.ts`'s header and
+  `peer-context.ts`'s WeakMap rationale) were reworded to "a transport" / "a
+  transport's `fetch` handler" specifically so Task 2 does not add new literal
+  matches; the one remaining match is pre-existing Task 1 prose, left untouched
+  as out of this task's scope.
+- **`createMounts()`'s normalisation, and why `provide()` wasn't given an
+  additive `provide` top-level export alias.** The dispatch message allowed but
+  did not require a top-level `provide` alias for the plan's prose name; since
+  the promoted test imports `createMounts` and passes unmodified, no alias was
+  added.
+- **The router's own `allowForward` default stays `async () => false`,
+  unconditionally** — not the ANONYMOUS-vs-proven-peer policy described in
+  `task-2-brief.md`'s "Step 2" prose. That policy (forward if the origin is
+  `ANONYMOUS`, refuse a proven peer unless it is a relay) is the **caller-supplied**
+  policy documented in the archive's own `router.ts` header comment and spelled
+  out in `CHANGES-v0.6.0.txt` as something `peer.ts` wires in — and `peer.ts`
+  does not exist yet (Task 6). Baking that policy into the router's built-in
+  default would couple the pure core to one specific policy the brief itself
+  says is supplied by the caller. `router.test.ts`'s new tests exercise the
+  router's actual default (unconditional deny) plus an explicitly supplied
+  `allowForward`, not the ANONYMOUS-aware policy — that belongs with `peer.ts`.
