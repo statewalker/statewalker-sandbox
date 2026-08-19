@@ -162,7 +162,15 @@ describe("access policy", () => {
   it("denies an admin path to a member", async () => {
     const res = await alice.call(hub.peer.peerId, "/admin/invitations", { token: aliceToken });
     expect(res.status).toBe(403);
-    expect(((await res.json()) as any).error).toMatch(/requires one of: admin/);
+    // DELTA APPLICATION, not an accommodation: `CHANGES-v0.9.0.txt` ("What
+    // the switch cost") documents this exact change -- "the denial message
+    // improved from `requires one of: admin` to `requires one of:
+    // std:mesh.admin`" -- as part of the capability-based `.access` rewrite.
+    // That delta's other three access-tree tests were already applied by an
+    // earlier task; this integration assertion lived in a suite that did not
+    // exist yet, so it is applied here, on the archive's own authority, not
+    // edited to make a failure disappear.
+    expect(((await res.json()) as any).error).toMatch(/requires one of: std:mesh\.admin/);
   });
 
   it("denies an unmapped path by default", async () => {
