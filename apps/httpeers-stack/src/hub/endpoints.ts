@@ -58,6 +58,43 @@ export function usesTransportIdentity(): UsesTransportIdentity {
   };
 }
 
+/**
+ * The diagnostic `/test` surface: `/test/whoami` and `/test/echo`, per the
+ * archived `12-httpeers-prototype-validated/src/endpoints.ts` (lines 128
+ * and 138). NOT hub-specific — every peer in that archive served this
+ * unconditionally, hub or not, and Task 7b's promoted E2E suites need the
+ * same: their "provider" peer (an ordinary member, never a hub) must answer
+ * `/test/whoami` with this rich shape too.
+ *
+ * This is deliberately NOT `httpeers.core`'s own default diagnostic mount
+ * (`peer.ts`'s `defaultMounts`, also `/test/whoami`) — that one answers
+ * `{ peer, sub }` from the transport/binding alone and knows nothing about
+ * a minted token's `roles`/`mesh`. The archived suites assert `body.you`,
+ * `body.roles`, `body.mesh` — fields the core's default does not have and
+ * is not meant to grow, since the core must stay hub-agnostic. Any peer
+ * that wants this richer surface mounts this handler explicitly, the same
+ * way `createHubEndpoints` below does for the hub itself.
+ */
+export function createTestSurfaceHandler(selfPeerId: PeerIdStr): FetchHandler {
+  const app = new Hono();
+
+  app.get("/test/whoami", (c) => {
+    const claims = lookupClaims(c.req.raw) ?? null;
+    return json({
+      servedBy: selfPeerId,
+      you: claims?.sub ?? null,
+      roles: claims?.roles ?? [],
+      mesh: claims?.mesh ?? null,
+    });
+  });
+
+  app.post("/test/echo", async (c) =>
+    json({ method: c.req.method, body: await c.req.text() }),
+  );
+
+  return app.fetch as FetchHandler;
+}
+
 export interface HubEndpointsInit {
   selfPeerId: PeerIdStr;
   mintToken: (sub: string, roles: string[], ttlMs?: number) => Promise<string>;
@@ -282,10 +319,21 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
     });
   });
 
+  // --- admin-only, to exercise the policy middleware -----------------------
+  // Archive: `12/src/endpoints.ts` line 122. Listing only — invitations are
+  // created programmatically (`InvitationStore.create`, `persist.ts`), never
+  // over HTTP; see this app's `PROVENANCE.md`.
+
+  app.get("/admin/invitations", (c) =>
+    json({ ok: true, issuedBy: init.selfPeerId, caller: claimsOf(c.req.raw)?.sub }),
+  );
+
   app.all("*", (c) => json({ error: "not found", path: new URL(c.req.raw.url).pathname }, 404));
 
   const mounts = createMounts();
   mounts.provide("/.well-known", app.fetch as FetchHandler);
+  mounts.provide("/test", createTestSurfaceHandler(init.selfPeerId));
+  mounts.provide("/admin", app.fetch as FetchHandler);
 
   return {
     mounts,

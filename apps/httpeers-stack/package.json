@@ -21,6 +21,7 @@
     "hono": "catalog:"
   },
   "devDependencies": {
+    "@multiformats/multiaddr": "13.0.3",
     "@types/node": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",

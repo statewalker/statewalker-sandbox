@@ -142,16 +142,73 @@ bulletin board with no TTL of its own.
   builds a fresh one over the same snapshot file, and confirms both the membership and
   the spent id survived.
 
-## Not in this task (Task 7b's)
+## Not in this task (Task 7a's) — done in Task 7b, see below
 
-- The six promoted E2E tests (E1-E6) from
-  `35-httpeers-prototype-v0.8.0-revocation/revocation.test.ts`, and `chain.test.ts` /
-  `integration.test.ts` from the validated prototype — moved to Task 7b by ledger R30/R37.
-  Not promoted, not stubbed, no test cases copied from them. This app's wire formats
-  (`versions: {mesh, policy, vocabulary}`, the presence/invite response shapes) were
-  designed to match what those archived tests assert, so that Task 7b's promotion is a
-  straightforward port rather than a redesign, but no code or test body was copied.
-- `DELETE /admin/members/{peerId}`, `GET /search`, and their `.access` entries — Task 8.
+- `DELETE /admin/members/{peerId}`, `GET /search`, and their `.access` entries — Task 8, still
+  not done.
+
+## Task 7b: the four routes Task 7a's mount table omitted, and three promoted suites
+
+Task 7a's own mount table (Step 2 of the brief) listed no `/test/*` or `/admin/*` routes at
+all — a planning error (see the team lead's Task 7b brief, Part 1), not a deliberate
+scope cut. The three suites below all call `/test/whoami`; `integration.test.ts` also
+calls `/test/echo` and `/admin/invitations`. All four are promoted verbatim from the
+archived `12-httpeers-prototype-validated/src/endpoints.ts`:
+
+| Route | Archive line | This app |
+| --- | --- | --- |
+| `GET /test/whoami` | 128 | `endpoints.ts`'s new `createTestSurfaceHandler` — `{ servedBy, you, roles, mesh }`, **not** `httpeers.core`'s own default `/test/whoami` diagnostic mount (`peer.ts`'s `defaultMounts`, `{ peer, sub }` — a different handler, not a substitute; see that function's doc comment). Mounted at `/test` for the hub, and reused directly by the "provider" peer in `revocation-e2e.test.ts`, which is not the hub but needs the same rich shape. |
+| `POST /test/echo` | 138 | Same handler; echoes `{ method, body }`. |
+| `GET /admin/invitations` | 122 | Added directly to the hub's own Hono `app`, mounted at `/admin`. Listing only — invitations are still created programmatically (`InvitationStore.create`), never over HTTP; unchanged from Task 7a's design note above. |
+| `ALL *` → 404 `{ error, path }` | 143 | Already present in Task 7a's `endpoints.ts` (the `app.all("*", ...)` catch-all) — not one of the four actually missing; re-verified, not re-added. Note this is rarely what a real unmapped request hits: `DEFAULT_ACCESS_TREE`'s deny-by-default `/` entry denies most unmapped paths at the access-tree layer, before the router's own mount lookup — e.g. `integration.test.ts`'s "denies an unmapped path by default" gets a 403, not this 404. |
+
+Promoted suites — all under
+`notes/2026/2026-08/2026-08-16/httpeers-plan/prototypes/`, moved here by ledger R30/R37:
+
+| Suite | Source | Cases | Result |
+| --- | --- | --- | --- |
+| `tests/chain.test.ts` | `31-.../chain.test.ts` | 8 (C1–C7, C5b) | 8/8 pass |
+| `tests/integration.test.ts` | `12-.../src/integration.test.ts` | 17 | 16/17 pass — see below |
+| `tests/revocation-e2e.test.ts` | `35-.../revocation.test.ts`, `describe('A-2 end to end', ...)` only | 6 (E1–E6) | 6/6 pass |
+
+The ten `describe('A-2 unit: ...')` tests in `35-.../revocation.test.ts` were already
+promoted by Task 5 into `packages/httpeers.core/tests/revocation.test.ts` and are **not**
+duplicated here.
+
+**No assertion was altered in any of the three files.** Construction and call sites were
+adapted — `hub.store.X(...)` (the archive's one combined `MeshStore`) became
+`hub.memberStore.X(...)` plus, where revocation must also see the change,
+`hub.revocations.X(...)` (Task 1 split membership and revocation into separate
+registries); `mintMeshToken`/`verifyMeshToken` became this package's `mintToken`/
+`verifyToken`; a presence POST body gained the `seq` field this package's replay guard
+requires; the invite body's field is `id`, not `code`. Full adaptation record, including
+why the rogue/forged-mesh and expired-token tests needed no library key exposed, is in
+`.superpowers/sdd/2026-08-18-httpeers-stack/task-7b-report.md`.
+
+**One assertion does not pass, and was left exactly as written**:
+`integration.test.ts`'s "denies an admin path to a member" expects the denial error to
+match `/requires one of: admin/`. `DEFAULT_ACCESS_TREE`'s `/admin/` entry (Task 4/9) is
+gated by the capability `std:mesh.admin`, not the role name `admin` the archive's
+`DEFAULT_ACCESS_RULES` used — so the actual message is `requires one of: std:mesh.admin`,
+which does not contain the literal substring the archive's regex requires. The *behavior*
+this test exists to pin (a member is refused `/admin/*` with 403) is intact and passes;
+only the wording of the refusal changed, for a reason external to this task (the
+capability-based rewrite of `.access`, done before Task 7 existed). Per this task's rule —
+promoted assertions are not adjusted to fit — this was reported rather than fixed. See the
+task-7b report for the full analysis.
+
+**E4's measured latency** (this run): **7 ms** — well under the archive's own 59 ms
+localhost figure, consistent with "the mechanism's floor, not a production figure."
+
+`tests/support/mesh.ts` (new, test-only) provides `buildTestHub`/`buildTestPeer`: real,
+listening peers over loopback TCP, shared by all three suites — `buildTestHub` wires the
+same `createHubEndpoints`/`DEFAULT_ACCESS_TREE`/`usesTransportIdentity` construction
+`src/hub/main.ts` uses; `buildTestPeer` wraps `createPeer` with a per-instance
+`RevocationCache` and a `.heartbeat(hubPeerId, token)` convenience (one presence POST,
+pulling `/.well-known/revocations` only when the returned policy version moved) — the
+archive's own monolithic `peer.ts` had both built in; this package's split
+`httpeers.core`/`httpeers-stack` does not, by design (see `revocation.ts`'s header
+comment), so the wrap lives here, at the call site, as intended.
 
 ## Isolation grep
 
@@ -159,15 +216,23 @@ bulletin board with no TTL of its own.
 to the mesh only through `@statewalker/httpeers.core`'s already-isolated surface
 (`createPeer`, the `Mounts`/`FetchHandler` contracts, `lookupPeer`/`lookupClaims`). The
 package-level constraint (`grep -rlE "^import.*libp2p" src/` inside `httpeers.core`
-listing exactly `tokens.ts` and `transport-duplex.ts`) is unaffected — verified after this
-task's one core change, see that package's own `PROVENANCE.md`.
+listing exactly `tokens.ts` and `transport-duplex.ts`) is unaffected by Task 7b — no core
+change was made.
+
+Task 7b's three promoted E2E suites dial real libp2p nodes (`Peer.libp2p.dial(...)`,
+which is exactly what that field's own doc comment names it for), so they need a
+`Multiaddr` value to dial with — `@multiformats/multiaddr`, a devDependency added for
+`tests/` only. That import does not match `^import.*libp2p` (no "libp2p" substring in its
+specifier), so the grep below — now run across this app's `src/` **and** `tests/`
+— still finds nothing (see the task-7b report for why this is the intended reading of
+"no libp2p at all"):
 
 ```
-$ grep -rlE "^import.*libp2p" src/     # from apps/httpeers-stack
+$ grep -rlE "^import.*libp2p" src/ tests/     # from apps/httpeers-stack
 (no output -- nothing matches)
 ```
 
-## Verification
+## Verification (current, after Task 7b)
 
 ```
 $ pnpm run typecheck        # from apps/httpeers-stack
@@ -177,6 +242,9 @@ $ pnpm run typecheck:tests
 (clean)
 
 $ pnpm exec vitest run --no-file-parallelism
- Test Files  1 passed (1)
-      Tests  9 passed (9)
+ Test Files  1 failed | 3 passed (4)
+      Tests  1 failed | 40 passed (41)
 ```
+
+The one failure is the reported, unaltered assertion above
+("denies an admin path to a member").
