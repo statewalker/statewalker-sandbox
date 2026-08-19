@@ -353,3 +353,97 @@ Both inherited verbatim from archive folder 33, not introduced by this task:
   (`decision.reason.includes("token")`) rather than using a typed discriminant.
 - The redundant `(lookupClaims(req) ?? null) as MeshClaims | null` cast in
   `withAccessTree`.
+
+## Task 5 — revocation as a pulled, cached deny list
+
+Source material for Task 5 is the same archive as Tasks 2-4
+(`notes/2026/2026-08/2026-08-16/httpeers-plan/prototypes/`), at
+`35-httpeers-prototype-v0.8.0-revocation/`. This one is a near-clean promotion — the
+team lead's dispatch message had already confirmed `RevocationCache.check()` takes a
+structural `{ sub: PeerIdStr; iat: number }` type (compatible with this package's
+`MeshClaims` with zero adaptation) and imports only `PeerIdStr` from `./types.js`.
+
+| File | Actual basis | How resolved |
+| --- | --- | --- |
+| `src/revocation.ts` | Promoted from `35-httpeers-prototype-v0.8.0-revocation/revocation.ts` in full: `ChangeEntry`, `RevocationRegistryInit`, `RevocationRegistry` (`revoke`, `changeRoles`, `prune`, `policyVersion`, `list`), `RevocationCacheInit`, `StalenessMode`, `RevocationCache` (`update`, `knownVersion`, `staleness`, `check`). Logic is byte-for-byte the same algorithm as the archive — only formatting changed to house style (double quotes, semicolons, braces on `if`/`for` bodies) and the module header gained a paragraph explaining why `check()` stays synchronous (see "The one adaptation" below) plus a doc-comment note on `check`'s structural parameter type. | Team lead's dispatch message: promote as-is; the three properties (revocation-and-role-change-are-one-mechanism, no-clock-synchronisation, self-pruning-without-a-version-bump) are unchanged from the archive's own doc comments, only reworded slightly to fold in the synchronous-`check` rationale. |
+| `src/index.ts` | One-line addition: `export * from "./revocation.js";`, alongside the existing barrel exports. | Mechanical — new module needs a barrel export like every other `src/*.ts`. |
+| `tests/revocation.test.ts` | The archive's ten unit tests promoted **unchanged in assertion** (four `A-2 unit: registry` cases: role-change-to-empty-set, policy version bumps on every change, self-pruning past the token lifetime, pruning does not bump the version; six `A-2 unit: cache` cases: re-admission via a post-change `iat`, refusal of a pre-change `iat`, role-change-vs-revocation message distinction, no-entry pass-through, staleness refusal, and the never-expires-without-a-bound case named "deliberate and dangerous" in the archive's own test title). Only the cache helper's `any`/`any[]` parameter types were tightened to `ChangeEntry[]` / `{ maxStalenessMs?: number; now?: () => number }` for `noUncheckedIndexedAccess`/`strict` — a typing fix, not an assertion change. The archive's `describe('A-2 end to end', ...)` block (E1-E6) was **not promoted** — see "Not promoted, and why" below. | Team lead's dispatch message: promote `revocation.test.ts`; "Be precise about counts" — confirmed 10 (`grep -c '  it(' tests/revocation.test.ts`), not the archive's combined 16 (10 unit + 6 E2E). |
+
+### The one adaptation: `check()` stays synchronous
+
+The archived `RevocationCache.check()` is `(claims) => string | null` — synchronous.
+The `isRevoked` seam Task 3 built on `newPeerHandlers` (`src/peer-handlers.ts`) is
+`(claims: MeshClaims) => Promise<string | null>` — async. Per the team lead's explicit
+instruction, `check()` was **not** made async to match: it is a pure in-memory `Map`
+lookup with nothing to await, and an async signature would invite a future
+implementation to do I/O on the request path, which is exactly what this pulled-and-
+cached design exists to avoid. The wrap (`isRevoked: async (claims) => revocations.check(claims)`)
+is a wiring-point concern that belongs in `peer.ts`, which does not exist in this
+package yet — it is Task 6's file (per `task-6-brief.md`'s "Step 2: `peer.ts` — the
+composition"). **Left as an open wiring requirement for Task 6**, not stubbed or
+anticipated here.
+
+### Not promoted, and why
+
+- **The archive's `describe('A-2 end to end', ...)` block (E1-E6).** These six cases
+  (heartbeat carries a version vector; tokens carry `iat` from the hub; a provider
+  pulls the list only when the policy version moves; the timed revoked-token-refused
+  measurement; a role downgrade invalidates the old token without locking the peer
+  out; the hub is never on the critical path — enforcement continues offline) all
+  import `createPeer` from `./peer.js` and dial real libp2p nodes via
+  `@multiformats/multiaddr`. Neither `peer.ts` nor `createPeer` exists in this
+  package — `task-6-brief.md`'s "Step 2" is where `peer.ts` gets built, consuming
+  Tasks 1-5. Promoting these tests now would either fail to compile (no `./peer.js`
+  to import) or require reaching into Task 6's scope to fabricate a `peer.ts` this
+  task was not asked to build. The team lead's dispatch message already anticipated
+  this — it names `peer.ts` as "Task 6" when describing the sync-vs-async wrapping
+  point — so this is read as an intentional deferral, not a gap. **These six cases
+  are Task 6 (or a later integration task)'s responsibility to reconstruct once
+  `createPeer`/`heartbeat` exist**, at which point `RevocationRegistry`/`RevocationCache`
+  from this task's `src/revocation.ts` are the pieces they exercise end-to-end.
+- **`apps/httpeers-protos/lib/revocation.ts`'s `Hub` class.** Per the team lead's
+  explicit instruction, not promoted: it is a demo stand-in with no cryptography,
+  hardcodes `mesh: "H"`, and mints plain objects via its own `Hub.mint()` — this
+  package already has real token minting in `src/tokens.ts`. Its change-list/version
+  logic was read only as a cross-check that this task's promoted `RevocationRegistry`
+  is sound, not as a source.
+- **`store.ts`'s `removeMember`/`setRoles`, `endpoints.ts`'s version vector and
+  `GET /.well-known/revocations`, `peer.ts`'s `heartbeat`/cache-wiring — all from
+  `CHANGES-v0.8.0.txt`.** All belong to later tasks: this package's `src/store.ts`
+  (Task 1) uses three standalone `createXStore()` factories, not the prototype's
+  single `Store` class with `revocations: RevocationRegistry` built in, and no
+  `endpoints.ts` or `peer.ts` exists yet. Not implemented, not stubbed — consistent
+  with how Task 1's `PROVENANCE.md` entry for `src/store.ts` already flagged the
+  revocation change-list as explicitly out of scope for that task.
+
+### Verification
+
+```
+$ grep -nE "^import.*libp2p" src/revocation.ts tests/revocation.test.ts
+(no matches, exit 1)
+
+$ pnpm run typecheck
+> tsc --noEmit
+(clean, no output)
+
+$ pnpm run typecheck:tests
+> tsc -p tsconfig.tests.json --noEmit
+(clean, no output)
+
+$ pnpm vitest run --no-file-parallelism
+ Test Files  9 passed (9)
+      Tests  115 passed (115)
+
+$ pnpm vitest run --no-file-parallelism tests/revocation.test.ts
+ Test Files  1 passed (1)
+      Tests  10 passed (10)
+
+$ grep -c '  it(' tests/revocation.test.ts
+10
+
+$ npx biome check src/revocation.ts tests/revocation.test.ts src/index.ts
+(clean, no output; no formatting changes needed on write)
+```
+
+Test count moved from 105/105 (end of Task 4) to **115/115** — 10 new cases, all in
+`tests/revocation.test.ts`, all promoted from the archive's unit-test block.
