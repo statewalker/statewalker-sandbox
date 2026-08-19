@@ -19,8 +19,13 @@ export type FetchHandler = (req: Request) => Promise<Response>;
  * purpose). Code that branches on identity must be able to tell "nobody
  * wired this up" apart from "this call really is anonymous." Absence is a
  * bug; anonymity is a value.
+ *
+ * Uses the global symbol registry (`Symbol.for`, not `Symbol()`): this
+ * package is consumed by both Node peers and browser bundles, and separate
+ * module instances of the same package must still produce a sentinel that
+ * is `===` to each other, or an identity check fails silently.
  */
-export const ANONYMOUS: unique symbol = Symbol("httpeers.anonymous");
+export const ANONYMOUS: unique symbol = Symbol.for("httpeers.anonymous");
 
 /**
  * A signed membership claim, minted by a mesh's hub.

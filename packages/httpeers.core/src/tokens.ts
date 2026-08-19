@@ -8,11 +8,13 @@
  * already own the Ed25519 primitives and peerId↔public-key recovery.
  *
  * The verification chain, in order:
+ *   0. assert `claims.mesh === claims.iss` — a token may only self-certify
+ *      membership in the mesh it was itself issued by;
  *   1. recover the issuer's public key from `claims.mesh` (the peerId) —
  *      Ed25519 only, so this is a local computation, never a fetch;
  *   2. verify the signature, then check expiry;
- *   3. assert `claims.mesh === policy.issuer` — the self-certification
- *      check.
+ *   3. assert `claims.mesh === policy.issuer` — the token belongs to the
+ *      mesh this verifier actually expects.
  * `claims.sub === provenPeer` (did the transport handshake prove the caller
  * is the subject) is left to the binding middleware — a later task.
  */
@@ -105,6 +107,14 @@ export async function verifyToken(token: string, options: VerifyTokenOptions): P
 
   const claims = decodeSegment<MeshClaims>(encodedPayload, "malformed payload");
 
+  // Self-certification: the token's issuer and its mesh must be the same
+  // peerId. `mintToken` always sets them equal; this rejects any validly
+  // signed token whose issuer claims membership in a mesh other than its
+  // own — nothing else checks `claims.iss` against `claims.mesh`.
+  if (claims.mesh !== claims.iss) {
+    throw new TokenVerificationError("mesh does not match issuer");
+  }
+
   // Step 1: recover the issuer's key from the peerId. Ed25519 only — the
   // public key must be inlined in the peerId's identity multihash, so this
   // never requires a fetch. Any other key type (or an RSA-style sha2-256
@@ -121,7 +131,12 @@ export async function verifyToken(token: string, options: VerifyTokenOptions): P
 
   // Step 2: signature, then expiry.
   const signingInput = new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`);
-  const signature = base64urlDecode(encodedSignature);
+  let signature: Uint8Array;
+  try {
+    signature = base64urlDecode(encodedSignature);
+  } catch {
+    throw new TokenVerificationError("malformed signature");
+  }
   const valid = await issuerPeerId.publicKey.verify(signingInput, signature);
   if (!valid) {
     throw new TokenVerificationError("invalid signature");
