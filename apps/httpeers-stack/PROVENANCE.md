@@ -448,7 +448,7 @@ unchanged.
 | "the fixture upstream itself is deterministic and case-insensitive" | `search.test.ts` | `fixtureUpstream` directly, independent of the HTTP layer. |
 | "query strings survive this transport..." | `search.test.ts` | Restates, explicitly, that no dropped-`?q=` guard exists or is needed — see Step 3 above. |
 
-### Counts and verification (after the review round)
+### Counts and verification (after Task 8's review round)
 
 ```
 $ pnpm install                              # from the umbrella root, never from workspaces/statewalker-sandbox
@@ -510,3 +510,221 @@ unmodified).
   membership check caught.
 - No existing assertion in any of the four previously-passing test files was altered, in
   either the original pass or the review round.
+
+## Task 9: relay and static server processes
+
+Two small, independent processes — batched into one task because they are the same
+shape (a standalone boot script under `src/<name>/main.ts`, no test file for the relay,
+one shared test file for both static-server origins). Neither touches `httpeers.core`.
+
+### Step 1: `src/relay/main.ts`
+
+Stock `circuitRelayServer()` (`@libp2p/circuit-relay-v2`) over `webSockets()`
+(`@libp2p/websockets@10.1.19`), `noise()`/`yamux()` for encryption/muxing, `identify()`
+alongside it (same pairing `httpeers.core`'s own `transport-duplex.ts` `createNode` uses,
+and required for the relay's own reservation/identify flow, not merely copied). Listens on
+`/ip4/0.0.0.0/tcp/${RELAY_PORT}/ws` (`RELAY_PORT` defaults to 9090, `DEFAULT_RELAY_PORT`).
+
+**No application code**: no `serveDiscovery()`, no directory, no self-announcement —
+confirmed by inspection that `src/relay/main.ts` imports only libp2p packages plus
+`node:fs`, nothing from `../hub/`, `../policy.ts`, or `httpeers.core`. `p2p-demo`'s
+`relay/server.ts` (`workspaces/webrun-wire/apps/p2p-demo/relay/server.ts`) was read for
+reference on the libp2p wiring shape only; its `serveDiscovery()` call was deliberately
+not carried over.
+
+Reservation limits: `circuitRelayServer()` called with no options, i.e. left at its own
+defaults — not raised, not lowered.
+
+**TLS**: when both `TLS_CERT` and `TLS_KEY` are set, they are read as **file paths** (a
+decision this task makes — the brief names the env vars but not whether they hold PEM
+content or a path to it; treated as paths because that is how a real deployment renews a
+Let's Encrypt cert without touching the env, and because passing multi-line PEM content
+through a shell env var is the more awkward of the two conventions). Their file contents
+are passed to `webSockets({ https: { cert, key } })`, and the listen multiaddr's scheme
+switches to `wss`. `@libp2p/websockets`'s `WebSocketsInit.https` field was checked against
+the installed `10.1.19` types (`https.ServerOptions`, accepting `cert`/`key` as
+string/Buffer) — not assumed.
+
+**Identity — fail loudly, do not generate.** The relay's peerId is embedded in every
+multiaddr `httpeers.json` (Task 10) hands out; an ephemeral key would silently invalidate
+that config on every restart, with a symptom (peers can't connect) that points nowhere
+near the relay. `loadRelayKey` reads `.httpeers/relay.key` (`DEFAULT_RELAY_KEY_PATH`);
+on `ENOENT` it prints an explicit "run `pnpm setup` first" message to stderr and calls
+`process.exit(1)` — verified manually (see "Manual verification" below), not just
+asserted in prose.
+
+**Key file format — a decision this task makes, for Task 10 to honor.** The brief names
+the file (`.httpeers/relay.key`) but not its encoding, since Task 10 (the setup CLI that
+writes it) does not exist yet. Chosen: the protobuf encoding `@libp2p/crypto/keys`'
+`privateKeyToProtobuf`/`privateKeyFromProtobuf` round-trip through — libp2p's own
+idiomatic on-disk key format, and the same package `httpeers.core`'s `tokens.ts` already
+depends on for `generateMeshKey`. Documented in `src/relay/main.ts`'s module comment so
+Task 10 has one place to check. **Flagging to the team lead**: if Task 10 lands with a
+different format in mind, this is the one line (`loadRelayKey`'s `privateKeyFromProtobuf`
+call) that needs to change to match — no other code here depends on the encoding.
+
+Prints the peerId and every multiaddr on boot; `SIGINT`/`SIGTERM` both call `node.stop()`
+via a shared `shutdown` handler, then `process.exit(0)`.
+
+### Step 2: `src/static-server/main.ts`
+
+Plain `node:http`/`node:https` — **no libp2p import** (verified: `grep -n libp2p
+src/static-server/main.ts` matches only prose inside comments, never an `import`). Two
+`createOriginServer` instances, one per port (`APP_PORT` = 5175, `IMAGE_PEER_PORT` =
+5176, both fixed constants per the brief, not env-configurable), started together by
+`startStaticServer`.
+
+**Why two real `http.Server` instances, not one server with two `listen()` calls or a
+single dispatcher keyed by port**: each origin needs its own closure over its own
+`distDir`/`swFile` — using two independent `createOriginServer` calls makes it structurally
+impossible to accidentally serve one origin's assets under the other's port, which a
+shared dispatcher branching on `req.socket.localPort` would not guarantee as cleanly.
+
+**Dist directory layout — an assumption this task makes, flagged for Tasks 12/13.**
+Tasks 11–13 (the browser peer runtime and the two page bundles) do not exist yet, so
+there is no built output to point at. Defaults chosen: `dist/app` and `dist/image-peer`
+(`DEFAULT_APP_DIST_DIR`/`DEFAULT_IMAGE_PEER_DIST_DIR`), following this workspace's
+existing `dist/`-is-gitignored convention (confirmed:
+`workspaces/statewalker-sandbox/.gitignore` already lists `dist/`). Overridable via
+`APP_DIST_DIR`/`IMAGE_PEER_DIST_DIR` env vars (production) or `appDistDir`/
+`imagePeerDistDir` init fields (tests), so Tasks 12/13 can either match these defaults or
+override them with no change needed here. Same reasoning for the ServiceWorker script's
+assumed filename, `sw.js` (`swFile` init field, defaulting from each page's `sw.ts`
+entry) — not pinned anywhere in the brief or the plan.
+
+**`/httpeers.json`**: served from **outside** each origin's `distDir` — it is one shared
+invitation payload (`DEFAULT_HTTPEERS_CONFIG_PATH` = `./httpeers.json`, matching the
+plan's Task 10 §2 shape, `{ relayAddrs, hubPeerId }`), not a per-page build artifact.
+Read fresh off disk on every request (no caching layer) and passed through byte-for-byte
+— the server never parses it, since the pages are the ones that need to. Missing file →
+**503** with a JSON body naming `"run \"pnpm setup\" first"`, never a 404: an absent
+config is a different condition from a missing route (brief's own framing), and a 503
+here is what lets the page say "run setup" instead of "not found".
+
+**ServiceWorker script headers**: `Cache-Control: no-cache, no-store, must-revalidate`,
+`Pragma: no-cache`, `Service-Worker-Allowed: /` — applied only to the resolved file that
+matches `swFile`, not to every static asset (an app's hashed JS/CSS bundle files are
+meant to be cached; only the SW script itself is the debugging-tarpit risk the brief
+calls out).
+
+**Path safety**: `resolveDistFile` refuses to resolve outside `distDir` (checked via
+`target.startsWith(root + sep)`), and every request whose method is not `GET`/`HEAD` is
+answered 404 before any routing or file I/O runs at all — so a POST anywhere, matched
+route or not, can never reach a code path that reads a file and could throw. This is a
+different implementation shape from `webrun-http-browser`'s bug (note 39: rebuilding a
+`Request` without `duplex: "half"`) — this server never constructs a Fetch API `Request`
+internally at all, so that specific defect class does not apply here — but the
+**symptom** (POST to an unmatched path → 500) is exactly what `tests/static-server.test.ts`
+asserts against, directly, per the brief's instruction.
+
+### Step 3: `tests/static-server.test.ts` (9 cases, real bound ports, ephemeral `port: 0`)
+
+| Test | Proves |
+| --- | --- |
+| "serves the app origin's index.html" | `GET /` on the app port → 200, `text/html`, correct body. |
+| "serves the image-peer origin's index.html, distinct from the app's" | Same, on the image-peer port, with different content — the two origins are genuinely independent servers, not one server keyed by header. |
+| "serves each origin's ServiceWorker script with the right content type and no-cache headers" | `GET /sw.js` on both ports → `text/javascript`, `Cache-Control` matching `no-cache`/`no-store`, `Service-Worker-Allowed: /`. |
+| "serves /httpeers.json identically at both origins when present" | Both ports read the same on-disk file and return its `hubPeerId` unchanged. |
+| "returns 404, not 500, for an unknown GET path" | The brief's baseline case. |
+| "returns 404, not 500, for a POST to an unknown path -- the duplex/passthrough regression case" | The brief's explicitly-called-out case (note 39). Sends a JSON body with `content-type: application/json` on the POST — not a bodyless request — so the assertion is not weakened to "POST with no body happens to work." |
+| "never resolves a '..'-shaped path to a file outside its distDir" | Sent via a raw `node:http` client (`rawGet`), not `fetch`/`URL` — `fetch`'s own client-side URL normalization would silently rewrite a literal `..` away before the request left the client, which would make this assertion pass for the wrong reason. Confirms the response is 404, not 500 and not a leaked file, regardless of whether `new URL()`'s own path-shortening or `resolveDistFile`'s explicit root check is what stops it (both are in play; this test does not need to distinguish which). |
+| "gives a clear 503, not a 404, when httpeers.json has not been generated yet" | A separate `createOriginServer` pointed at a config path that is never written — 503, JSON body, error text matches `/setup/i`. |
+| "still serves index.html and 404s an unknown path normally" | The 503 branch does not degrade the rest of that same origin's routing. |
+
+54 → 63 app tests (9 new, all in the new file; no existing assertion in any of the six
+previously-passing test files was touched).
+
+### Where libp2p imports live in `apps/httpeers-stack`, and why
+
+```
+$ grep -rlE 'from "(@chainsafe/libp2p|@libp2p/|libp2p)' src/
+src/relay/main.ts
+$ grep -rlE 'from "(@chainsafe/libp2p|@libp2p/|libp2p)' tests/
+(no output -- nothing matches)
+```
+
+Exactly one file: `src/relay/main.ts`. It is the process whose entire job is running a
+libp2p Circuit Relay v2 node, so it is the one place in this app where importing libp2p
+directly is the design, not a leak. `src/static-server/main.ts` imports none — confirmed
+above and by inspection: it never imports `httpeers.core` either, matching the brief's "no
+libp2p, no mesh identity" instruction for that process. `httpeers.core`'s own isolation
+grep (`src/tokens.ts`, `src/transport-duplex.ts`) is untouched by this task — nothing in
+`packages/httpeers.core` was modified.
+
+### Counts and verification (after Task 9)
+
+```
+$ pnpm install                              # from the umbrella root, never from workspaces/statewalker-sandbox
+Already up to date
+
+# packages/httpeers.core (untouched by this task -- re-run as a baseline check)
+$ pnpm run typecheck && pnpm run typecheck:tests
+(clean, both)
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  12 passed (12)
+      Tests  146 passed (146)
+$ grep -rlE "^import.*libp2p" src/
+src/tokens.ts
+src/transport-duplex.ts
+
+# apps/httpeers-stack
+$ pnpm run typecheck && pnpm run typecheck:tests
+(clean, both)
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  7 passed (7)
+      Tests  63 passed (63)
+$ grep -rlE 'from "(@chainsafe/libp2p|@libp2p/|libp2p)' src/
+src/relay/main.ts
+```
+
+**146 core (unchanged) / 54 → 63 app** (9 new cases, all in
+`tests/static-server.test.ts`; the six previously-passing files — `admin.test.ts`,
+`chain.test.ts`, `hub.test.ts`, `integration.test.ts`, `revocation-e2e.test.ts`,
+`search.test.ts` — are unmodified and still passing).
+
+### `package.json`
+
+Added to `dependencies` (all exact-pinned, no carets, matching `httpeers.core`'s own
+versions where the same package is already a dependency there):
+`@chainsafe/libp2p-noise@17.0.0`, `@chainsafe/libp2p-yamux@8.0.1`,
+`@libp2p/circuit-relay-v2@4.2.11` (version taken from `p2p-demo`'s own pin, the only
+existing consumer of that package in this workspace — `httpeers.core` does not depend on
+it), `@libp2p/crypto@5.1.22`, `@libp2p/identify@4.1.12`, `@libp2p/interface@3.2.5`,
+`@libp2p/websockets@10.1.19`, `libp2p@3.3.8`. No `@statewalker/*` cross-repo dependency
+was touched — `@statewalker/httpeers.core` stays `workspace:*`, unchanged.
+
+### Manual verification (beyond the automated suite)
+
+Both processes were also boot-tested directly, not only unit-tested, since a boot script
+run only via `import.meta.url === file://...` guard is otherwise unexercised by
+`vitest run`:
+
+- `tsx src/relay/main.ts` with no `.httpeers/relay.key` present → printed the "run `pnpm
+  setup` first" message to stderr and exited `1`, no `.httpeers/` directory created.
+- `tsx src/relay/main.ts` with a manually-generated protobuf key at
+  `.httpeers/relay.key` → printed a real peerId and three multiaddrs (loopback + two LAN
+  interfaces) on `/ws`, then handled `SIGINT` by logging and stopping cleanly.
+- `startStaticServer` invoked directly (not through the test file) against a scratch
+  `dist/app` + `dist/image-peer` with real files → `GET /`, `GET /httpeers.json`,
+  `GET /sw.js` (headers inspected directly) and a `POST` to an unmatched path all
+  returned the expected status/headers.
+
+### Deviations from the brief, and why
+
+- **Key file format for `.httpeers/relay.key` is this task's own decision**, not
+  specified by the brief (Task 10, which writes it, does not exist yet). See "Key file
+  format" above. Flagged for the team lead / Task 10's implementer to confirm or correct.
+- **Dist directory layout (`dist/app`, `dist/image-peer`) and the ServiceWorker
+  filename (`sw.js`) are this task's own assumption**, for the same reason — Tasks
+  11–13 do not exist yet. Both are overridable via env vars/init fields specifically so
+  a different choice in those later tasks costs a one-line override here, not a rewrite.
+- **`TLS_CERT`/`TLS_KEY` are read as file paths**, not treated as raw PEM content. The
+  brief names the env vars but not their contents; this task chose paths (see "TLS"
+  above) for both processes consistently.
+- **Static server ports/dist dirs are configurable beyond the brief's literal fixed
+  5175/5176**: `appPort`/`imagePeerPort` init overrides exist so the test suite can bind
+  ephemeral ports (`0`) rather than depending on 5175/5176 being free on the machine
+  running the tests. Production use (`import.meta.url` guard) always binds the fixed
+  `APP_PORT`/`IMAGE_PEER_PORT` constants — the override exists for testability only, not
+  as a configuration surface anyone is expected to use in the real deployment.
+- No existing assertion in any of the six previously-passing test files was touched.
