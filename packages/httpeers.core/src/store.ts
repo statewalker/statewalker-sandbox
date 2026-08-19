@@ -15,9 +15,26 @@ import type {
   PresenceStore,
   PresenceWriteResult,
 } from "./types.js";
+import { assertValid, validateRoles } from "./vocabulary.js";
+import type { Vocabulary } from "./vocabulary.js";
 
-/** Durable membership: who belongs to the mesh, and with what roles. */
-export function createMemberStore(clock: () => number = Date.now): MemberStore {
+/**
+ * Durable membership: who belongs to the mesh, and with what roles.
+ *
+ * `setRoles` validates its `roles` against `vocabulary` before writing —
+ * "catch a typo where it is made, not three hops later as a silent denial"
+ * (the v0.9.0 delta's own rationale). This is deliberately at the STORE,
+ * not at whichever call site happens to reach `setRoles` today: a guard
+ * placed at a call site is only as durable as that call site, and a later
+ * one added without knowing the guard belongs here would ship an
+ * unvalidated role write. `add` is NOT validated here — every caller that
+ * feeds it caller-supplied roles (e.g. invitation redemption) validates
+ * them earlier, at the point the roles were themselves accepted
+ * (`InvitationStore.create` in `apps/httpeers-stack`), matching the
+ * archived delta's own choice to guard `createInvitation` and `setRoles`,
+ * never `addMember`.
+ */
+export function createMemberStore(vocabulary: Vocabulary, clock: () => number = Date.now): MemberStore {
   const members = new Map<string, MemberRecord>();
 
   return {
@@ -27,6 +44,7 @@ export function createMemberStore(clock: () => number = Date.now): MemberStore {
       return record;
     },
     setRoles(peerId, roles) {
+      assertValid(validateRoles(vocabulary, roles, `setRoles(${peerId})`));
       const record: MemberRecord = { peerId, roles: [...roles], updatedAt: clock() };
       members.set(peerId, record);
       return record;
