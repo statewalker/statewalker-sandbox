@@ -968,19 +968,25 @@ Both variants used real TCP/Noise/Yamux nodes, `services: { identify: identify()
 `identify()`, closer to the bare `webrun-streams-libp2p` test suite's own `node()` helper,
 and is reported separately below for completeness).
 
-**RESULT: DID NOT REPRODUCE under these conditions.**
+**RESULT: DID NOT REPRODUCE under these conditions.** The headline number below is from the
+**committed** script (`scripts/dial-burst-repro.mjs`, fix round 2) — not the original,
+since-deleted one. The two are reported together because they used identical parameters and
+produced an identical result; see "Fix round 1 & 2 (review)" below for why the committed
+number, not the original, is the one this project should cite.
 
 | Run | Variant(s) | Rounds | N (concurrent) | `identify()` | Uncaught exceptions observed |
 | --- | --- | --- | --- | --- | --- |
-| 1 | A, B | 80 each | 40 | no | 0 / 160 rounds |
-| 2 | A, B | 120 each | 60 | no | 0 / 240 rounds |
-| 3 | A, B | 100 each | 80 | yes (matches `createNode`) | 0 / 200 rounds |
+| 1 | A, B | 80 each | 40 | yes | 0 / 160 rounds |
+| 2 | A, B | 120 each | 60 | yes | 0 / 240 rounds |
+| 3 | A, B | 100 each | 80 | yes | 0 / 200 rounds |
 
 Total: **0 uncaught synchronous exceptions across 600 rounds**, **36,800 individual
 concurrent-dial/call attempts** (`160*40 + 240*60 + 200*80`, rounds summed across both
-variants per run, times that run's N). Variant A did surface real, expected TCP-level
-contention as ordinary PROMISE REJECTIONS (`ECONNRESET` on some fraction of the N clients
-under the heaviest bursts) — proving the burst condition itself is genuinely being
+variants per run, times that run's N), **reproduced against the committed harness in
+35.3s wall-clock** (`7.432s + 13.629s + 14.252s`, the three runs' own `time` output — see
+"Fix round 1 & 2" below for the exact commands). Variant A did surface real, expected
+TCP-level contention as ordinary PROMISE REJECTIONS (`ECONNRESET` on some fraction of the N
+clients under the heaviest bursts) — proving the burst condition itself is genuinely being
 exercised — but every one of those surfaced as a normal rejected promise, never as an
 uncaught synchronous exception.
 
@@ -994,16 +1000,37 @@ loop, OS socket buffering, or Yamux frame boundaries the original run encountere
 did the latter, under the exact dial-burst framing the reviewer specified rather than the
 cap-exhaustion framing originally (and incorrectly) assigned.**
 
-**Fix round 1 (review):** the debug script was originally deleted after use, matching Task
-6a's own `debug-stream*.mjs` precedent — review correctly flagged that precedent as one
+**Fix round 1 & 2 (review):** the debug script was originally deleted after use, matching
+Task 6a's own `debug-stream*.mjs` precedent — review correctly flagged that precedent as one
 worth not repeating (a negative result nobody can re-run or vary from a script that no
-longer exists is a narrative, not evidence), so it has been reconstructed and committed at
-`scripts/dial-burst-repro.mjs`, with a header documenting what it looks for, both variants,
-how to run it, and which parameters to vary. See the Task 18 report's "Review follow-up"
-section for exactly what differs between the reconstruction and the original (an import
-switched from a relative disk path to the `@statewalker/webrun-streams-libp2p` package
-specifier; `identify()` parameterized via one constant instead of being a second copy of the
-file) and the sanity re-run performed after reconstruction.
+longer exists is a narrative, not evidence), so it was reconstructed and committed at
+`scripts/dial-burst-repro.mjs` in fix round 1, with a header documenting what it looks for,
+both variants, how to run it, and which parameters to vary. See the Task 18 report's "Review
+follow-up" section for exactly what differs between the reconstruction and the original (an
+import switched from a relative disk path to the `@statewalker/webrun-streams-libp2p`
+package specifier; `identify()` parameterized via one constant instead of being a second
+copy of the file).
+
+Fix round 1 only re-verified the reconstruction with a small sanity sweep (3 rounds × 30,
+both variants), leaving the citable 36,800-attempt claim and the auditable committed
+artefact as two different things joined by a footnote. **Fix round 2 closes that gap: the
+full three-run sweep above (identical parameters to the original — 80×40, 120×60, 100×80,
+each rounds-count per variant) was re-run against the exact committed bytes**, via:
+
+```
+pnpm exec tsx scripts/dial-burst-repro.mjs 80 40
+pnpm exec tsx scripts/dial-burst-repro.mjs 120 60
+pnpm exec tsx scripts/dial-burst-repro.mjs 100 80
+```
+
+Result: **identical to the original run — 0 uncaught exceptions across all 600 rounds** —
+with `identify()` on for every run this time (the original's runs 1-2 had it off, run 3 on;
+the table above reflects the committed script, which defaults `WITH_IDENTIFY = true` to
+match `createNode` unconditionally, so this re-run does not reproduce the original's
+identify-off condition separately — a narrower recheck than the original three-run spread,
+noted rather than glossed over). Total wall-clock: **35.3 seconds** for all 600 rounds
+combined — reproducing this claim from the committed harness costs under a minute, not the
+open-ended time a fresh from-scratch investigation would.
 
 **Consequence for this task's own design:** the semaphore built here does not, and cannot,
 fully close this risk — it only throttles ONE `Remote`'s own OUTBOUND concurrency (this
@@ -1082,7 +1109,57 @@ $ pnpm exec tsx scripts/dial-burst-repro.mjs 3 30
 ```
 
 138/138 unchanged, exactly as expected — committing the harness and sweeping stale wording
-touch no runtime behavior. The sanity re-run of the reconstructed script (last command
-above) confirms it still exhibits the same shape reported earlier (both variants run, zero
-uncaught exceptions); the full 600-round sweep was not re-run against the committed bytes —
-see the Task 18 report's "Review follow-up" for that judgment call.
+touch no runtime behavior. The `pnpm exec tsx scripts/dial-burst-repro.mjs 3 30` sanity
+re-run above confirmed the reconstructed script still runs; it was NOT the full 600-round
+sweep.
+
+### Fix round 2 (review) — the full sweep, against the committed bytes
+
+Review asked for the full 600-round sweep to actually run against the committed script
+rather than being covered only by the 3×30 sanity check — the citable "36,800 attempts,
+zero crashes" claim otherwise referred to a harness that no longer exists. Ran:
+
+```
+$ pnpm exec tsx scripts/dial-burst-repro.mjs 80 40
+[dial-burst-repro] Variant A (separate fresh clients): 80 rounds x 40 concurrent, zero stagger, identify=true
+[dial-burst-repro] Variant B (one connection, N conn.call()): 80 rounds x 40 concurrent, zero stagger, identify=true
+[dial-burst-repro] TOTAL uncaught synchronous exceptions observed: 0
+real 0m7.432s
+
+$ pnpm exec tsx scripts/dial-burst-repro.mjs 120 60
+[dial-burst-repro] Variant A (separate fresh clients): 120 rounds x 60 concurrent, zero stagger, identify=true
+[dial-burst-repro] Variant B (one connection, N conn.call()): 120 rounds x 60 concurrent, zero stagger, identify=true
+[dial-burst-repro] TOTAL uncaught synchronous exceptions observed: 0
+real 0m13.629s
+
+$ pnpm exec tsx scripts/dial-burst-repro.mjs 100 80
+[dial-burst-repro] Variant A (separate fresh clients): 100 rounds x 80 concurrent, zero stagger, identify=true
+[dial-burst-repro] Variant B (one connection, N conn.call()): 100 rounds x 80 concurrent, zero stagger, identify=true
+[dial-burst-repro] TOTAL uncaught synchronous exceptions observed: 0
+real 0m14.252s
+```
+
+**Result: 0 uncaught synchronous exceptions across all 600 rounds, 36,800 attempts —
+identical to the original (since-deleted-harness) run.** Total wall-clock: **35.313s**
+(7.432 + 13.629 + 14.252) for all three runs combined — cheap enough that re-running this
+sweep from the committed script is not a burden for whoever next wants to check it. This
+now IS the citable evidence — the "did not reproduce" claim above and in the Task 18 report
+refers to this run against the committed `scripts/dial-burst-repro.mjs`, not to the deleted
+original.
+
+One difference from the original run, disclosed rather than blended in: the original's runs
+1-2 had `identify()` off and run 3 had it on; the committed script defaults `identify()` on
+for every run (matching `createNode` unconditionally — see the script's `WITH_IDENTIFY`
+constant), so this re-run does not separately re-cover the identify-off condition the
+original's runs 1-2 checked. The result was identical either way in the original three-run
+spread, so this is not expected to matter, but it is a real, stated difference in coverage,
+not noise.
+
+```
+$ pnpm vitest run --no-file-parallelism
+ Test Files  12 passed (12)
+      Tests  138 passed (138)
+```
+
+138/138 confirmed unchanged after the full sweep, as expected (the sweep exercises no code
+this suite covers).
