@@ -22,6 +22,7 @@ import type { AccessTree } from "../src/access-tree.js";
 import { cacheClaims } from "../src/peer-context.js";
 import type { MeshClaims } from "../src/types.js";
 import { DEFAULT_VOCABULARY } from "../src/vocabulary.js";
+import type { Vocabulary } from "../src/vocabulary.js";
 
 const claims = (...roles: string[]): MeshClaims => ({
   sub: "peerA",
@@ -86,6 +87,55 @@ describe("A-1: root-to-leaf override", () => {
     const t: AccessTree = { ...tree, "/docs/public/": { public: true } };
     expect(decide(t, "/docs/public/index.html", null).allowed).toBe(true);
     expect(decide(t, "/docs/readme", null).allowed).toBe(false);
+  });
+});
+
+describe("A-1: an exact-path entry is the deepest match of all", () => {
+  // Post-review fix: `resolveAccess` used to walk ONLY the proper ancestor
+  // directories `ancestors()` returns, which excludes the resource itself
+  // by construction -- an entry keyed by the exact resource path (no
+  // trailing slash) was therefore never consulted at all.
+
+  it("grants a bare, one-segment resource that has no ancestor directory of its own", () => {
+    // The fail-CLOSED symptom: `/search` has only `/` as an ancestor, so a
+    // `/search`-keyed entry was previously dead code and the request could
+    // only ever fall through to root's deny.
+    const tree: AccessTree = {
+      "/": { anyOf: [] },
+      "/search": { anyOf: ["app:search.query"] },
+    };
+    const vocab: Vocabulary = {
+      version: 1,
+      capabilities: { "app:search.query": {} },
+      roles: { member: { capabilities: ["app:search.query"] } },
+    };
+    expect(resolveAccess(tree, "/search", "GET", member, vocab).allowed).toBe(true);
+    expect(resolveAccess(tree, "/search", "GET", member, vocab).source).toBe("/search");
+  });
+
+  it("an exact-leaf deny overrides a granting ancestor -- the fail-OPEN case", () => {
+    // This is the case that makes the old behaviour a defect, not a quirk:
+    // an operator writing a targeted deny under a granted directory got
+    // silence and a false sense of protection, because the deny was never
+    // consulted and the directory's grant applied instead.
+    const tree: AccessTree = {
+      "/": { anyOf: [] },
+      "/admin/": { anyOf: ["std:mesh.admin"] },
+      "/admin/secret": { anyOf: [] },
+    };
+    expect(decide(tree, "/admin/invitations", admin).allowed).toBe(true); // ancestor still governs siblings
+    expect(decide(tree, "/admin/secret", admin).allowed).toBe(false); // exact deny wins over the ancestor grant
+    expect(decide(tree, "/admin/secret", admin).source).toBe("/admin/secret");
+  });
+
+  it("a tree declaring both '/x' and '/x/' is rejected at construction, naming both", () => {
+    const tree: AccessTree = {
+      "/": { anyOf: [] },
+      "/search": { anyOf: ["std:mesh.read"] },
+      "/search/": { anyOf: ["std:mesh.admin"] },
+    };
+    expect(() => withAccessTree({ tree, vocabulary: DEFAULT_VOCABULARY, usesTransportIdentity: async () => false }))
+      .toThrow(/'\/search'.*'\/search\/'/);
   });
 });
 

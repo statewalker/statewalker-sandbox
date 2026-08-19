@@ -1163,3 +1163,70 @@ $ pnpm vitest run --no-file-parallelism
 
 138/138 confirmed unchanged after the full sweep, as expected (the sweep exercises no code
 this suite covers).
+
+## Task 8 (pre-work) — `resolveAccess` fix: an exact-path entry was dead code
+
+Found while implementing `httpeers-stack`'s Task 8 (the admin revocation endpoint and the
+search service), before any of that task's own code was written: the brief's example
+`.access` tree for the new `GET /search` route used an exact-path key (`"/search": {
+anyOf: [...] }`), and running `ancestors("/search")` against the actual, previously-
+reviewed `access-tree.ts` showed it returns `["/"]` only — `ancestors` always drops the
+final path segment ("the resource, not a directory"), so `resolveAccess`, which only ever
+looked up `tree[dir]` for `dir` in `ancestors(pathname)`, never consulted `tree[pathname]`
+itself. An exact-path key was therefore never reachable at all.
+
+This is worse than a `/search`-shaped inconvenience. The fail-**closed** symptom (a lone
+grant on a bare, one-segment top-level resource is dead, so the request 403s no matter
+what capability the caller holds) is visible immediately. The fail-**open** symptom is
+not: a tree with `"/admin/": { anyOf: [...] }` (a grant) and `"/admin/secret": { anyOf: []
+}` (an intended deny of that one resource) silently drops the deny — it is never
+consulted — and the directory's grant applies instead. An operator writing that targeted
+deny got silence and a false sense of protection. It had not bitten yet only because
+every governed resource in `DEFAULT_ACCESS_TREE` happens to sit two or more segments
+beneath a directory entry that genuinely is its ancestor — luck, not design.
+
+**Fix** (`src/access-tree.ts`): `resolveAccess` now also checks `tree[pathname]` — the
+exact resource path — as the most specific candidate, applied *after* the ancestor walk
+so it overrides whatever an ancestor directory decided. This is not a new contract; it is
+the existing doc comment's own claim ("walk from `/` down to the resource") made true.
+`validateAccessTree` (called from `withAccessTree`'s constructor, so this fails at
+startup, not at request time) now also rejects a tree that declares both `/x` and `/x/` —
+now two different keys (one governs the exact resource `x`; the other governs everything
+*inside* directory `x`) that a policy author could easily expect to mean the same thing,
+and letting both live silently is exactly the ambiguity this module refuses to start
+with.
+
+**Tests** (`tests/access-tree.test.ts`, new `describe("A-1: an exact-path entry is the
+deepest match of all", ...)`, 3 cases):
+- a bare, one-segment resource (`/search`) is granted by its own exact-path entry — the
+  fail-closed case;
+- an exact-leaf deny overrides a granting ancestor (`/admin/` grants, `/admin/secret`
+  denies) — the fail-open case, the one that makes this a defect rather than a quirk;
+- a tree declaring both `/x` and `/x/` throws at construction, naming both.
+
+**The eleven-case equivalence table (`DEFAULT_ACCESS_TREE`) is untouched and still
+passes** — none of its resources are governed by an exact-path key, so nothing about the
+fix changes any of those eleven decisions.
+
+```
+$ pnpm exec vitest run tests/access-tree.test.ts --no-file-parallelism
+ Test Files  1 passed (1)
+      Tests  31 passed (31)
+
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  12 passed (12)
+      Tests  141 passed (141)
+
+$ pnpm run typecheck && pnpm run typecheck:tests
+(clean, both)
+
+$ grep -rlE "^import.*libp2p" src/
+src/tokens.ts
+src/transport-duplex.ts
+```
+
+141 = 138 + 3 new. Isolation grep unaffected — this fix touches only `access-tree.ts`, and
+its own doc comment/tests, neither of which import libp2p.
+
+Landed in its own commit, separate from `httpeers-stack`'s Task 8 app-level work, so this
+core change is reviewable on its own — see that task's report for the commit SHA.

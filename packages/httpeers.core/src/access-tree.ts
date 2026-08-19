@@ -5,6 +5,29 @@
  * files resolved root to leaf with deny-by-default. Resolution rules:
  *  - walk from `/` down to the resource, collecting every `.access` entry
  *    on the way; a deeper entry overrides a shallower one
+ *  - THE RESOURCE'S OWN EXACT PATH IS THE DEEPEST ENTRY OF ALL. `ancestors`
+ *    only ever returns proper ancestor DIRECTORIES (it deliberately excludes
+ *    the resource itself — see that function's own doc comment), so an entry
+ *    keyed by the exact request path (no trailing slash, e.g. `/search`) is
+ *    a separate, more specific match than anything the ancestor walk finds,
+ *    and overrides it when both are present. Fixed post-review: earlier,
+ *    `resolveAccess` walked ancestors ONLY, which made any exact-path key
+ *    dead code — never consulted at all. That is a fail-CLOSED symptom for
+ *    a resource with no ancestor directory of its own (a bare, one-segment
+ *    top-level path like `/search` could never be granted, no matter what
+ *    its own entry said) but a fail-OPEN one for a targeted deny nested
+ *    under a granting directory (`/admin/`: grant, `/admin/secret`: deny —
+ *    the deny was silently unreachable and the directory's grant applied).
+ *    The second case is the one that makes this a defect, not a quirk: a
+ *    policy author writing that deny got silence and a false sense of
+ *    protection. See `access-tree.test.ts`'s "an exact-leaf deny overrides
+ *    a granting ancestor".
+ *  - because `/x` and `/x/` are now two DIFFERENT keys that could silently
+ *    diverge (one governs the resource `x`, the other governs everything
+ *    *inside* directory `x`) but that a policy author could easily expect to
+ *    mean the same thing, `withAccessTree` rejects a tree declaring both, at
+ *    construction — fail fast, not fail closed, same stance as every other
+ *    structural check in this file.
  *  - deny by default: no entry anywhere means no access
  *  - an entry grants to capabilities (`anyOf`), or denies outright
  *    (`anyOf: []`)
@@ -93,6 +116,20 @@ export function resolveAccess(
     }
   }
 
+  // The resource's own exact path is deeper than any ancestor DIRECTORY
+  // `ancestors` walked above (that function deliberately excludes the
+  // resource itself), so it is checked last and, when present, wins over
+  // whatever an ancestor directory granted or denied. See the module
+  // comment for why this is not optional: without it, an exact-path entry
+  // is dead code, silently unreachable in both directions (a lone grant
+  // never applies; a targeted deny nested under a granting directory never
+  // applies either).
+  const exact = tree[pathname];
+  if (exact != null) {
+    governing = exact;
+    source = pathname;
+  }
+
   if (governing == null) {
     return { allowed: false, source: null, reason: "no .access entry governs this path" };
   }
@@ -126,6 +163,13 @@ export function resolveAccess(
  * capability named in `anyOf` (directory-level or under a method override)
  * must be declared. Catches, in particular, a ROLE name written where a
  * capability belongs — the exact mistake the pre-vocabulary design invited.
+ *
+ * Also catches a tree that declares both `/x` (governs the exact resource
+ * `x`) and `/x/` (governs everything INSIDE directory `x`) — two different
+ * keys as of `resolveAccess`'s exact-match fix above, but ones a policy
+ * author could easily expect to mean the same thing. Silently letting both
+ * live is exactly the class of ambiguity this module refuses to start with
+ * rather than resolve at runtime — see the module comment.
  */
 export function validateAccessTree(vocab: Vocabulary, tree: AccessTree): string[] {
   const problems: string[] = [];
@@ -143,6 +187,18 @@ export function validateAccessTree(vocab: Vocabulary, tree: AccessTree): string[
     checkCapabilities(dir, entry);
     for (const [method, override] of Object.entries(entry.methods ?? {})) {
       checkCapabilities(dir, override, method);
+    }
+  }
+
+  const seen = new Set<string>();
+  for (const key of Object.keys(tree)) {
+    // "/" has no bare counterpart (stripping its trailing slash leaves ""),
+    // and is not itself a directory nested under anything -- exempt.
+    if (key === "/" || !key.endsWith("/")) continue;
+    const bare = key.slice(0, -1);
+    if (bare in tree && !seen.has(bare)) {
+      seen.add(bare);
+      problems.push(`both '${bare}' and '${key}' are declared -- ambiguous: pick one`);
     }
   }
 
