@@ -10,10 +10,14 @@
  *
  * See the Task 17 report (`.superpowers/sdd/2026-08-18-httpeers-stack/
  * task-17-report.md`) for the full failure -> observation table this file
- * implements, including the two rows this file deliberately does NOT test
- * (relay data-limit exceeded: no relay transport in this stack; the
- * concurrency cliff at N=512 itself: Task 18's job, not this one's -- row 4
- * below proves the same code path at a small, fast N instead).
+ * implements, including the rows this file deliberately does NOT test:
+ * relay data-limit exceeded (no relay transport in this stack, so
+ * unprovokable in-process), the synchronous outbound-stream-cap throw
+ * (row 3a -- inspection-backed only, sharing `mapPeerCallError`'s branch
+ * with row 3b below, deferred to Task 18's concurrency harness rather than
+ * built here), and the concurrency cliff at N=512 itself (Task 18's job,
+ * not this one's -- row 3b below proves the same code path at a small,
+ * fast N instead).
  */
 import { generateKeyPair } from "@libp2p/crypto/keys";
 import { identify } from "@libp2p/identify";
@@ -90,6 +94,47 @@ describe("T-2: failure -> observation", () => {
     await clientA.dial(addr);
     await clientA.hangUp(server.peerId);
     await server.stop(); // now genuinely offline; the port stops accepting
+
+    const remote = createRemote({ node: clientA });
+    const call = remote(serverPeerId, new Request("http://peer/x"));
+
+    await expect(call).rejects.toBeInstanceOf(PeerUnreachableError);
+    await expect(call).rejects.toMatchObject({ kind: "peer-unreachable", peerId: serverPeerId });
+  }, 15_000);
+
+  it("row 1c: a peer with 2+ known addresses, all offline, surfaces as PeerUnreachableError (genuine dial-queue AggregateError)", async () => {
+    // Added on review: row 1b alone only proves the SINGLE-address unwrap
+    // (`dial-queue.js`'s `if (errors.length === 1) throw errors[0]`) maps
+    // correctly. It does NOT prove the genuine `AggregateError` shape
+    // (2+ failed addresses) is produced in this situation and mapped the
+    // same way -- that is a materially different branch in `dialPeer`, and
+    // this task's own first-run failures (see the Task 17 report) are
+    // exactly why "the same branch handles a neighbour row" is not treated
+    // as proof here. Two listeners on 127.0.0.1 give the server two real,
+    // independent addresses; `identify` propagates both into clientA's
+    // peerStore after a single dial, so dialing the (now fully offline)
+    // peerId again genuinely tries both and genuinely fails both.
+    const server = await createLibp2p({
+      addresses: { listen: ["/ip4/127.0.0.1/tcp/0", "/ip4/127.0.0.1/tcp/0"] },
+      transports: [tcp()],
+      connectionEncrypters: [noise()],
+      streamMuxers: [yamux()],
+      services: { identify: identify() },
+    });
+    toStop.push(server);
+    const addrs = server.getMultiaddrs();
+    // Guard on the premise itself: if this ever comes back with fewer than
+    // 2 addresses (a libp2p/OS change), this test would silently degrade
+    // into re-proving row 1b instead of the AggregateError branch it names.
+    expect(addrs.length).toBeGreaterThanOrEqual(2);
+    const serverPeerId = server.peerId.toString();
+
+    await clientA.dial(addrs[0]!);
+    // Let identify's address exchange land before hanging up -- without
+    // this, clientA's peerStore may still hold only the one address dialed.
+    await sleep(300);
+    await clientA.hangUp(server.peerId);
+    await server.stop();
 
     const remote = createRemote({ node: clientA });
     const call = remote(serverPeerId, new Request("http://peer/x"));

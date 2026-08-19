@@ -722,13 +722,13 @@ different from what the source alone predicted; see rows 1 and 3 below.
 | --- | --- | --- | --- | --- | --- |
 | 1a | No address known for a peerId (never dialed) | `libp2p/dist/src/connection-manager/dial-queue.js`: `NoValidAddressesError` | `PeerUnreachableError` (`kind: "peer-unreachable"`) | Yes, with backoff — may be transient | `tests/errors.test.ts` "row 1a" |
 | 1b | A previously-reachable peer has since gone offline, ONE address tried | `dial-queue.js`'s `dialPeer`: `if (errors.length === 1) throw errors[0]` — the raw, unwrapped `@libp2p/tcp` `net.connect` error (`.name === "Error"`, `.code === "ECONNREFUSED"`). **Not predicted by reading alone** — the source suggested `AggregateError` always; running it against a real stopped server showed the single-address unwrap. `mapPeerCallError` matches Node's own `.code` (`CONNECTION_ESTABLISHMENT_ERRNO`), not a message string. | `PeerUnreachableError` | Yes, with backoff | `tests/errors.test.ts` "row 1b" |
-| 1c | Every address failed, 2+ addresses tried | `dial-queue.js`: `AggregateError(errors, 'All multiaddr dials failed')` | `PeerUnreachableError` | Yes, with backoff | Not separately tested — same class, same `mapPeerCallError` branch (`instanceof AggregateError`) as 1a/1b; a real multi-address peer is out of this task's scope to construct (would need two listen transports) and would not exercise a different code path than 1a/1b already do. |
+| 1c | Every address failed, 2+ addresses tried | `dial-queue.js`: `AggregateError(errors, 'All multiaddr dials failed')` | `PeerUnreachableError` | Yes, with backoff | `tests/errors.test.ts` "row 1c" — a real two-listener peer, both addresses genuinely dialed and refused; closed post-review after row 1b/3c's own mispredictions showed "shares a branch with a proven row" is not proof the library produces this shape in this situation. |
 | 2 | Protocol unsupported by the remote | `@libp2p/multistream-select`'s `select.js`: `UnsupportedProtocolError` (`@libp2p/interface`) when no offered protocol is acknowledged | `PeerProtocolUnsupportedError` (`kind: "protocol-unsupported"`) | Never — the remote's protocol table does not change between calls | `tests/errors.test.ts` "row 2" |
-| 3a | Stream reset: this peer's own outbound cap tripped | `libp2p/dist/src/connection.js`'s `newStream`: `TooManyOutboundProtocolStreamsError`, thrown SYNCHRONOUSLY, rejects before the stream is handed back | `PeerStreamResetError` (`kind: "stream-reset"`) | Only for a known-idempotent request | Not separately tested — see row 3b, same mapped class, and Task 18 owns reproducing the cap itself at production scale |
+| 3a | Stream reset: this peer's own outbound cap tripped | `libp2p/dist/src/connection.js`'s `newStream`: `TooManyOutboundProtocolStreamsError`, thrown SYNCHRONOUSLY, rejects before the stream is handed back | `PeerStreamResetError` (`kind: "stream-reset"`) | Only for a known-idempotent request | **STATUS: inspection-backed only, deferred to Task 18.** Not proven by a running test here — provoking it needs the concurrency harness (hundreds of simultaneous outbound calls) Task 18 is already building to chase an uncatchable `StreamResetError` out of `@libp2p/utils`'s reset path; this row belongs to that investigation rather than a duplicate harness in this task. |
 | 3b | Stream reset: the remote's inbound cap tripped (the concurrency cliff, ledger note 18) | `connection.js`'s `onIncomingStream`: `TooManyInboundProtocolStreamsError`, caught internally and turned into `muxedStream.abort(err)` — the caller never sees that class, only the reset it causes | `PeerStreamResetError` | Only for a known-idempotent request | `tests/errors.test.ts` "row 3" — reproduces the exact code path at `maxInboundStreams: 1` for a fast, deterministic test; N=512 itself is Task 18's job (see brief) |
 | 3c | Stream reset with zero response bytes ever written | **Found only by running row 3b's test, not predicted by reading**: `duplexOverStream` (`webrun-streams-libp2p`) does not distinguish "reset" from "closed with nothing written" at its own layer — both end the read loop with zero frames. The observable symptom by the time it reaches this package is `HttpParseError("sniff: stream ended before any bytes arrived")` from `sniff.ts` (`@statewalker/webrun-http-streams`), not any stream-error class. `mapPeerCallError` matches this exact message. | `PeerStreamResetError` | Only for a known-idempotent request | Covered by the same "row 3" test — it is what that test actually observed before the mapping was corrected (see the Task 17 report) |
 | 4 | Relay data-limit exceeded | `@libp2p/circuit-relay-v2`'s `utils.js`: `TransferLimitError('data limit of <n> bytes exceeded')`, thrown relay-side once a relayed stream's byte count passes the reservation's `dataLimit` | `PeerRelayLimitExceededError` (`kind: "relay-limit-exceeded"`) | Never (same reservation) | **Not tested.** `createNode` (`transport-duplex.ts`) configures TCP direct dialing only; this package has no `@libp2p/circuit-relay-v2` dependency and no relay transport in its stack, so this condition cannot be provoked in-process. The class and its `mapPeerCallError` branch (matched by `.name === "TransferLimitError"`, a string check since the class cannot be imported from a dependency this package doesn't have) exist as grounded, forward-compatible plumbing — real library behaviour, cited from source — but are themselves unexercised. No synthetic/mocked test was written for this row; per the team lead's Step 4, "an error taxonomy whose rows are asserted against mocks of themselves proves nothing." |
-| 5 | Request timeout | This package's own policy (`DEFAULT_REQUEST_TIMEOUT_MS`, `transport-duplex.ts`), not a libp2p condition | `PeerRequestTimeoutError` (`kind: "request-timeout"`) | Only for a known-idempotent request | `tests/errors.test.ts` "row 5" |
+| 5 | Request timeout | This package's own policy (`DEFAULT_REQUEST_TIMEOUT_MS = 8_000`, `transport-duplex.ts`), not a libp2p condition. **Ordering (stated here, not only in prose below): `8_000ms < 10_000ms (libp2p's own `PROTOCOL_NEGOTIATION_TIMEOUT` default) < 15_000ms (`DEFAULT_DRAIN_TIMEOUT_MS`)`** — the request timeout is the shortest of the three, deliberately, so it always trips first; the reverse ordering (request timeout longer than the drain timeout, the transport giving up before the caller does) was considered and not chosen. | `PeerRequestTimeoutError` (`kind: "request-timeout"`) | Only for a known-idempotent request | `tests/errors.test.ts` "row 5" |
 | 6 | Peer binding lost | `peer-handlers.ts`'s existing `PeerBindingLostError` (unchanged by this task) — thrown when `getPeerId` returns `undefined`, meaning something re-created the `Request` above the binding middleware without `copyPeerBinding` | `PeerBindingLostError` — thrown, not a 401/403 | **Never.** A bug in composition, not a network condition; retrying reproduces the identical bug every time. | `tests/errors.test.ts` "row 6" — calls `Peer.dispatch(req)` directly on a `Request` that never passed through `serveTransport`'s registration |
 | — | Unrecognised failure (contract, not a row) | N/A — this is `mapPeerCallError`'s own default case | `UnknownPeerCallError` (`kind: "unknown"`), `cause` preserved | N/A | `tests/errors.test.ts`'s "mapPeerCallError: the fallback contract" — unit-tests the pure function's fallback directly (not a network condition; testing this package's own default-case logic, same class of test as `binding.test.ts`'s seam stubs) |
 
@@ -739,12 +739,26 @@ brief names peer-offline, protocol-unsupported, stream-reset (incl. concurrency 
 relay-limit, request-timeout, binding-lost as six. This table has 10 rows resolving to
 those six typed classes plus the fallback contract — the **additional, source-derived**
 rows are 1b (single-address unwrap, no libp2p class at all), 1c (the genuine
-`AggregateError` case, distinct code path from 1b), 3a (the synchronous outbound-cap
-throw, a different code path from the inbound-cap reset 3b already names), 3c (the
-zero-bytes-written reset signature, found only by running the test), and the
-`UnknownPeerCallError` fallback contract — **5 rows beyond the minimum**, three of which
-(1b, 3c, and the general lesson that reading predicted the wrong shape for 1b) were only
-found by running real nodes, not by reading source.
+`AggregateError` case, distinct code path from 1b, closed with a real test on review), 3a
+(the synchronous outbound-cap throw, a different code path from the inbound-cap reset 3b
+already names — left inspection-backed and explicitly deferred to Task 18's own
+concurrency harness), 3c (the zero-bytes-written reset signature, found only by running
+the test), and the `UnknownPeerCallError` fallback contract — **5 rows beyond the
+minimum**, three of which (1b, 3c, and the general lesson that reading predicted the
+wrong shape for 1b) were only found by running real nodes, not by reading source.
+
+**Said plainly, since the table's per-row citations do not add up to a ranking on their
+own: reading beat imagining, and then running beat reading.** Reading the actual library
+source (not documentation, not memory) produced the full ten-row shape of this table —
+imagining alone would not have surfaced rows like 1b or 3c at all. But for those same two
+rows, reading alone still landed on the wrong CLASSIFICATION — it predicted
+`AggregateError` unconditionally for row 1, and predicted some libp2p stream-error class
+for what turned out to be row 3c's zero-bytes case. Only running `tests/errors.test.ts`
+against real nodes surfaced the actual shapes: the first implementation of
+`mapPeerCallError`, written from source-reading alone, sent 2 of that file's first 8
+tests straight into the `UnknownPeerCallError` fallback. Both are fixed now, cited in
+place in `mapPeerCallError`'s own doc comments — see the Task 17 report's "What the first
+run of the tests actually found" for the full trace.
 
 ### The timeout policy
 
@@ -788,7 +802,7 @@ idempotency-key layer, so it cannot make that determination itself.
 | `src/transport-duplex.ts` | Added `DEFAULT_REQUEST_TIMEOUT_MS`, `mapPeerCallError` (exported), `CONNECTION_ESTABLISHMENT_ERRNO`, `withRequestTimeout`. `CreateRemoteInit` gained `requestTimeoutMs`. `createRemote`'s returned function now races the whole dial-negotiate-respond sequence against the timeout and maps every rejection through `mapPeerCallError` before it reaches the caller. |
 | `src/peer.ts` | `CreatePeerInit` gained `requestTimeoutMs`, threaded straight to `createRemote`. No other change. |
 | `src/index.ts` | Added `export * from "./errors.js"`. |
-| `tests/errors.test.ts` (new) | 8 tests: 6 real end-to-end tests against real libp2p nodes (rows 1a, 1b, 2, 3, 5, 6 — row 3's test is what surfaced 3c) plus 2 direct unit tests of `mapPeerCallError`'s own fallback contract (not a row; see the table). |
+| `tests/errors.test.ts` (new) | 9 tests: 7 real end-to-end tests against real libp2p nodes (rows 1a, 1b, 1c, 2, 3, 5, 6 — row 3's test is what surfaced 3c) plus 2 direct unit tests of `mapPeerCallError`'s own fallback contract (not a row; see the table). Row 1c added post-review, closing a judgment call that had initially left it inspection-only. |
 
 ### Verification
 
@@ -799,9 +813,9 @@ $ pnpm run typecheck
 $ pnpm run typecheck:tests
 (clean)
 
-$ pnpm exec vitest run --no-file-parallelism
+$ pnpm vitest run --no-file-parallelism
  Test Files  11 passed (11)
-      Tests  133 passed (133)
+      Tests  134 passed (134)
 
 $ npx biome check src/ tests/ package.json
 (clean, no output; no formatting changes needed)
@@ -811,7 +825,7 @@ src/transport-duplex.ts
 src/tokens.ts
 ```
 
-Test count moved from 125/125 to **133/133** — 8 new cases, all in `tests/errors.test.ts`.
+Test count moved from 125/125 to **134/134** — 9 new cases, all in `tests/errors.test.ts`.
 No existing assertion was weakened or altered; `apps/httpeers-stack`'s 42/42 also
 verified unaffected (`pnpm run typecheck && pnpm run typecheck:tests && pnpm exec vitest
 run --no-file-parallelism`, all clean) — the new `DEFAULT_REQUEST_TIMEOUT_MS` (8s) is far
