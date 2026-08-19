@@ -38,7 +38,7 @@ import type { AccessTree } from "./access-tree.js";
 import { DEFAULT_ACCESS_TREE, withAccessTree } from "./access-tree.js";
 import { cacheClaims, lookupClaims, lookupPeer } from "./peer-context.js";
 import { newPeerHandlers } from "./peer-handlers.js";
-import type { RevocationCache } from "./revocation.js";
+import type { RevocationChecker } from "./revocation.js";
 import { createMounts, createPeerRouter } from "./router.js";
 import { generateMeshKey, mintToken, verifyToken } from "./tokens.js";
 import type { Ed25519PrivateKey, Libp2p } from "./transport-duplex.js";
@@ -176,13 +176,20 @@ export interface CreatePeerInit {
    */
   usesTransportIdentity?: UsesTransportIdentity;
   /**
-   * Pulled-and-cached revocation list (`RevocationCache` from
-   * `revocation.ts`). Optional — omit and nothing is ever revoked.
-   * `RevocationCache.check` is deliberately synchronous (a pure in-memory
-   * lookup); this is the wrap-at-the-call-site the binding's `isRevoked`
-   * seam (which is `async`) was left for.
+   * A revocation decision, checked synchronously per request via the
+   * `RevocationChecker` shape (`revocation.ts`) — `.check(claims) -> reason
+   * | null`. Optional — omit and nothing is ever revoked. Despite the field
+   * name (kept for compatibility with every existing caller), this is NOT
+   * always a cache: a REMOTE provider with no direct line to the hub's state
+   * passes a `RevocationCache` (a pulled-and-cached snapshot, fetched on its
+   * own schedule); the hub itself, which owns the live `RevocationRegistry`,
+   * passes that registry directly — it has nothing to pull from itself and
+   * needs no synchronised copy. Either way, `.check` is deliberately
+   * synchronous (a pure in-memory lookup); this field is the
+   * wrap-at-the-call-site the binding's `isRevoked` seam (which is `async`)
+   * was left for.
    */
-  revocationCache?: RevocationCache;
+  revocationCache?: RevocationChecker;
   /**
    * May this peer relay on behalf of others? Deny by default (R-2):
    * relaying is a distinct capability, not a side effect of knowing how to
@@ -362,8 +369,9 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
     return claims;
   };
 
-  // Wrapped here, not made async at the source: `RevocationCache.check` is
-  // deliberately synchronous (see revocation.ts); the binding's `isRevoked`
+  // Wrapped here, not made async at the source: `RevocationChecker.check` is
+  // deliberately synchronous (see revocation.ts) whether the caller passed a
+  // `RevocationCache` or a `RevocationRegistry`; the binding's `isRevoked`
   // seam is `async`, so this is the one-line adapter between them.
   const isRevoked = revocationCache
     ? async (claims: MeshClaims): Promise<string | null> => revocationCache.check(claims)
