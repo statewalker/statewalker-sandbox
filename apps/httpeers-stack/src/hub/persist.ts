@@ -85,12 +85,12 @@ export function createPersistentHub(init: {
   filePath: string;
   vocabulary: Vocabulary;
   now?: () => number;
-  createMemberStore: (clock?: () => number) => MemberStore;
+  createMemberStore: (vocabulary: Vocabulary, clock?: () => number) => MemberStore;
 }): PersistentHub {
   const now = init.now ?? Date.now;
   const snapshot = readSnapshot(init.filePath);
 
-  const innerMembers = init.createMemberStore(now);
+  const innerMembers = init.createMemberStore(init.vocabulary, now);
   for (const m of snapshot.members) innerMembers.add(m.peerId, m.roles);
   const spentIds = new Set(snapshot.spentInvitationIds);
 

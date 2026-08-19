@@ -182,6 +182,10 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
 
     const wasPresent = presenceStore.isPresent(peerId);
     const prevAddrs = addrsByPeer.get(peerId);
+    // Result intentionally ignored: `lastSeqByPeer` above already decided
+    // whether this write is stale, using a guard that survives the TTL
+    // sweep clearing `presenceStore`'s own record (see that map's doc
+    // comment) — so `presenceStore`'s own monotonic check can only agree.
     presenceStore.heartbeat(peerId, body.seq, presenceTtlMs);
     addrsByPeer.set(peerId, body.addrs);
 

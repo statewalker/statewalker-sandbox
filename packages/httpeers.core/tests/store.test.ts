@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { createAdvertisementStore, createMemberStore, createPresenceStore } from "../src/store.js";
+import type { Vocabulary } from "../src/vocabulary.js";
+
+/** A minimal vocabulary declaring exactly the role names these tests use — the tests are about `MemberStore`'s own behaviour, not about vocabulary content. */
+const TEST_VOCABULARY: Vocabulary = {
+  version: 1,
+  capabilities: {},
+  roles: { read: {}, write: {} },
+};
 
 describe("createMemberStore", () => {
   it("adds, reads, and lists members", () => {
-    const store = createMemberStore(() => 100);
+    const store = createMemberStore(TEST_VOCABULARY, () => 100);
 
     const added = store.add("peer-a", ["read"]);
 
@@ -14,7 +22,7 @@ describe("createMemberStore", () => {
 
   it("replaces roles on setRoles, stamped with the current clock", () => {
     let time = 100;
-    const store = createMemberStore(() => time);
+    const store = createMemberStore(TEST_VOCABULARY, () => time);
     store.add("peer-a", ["read"]);
 
     time = 200;
@@ -24,8 +32,17 @@ describe("createMemberStore", () => {
     expect(store.get("peer-a")).toEqual(updated);
   });
 
+  it("setRoles rejects a role that is not in the vocabulary", () => {
+    const store = createMemberStore(TEST_VOCABULARY, () => 100);
+    store.add("peer-a", ["read"]);
+
+    expect(() => store.setRoles("peer-a", ["superadmin"])).toThrow(/unknown role 'superadmin'/);
+    // Rejected before the write: the stale roles are untouched.
+    expect(store.get("peer-a")).toEqual({ peerId: "peer-a", roles: ["read"], updatedAt: 100 });
+  });
+
   it("removes a member", () => {
-    const store = createMemberStore();
+    const store = createMemberStore(TEST_VOCABULARY);
     store.add("peer-a", ["read"]);
 
     store.remove("peer-a");
@@ -36,7 +53,7 @@ describe("createMemberStore", () => {
 
   it("is durable: membership does not expire on its own", () => {
     let time = 0;
-    const store = createMemberStore(() => time);
+    const store = createMemberStore(TEST_VOCABULARY, () => time);
     store.add("peer-a", ["read"]);
 
     time = 1_000_000_000;

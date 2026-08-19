@@ -221,6 +221,17 @@ describe("hub: invite, presence and the mesh view", () => {
     );
   });
 
+  it("a role name that is not in the vocabulary is rejected at MemberStore.setRoles too — the guard lives at the store, not at whichever call site exists today", async () => {
+    hub.invitations.create("INV-GRACE", ["member"], 60_000);
+    await hub.peer.dispatch(
+      requestAs("grace", "/.well-known/invite", { method: "POST", body: JSON.stringify({ id: "INV-GRACE" }) }),
+    );
+
+    expect(() => hub.memberStore.setRoles("grace", ["superadmin"])).toThrow(/unknown role 'superadmin'/);
+    // Rejected before the write: grace's roles are unchanged.
+    expect(hub.memberStore.get("grace")?.roles).toEqual(["member"]);
+  });
+
   it("check-in returns { token, versions } and not the roster", async () => {
     hub.invitations.create("INV-CAROL", ["member"], 60_000);
     await hub.peer.dispatch(
