@@ -104,36 +104,75 @@ export interface OriginServer {
   close(): Promise<void>;
 }
 
-/** Resolves a request path to a file inside `distDir`, refusing to escape it (e.g. via `..`). Returns `null` if the resolved path would fall outside `distDir`. */
-function resolveDistFile(distDir: string, pathname: string): string | null {
-  const relative =
-    pathname === "/" ? "index.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
+/**
+ * Resolves a request path to a file inside `distDir`, refusing to escape it
+ * (e.g. via `..`). Returns `null` -- meaning "404, not a server error" to
+ * every caller -- both when the resolved path would fall outside `distDir`
+ * AND when `pathname` carries malformed percent-encoding (e.g. a lone
+ * trailing `%`, which `decodeURIComponent` throws `URIError` on). A
+ * malformed path is not a 500: it is exactly as "not found" as any other
+ * path this server doesn't recognise, and a scanner or a stale cached link
+ * can produce one without doing anything unusual.
+ *
+ * Exported (only) so `tests/static-server.test.ts` can exercise the root-
+ * boundary check directly with a target that is genuinely outside
+ * `distDir` -- `new URL()`'s own dot-segment normalization means an actual
+ * out-of-root request is not constructible through the HTTP server's own
+ * request handling (see that test for the full explanation), which would
+ * otherwise leave this function's `target.startsWith(root + sep)` guard
+ * completely untested.
+ */
+export function resolveDistFile(distDir: string, pathname: string): string | null {
+  let relative: string;
+  try {
+    relative = pathname === "/" ? "index.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
+  } catch {
+    return null;
+  }
   const root = resolve(distDir);
   const target = resolve(root, relative);
   if (target !== root && !target.startsWith(root + sep)) return null;
   return target;
 }
 
+/** Writes `body` as the response, except for a `HEAD` request, which gets the same status/headers with no body -- Node does not strip a body from a `HEAD` response on its own. */
+function respond(
+  res: ServerResponse,
+  isHead: boolean,
+  status: number,
+  headers: Record<string, string>,
+  body: string | Buffer,
+): void {
+  res.writeHead(status, headers);
+  res.end(isHead ? undefined : body);
+}
+
 function serveFile(
   res: ServerResponse,
   filePath: string,
+  isHead: boolean,
   extraHeaders?: Record<string, string>,
 ): void {
   let body: Buffer;
   try {
     body = readFileSync(filePath);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("not found");
+    const code = (err as NodeJS.ErrnoException).code;
+    // ENOENT: no such file. EISDIR: `filePath` resolved to a real
+    // directory (e.g. a request for a bundle subdirectory with no
+    // trailing index.html of its own) -- `readFileSync` throws for both,
+    // and both mean "nothing to serve at this path," not a server error.
+    if (code === "ENOENT" || code === "EISDIR") {
+      respond(res, isHead, 404, { "Content-Type": "text/plain; charset=utf-8" }, "not found");
       return;
     }
     throw err;
   }
   const contentType = CONTENT_TYPES[extname(filePath)] ?? "application/octet-stream";
-  res.writeHead(200, { "Content-Type": contentType, ...extraHeaders }).end(body);
+  respond(res, isHead, 200, { "Content-Type": contentType, ...extraHeaders }, body);
 }
 
-function serveHttpeersConfig(res: ServerResponse, configPath: string): void {
+function serveHttpeersConfig(res: ServerResponse, configPath: string, isHead: boolean): void {
   let body: Buffer;
   try {
     body = readFileSync(configPath);
@@ -141,47 +180,67 @@ function serveHttpeersConfig(res: ServerResponse, configPath: string): void {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       // Absent config is a DIFFERENT condition from a missing route: the
       // page should be able to say "run setup", not "not found".
-      res
-        .writeHead(503, { "Content-Type": "application/json; charset=utf-8" })
-        .end(JSON.stringify({ error: 'httpeers.json not found -- run "pnpm setup" first' }));
+      respond(
+        res,
+        isHead,
+        503,
+        { "Content-Type": "application/json; charset=utf-8" },
+        JSON.stringify({ error: 'httpeers.json not found -- run "pnpm setup" first' }),
+      );
       return;
     }
     throw err;
   }
-  res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" }).end(body);
+  respond(res, isHead, 200, { "Content-Type": "application/json; charset=utf-8" }, body);
 }
 
-/** One origin's request handler: `httpeers.json`, this origin's ServiceWorker script, and everything else out of `distDir`. Every branch is wrapped so a thrown error becomes a 500, not a crashed process or a hung socket -- and a POST/PUT/etc. to any path, matched or not, is a plain 404, never routed into file-reading logic that could throw. */
+/**
+ * One origin's request handler: `httpeers.json`, this origin's
+ * ServiceWorker script, and everything else out of `distDir`.
+ *
+ * NEVER 500 ON A REQUEST SHAPE, ONLY ON A GENUINE SERVER FAULT. Every path
+ * an attacker, a scanner, or a stale cached link can drive from the
+ * request alone -- an unmatched route, a POST/PUT/etc. verb, a `..`-shaped
+ * path, malformed percent-encoding, a path that resolves to a real
+ * directory -- is handled explicitly and answered 404 (or 503 for the one
+ * "config not generated yet" case) before any file read that could throw
+ * on it runs. A POST specifically never reaches file-reading logic at
+ * all: the method check below runs first. The outer `try`/`catch` here is
+ * a last-resort net for a genuine fault (e.g. a permissions error reading
+ * `distDir` itself), not the mechanism relied on for any of the cases
+ * above -- each of those is caught at its own, more specific layer.
+ */
 function createHandler(init: OriginServerInit) {
   const swFile = init.swFile ?? "sw.js";
   const configPath = init.httpeersConfigPath ?? DEFAULT_HTTPEERS_CONFIG_PATH;
 
   return (req: IncomingMessage, res: ServerResponse): void => {
+    const isHead = req.method === "HEAD";
     try {
-      if (req.method !== "GET" && req.method !== "HEAD") {
-        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("not found");
+      if (req.method !== "GET" && !isHead) {
+        respond(res, false, 404, { "Content-Type": "text/plain; charset=utf-8" }, "not found");
         return;
       }
 
       const pathname = new URL(req.url ?? "/", "http://static-server").pathname;
 
       if (pathname === "/httpeers.json") {
-        serveHttpeersConfig(res, configPath);
+        serveHttpeersConfig(res, configPath, isHead);
         return;
       }
 
       const filePath = resolveDistFile(init.distDir, pathname);
       if (filePath == null) {
-        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("not found");
+        respond(res, isHead, 404, { "Content-Type": "text/plain; charset=utf-8" }, "not found");
         return;
       }
 
       const isSwScript = pathname === `/${swFile}`;
-      serveFile(res, filePath, isSwScript ? SW_NO_CACHE_HEADERS : undefined);
+      serveFile(res, filePath, isHead, isSwScript ? SW_NO_CACHE_HEADERS : undefined);
     } catch (err) {
       console.error("static-server: unhandled error serving request:", err);
       if (!res.headersSent) res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end("internal error");
+      res.end(isHead ? undefined : "internal error");
     }
   };
 }

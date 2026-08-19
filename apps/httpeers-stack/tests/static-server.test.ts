@@ -7,12 +7,14 @@
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createOriginServer,
   type OriginServer,
+  resolveDistFile,
   startStaticServer,
 } from "../src/static-server/main.js";
 
@@ -30,6 +32,32 @@ function rawGet(port: number, rawPath: string): Promise<number> {
     });
     req.on("error", reject);
     req.end();
+  });
+}
+
+/**
+ * Sends a raw HTTP/1.1 request over a plain TCP socket and returns the
+ * complete response text, headers and body both, exactly as it appeared on
+ * the wire. Used only for the `HEAD` tests below -- `fetch` is unsuitable
+ * there: per the Fetch spec, a `HEAD` response's body is discarded
+ * client-side unconditionally, so `(await fetch(url, {method:"HEAD"})).text()`
+ * would read `""` even against a server that incorrectly wrote real body
+ * bytes onto the socket. Reading the socket directly is the only way to
+ * observe what the server actually sent.
+ */
+function rawRequest(port: number, method: string, path: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const socket = connect(port, "127.0.0.1", () => {
+      socket.write(
+        `${method} ${path} HTTP/1.1\r\nHost: static-server\r\nConnection: close\r\n\r\n`,
+      );
+    });
+    let raw = "";
+    socket.on("data", (chunk) => {
+      raw += chunk.toString();
+    });
+    socket.on("error", reject);
+    socket.on("close", () => resolvePromise(raw));
   });
 }
 
@@ -61,6 +89,10 @@ describe("static-server: both origins", () => {
     mkdirSync(imagePeerDistDir, { recursive: true });
     writePage(appDistDir, { title: "main app" });
     writePage(imagePeerDistDir, { title: "image peer" });
+    // A real directory with no index.html of its own -- for the EISDIR
+    // regression test below (readFileSync throws EISDIR for a directory
+    // path, same shape of bug as ENOENT if not special-cased).
+    mkdirSync(join(appDistDir, "subdir"), { recursive: true });
 
     configPath = join(workDir, "httpeers.json");
     writeFileSync(
@@ -140,11 +172,88 @@ describe("static-server: both origins", () => {
     // Sent raw (bypassing `fetch`/`URL`'s own client-side normalization,
     // which would otherwise rewrite ".." away before the request left the
     // client) so this exercises the server's own handling of the literal
-    // bytes on the wire, whatever combination of `new URL()`'s path
-    // shortening and `resolveDistFile`'s explicit root check is doing the
-    // work.
+    // bytes on the wire. Over HTTP, `new URL()` (called on the raw
+    // `req.url` inside the handler, before `resolveDistFile` ever runs)
+    // already normalizes a leading ".." away to nothing -- it cannot
+    // resolve to a path above the root at all -- so this 404 comes from
+    // the pathname resolving to a nonexistent file (ENOENT) under
+    // `distDir`, not from `resolveDistFile`'s own root-boundary check.
+    // That check is real but structurally unreachable via this server's
+    // own `new URL()`-based routing -- see the direct unit test below for
+    // where it actually gets exercised.
     const status = await rawGet(servers.imagePeerPort, "/../app/index.html");
     expect(status).toBe(404);
+  });
+
+  it("returns 404, not 500, for a malformed percent-encoded path", async () => {
+    // `decodeURIComponent` throws `URIError` on an unterminated "%" --
+    // `new URL()` does not validate/reject this during parsing, so it
+    // reaches `resolveDistFile` unchanged. This is that regression,
+    // asserted directly: a lone "%" used to 500 before this fix.
+    const status = await rawGet(servers.appPort, "/%");
+    expect(status).toBe(404);
+  });
+
+  it("returns 404, not 500, for a path that resolves to a real directory", async () => {
+    // `readFileSync` throws EISDIR for a directory path -- `subdir` exists
+    // under `appDistDir` (see beforeEach) with no `index.html` of its own.
+    // This used to 500 before ENOENT and EISDIR were both special-cased.
+    const status = await rawGet(servers.appPort, "/subdir");
+    expect(status).toBe(404);
+  });
+
+  it("HEAD /httpeers.json sends no body bytes on the wire", async () => {
+    // Node's http.ServerResponse already tracks `req.method === "HEAD"`
+    // internally and drops `write`/`end` payloads for it -- verified
+    // directly (raw TCP capture, both against this code and against the
+    // pre-fix `serveHttpeersConfig`/`serveFile`, which called
+    // `res.end(body)` unconditionally): neither sent a body byte over the
+    // wire for a HEAD request. So this isn't a regression test for a
+    // fixed bug -- it's a direct assertion of the wire-level contract,
+    // using a raw socket specifically because `fetch`'s own HEAD handling
+    // (spec-mandated body discard) would pass here even against a server
+    // that DID send a body, and so would prove nothing.
+    const raw = await rawRequest(servers.appPort, "HEAD", "/httpeers.json");
+    const [headPart, ...bodyParts] = raw.split("\r\n\r\n");
+    expect(headPart).toMatch(/^HTTP\/1\.1 200/);
+    expect(bodyParts.join("\r\n\r\n")).toBe("");
+  });
+
+  it("HEAD / (index.html) also sends no body bytes on the wire", async () => {
+    const raw = await rawRequest(servers.appPort, "HEAD", "/");
+    const [headPart, ...bodyParts] = raw.split("\r\n\r\n");
+    expect(headPart).toMatch(/^HTTP\/1\.1 200/);
+    expect(bodyParts.join("\r\n\r\n")).toBe("");
+  });
+});
+
+describe("static-server: resolveDistFile's root-boundary check, directly", () => {
+  it("refuses a path that resolves outside distDir even when nothing upstream would normalize it away first", () => {
+    // `resolveDistFile` is called with an already-decoded, already-
+    // "shortened" pathname whenever it runs behind this server's own
+    // `new URL()`-based routing (see the HTTP-level '..' test above,
+    // where that normalization means an actual escape can never reach
+    // this function over the wire). Calling it directly, with a raw
+    // relative path a caller could construct without going through that
+    // normalization, is the only way to exercise the
+    // `target.startsWith(root + sep)` guard itself.
+    const distDir = mkdtempSync(join(tmpdir(), "httpeers-static-boundary-"));
+    try {
+      const result = resolveDistFile(distDir, "/../../../../etc/passwd");
+      expect(result).toBeNull();
+    } finally {
+      rmSync(distDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still resolves an ordinary in-root path", () => {
+    const distDir = mkdtempSync(join(tmpdir(), "httpeers-static-boundary-"));
+    try {
+      const result = resolveDistFile(distDir, "/index.html");
+      expect(result).toBe(join(distDir, "index.html"));
+    } finally {
+      rmSync(distDir, { recursive: true, force: true });
+    }
   });
 });
 
