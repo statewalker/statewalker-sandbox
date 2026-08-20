@@ -19,12 +19,17 @@
 #   RELAY_PORT -- the relay's WS listen port (default 9090, matches
 #                 relay/main.ts's own default -- used here only to know
 #                 which local port to poll for "the relay is up").
+#   HUB_READY_FILE -- where the hub records that it has finished
+#                 bootstrapping (default .httpeers/hub-ready, matches
+#                 hub/main.ts's DEFAULT_HUB_READY_PATH). This script waits
+#                 for it; see the hub section below.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
 RELAY_PORT="${RELAY_PORT:-9090}"
+HUB_READY_FILE="${HUB_READY_FILE:-$ROOT/.httpeers/hub-ready}"
 
 if [[ ! -f "$ROOT/httpeers.json" ]]; then
   echo "[httpeers-stack] httpeers.json not found -- run \"pnpm setup\" first." >&2
@@ -42,6 +47,10 @@ cleanup() {
     fi
   done
   wait 2>/dev/null || true
+  # The hub removes this itself on a clean SIGTERM; removing it here too
+  # covers the hub dying without getting the chance, so the next run never
+  # reads a ready marker left by a hub that is gone.
+  rm -f "$HUB_READY_FILE"
 }
 trap cleanup EXIT INT TERM
 
@@ -70,19 +79,45 @@ if [[ "$relay_up" != true ]]; then
   exit 1
 fi
 
+# Any file left by a previous run is stale by definition -- the wait below
+# would otherwise pass instantly on a hub that has not started yet.
+rm -f "$HUB_READY_FILE"
+
 echo "[httpeers-stack] starting hub..."
-(cd "$ROOT" && exec pnpm run start:hub) &
+(cd "$ROOT" && HUB_READY_FILE="$HUB_READY_FILE" exec pnpm run start:hub) &
 hub_pid=$!
 pids+=("$hub_pid")
 
-# The hub reserves a slot through the relay rather than binding a fixed,
-# externally-knowable port of its own -- httpeers.json's own shape
-# (relayAddrs + hubPeerId, no hub port) reflects that there is nothing to
-# TCP-poll it on. A short fixed pause is enough to catch an immediate
-# failure (a missing/corrupt key, a crash on startup) before moving on.
-sleep 1
-if ! kill -0 "$hub_pid" 2>/dev/null; then
-  echo "[httpeers-stack] hub exited immediately after starting" >&2
+# THE HUB RESERVES A SLOT THROUGH THE RELAY, and this script waits until it
+# actually has one. httpeers.json's own shape (relayAddrs + hubPeerId, no hub
+# port) says a page reaches the hub through the relay and not at an address
+# of its own -- which is true, and as of Task 20 it is also true of the
+# running process: hub/main.ts dials the relay and holds a `/p2p-circuit`
+# reservation before it reports ready. (Before Task 20 this comment claimed
+# that reservation as fact while the hub was TCP-only and no page could reach
+# it at all.)
+#
+# The wait is on the hub's ready FILE, not on a port and not on a log line.
+# A TCP probe would not do: libp2p opens its listeners during node startup,
+# BEFORE the relay grants anything, so an open hub port proves the process is
+# alive and says nothing about reachability. And this script does not parse
+# child stdout, for the reasons in its own header. hub/main.ts writes that
+# file after the reservation and only after it.
+echo "[httpeers-stack] waiting for the hub to reserve a slot on the relay..."
+hub_up=false
+for _ in $(seq 1 60); do
+  if ! kill -0 "$hub_pid" 2>/dev/null; then
+    echo "[httpeers-stack] hub exited before it finished starting" >&2
+    exit 1
+  fi
+  if [[ -f "$HUB_READY_FILE" ]]; then
+    hub_up=true
+    break
+  fi
+  sleep 0.5
+done
+if [[ "$hub_up" != true ]]; then
+  echo "[httpeers-stack] timed out waiting for the hub to reserve a slot on the relay" >&2
   exit 1
 fi
 

@@ -34,31 +34,34 @@
  * itself (revocation cache wiring, the monotonic-`seq` heartbeat) — this file
  * adds the relay/hub/deployment envelope around it, and clones nothing.
  *
- * WHAT LEG 1 CANNOT REACH, STATED HERE RATHER THAN IMPLIED. In the browser
- * the hop from one member peer to another is
- * `<relay>/p2p-circuit/webrtc/p2p/<peer>` — a relayed dial UPGRADED to
- * WebRTC (`src/browser/join.ts`'s `preDialPeer`). Under Node this harness
- * dials member-to-member over loopback TCP instead, for two reasons that are
- * findings, not conveniences, and are written up in the Task 14 report:
+ * THE HUB HOLDS A REAL CIRCUIT RESERVATION HERE (Task 20). `startStack`
+ * hands `startHub` the relay's address, so the hub dials the relay and waits
+ * for a `/p2p-circuit` reservation before it reports ready — the deployment
+ * shape a browser page actually needs, and the one Task 14 found missing.
+ * `hubCircuitAddr` below is that address, and `node-consumer.test.ts`
+ * asserts it rather than inferring it from the absence of an error.
  *
- *   - a bare `/p2p-circuit` connection is a LIMITED connection, and libp2p
- *     refuses to open `/httpeers/1.0.0` on one: the call rejects with
- *     `LimitedConnectionError` ("Cannot open protocol stream on limited
- *     connection"), which `mapPeerCallError` surfaces as
- *     `UnknownPeerCallError`. `node-consumer.test.ts` pins that behaviour
- *     explicitly rather than leaving it as folklore — it is precisely why
- *     the browser path needs the WebRTC upgrade at all;
- *   - the WebRTC upgrade itself is unavailable to Node here:
- *     `@libp2p/webrtc` reaches for `node-datachannel`'s native binary, whose
- *     install script has not run in this workspace. Task 15's real browsers
- *     have WebRTC natively and are the right place for that leg.
+ * TWO WAYS TO REACH THE HUB, BOTH EXERCISED, AND THE DEFAULT IS THE CHEAP
+ * ONE. `JoinInit.hubDial` picks:
  *
- * Separately: the hub, as `startHub` builds it, listens on TCP ONLY
- * (`httpeers.core`'s `createNode` configures `tcp()` and nothing else) and
- * therefore holds no reservation of its own — so its addresses are
- * undialable from a browser today. That is a real gap in the deployment,
- * reported rather than papered over; this harness dials the hub over its TCP
- * address because that is the only address the hub has.
+ *   - `"tcp"` (default) — dial the hub's loopback TCP address directly. What
+ *     a Node peer on the same host does, and what the eight tests that are
+ *     about mesh BEHAVIOUR rather than about reachability use, because it
+ *     adds no ICE negotiation to a suite that is already timing-sensitive.
+ *   - `"webrtc"` — `src/browser/join.ts`'s own `preDialPeer`, dialing
+ *     `<relay>/p2p-circuit/webrtc/p2p/<hub>`: byte for byte the address a
+ *     page dials, through the production function, over the real relay. One
+ *     test uses it, and it is the acceptance signal for Task 20.
+ *
+ * A bare `/p2p-circuit` connection remains a LIMITED connection on which
+ * libp2p refuses to open `/httpeers/1.0.0` — that is exactly WHY the
+ * `/webrtc` suffix above is mandatory rather than decorative, and
+ * `node-consumer.test.ts` still pins the refusal.
+ *
+ * WHAT LEG 1 STILL CANNOT REACH. Member-to-member hops here stay on loopback
+ * TCP: a page reaching another page over WebRTC involves a real browser's
+ * ICE stack and its ServiceWorker edge, which is Task 15's, and nothing in
+ * this file claims it.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,15 +71,17 @@ import { yamux } from "@chainsafe/libp2p-yamux";
 import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
 import { identify } from "@libp2p/identify";
 import { tcp } from "@libp2p/tcp";
+import { webRTC } from "@libp2p/webrtc";
 import { webSockets } from "@libp2p/websockets";
 import { multiaddr } from "@multiformats/multiaddr";
 import type { AccessTree, Libp2p, Mounts, PeerIdStr } from "@statewalker/httpeers.core";
 import { createLibp2p } from "libp2p";
-import { redeemInvitation } from "../../src/browser/join.js";
+import { preDialPeer, redeemInvitation } from "../../src/browser/join.js";
 import { startHub } from "../../src/hub/main.js";
 import type { MeshView } from "../../src/hub/mesh-view.js";
 import { VOCABULARY } from "../../src/policy.js";
 import { startRelay } from "../../src/relay/main.js";
+import { dialRelay, waitForCircuitReservation } from "../../src/reservation.js";
 import { loadOrGenerateKey, peerIdOf } from "../../src/setup/keys.js";
 import { buildTestPeer, type TestAdvertisement, type TestPeer } from "../support/mesh.js";
 
@@ -122,10 +127,12 @@ export interface StackPeer extends TestPeer {
   /**
    * Start beating on a timer, the deterministic stand-in for what
    * `src/browser/join.ts`'s `startJoin` does in a page. Not `startJoin`
-   * itself: its keepalive re-dials over `/p2p-circuit/webrtc/...`, which
-   * needs the WebRTC transport this harness cannot load (module comment), and
-   * a suite that measures revocation latency wants to drive individual beats
-   * itself rather than race a timer it does not control.
+   * itself, and no longer for the reason this comment used to give (its
+   * keepalive re-dials over `/p2p-circuit/webrtc/...`, which this harness
+   * now CAN do — Task 20). The remaining reason stands on its own: a suite
+   * that measures revocation latency and TTL sweeps to the millisecond wants
+   * to drive individual beats itself rather than race a 5-second timer it
+   * does not control.
    */
   startBeating: (advertisements?: TestAdvertisement[]) => void;
   stopBeating: () => void;
@@ -158,6 +165,13 @@ export interface JoinInit {
   accessTree: AccessTree;
   /** This peer's own mount table. Omit for a pure consumer that serves nothing. */
   mounts?: Mounts;
+  /**
+   * How this peer reaches the hub before redeeming its invitation. Defaults
+   * to `"tcp"`; see the module comment's "TWO WAYS TO REACH THE HUB" note
+   * for why the browser-shaped `"webrtc"` path is opt-in rather than the
+   * default.
+   */
+  hubDial?: "tcp" | "webrtc";
 }
 
 export interface Stack {
@@ -165,6 +179,16 @@ export interface Stack {
   /** The relay's dialable `/ws` multiaddr on loopback, including its `/p2p/<relayPeerId>` suffix — `httpeers.json`'s `relayAddrs[0]` in a real deployment. */
   relayAddr: string;
   hubPeerId: PeerIdStr;
+  /**
+   * The hub's own relayed address — the one `startHub` waited for before
+   * reporting ready, and the one a browser page dials (after appending
+   * nothing: `preDialPeer` composes `<relayAddr>/p2p-circuit/webrtc/p2p/<hub>`
+   * from the relay address instead, and this is the same hop libp2p resolves
+   * it to). `undefined` is impossible here — `startStack` always passes a
+   * `relayAddr` — and the assertion that it is present is
+   * `node-consumer.test.ts`'s, not this file's.
+   */
+  hubCircuitAddr: string | undefined;
   /** The hub's own registries, for the admin-side operations a test drives directly (creating invitations). */
   hub: Awaited<ReturnType<typeof startHub>>;
   /** Create a fresh invitation carrying `roles` and return its id. */
@@ -176,53 +200,22 @@ export interface Stack {
   stop: () => Promise<void>;
 }
 
-/** How often `awaitReservation` re-checks, and for how long — the same 250 ms x 40 schedule `src/browser/node-profile.ts` polls on. */
-const RESERVATION_POLL_INTERVAL_MS = 250;
-const RESERVATION_POLL_ATTEMPTS = 40;
-
 /**
- * Poll `node.getMultiaddrs()` until the relay has actually granted a
- * reservation. `node.dial(relay)` resolving means only that the WebSocket
- * opened; the reservation lands asynchronously afterwards.
+ * A member peer's libp2p node. `webSockets` + `circuitRelayTransport` +
+ * `webRTC` are the browser profile's own three
+ * (`src/browser/node-profile.ts`), so the relay dial, the reservation and the
+ * WebRTC upgrade to the hub are all the real thing; `tcp` is the one addition
+ * Node needs, for the direct member-to-member hop a page would make over
+ * WebRTC instead (see the module comment).
  *
- * DUPLICATED FROM `src/browser/node-profile.ts`'s `waitForCircuitReservation`
- * ON PURPOSE, AND THE DUPLICATION IS A FINDING. That function is
- * transport-agnostic and would fit here unchanged, but it lives in a module
- * whose top-level imports include `@libp2p/webrtc` — importing it from Node
- * pulls in `node-datachannel`'s native binary and crashes the test process
- * before a single assertion runs. Reported rather than fixed here: extracting
- * the poll would be a change to browser runtime code, which is not Task 14's
- * to make.
- */
-async function awaitReservation(node: Libp2p): Promise<string> {
-  for (let attempt = 0; attempt < RESERVATION_POLL_ATTEMPTS; attempt++) {
-    const found = node
-      .getMultiaddrs()
-      .map((addr) => addr.toString())
-      .find((addr) => addr.includes("p2p-circuit"));
-    if (found != null) return found;
-    await new Promise<void>((resolve) => setTimeout(resolve, RESERVATION_POLL_INTERVAL_MS));
-  }
-  throw new Error(
-    `harness: no p2p-circuit reservation appeared within ${
-      RESERVATION_POLL_ATTEMPTS * RESERVATION_POLL_INTERVAL_MS
-    }ms of dialing the relay.`,
-  );
-}
-
-/**
- * A member peer's libp2p node. `webSockets` + `circuitRelayTransport` are the
- * browser profile's own two (`src/browser/node-profile.ts`), so the relay dial
- * and the reservation are the real thing; `tcp` is the one addition Node
- * needs, because the hub `startHub` builds listens on TCP and nothing else
- * (see the module comment). `webRTC`, the browser's third transport, is
- * deliberately absent — see the module comment for what that costs and why it
- * is unavailable here anyway.
+ * `/webrtc` IS IN `listen` FOR THE SAME REASON THE HUB HAS IT: without it,
+ * `webRTC()` never negotiates, and a `.../p2p-circuit/webrtc/p2p/<hub>` dial
+ * has no local end to build. It costs a peer that never uses it nothing.
  */
 async function createStackNode(): Promise<Libp2p> {
   return createLibp2p({
-    addresses: { listen: ["/ip4/127.0.0.1/tcp/0", "/p2p-circuit"] },
-    transports: [webSockets(), circuitRelayTransport(), tcp()],
+    addresses: { listen: ["/ip4/127.0.0.1/tcp/0", "/p2p-circuit", "/webrtc"] },
+    transports: [webSockets(), circuitRelayTransport(), webRTC(), tcp()],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],
     services: { identify: identify() },
@@ -259,14 +252,26 @@ export async function startStack(): Promise<Stack> {
     );
   }
 
+  // `relayAddr` is what makes this the DEPLOYMENT shape rather than a
+  // loopback approximation of it: the hub dials the relay and holds a
+  // reservation before `startHub` resolves, so by the time any peer below
+  // joins, the hub is reachable the way a page reaches it.
   const hub = await startHub({
     stateFilePath: join(dir, "hub-state.json"),
     keyPath: hubKeyPath,
     listen: ["/ip4/127.0.0.1/tcp/0"],
     presenceTtlMs: PRESENCE_TTL_MS,
+    relayAddr,
   });
-  const hubAddr = hub.peer.addrs()[0];
-  if (hubAddr == null) throw new Error("harness: the hub reported no listen address");
+  // The hub's DIRECT address, for the `hubDial: "tcp"` path — picked by
+  // shape, not by index: `addrs()` now carries the relayed entries too, and
+  // `[0]` silently became a lottery the moment it did.
+  const hubAddr = hub.peer.addrs().find((addr) => !addr.includes("p2p-circuit"));
+  if (hubAddr == null) {
+    throw new Error(
+      `harness: the hub reported no direct listen address; got ${hub.peer.addrs().join(", ")}`,
+    );
+  }
 
   const peers: StackPeer[] = [];
   const nodes: Libp2p[] = [];
@@ -276,6 +281,7 @@ export async function startStack(): Promise<Stack> {
     relayPeerId,
     relayAddr,
     hubPeerId,
+    hubCircuitAddr: hub.circuitAddr,
     hub,
 
     invite(roles) {
@@ -288,8 +294,8 @@ export async function startStack(): Promise<Stack> {
     async join(init) {
       const node = await createStackNode();
       nodes.push(node);
-      await node.dial(multiaddr(relayAddr));
-      const circuitAddr = await awaitReservation(node);
+      await dialRelay(node, relayAddr);
+      const circuitAddr = await waitForCircuitReservation(node);
 
       const peer = await buildTestPeer({
         node,
@@ -298,10 +304,12 @@ export async function startStack(): Promise<Stack> {
         vocabulary: VOCABULARY,
         hubPeerId,
       });
-      // The hub's only address is a TCP one — see the module comment. This is
-      // the deployment's analogue of `join.ts`'s `preDialPeer`: establish the
-      // connection explicitly before any protocol call rides it.
-      await node.dial(multiaddr(hubAddr));
+      // Establish the connection to the hub explicitly before any protocol
+      // call rides it. `"webrtc"` is `src/browser/join.ts`'s OWN
+      // `preDialPeer`, unmodified, against the same address a page composes;
+      // `"tcp"` is the direct same-host dial. See the module comment.
+      if (init.hubDial === "webrtc") await preDialPeer(node, relayAddr, hubPeerId);
+      else await node.dial(multiaddr(hubAddr));
 
       const redemption = await redeemInvitation(peer, hubPeerId, stack.invite(init.roles));
 

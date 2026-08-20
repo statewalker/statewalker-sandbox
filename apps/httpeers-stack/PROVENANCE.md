@@ -1638,3 +1638,104 @@ Re-measured over 8 consecutive runs of the new suite: streaming margin 199.7–2
 left the view 2230–2278 ms after its last accepted heartbeat against the 3500 ms budget. Full app
 suite 172/172 on 6 consecutive runs; `httpeers.core` 148/148 and still untouched; all typechecks
 clean.
+
+## Task 20 — the hub reserves through the relay
+
+Inserted mid-plan, after Task 14 (leg 1) proved at runtime that **no browser could reach the
+hub**, which made every browser-side acceptance criterion unreachable. `startHub` built its node
+through `httpeers.core`'s `createNode` (`transport-duplex.ts`, `transports: [tcp()]`), so the hub's
+transports were `['@libp2p/tcp']`, its only address `/ip4/127.0.0.1/tcp/<ephemeral>`, it held no
+circuit reservation, and dialing the relay's `/ws` address failed outright with *"The dial request
+has no valid addresses for peer"*. Meanwhile `src/browser/peer-runtime.ts` pre-dialed
+`${relayAddr}/p2p-circuit/webrtc/p2p/${hubPeerId}` and `scripts/start.sh:78` stated as fact that
+"the hub reserves a slot through the relay". It did not.
+
+**Door taken: 1 — the hub speaks WebRTC**, the spec's own topology (§9, §11). Door 2
+(`runOnLimitedConnection`) is a change to `packages/httpeers.core`, which this task may not make,
+and circuit-relay-v2's 128 KB / 2 min default limits would break image streaming anyway. Door 3
+(the hub listening on `/ws` at a knowable address) is a spec-level topology decision belonging to
+the owner. Neither was needed: Door 1 works here, proven at runtime rather than argued.
+
+### Step 1 (the gate): why `@libp2p/webrtc` could not load, and what fixed it
+
+`node-datachannel@0.32.3`'s `scripts.install` is
+`prebuild-install -r napi || (npm install … && npm run _prebuild)`. pnpm 10 blocks dependency
+lifecycle scripts unless the package is listed in `onlyBuiltDependencies`, and the umbrella
+declares that setting **nowhere** (`pnpm-workspace.yaml`, `.npmrc`, root `package.json` — all
+checked). So the script never ran and `.../node-datachannel/build/` did not exist. It is not a
+broken package and not a platform limitation: running the package's own `prebuild-install` in a
+scratch copy downloaded `node-datachannel-v0.32.3-napi-v8-linux-x64.tar.gz` (HTTP 200) and
+unpacked `build/Release/node_datachannel.node` — a **prebuilt N-API binary**, no compilation, no
+toolchain involved.
+
+**Required umbrella-level change (outside this submodule, requested from the coordinator):** add
+to the umbrella root's `pnpm-workspace.yaml`
+
+```yaml
+onlyBuiltDependencies:
+  - node-datachannel
+```
+
+then `pnpm rebuild node-datachannel`. Until that lands the binary is present in this working
+tree only because it was placed there by hand, and it will not survive a reinstall.
+
+### What changed
+
+| File | Change |
+| --- | --- |
+| `src/hub/node-profile.ts` (new) | The Node-side mirror of `src/browser/node-profile.ts`. `tcp()` **and** `webSockets()`, `webRTC()`, `circuitRelayTransport()`, with identify; `addresses.listen` is `[...listen, "/p2p-circuit", "/webrtc"]`. TCP stays — leg 1's own Node peers still reach the hub that way, and dropping it would break the suite that found this. |
+| `src/reservation.ts` (new) | `dialRelay` + `waitForCircuitReservation` + their two constants, extracted from `src/browser/node-profile.ts`, which now re-exports them. Transport-neutral; three callers now need them. This **removes** the duplication Task 14 reported as a finding — `tests/e2e/harness.ts`'s hand-copied `awaitReservation` is gone. |
+| `src/hub/main.ts` | `StartHubInit` gains `node` (the seam `peer-runtime.ts` already used) and `relayAddr`. `startHub` builds the node from the profile with the hub's own `privateKey`, dials the relay, and **waits for the reservation before it resolves**; a hub that cannot reserve throws with the relay address and the remedy in the message. Teardown stops the node it built (`createPeer` never stops a supplied node), in a `finally`, matching `peer-runtime.ts`. Returns `node` and `circuitAddr`. |
+| `src/hub/main.ts` run-as-a-process block | `/ip4/0.0.0.0/tcp/0` → `/ip4/0.0.0.0/tcp/${HUB_PORT}` (default 9091, next to the relay's 9090): the old ephemeral port was written nowhere and could never be dialed. Reads `relayAddrs[0]` from `httpeers.json` (`RELAY_ADDR` overrides), writes `.httpeers/hub-ready` **after** the reservation, prints the relayed address, and gains the SIGINT/SIGTERM handlers the relay has had since Task 7 and the hub never did. |
+| `src/browser/peer-runtime.ts` | `preDialPeer` was un-caught, so `startBrowserPeer` threw libp2p's "The dial request has no valid addresses for peer" — a sentence naming neither the hub, the relay, nor the reservation, and the sentence that sent two investigations down the wrong path. Now caught and re-thrown naming all three plus the remedy; the relay dial and the reservation wait get the same treatment. Separately, a `startBrowserPeer` that failed partway **leaked its libp2p node** (relay WebSocket open, reservation held, one more on every page retry) — every step is now unwound on failure, in reverse. |
+| `scripts/start.sh` | Line 78's claim is now true. The blind `sleep 1` is replaced by a real wait on `.httpeers/hub-ready`. Not a TCP probe: libp2p opens its listeners during `node.start()`, **before** the relay grants anything, so an open hub port proves the process is alive and says nothing about reachability. Not a parsed log line either — this script's own header refuses to scrape child stdout. Stale files are removed before the wait and after teardown. |
+| `package.json` | `@libp2p/tcp` moved `devDependencies` → `dependencies`: `src/hub/node-profile.ts` is production code and imports it. |
+| `tests/e2e/harness.ts` | `startStack` passes `relayAddr` to `startHub`, exposes `hubCircuitAddr`, and picks the hub's direct address **by shape** rather than `addrs()[0]` (which became a lottery the moment relayed entries joined the list). Member nodes gain `webRTC()` and `/webrtc`. `JoinInit.hubDial` selects `"tcp"` (default) or `"webrtc"`, the latter calling `src/browser/join.ts`'s own `preDialPeer` unmodified. |
+| `tests/e2e/node-consumer.test.ts` | Two new tests, +2 (172 → 174). |
+
+### The acceptance signal, asserted rather than inferred
+
+1. **`TASK 20: the hub advertises a /p2p-circuit address`** — `stack.hub.peer.addrs()` contains
+   circuit addresses; each names *this* relay and *this* hub; one carries the `/webrtc` suffix;
+   `startHub` **returned** the address, which is what proves it existed before `startHub` resolved
+   and therefore that a page cannot race the bootstrap. The direct TCP address is still present.
+2. **`TASK 20: a peer that reaches the hub the way a BROWSER does`** — a peer given the hub's
+   address by no route at all dials `<relay>/p2p-circuit/webrtc/p2p/<hub>` through the production
+   `preDialPeer`, redeems an invitation over it (an `/httpeers/1.0.0` request, not a weaker
+   proxy), and its token verifies against the hub. The live connection is then asserted to be
+   relayed, `/webrtc`-upgraded, and **not limited**; a second ordinary mesh call over the same
+   connection returns 200, so this is not a bootstrap path that happens to work once.
+
+Task 14's limited-connection refusal test is untouched and still passes — it is *why* the
+`/webrtc` upgrade is mandatory rather than decorative.
+
+**Negative control.** With `relayAddr` removed from the harness's `startHub` call (the pre-Task-20
+arrangement), both new tests fail — the first on `expected 0 to be greater than 0`, i.e. no circuit
+address at all — and the other nine still pass. The assertions bite.
+
+### Verification
+
+```
+$ (apps/httpeers-stack) pnpm exec vitest run --no-file-parallelism
+      Tests  174 passed (174)                 # 172 before, +2 new; 5 consecutive full runs
+$ (apps/httpeers-stack) pnpm exec vitest run --no-file-parallelism tests/e2e/node-consumer.test.ts
+      Tests  11 passed (11)                   # 8 consecutive runs, no flake
+$ (packages/httpeers.core) pnpm exec vitest run --no-file-parallelism
+      Tests  148 passed (148)                 # untouched by this task
+$ tsc --noEmit && tsc -p tsconfig.tests.json --noEmit     # both clean, app and core
+```
+
+The real deployment was also run (`pnpm setup` then `scripts/start.sh`): the hub printed
+`hub relayed addr: …/p2p-circuit/webrtc/p2p/<hub>`, the script's readiness wait gated on it, and
+the new SIGINT handler tore the hub down cleanly.
+
+### Defects found in `httpeers.core`, reported not fixed (out of this task's scope)
+
+- **`CreatePeerInit.privateKey`'s doc comment is wrong.** It says the field is "ignored when `node`
+  is supplied (that node's identity is already fixed)". `peer.ts` skips *generating* a key for a
+  supplied node, but `mintTokenForMounts` still closes over whatever `privateKey` it was given and
+  throws lazily when there was none. A hub that believed the comment and dropped the field would
+  fail at its first invitation redemption, not at startup. `src/hub/main.ts` passes both and says
+  why at the call site.
+- `createNode`'s TCP-only transport list is the root cause this task worked around rather than
+  fixed; `createPeer`'s `node` seam is the sanctioned way around it and is what was used.

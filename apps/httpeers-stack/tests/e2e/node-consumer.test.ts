@@ -28,6 +28,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { peerIdFromString } from "@libp2p/peer-id";
 import type { AccessTree } from "@statewalker/httpeers.core";
 import { createMounts, PeerCallError, verifyToken } from "@statewalker/httpeers.core";
 import type { FilesApi, ListOptions, ReadOptions } from "@statewalker/webrun-files";
@@ -333,6 +334,86 @@ describe("Task 14: a Node consumer over the real relay + hub", () => {
     });
     expect(allowed.status).toBe(200);
   });
+
+  it("TASK 20: the hub advertises a /p2p-circuit address -- it holds a real reservation on the relay", async () => {
+    // The acceptance signal Task 20 exists for, in its weakest necessary
+    // form. Before it, `startHub` built its node through `httpeers.core`'s
+    // `createNode` (transports: `[tcp()]`), so the hub's only address was
+    // `/ip4/127.0.0.1/tcp/<ephemeral>` and no browser could reach it at all.
+    const addrs = stack.hub.peer.addrs();
+    const circuit = addrs.filter((addr) => addr.includes("p2p-circuit"));
+    expect(circuit.length).toBeGreaterThan(0);
+
+    // The reservation is on THIS deployment's relay and is FOR the hub --
+    // not some other relay, and not some other peer's slot.
+    for (const addr of circuit) {
+      expect(addr).toContain(stack.relayPeerId);
+      expect(addr).toContain(stack.hubPeerId);
+    }
+
+    // One of them carries the `/webrtc` suffix: that is the address
+    // `src/browser/join.ts`'s `preDialPeer` resolves to, and the next test
+    // pins that a bare circuit address without it does not work.
+    expect(circuit.some((addr) => addr.includes("/webrtc"))).toBe(true);
+
+    // `startHub` RETURNED it, which is the part that matters for ordering:
+    // the address was present before `startHub` resolved, so a page that
+    // reads httpeers.json and dials immediately cannot race the bootstrap.
+    expect(stack.hubCircuitAddr).toBeDefined();
+    expect(circuit).toContain(stack.hubCircuitAddr);
+
+    // The direct TCP address is still there -- Node peers (every other test
+    // in this file) still reach the hub that way.
+    expect(addrs.some((addr) => addr.startsWith("/ip4/127.0.0.1/tcp/"))).toBe(true);
+  });
+
+  it("TASK 20: a peer that reaches the hub the way a BROWSER does -- over the relay, upgraded to WebRTC -- completes a real /httpeers/1.0.0 call", async () => {
+    // The strong form, and the one that would have caught the gap: this peer
+    // is given the hub's address by no route at all. It dials
+    // `<relay>/p2p-circuit/webrtc/p2p/<hub>` through `src/browser/join.ts`'s
+    // OWN `preDialPeer` -- the production function, unmodified -- and then
+    // redeems an invitation over that connection, which is an
+    // `/httpeers/1.0.0` request and nothing weaker.
+    const browserShaped = await stack.join({
+      roles: ["member"],
+      accessTree: SERVES_NOTHING,
+      hubDial: "webrtc",
+    });
+
+    // `stack.join` already redeemed an invitation over this connection; a
+    // token that verifies against the hub is proof the protocol stream
+    // opened, was served, and came back.
+    const claims = await verifyToken(browserShaped.token, { issuer: stack.hubPeerId });
+    expect(claims?.sub).toBe(browserShaped.peerId);
+
+    // AND the connection it rode really is the relayed, WebRTC-upgraded one
+    // -- not a TCP fallback libp2p found on its own. Asserted on the live
+    // connection rather than inferred from the dial having succeeded.
+    const conns = browserShaped.libp2p.getConnections(peerIdFromString(stack.hubPeerId));
+    const webrtc = conns.filter((conn) => conn.remoteAddr.toString().includes("/webrtc"));
+    expect(webrtc.length).toBeGreaterThan(0);
+    for (const conn of webrtc) {
+      expect(conn.remoteAddr.toString()).toContain("p2p-circuit");
+      // NOT a limited connection -- the whole point of the upgrade. The next
+      // test shows what happens without it. Nullish rather than strictly
+      // `undefined`: libp2p's own type is `limits?: ConnectionLimits`, and
+      // whether an unlimited connection carries `undefined` or `null` is its
+      // business, not this assertion's.
+      expect(conn.limits ?? null).toBeNull();
+    }
+
+    // And a second, ordinary mesh call over the same connection, so this is
+    // not a one-shot bootstrap path that happens to work once.
+    const res = await browserShaped.call(stack.hubPeerId, "/.well-known/mesh", {
+      token: browserShaped.token,
+    });
+    expect(res.status).toBe(200);
+    console.log(
+      `[task-20] browser-shaped hub dial: ${webrtc[0]?.remoteAddr.toString()} (limits: ${String(
+        webrtc[0]?.limits,
+      )})`,
+    );
+  }, 30_000);
 
   it("an httpeers call over a bare /p2p-circuit connection is refused by libp2p itself -- why the browser leg needs the WebRTC upgrade", async () => {
     // NOT a wish-list item: this pins the reason `src/browser/join.ts`'s
