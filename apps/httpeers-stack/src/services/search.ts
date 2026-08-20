@@ -61,6 +61,31 @@ export const fixtureUpstream: SearchUpstream = async (query) => {
   );
 };
 
+/**
+ * The hub's own advertisement for this service — the THIRD of the three
+ * pieces the design record §5.2 says search is made of ("a handler plus its
+ * `.access` entry plus its advertisement, so relocating it to a standalone
+ * peer later is a change of wiring, not of code"). Task 8 built the first
+ * two and left this one unwritten, which made search undiscoverable: nothing
+ * in this app ever posted it, the hub does not heartbeat itself, and
+ * `/.well-known/mesh` builds its `advertisements` list purely from what
+ * peers posted on their own heartbeats — so a consumer filtering the view by
+ * `kind` found the image peer and nothing else. `hub/endpoints.ts` posts this
+ * into its own advertisement store at construction time; see that file.
+ *
+ * `kind` IS THE DISCOVERY KEY, and it is what a consumer filters on — never
+ * a peer id. Keeping the literal here, next to the handler and beside
+ * `policy.ts`'s `"/search"` `.access` entry, is what makes "relocate search
+ * to its own peer" a wiring change: the new peer posts this same
+ * advertisement on its own heartbeat and every consumer keeps working
+ * unchanged.
+ */
+export const SEARCH_ADVERTISEMENT = {
+  id: "search",
+  kind: "search",
+  title: "Search",
+} as const;
+
 export interface SearchEndpointInit {
   upstream: SearchUpstream;
 }

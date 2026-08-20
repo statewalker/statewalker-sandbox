@@ -39,12 +39,12 @@ import {
   lookupPeer,
 } from "@statewalker/httpeers.core";
 import { Hono } from "hono";
+import type { SearchUpstream } from "../services/search.js";
+import { createSearchEndpoint, fixtureUpstream, SEARCH_ADVERTISEMENT } from "../services/search.js";
 import { createAdminEndpoints } from "./admin.js";
 import type { AdvertisementPayload } from "./mesh-view.js";
 import { buildMeshView } from "./mesh-view.js";
 import type { InvitationStore } from "./persist.js";
-import { createSearchEndpoint, fixtureUpstream } from "../services/search.js";
-import type { SearchUpstream } from "../services/search.js";
 
 /** The capability that grants admin visibility — sees `hidden` members and gates `/admin/*` (Task 8's `DELETE /admin/members/{peerId}` included). */
 export const ADMIN_CAPABILITY = "std:mesh.admin";
@@ -91,9 +91,7 @@ export function createTestSurfaceHandler(selfPeerId: PeerIdStr): FetchHandler {
     });
   });
 
-  app.post("/test/echo", async (c) =>
-    json({ method: c.req.method, body: await c.req.text() }),
-  );
+  app.post("/test/echo", async (c) => json({ method: c.req.method, body: await c.req.text() }));
 
   return app.fetch as FetchHandler;
 }
@@ -151,6 +149,28 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
   const presenceStore: PresenceStore = createPresenceStore(now);
   const advertisementStore: AdvertisementStore = createAdvertisementStore(now);
   const addrsByPeer = new Map<PeerIdStr, string[]>();
+
+  // THE HUB ADVERTISES ITS OWN SEARCH MOUNT. Posted once, here, at
+  // construction — because the hub is the one peer on the bulletin board
+  // that never posts a heartbeat, and a heartbeat's `advertisements` array
+  // is otherwise the ONLY way anything reaches this store. Without this,
+  // `/search` was mounted and gated but invisible: a consumer filtering
+  // `/.well-known/mesh` by `kind` (design record §5.4, acceptance criterion
+  // 4 — no peer id may be configured in the consumer) found the image peer
+  // and nothing else, so the main app page could not discover search at
+  // all. Found while building Task 13's page; see `services/search.ts`'s
+  // `SEARCH_ADVERTISEMENT` for the design-record obligation this closes
+  // (§5.2: "a handler plus its `.access` entry plus its advertisement").
+  //
+  // Deliberately NOT gated on any init flag: `/search` is mounted
+  // unconditionally below, and a hub that serves a route while withholding
+  // its advertisement is exactly the half-wired state this fixes. It also
+  // never needs withdrawing — `sweep` withdraws only for peers whose
+  // PRESENCE expired, and the hub has no presence record of its own.
+  advertisementStore.post(init.selfPeerId, SEARCH_ADVERTISEMENT.id, {
+    kind: SEARCH_ADVERTISEMENT.kind,
+    title: SEARCH_ADVERTISEMENT.title,
+  } satisfies AdvertisementPayload);
 
   // Tracks the highest `seq` EVER accepted for a peer, independent of
   // `presenceStore` — which the TTL sweep clears. Without this, a delayed
@@ -367,7 +387,10 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
   // (including `/admin/*`) still honouring a revoked token until it
   // expired -- removed on review. See `hub/main.ts` and this app's
   // `PROVENANCE.md`.
-  mounts.provide("/search", createSearchEndpoint({ upstream: init.searchUpstream ?? fixtureUpstream }));
+  mounts.provide(
+    "/search",
+    createSearchEndpoint({ upstream: init.searchUpstream ?? fixtureUpstream }),
+  );
 
   return {
     mounts,
