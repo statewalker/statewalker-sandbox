@@ -19,7 +19,9 @@
     "start": "bash scripts/start.sh",
     "start:relay": "tsx src/relay/main.ts",
     "start:hub": "tsx src/hub/main.ts",
-    "start:static": "tsx src/static-server/main.ts"
+    "start:static": "tsx src/static-server/main.ts",
+    "dev:image-peer": "vite --config vite.image-peer.config.ts",
+    "build:image-peer": "vite build --config vite.image-peer.config.ts"
   },
   "dependencies": {
     "@chainsafe/libp2p-noise": "17.0.0",
@@ -33,6 +35,8 @@
     "@libp2p/websockets": "10.1.19",
     "@multiformats/multiaddr": "13.0.3",
     "@statewalker/httpeers.core": "workspace:*",
+    "@statewalker/webrun-files": "workspace:*",
+    "@statewalker/webrun-files-mem": "workspace:*",
     "@statewalker/webrun-http-browser": "workspace:*",
     "hono": "catalog:",
     "idb-keyval": "catalog:",
@@ -42,6 +46,7 @@
     "@types/node": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
+    "vite": "catalog:",
     "vitest": "catalog:"
   }
 }

@@ -1205,3 +1205,234 @@ in `.superpowers/sdd/2026-08-18-httpeers-stack/task-11-report.md`'s "Fix round" 
 
 **146 core (unchanged) / 93 → 96 app** (3 new, all in `tests/browser-join.test.ts`).
 `httpeers.core`'s isolation grep unchanged; nothing in `packages/httpeers.core` touched.
+
+## Task 12: the image peer page
+
+**New files:** `src/services/images.ts`, `src/services/image-fixtures.node.ts`,
+`src/services/image-fixtures/{manifest.json,relay-node.png,mesh-diagram.png,hub-desk.png,
+circuit-relay.png}`, `src/pages/image-peer/{index.html,main.ts,fixtures.ts,sw.ts,
+vite-env.d.ts}`, `vite.image-peer.config.ts`, `tests/images.test.ts`.
+**Modified:** `package.json` (new dependencies + two scripts), this file.
+**Untouched:** `packages/httpeers.core`, `apps/httpeers-protos`, every other Task's files.
+
+This is new construction, not reconstruction or promotion -- design record §5.5 names it
+"a provider running in a browser, the thing nothing in the record has yet done," and no
+archived prototype in this project's history shipped one.
+
+### The service and why streaming is not `files.read()`'s default shape
+
+`createImagesEndpoint` (`src/services/images.ts`) is a plain Hono app wrapped as a
+`FetchHandler` -- same shape as Task 8's `createSearchEndpoint`. `GET /images` lists
+`{ id, title, contentType, size }` for every configured `ImageInfo`; `GET /images/:id`
+drives a `ReadableStream` whose `pull` repeatedly calls `files.read(path, { start, length:
+chunkSize })`. This distinction is load-bearing: `MemFilesApi.read(path)` with no `length`
+yields the WHOLE file as one `Uint8Array` in a single iteration (read directly in
+`mem-files-api.ts`, not assumed) -- handing that straight to `new Response(...)` would
+produce byte-correct output while silently defeating design note 20's proof (streaming
+survives a real WebRTC hop). Windowing the reads through `chunkSize` is what actually makes
+this handler stream, independent of what any particular `FilesApi` implementation would
+hand back for an unbounded read. `tests/images.test.ts`'s "STREAMS" test asserts the
+property directly: more than one chunk arrives from `res.body.getReader()`, not merely that
+the concatenated bytes are correct (a buffering implementation passes the second, not the
+first).
+
+`ImagesEndpointInit.files: FilesApi` is the only seam this module needs -- it imports
+`@statewalker/webrun-files`'s TYPE only, never `@statewalker/webrun-files-mem` or any
+concrete backend, so a later swap to OPFS or a real file picker is a change to what gets
+passed as `files`, not to this handler.
+
+### The access tree bug this task found, and the fix that stays in this app
+
+The brief's own `.access` snippet (`{ "/": anyOf: [], "/images": anyOf:
+["app:images.read"] }`) does not, in fact, grant `GET /images/{id}`. Verified directly with
+`httpeers.core`'s own `resolveAccess`/`validateAccessTree`, not assumed: `ancestors('/images')`
+is `['/']` (the walk drops the request's own final segment as "the resource itself"), so a
+bare-key entry only ever matches an EXACT request to `/images` -- `/images/abc` falls
+through to `"/"` (deny) every time. Granting `/images/abc` needs an ANCESTOR directory entry
+keyed `/images/` (trailing slash); `withAccessTree` refuses to construct a tree declaring
+BOTH `/images` and `/images/` at once (`validateAccessTree`'s own ambiguity check, added for
+the "/search"/"/search/" case in Task 8's pre-work) -- so the brief's literal two-entry tree
+cannot grant both `GET /images` and `GET /images/{id}` under the current library, full stop.
+Reproduced with a standalone script calling `resolveAccess` directly before writing a single
+line of the actual endpoint, and again as `tests/images.test.ts`'s own coverage.
+
+**The fix stays entirely inside this app**, not in `httpeers.core` (a shared library, out of
+scope for a policy bug specific to one provider's route shape, and the isolation constraint
+this task was dispatched under does not ask for or permit touching it):
+`buildImagesAccessTree` (`src/services/images.ts`) declares one EXACT leaf per configured
+image id (`/images/relay-node`, `/images/mesh-diagram`, …) alongside the bare `/images`
+leaf, all granting `app:images.read`. This is not a workaround bolted onto the brief's
+intent -- for a provider whose whole catalogue is known upfront, it IS "the provider decides
+who may read": every resource this peer will serve gets an explicit grant, and an id NOT in
+the catalogue (typo, stale link, probe) is denied by the same "no `.access` entry governs
+this path" fallthrough `tests/integration.test.ts`'s "denies an unmapped path by default"
+already exercises elsewhere in this stack -- not a new failure mode. `app:images.read` was
+already declared in `../policy.ts`'s `VOCABULARY` (Task 8's own pre-work, per that module's
+comment) and already granted to `member`; nothing there needed to change.
+
+### The page: gallery renders on load, join is separate and optional
+
+`src/pages/image-peer/main.ts` loads the fixture set (`fixtures.ts`) and renders the gallery
+IMMEDIATELY on page load -- independent of whether or when this peer ever joins the mesh.
+An earlier version of this file gated fixture-loading (and the gallery) behind
+`joinWithInvitation`, so the gallery stayed empty until a user pasted an invitation code and
+submitted the form; caught by loading the built page in a real browser (`claude-in-chrome`)
+before committing, not by reading the code -- the module's own doc comment claims the
+gallery "shows exactly what this peer is offering ... even [without] a successful join,"
+which the original wiring did not actually deliver. Fixed by hoisting the `loadFixtureImages()`
+call (and its `.then` render) to module scope, reused by `joinWithInvitation` via the same
+promise rather than a second fetch.
+
+`StartBrowserPeerInit.invitationId` (Task 11) is a required string with no default, and
+`httpeers.json` carries only `{ relayAddrs, hubPeerId }` -- design note 07 §4's "one
+generated file that is the invitation" describes the DAEMONS' bootstrap, not a browser
+page's. This page accepts an invitation two ways: a `?invite=` query parameter, or a
+paste-in form when that parameter is absent -- there is no third source anywhere in this
+codebase (verified by reading `setup/main.ts`, `hub/endpoints.ts`, and `hub/admin.ts`) to
+read one from instead.
+
+Advertises `{ id: 'images', kind: 'images', title: 'Images' }` on every heartbeat, via
+`startBrowserPeer`'s `advertisements` hook -- unchanged from Task 11's shape, this task only
+supplies the value.
+
+### The build: two real bugs found and fixed in `vite.image-peer.config.ts`
+
+This app's `vite`/`vite-plugin-static-copy` come from the umbrella ROOT catalog (this
+worktree's whole `packages: ["workspaces/*/packages/*", "workspaces/*/apps/*"]` pnpm
+workspace, not `workspaces/statewalker-sandbox`'s own, separate `pnpm-workspace.yaml` --
+confirmed by reading both files, not assumed) -- `vite: ^8.2.1`, which builds on Rolldown,
+not classic Rollup. Two build-time defects were found by actually running `vite build` and
+reading the output, not by reasoning about the config in the abstract:
+
+1. **`sw.js` built to a literal 0-byte file.** `sw.ts`'s entire job is
+   `import "@statewalker/webrun-http-browser/sw-worker"` for that module's side effect
+   (`startHttpDispatcher(...)`, run at top level) -- a script with no exports, meant to run
+   for the side effect alone. Rolldown's default tree-shaking dropped the whole import.
+   `treeshake: { moduleSideEffects: true }` did NOT fix it, tried first (still 0 bytes) --
+   neither under the deprecated `rollupOptions.treeshake` (this vite version's own type
+   declares `rollupOptions` `@deprecated`, and empirically drops fields `rolldownOptions`
+   accepts, `treeshake` among them) nor under `rolldownOptions.treeshake` itself. Only
+   `rolldownOptions.treeshake: false` (disabling tree-shaking outright for this build)
+   produced a `sw.js` containing the real, minified `startHttpDispatcher({ self, log:
+   console.log })` call -- confirmed by reading the built output byte-for-byte, not by file
+   size alone.
+2. **Fixture assets silently absent from every build.** An earlier version of
+   `fixtures.ts` built each fixture's URL with `new URL(`./${entry.file}`, import.meta.url)`
+   -- a TEMPLATE LITERAL, not a static string. Vite's "Explicit URL Imports" feature only
+   rewrites a literal-string argument; with a dynamic one, the build silently emitted no
+   fixture assets at all (no error), which would have 404'd every fetch this page's own
+   loader makes the moment it ran in a real browser. Caught in the real-browser check below,
+   not by typecheck (this is a runtime/build-graph gap `tsc` has no way to see). Fixed by
+   switching to `import.meta.glob("../../services/image-fixtures/*", { eager: true, query:
+   "?url", import: "default" })` -- Vite's documented mechanism for "a set of files matching
+   a pattern," which does not require the set of filenames to be known ahead of writing the
+   glob. Every fixture here is small enough to land under Vite's default 4 KiB
+   `assetsInlineLimit`, so the resulting "URL" is actually a `data:` URI with the bytes
+   inlined as base64, not a separate copied file -- verified `fetch()` on a `data:` URL
+   works both under Node's own `fetch` and, directly, inside the real browser check below;
+   `fetchBytes` needs no special case for it either way.
+
+`resolve.conditions` starts with `"source"` (matching this app's own `vitest.config.ts` and
+`apps/byok-config-prototype/vite.config.ts`'s precedent), so `@statewalker/*` workspace
+packages resolve against source rather than a possibly-unbuilt `dist/` for THIS build --
+except `@statewalker/webrun-http-browser`'s `./sw-worker` export, whose export map offers
+`"default"` only (a ready-built runtime script, not a TS module), which still needs that
+package's `dist/` built, exactly as Task 11 already found for `edge.ts`'s `./sw` import.
+This worktree's `webrun-files`/`webrun-files-mem` packages ALSO needed a first build
+(`pnpm --filter @statewalker/webrun-files --filter @statewalker/webrun-files-mem build`) --
+neither had a committed `dist/` before this task, the same class of gap Task 11 flagged for
+`webrun-http-browser`, now hit a second time by a different pair of packages. Not fixed at
+the `turbo.json`/workspace level (shared, out of this task's scope); flagged to the team
+lead below.
+
+### What was verified under Node, and what genuinely needed a browser
+
+**Under Node (`tests/images.test.ts`, 12 tests):** the service's own routes and the
+streaming property (a small `chunkSize` forces `chunkSize: 6` against a 40-byte synthetic
+fixture into 7 chunks, asserted via `res.body.getReader()`, not `.arrayBuffer()`); the real
+fixture set loaded off disk (`image-fixtures.node.ts`'s `loadFixtureImages`) served correctly
+end to end through a real `createPeer`, every fixture confirmed to stream in more than one
+chunk against a deliberately small `chunkSize`; the access tree's actual behavior --
+a member reads both routes, a token with `roles: []` is refused both with `403` naming
+`app:images.read`, a missing token is `401`, an id outside the catalogue is `403` (not
+`404`, since the access tree denies it before the handler ever runs), and a path outside
+`/images` entirely is denied by the default deny; titles carrying non-latin1 characters
+(café, 🔍, 🖥️) pass through the JSON body without throwing, and never appear in a header key.
+
+**Genuinely browser-only, per this task's own scoping to Task 15's Playwright suite:**
+whether a real ServiceWorker actually intercepts a same-origin `fetch()` for this page
+(structurally covered already by `tests/browser-edge-guard.test.ts`, Task 11 -- not
+re-proven here); whether a stream this handler produces actually survives a real WebRTC hop
+between two browser tabs (design note 20 proved the mechanism once, generically -- this
+task's own suite proves THIS handler drives a correct multi-chunk stream, a precondition for
+that proof to mean anything for this specific service, not a repeat of it); the full join
+sequence against a real relay + hub from this page. **What was checked directly in a real
+browser anyway, beyond what the brief required** (`claude-in-chrome`, against the actual
+built `dist/image-peer` served by `../static-server/main.ts`, no relay/hub running): the page
+loads with zero console errors, the gallery renders all four real fixture images (including
+their non-ASCII titles) from bytes fetched via the built bundle's own `data:` URIs, and
+submitting an invitation code drives `startBrowserPeer` far enough to fail cleanly at the
+relay dial (no relay running) -- `connection state` renders `error`, the page does not
+crash, and the console shows exactly the one caught, logged error this page's own
+`try`/`catch` produces. This is real evidence for "the shell boots and degrades gracefully,"
+not a claim about a successful join, which needs the relay + hub this check deliberately
+did not stand up (out of this task's scope, Task 15's job).
+
+### Flagged to the team lead, not fixed here (out of this task's scope)
+
+- `webrun-files`/`webrun-files-mem` had no committed `dist/` in this worktree before this
+  task (same class of gap as Task 11's `webrun-http-browser` finding) -- `tsc --noEmit`
+  fails with `TS2307` for both packages on a checkout that has not built them first. This
+  worktree now has both built (a side effect of this task's own verification), so
+  `pnpm run typecheck`/`pnpm run test` pass here; a genuinely fresh checkout will not, until
+  `pnpm --filter @statewalker/webrun-files --filter @statewalker/webrun-files-mem build`
+  (or an equivalent `turbo build`/`turbo typecheck`) runs first -- same root cause and same
+  fix Task 11 already named for `webrun-http-browser`, just two more packages hitting it.
+- `vite.image-peer.config.ts` disables tree-shaking build-wide (`rolldownOptions.treeshake:
+  false`) to keep `sw.js` non-empty -- see "The build" above. A narrower, per-module fix
+  (annotate only `webrun-http-browser`'s `./sw-worker` entry as side-effecting) was
+  attempted and rejected: rolldown's `moduleSideEffects` predicate in this vite version
+  (`8.2.1`) must return a strict boolean (a `"no-external"` string return threw a build
+  error), and even an unconditional `moduleSideEffects: true` predicate did not restore the
+  dropped code -- only `treeshake: false` outright did, verified by inspecting the built
+  output. A real, if minor, bundle-size cost for this page's `main` chunk; acceptable for a
+  small reference/demo deployment, worth revisiting if this page's bundle size ever becomes
+  a real constraint.
+
+### Counts and verification
+
+```
+$ pnpm install                              # from the umbrella root
+Already up to date
+
+# packages/httpeers.core (untouched by this task -- re-run as a baseline check)
+$ pnpm exec tsc --noEmit && pnpm exec tsc -p tsconfig.tests.json --noEmit
+(clean, both)
+$ grep -rlE "^import.*libp2p" src/
+src/tokens.ts
+src/transport-duplex.ts
+$ pnpm exec vitest run
+ Test Files  12 passed (12)
+      Tests  146 passed (146)
+
+# workspaces/webrun-files/packages/{webrun-files,webrun-files-mem} -- built once, see "Flagged" above
+$ pnpm --filter @statewalker/webrun-files --filter @statewalker/webrun-files-mem build
+Done (both)
+
+# apps/httpeers-stack
+$ pnpm exec tsc --noEmit && pnpm exec tsc -p tsconfig.tests.json --noEmit
+(clean, both)
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  11 passed (11)
+      Tests  108 passed (108)
+$ pnpm exec vite build --config vite.image-peer.config.ts
+dist/image-peer/index.html                 2.68 kB
+dist/image-peer/sw.js                      7.83 kB   # real dispatcher code, not empty -- see "The build" above
+dist/image-peer/assets/main-*.js         579.04 kB   # dominated by libp2p/webrtc; see "Flagged" above
+✓ built in ~0.2s
+```
+
+**146 core (unchanged) / 96 → 108 app** (12 new, all in `tests/images.test.ts`; every
+previously-passing file is unmodified and still passing). `httpeers.core`'s isolation grep
+unchanged (`src/tokens.ts`, `src/transport-duplex.ts`) -- nothing in `packages/httpeers.core`
+was touched by this task.
