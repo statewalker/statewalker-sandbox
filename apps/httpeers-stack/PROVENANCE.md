@@ -1504,3 +1504,101 @@ dist/image-peer/assets/main-*.js         579.18 kB
 genuinely rewritten as above, not just renamed) — the simplification is a pure refactor of
 `src/services/images.ts`/`src/pages/image-peer/main.ts` against an already-fixed library,
 not a change in what this app tests or asserts beyond that one honest correction.
+
+---
+
+# Task 14 — the Node consumer end-to-end suite (leg 1)
+
+New: `tests/e2e/harness.ts`, `tests/e2e/node-consumer.test.ts`. Nothing was promoted from
+the archive here; leg 1 of the design record's §10 verification has no prototype behind it.
+
+## Why a second harness, and what it is NOT
+
+`tests/support/mesh.ts` (Task 7b) stays exactly as it was, and its three suites keep using
+it. It builds a hub BY HAND (`createPeer` + `createHubEndpoints`) over direct loopback TCP,
+with no relay, no seeded identity and **no TTL sweep timer running**. `tests/e2e/harness.ts`
+boots the DEPLOYMENT instead — `startRelay` and `startHub` through their own entry points,
+identities derived from `RELAY_SEED`/`HUB_SEED` via `setup/keys.ts`, the hub's 1 s sweep
+timer live, and every member peer holding a real circuit-relay reservation whose relayed
+multiaddrs it reports on each heartbeat. "A provider that stops heartbeating leaves the view
+within one TTL" is simply not observable without that sweep, which is the clearest single
+reason the two harnesses are not one.
+
+`buildTestPeer` is reused unchanged for peer construction (revocation-cache wiring, the
+monotonic-`seq` heartbeat); the only edit to `mesh.ts` is an **optional third argument** to
+`.heartbeat(hubPeerId, token, advertisements?)`. Omitted-not-empty is load-bearing:
+`hub/endpoints.ts` branches on `body.advertisements !== undefined`, so passing `[]` would
+withdraw a peer's advertisements while omitting the field leaves them alone. Every
+pre-existing caller passes nothing and is unaffected.
+
+## One new devDependency: `@libp2p/tcp@11.0.26`
+
+Pinned exact, same version `httpeers.core` already depends on. Needed because a peer in this
+harness must hold BOTH a WebSocket link to the relay (for its circuit reservation) and a TCP
+link to the hub — and the hub, as `startHub` builds it, has no address of any other kind
+(see the next section). It is a devDependency: no production module imports it.
+
+## Two findings about the relayed path, both reproduced rather than reasoned
+
+1. **An httpeers call cannot ride a bare `/p2p-circuit` connection.** A relayed connection is
+   a *limited* connection, and libp2p refuses to open a protocol stream on one
+   (`LimitedConnectionError`, `libp2p/src/connection.ts`), which `mapPeerCallError` surfaces
+   as `UnknownPeerCallError` (`kind: "unknown"`). This is exactly why
+   `src/browser/join.ts`'s `preDialPeer` dials `/p2p-circuit/webrtc/p2p/<peer>` and not
+   `/p2p-circuit/p2p/<peer>`. `node-consumer.test.ts` pins the refusal so the reason stays
+   written down rather than remembered.
+2. **The WebRTC upgrade is unavailable to Node in this workspace.** `@libp2p/webrtc` loads
+   `node-datachannel`'s native binary, whose install script has not run here. Member-to-member
+   calls in leg 1 therefore go over loopback TCP, using the address the peer reported through
+   the mesh view. Real browsers have WebRTC natively; that hop is Task 15's.
+
+Consequence for `src/browser/node-profile.ts`: its `waitForCircuitReservation` is
+transport-agnostic and would have fit this harness unchanged, but it lives in a module whose
+top-level imports include `@libp2p/webrtc`, so importing it from Node crashes the process
+before any assertion runs. The harness re-implements the six-line poll and says so at the
+call site.
+
+## Reported, not fixed: the hub has no relay-reachable address
+
+`startHub` builds its node through `httpeers.core`'s `createNode`, which configures `tcp()`
+and nothing else, and `StartHubInit` has no seam for a caller-supplied node. So the hub
+holds no circuit reservation and its only multiaddr is `/ip4/.../tcp/<port>` — undialable
+from a browser, which has no TCP. `src/browser/peer-runtime.ts` nevertheless pre-dials the
+hub at `${relayAddr}/p2p-circuit/webrtc/p2p/${hubPeerId}`. Task 14 does not fix this: it is a
+wiring decision for whoever owns the hub process, and Task 15 is where it bites.
+
+## One pre-existing test's synchronization corrected
+
+`tests/browser-join.test.ts`'s version-gating test waited on `calls.includes(...)`, which
+`recordingPeer` pushes BEFORE awaiting the call — so the assertions could read state the
+in-flight request had not written yet. It held on an idle machine (0 failures in 8 full-suite
+runs at `2862dae`) and failed about one run in four once this task's suite ran ahead of it in
+the same worker (2 of 8). Fixed by waiting for the heartbeat to COMPLETE (`onHeartbeat` fires
+last in `heartbeatOnce`), not to start. **No assertion changed**, and the negative assertions
+were re-proven to still discriminate by forcing `join.ts` to refetch the vocabulary
+unconditionally and watching the test fail. 12 of 12 full-suite runs clean afterwards.
+
+## Measured, not merely bounded
+
+```
+streaming:  6 chunks; the first chunk arrived 201-204 ms before the last was SENT,
+            out of a 202-204 ms send window (5 runs) -- i.e. the transport resolved
+            essentially the whole window. Falsified by a buffering mutant in
+            src/services/images.ts: chunkSizes.length > 1 still passed, the timing
+            assertion failed, which is why counting chunks alone is not the test.
+revocation: the next search after the admin's DELETE was refused in 2.1-8.4 ms
+            (5 runs); bound asserted is one heartbeat, 5000 ms.
+TTL sweep:  the provider left the view 2224-2231 ms after its last heartbeat, with
+            presenceTtlMs 2000 ms and SWEEP_INTERVAL_MS 1000 ms (production's value).
+```
+
+```
+$ pnpm exec tsc --noEmit                      # clean
+$ pnpm exec tsc -p tsconfig.tests.json --noEmit   # clean
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  15 passed (15)
+      Tests  172 passed (172)                 # 163 -> 172, +9
+
+$ (packages/httpeers.core) pnpm exec vitest run --no-file-parallelism
+      Tests  148 passed (148)                 # untouched by this task
+```

@@ -114,9 +114,30 @@ export async function buildTestHub(): Promise<TestHub> {
   };
 }
 
+/** One advertisement as it travels on a heartbeat body — `src/hub/endpoints.ts`'s `PresenceBody.advertisements`. */
+export interface TestAdvertisement {
+  id: string;
+  kind: string;
+  title: string;
+}
+
 export interface TestPeer extends Peer {
-  /** One presence heartbeat; refreshes `.revocations` only when the policy version moved. Returns the fresh token. */
-  heartbeat: (hubPeerId: PeerIdStr, token: string) => Promise<string>;
+  /**
+   * One presence heartbeat; refreshes `.revocations` only when the policy
+   * version moved. Returns the fresh token.
+   *
+   * `advertisements` is OPTIONAL AND OMITTED-NOT-EMPTY when absent, which is
+   * load-bearing rather than tidiness: `hub/endpoints.ts`'s presence handler
+   * branches on `body.advertisements !== undefined`, so passing `[]` would
+   * withdraw whatever that peer had posted, while omitting the field leaves
+   * it untouched. Every caller predating `tests/e2e/harness.ts` (the three
+   * Task 7b suites) passes nothing and is therefore unaffected.
+   */
+  heartbeat: (
+    hubPeerId: PeerIdStr,
+    token: string,
+    advertisements?: TestAdvertisement[],
+  ) => Promise<string>;
   revocations: RevocationCache;
 }
 
@@ -136,12 +157,20 @@ export async function buildTestPeer(init: CreatePeerInit = {}): Promise<TestPeer
   const peer = await createPeer({ ...init, revocationCache });
 
   let seq = 0;
-  const heartbeat = async (hubPeerId: PeerIdStr, token: string): Promise<string> => {
+  const heartbeat = async (
+    hubPeerId: PeerIdStr,
+    token: string,
+    advertisements?: TestAdvertisement[],
+  ): Promise<string> => {
     seq += 1;
     const res = await peer.call(hubPeerId, "/.well-known/presence", {
       method: "POST",
       token,
-      body: JSON.stringify({ seq, addrs: peer.addrs() }),
+      body: JSON.stringify({
+        seq,
+        addrs: peer.addrs(),
+        ...(advertisements !== undefined ? { advertisements } : {}),
+      }),
     });
     const body = (await res.json()) as PresenceResponse;
 
