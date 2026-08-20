@@ -43,6 +43,80 @@ export async function preDialPeer(
   await node.dial(target);
 }
 
+export interface RouteEnsurerInit {
+  node: Libp2p;
+  /** `httpeers.json`'s `relayAddrs[0]` -- the fallback address composer, and the same string `preDialPeer` takes. */
+  relayAddr: string;
+  /** This peer's own id. A request addressed to it is served locally and must never be dialed. */
+  selfPeerId: PeerIdStr;
+  /** The current mesh view -- `JoinHandle.meshView`. Read per call, never snapshotted: a provider's addresses change when it re-reserves. */
+  meshView: () => MeshView | null;
+}
+
+/**
+ * "Make sure this peer can be called" -- the function
+ * `../browser/edge-dispatch.ts`'s `ensureRoute` hook wants, and the piece
+ * that was missing for browser-to-browser calls entirely (Task 15; see that
+ * module's job 4 for the symptom and the diagnosis).
+ *
+ * ADDRESSES COME FROM THE MESH VIEW, WHICH IS THE CONTRACT
+ * `../browser/peer-runtime.ts`'s module comment already stated and nothing
+ * had yet had to honour: the hub builds each member's `addrs` from that
+ * member's own most recent heartbeat, so it is the freshest source there
+ * is, and libp2p's peerStore -- what `remote()` falls back on when it dials
+ * by bare peer id -- is exactly the stale/absent one that comment warns
+ * about.
+ *
+ * ONLY THE `/webrtc` ENTRIES ARE DIALED. The same view also carries bare
+ * `/p2p-circuit` addresses for every member; connecting over one of those
+ * produces a LIMITED connection, on which libp2p silently refuses to open
+ * `/httpeers/1.0.0` (`preDialPeer`'s own comment, and Task 14's test that
+ * pins the refusal). Dialing them would therefore "succeed" and leave the
+ * call to fail anyway.
+ *
+ * THE COMPOSED ADDRESS IS THE FALLBACK, NOT THE PRIMARY. `preDialPeer`'s
+ * `<relay>/p2p-circuit/webrtc/p2p/<peer>` is right whenever every peer
+ * reserves on the one relay `httpeers.json` names -- true of this
+ * deployment, and how the hub itself is reached at startup, since the hub
+ * is not a mesh MEMBER and so never appears in the view at all. It is the
+ * fallback rather than the rule because a peer that reserved on a different
+ * relay is reachable only at the address it reported.
+ *
+ * AN EXISTING UNLIMITED CONNECTION SHORT-CIRCUITS. This runs on every
+ * outbound mesh call, including every `<img src>` in a gallery; re-dialing
+ * a peer that is already connected would add a round trip per image.
+ */
+export function createRouteEnsurer(init: RouteEnsurerInit): (peerId: PeerIdStr) => Promise<void> {
+  const { node, relayAddr, selfPeerId } = init;
+
+  return async function ensureRoute(peerId: PeerIdStr): Promise<void> {
+    if (peerId === selfPeerId) return;
+
+    let target: PeerId;
+    try {
+      target = peerIdFromString(peerId);
+    } catch {
+      // Not a peer id after all (the shape test in `edge-dispatch.ts` is a
+      // regex, not a decoder). Nothing to dial; let the router decide what
+      // this path means.
+      return;
+    }
+
+    if (node.getConnections(target).some((conn) => conn.limits == null)) return;
+
+    const advertised = (init.meshView()?.members.find((m) => m.peerId === peerId)?.addrs ?? [])
+      .filter((addr) => addr.includes("/p2p-circuit") && addr.includes("/webrtc"))
+      .map((addr) => multiaddr(addr));
+
+    // Every candidate in ONE dial, not a loop: libp2p ranks and races the
+    // addresses of a single peer itself, and a sequential loop would pay the
+    // full dial timeout for each unreachable interface address the provider
+    // reported (a browser peer behind a relay routinely reports several).
+    if (advertised.length > 0) await node.dial(advertised);
+    else await preDialPeer(node, relayAddr, peerId);
+  };
+}
+
 interface InviteRedeemResponse {
   token: string;
   mesh: string;

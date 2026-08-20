@@ -39,6 +39,7 @@ import { startBrowserPeer } from "../../browser/peer-runtime.js";
 import type { ImageInfo } from "../../services/images.js";
 import { createImagesEndpoint, IMAGES_ACCESS_TREE, imagePath } from "../../services/images.js";
 import { loadFixtureImages } from "./fixtures.js";
+import { pacedFiles, readStreamPacing } from "./pacing.js";
 
 const peerIdEl = document.querySelector<HTMLElement>("#peer-id")!;
 const stateEl = document.querySelector<HTMLElement>("#state")!;
@@ -100,9 +101,20 @@ async function joinWithInvitation(invitationId: string): Promise<void> {
 
   const { initialFiles, images } = await fixturesLoaded;
 
-  const files = new MemFilesApi({ initialFiles });
+  // `?chunk=` / `?delay=` -- absent (the normal case) this is
+  // `{ delayMs: 0 }` and the two lines below are the ones that were always
+  // here. See `./pacing.ts` for why a page carries this knob at all.
+  const pacing = readStreamPacing(location.search);
+  const stored = new MemFilesApi({ initialFiles });
+  const files = pacing.delayMs > 0 ? pacedFiles(stored, pacing.delayMs) : stored;
+  // Rendered into the DOM rather than only obeyed, so an observer can see
+  // that the page ACTUALLY applied what the URL asked for -- a knob that
+  // silently did nothing would make every measurement taken against it a
+  // measurement of the default.
+  document.body.dataset.pacing = JSON.stringify(pacing);
+
   const mounts = createMounts();
-  mounts.provide("/images", createImagesEndpoint({ files, images }));
+  mounts.provide("/images", createImagesEndpoint({ files, images, chunkSize: pacing.chunkSize }));
 
   const advertisements = (): AdvertisementInput[] => [
     { id: "images", kind: "images", title: "Images" },

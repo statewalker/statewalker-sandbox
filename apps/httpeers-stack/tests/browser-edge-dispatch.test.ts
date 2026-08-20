@@ -42,6 +42,7 @@ import {
   PEER_ERROR_STATUS,
   type PeerErrorBody,
   stripEdgePrefix,
+  targetPeerId,
 } from "../src/browser/edge-dispatch.js";
 import { VOCABULARY } from "../src/policy.js";
 
@@ -453,5 +454,127 @@ describe("against a real peer router (createPeer, not a spy)", () => {
       dispatch(new Request(`http://localhost:5175/${KEY}/${peer.peerId}/test/whoami`)),
     ).rejects.toThrow(/no peer context registered/);
     expect(echoed).toEqual([]);
+  });
+});
+
+/**
+ * Job 4 (Task 15): the route must exist before the call rides it.
+ *
+ * This is the Node half of what the Playwright suite found the hard way — a
+ * page calling another page was unreachable, always, because nothing dialed
+ * the target and `remote()` resolves a bare peer id through libp2p's
+ * peerStore. The hook itself is pure (`ensureRoute` is a callback), so its
+ * contract is provable here; that it dials the RIGHT address is
+ * `join.ts`'s `createRouteEnsurer`'s business and the browser suite's.
+ */
+const REMOTE_PEER = "12D3KooWQ1ngHnHGUUd6vv37Vnv5arjJGcgPGxDf5pkXXaebukd4";
+
+describe("targetPeerId", () => {
+  it("reads the peer id an outbound request is addressed to", () => {
+    expect(targetPeerId(`/${REMOTE_PEER}/images/relay-node`)).toBe(REMOTE_PEER);
+  });
+
+  it("is null for a path this peer serves itself", () => {
+    expect(targetPeerId("/search")).toBeNull();
+    expect(targetPeerId("/")).toBeNull();
+  });
+
+  it("is null for a first segment that merely starts like a peer id", () => {
+    // The same shape test `httpeers.core`'s router applies -- a truncated id
+    // is not a peer id, and must not be dialed as one.
+    expect(targetPeerId("/12D3Koo/search")).toBeNull();
+  });
+});
+
+describe("job 4: a route is established before the call", () => {
+  it("ensureRoute is called with the target peer id, BEFORE dispatch", async () => {
+    const order: string[] = [];
+    const dispatch = createEdgeDispatch({
+      dispatch: async (req) => {
+        order.push(`dispatch ${new URL(req.url).pathname}`);
+        return json({ ok: true }, 200);
+      },
+      key: KEY,
+      token: () => TOKEN,
+      ensureRoute: async (peerId) => {
+        order.push(`ensureRoute ${peerId}`);
+      },
+    });
+
+    await dispatch(new Request(`http://localhost:5175/${KEY}/${REMOTE_PEER}/images`));
+
+    // The path `dispatch` sees still carries the PEER prefix -- only the
+    // edge's own `/app` segment is stripped, which is exactly the shape
+    // `httpeers.core`'s router documents.
+    expect(order).toEqual([`ensureRoute ${REMOTE_PEER}`, `dispatch /${REMOTE_PEER}/images`]);
+  });
+
+  it("is not called at all for a request this peer serves itself", async () => {
+    const calls: string[] = [];
+    const spy = spyDispatch();
+    const dispatch = createEdgeDispatch({
+      dispatch: spy.handler,
+      key: KEY,
+      token: () => TOKEN,
+      ensureRoute: async (peerId) => {
+        calls.push(peerId);
+      },
+    });
+
+    await dispatch(new Request(`http://localhost:5175/${KEY}/search?q=relay`));
+
+    expect(calls).toEqual([]);
+    expect(spy.seen).toHaveLength(1);
+  });
+
+  it("is not called for an INBOUND request -- we never dial on someone else's behalf", async () => {
+    const calls: string[] = [];
+    const spy = spyDispatch();
+    const dispatch = createEdgeDispatch({
+      dispatch: spy.handler,
+      key: KEY,
+      token: () => TOKEN,
+      ensureRoute: async (peerId) => {
+        calls.push(peerId);
+      },
+    });
+
+    const inbound = new Request(`http://localhost:5175/${REMOTE_PEER}/images`);
+    registerPeer(inbound, REMOTE_PEER);
+    await dispatch(inbound);
+
+    expect(calls).toEqual([]);
+  });
+
+  it("a dial that fails does NOT fail the call -- the error the page sees stays T-2's own", async () => {
+    // The rule that matters: rethrowing here would surface as
+    // `SwHttpDispatcher`'s untyped 500 and destroy the `kind` the page
+    // switches on. The call proceeds, and the REAL failure -- typed --
+    // comes back from `dispatch`.
+    const dispatch = createEdgeDispatch({
+      dispatch: async () => {
+        throw new PeerUnreachableError(REMOTE_PEER);
+      },
+      key: KEY,
+      token: () => TOKEN,
+      ensureRoute: async () => {
+        throw new Error("dial refused");
+      },
+    });
+
+    const res = await dispatch(new Request(`http://localhost:5175/${KEY}/${REMOTE_PEER}/images`));
+
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as PeerErrorBody).kind).toBe("peer-unreachable");
+  });
+
+  it("omitting the hook entirely restores the pre-Task-15 behaviour", async () => {
+    const spy = spyDispatch();
+    const dispatch = createEdgeDispatch({ dispatch: spy.handler, key: KEY, token: () => TOKEN });
+
+    const res = await dispatch(new Request(`http://localhost:5175/${KEY}/${REMOTE_PEER}/images`));
+
+    expect(res.status).toBe(200);
+    expect(spy.seen).toHaveLength(1);
   });
 });

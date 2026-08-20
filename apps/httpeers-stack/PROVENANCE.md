@@ -1752,3 +1752,99 @@ the new SIGINT handler tore the hub down cleanly.
   why at the call site.
 - `createNode`'s TCP-only transport list is the root cause this task worked around rather than
   fixed; `createPeer`'s `node` seam is the sanctioned way around it and is what was used.
+
+---
+
+## Task 15 — the Playwright browser suite, and the two things it found
+
+Leg 2 of the design record's §10 verification: `tests/e2e/browser.test.ts` opens the two real
+pages in a real browser against a real relay + hub, in Chromium and in Firefox, launched
+**inside** a vitest test so `pnpm test` stays the single entry point. Nothing here is promoted;
+it is new construction.
+
+### The browsers have to be installed, and they are not a dependency
+
+`playwright@1.58.0` (exact, no caret — this app's libp2p convention applied to the whole
+devDependency set) brings the client, not the browsers. On a fresh machine:
+
+```
+$ pnpm exec playwright install chromium firefox
+```
+
+They land in `~/.cache/ms-playwright` and are shared across every project on the machine. A
+missing browser fails loudly at `launch()`.
+
+### Finding 1 — a page could never call another page, and nothing had ever noticed
+
+The suite's first real assertion — an image served by one browser tab rendering in another —
+came back `502 peer-unreachable`, every time, in both browsers. A Node peer calling that same
+browser provider over the same relay got a 200 on the same run, so the provider, the transport
+and the relay were all fine.
+
+The cause: `httpeers.core`'s `remote()` dials by **peer id**, which libp2p resolves through its
+peerStore, and one browser peer's peerStore entry for another is either absent or a bare
+`/p2p-circuit` address — a *limited* connection, over which libp2p silently refuses to open
+`/httpeers/1.0.0` (the same refusal Task 14 pins a test on). Something has to dial
+`<relay>/p2p-circuit/webrtc/p2p/<peer>` explicitly, exactly as `peer-runtime.ts` already did for
+the **hub** at startup. Every Node suite in this app hid this by dialing the provider itself
+(`harness.ts`'s `dialAddr`); the browser is the only caller that cannot.
+
+| File | Change |
+| --- | --- |
+| `src/browser/edge-dispatch.ts` | Job 4: an optional `ensureRoute(peerId)` hook, called before `dispatch` for any request addressed to another peer, plus `targetPeerId(pathname)`. A dial that throws is **swallowed** — the call proceeds and fails with T-2's own typed `PeerCallError`, rather than as `SwHttpDispatcher`'s untyped 500 with the `kind` destroyed. The module stays libp2p-free, so all of this is provable under Node. |
+| `src/browser/join.ts` | `createRouteEnsurer` — the libp2p half. Reads the target's addresses **from the mesh view** (the contract `peer-runtime.ts`'s module comment had already stated and nothing had yet had to honour), keeps only the `/webrtc` circuit entries, dials them in one call, and falls back to `preDialPeer`'s composed address for a peer the view does not carry (the hub, which is not a member). An existing unlimited connection short-circuits it, because it runs on every `<img src>` in a gallery. |
+| `src/browser/peer-runtime.ts` | Wires the two together at the one place that has both the node and the join handle. |
+| `tests/browser-edge-dispatch.test.ts` | +8 tests: the hook's ordering, its silence on local and inbound requests, and that a failed dial does not replace T-2's error. |
+
+### Finding 2 — Firefox: `Request.prototype.body` does not exist, so every POST body is dropped
+
+Firefox 146 (the Playwright-bundled build) does not implement `Request.prototype.body` — it is
+`undefined`, verified directly in both browsers:
+
+```
+firefox  {"bodyType":"undefined","hasBody":false}          # new Request(url, {method:"POST", body:"hello"})
+chromium {"bodyType":"[object ReadableStream]","hasBody":true}
+```
+
+`@statewalker/webrun-http-streams`'s `fetchOverDuplex` (`src/fetch.ts`) reads exactly that
+property to decide whether to put a body on the wire, so **every request a Firefox page makes
+arrives at its peer with an empty body**. The first casualty is invitation redemption: the hub
+answers 500 with `SyntaxError: Unexpected end of JSON input`, and no page can join at all.
+
+A second, worse variant is in the same file's serve direction (`serveFetchOverDuplex`):
+Firefox accepts a `ReadableStream` as a `Request` body without throwing and then **stringifies
+it** — `await request.text()` returns the literal `[object ReadableStream]`. An inbound POST to
+a Firefox-hosted peer would be silently corrupted rather than refused. Not reachable from this
+app today (both pages serve only GET), and recorded here so it is not rediscovered.
+
+Neither is fixable in this app: the `Request` is built inside `httpeers.core`'s `peer.call` and
+consumed by `webrun-http-streams`, with no seam between. Reported, not fixed — see the task
+report for the measured effect of a candidate patch.
+
+### The provider page gained a pacing knob, and why a page has one
+
+`src/pages/image-peer/pacing.ts` reads `?chunk=<bytes>&delay=<ms>`; absent (the normal case) the
+page behaves exactly as before. It exists because the page as shipped **cannot demonstrate the
+one property it exists for**: every fixture is ~370 bytes against `createImagesEndpoint`'s 64 KiB
+default, so each image is served in exactly one chunk — and chunks produced instantly are
+indistinguishable at the consumer from a body that was buffered and re-sliced. Leg 1 solved the
+same problem with an instrumented `FilesApi`, but it could, because it built its own provider;
+nothing outside a page can reach into one. There is deliberately no "buffer everything" setting:
+the falsification mutant was a local edit, never a shipped mode.
+
+### Verification
+
+```
+$ (apps/httpeers-stack) pnpm exec vitest run --no-file-parallelism
+      Tests  200 passed | 9 skipped (209)     # 176 before; Chromium green, Firefox red at finding 2
+$ (apps/httpeers-stack) pnpm exec vitest run --no-file-parallelism tests/e2e/browser.test.ts
+      Tests  9 passed | 9 skipped (18)        # 5 consecutive runs, no flake
+$ (packages/httpeers.core) pnpm exec vitest run --no-file-parallelism
+      Tests  148 passed (148)                 # untouched by this task
+$ tsc --noEmit && tsc -p tsconfig.tests.json --noEmit     # both clean, app and core
+```
+
+Chromium, one run: both pages ready in 615 ms, both providers discovered 3 ms later, the image
+streamed in 6 chunks `[64,64,64,64,64,41]` arriving at 44/84/124/165/205/245 ms, the provider left
+the app's view 9.0 s after its tab closed, and the revoked search rendered
+`refused (403): membership revoked`.

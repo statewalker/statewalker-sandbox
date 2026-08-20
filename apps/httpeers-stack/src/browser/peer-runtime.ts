@@ -49,7 +49,13 @@ import { VOCABULARY } from "../policy.js";
 import { mountEdge } from "./edge.js";
 import { createEdgeDispatch } from "./edge-dispatch.js";
 import type { AdvertisementInput } from "./join.js";
-import { preDialPeer, REVOCATION_MAX_STALENESS_MS, redeemInvitation, startJoin } from "./join.js";
+import {
+  createRouteEnsurer,
+  preDialPeer,
+  REVOCATION_MAX_STALENESS_MS,
+  redeemInvitation,
+  startJoin,
+} from "./join.js";
 import { createBrowserNode, dialRelay, waitForCircuitReservation } from "./node-profile.js";
 
 /**
@@ -273,6 +279,17 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
         dispatch: peer.dispatch,
         key: init.key,
         token: () => join.token(),
+        // The one thing that makes a page's `fetch()` of ANOTHER PAGE work
+        // at all -- see `edge-dispatch.ts`'s job 4 and `join.ts`'s
+        // `createRouteEnsurer`. Supplied here rather than inside
+        // `createEdgeDispatch` because it is the libp2p half, and that
+        // module is deliberately libp2p-free.
+        ensureRoute: createRouteEnsurer({
+          node,
+          relayAddr,
+          selfPeerId: peer.peerId,
+          meshView: () => join.meshView(),
+        }),
       }),
     });
   } catch (err) {
