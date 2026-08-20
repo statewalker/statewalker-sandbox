@@ -53,7 +53,7 @@ import { fileURLToPath } from "node:url";
 import type { AccessTree } from "@statewalker/httpeers.core";
 import type { Browser, BrowserType, Page } from "playwright";
 import { chromium, firefox } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { HEARTBEAT_INTERVAL_MS } from "../../src/browser/join.js";
 import { SWEEP_INTERVAL_MS } from "../../src/hub/main.js";
 import type { StaticServers } from "../../src/static-server/main.js";
@@ -147,6 +147,15 @@ async function waitForState(
  * the object still exists, down to its own `stack` (and `cause`, which is
  * where `peer-runtime.ts` puts the libp2p failure that actually explains a
  * join that did not happen).
+ *
+ * WARNINGS ARE KEPT, NOT ONLY ERRORS. `edge-dispatch.ts` deliberately
+ * SWALLOWS a failed `ensureRoute` dial (job 4: rethrowing would replace
+ * T-2's typed `kind` with an untyped 500) and its `console.warn` is then the
+ * only record that a route could not be established at all. Keeping only
+ * `error` would print that one line and drop it from the failure — the exact
+ * "diagnosable failure vs. an afternoon" difference this forwarding exists
+ * for. Nothing in a healthy run warns, so the cost is zero when it is not
+ * needed.
  */
 function forwardPageOutput(label: string, page: Page, faults: string[]): void {
   page.on("console", (msg) => {
@@ -173,7 +182,9 @@ function forwardPageOutput(label: string, page: Page, faults: string[]): void {
         // Kept as well as printed: the beforeAll that gives up on a page
         // quotes these, so the reason lands IN the failure rather than
         // several hundred lines above it.
-        if (msg.type() === "error") faults.push(`[${label}] ${text}`);
+        if (msg.type() === "error" || msg.type() === "warning") {
+          faults.push(`[${label}:${msg.type()}] ${text}`);
+        }
         console.log(`[${label}:${msg.type()}] ${text}`);
       })
       .catch(() => {
@@ -269,7 +280,7 @@ interface Session {
   configDir: string;
   /** Joined lazily by the revocation test — a Node peer holding `std:mesh.admin`, which neither page does. */
   admin?: StackPeer;
-  /** Every `console.error` and uncaught exception either page produced, newest last. Quoted verbatim by a failure. */
+  /** Every `console.error`, `console.warn` and uncaught exception either page produced, newest last. Quoted verbatim by a failure. */
   faults: string[];
 }
 
@@ -297,16 +308,55 @@ function distAppSources(): string {
   ].join("\n");
 }
 
+/**
+ * Boot everything one browser's run needs, and unwind ALL of it if any step
+ * fails.
+ *
+ * THE UNWIND IS NOT TIDINESS. `afterAll` can only stop what `beforeAll`
+ * assigned, so a throw between `launcher.launch()` and the last `goto` used
+ * to leave a browser process, two HTTP servers and a whole relay+hub mesh
+ * running with no handle to any of them — `session` is never assigned and
+ * `stopSession`'s own `session == null` guard skips the lot. Playwright's
+ * exit handlers usually mop the browser up, so it presents as noise rather
+ * than a hang, which is exactly why it would go unnoticed. Same shape
+ * `startBrowserPeer` and `startHub` already use for the same reason.
+ */
 async function startSession(launcher: BrowserType): Promise<Session> {
   buildPages();
 
+  const unwind: Array<() => Promise<void>> = [];
+  const startFailed = async (): Promise<void> => {
+    // A COPY: `reverse()` mutates in place, and unwinding twice off the same
+    // array would run the steps forwards the second time — the same note
+    // `peer-runtime.ts` carries.
+    for (const step of [...unwind].reverse()) {
+      await step().catch((err: unknown) => {
+        console.log(`[session] error while unwinding a failed start: ${String(err)}`);
+      });
+    }
+  };
+
+  try {
+    return await buildSession(launcher, unwind);
+  } catch (err) {
+    await startFailed();
+    throw err;
+  }
+}
+
+async function buildSession(
+  launcher: BrowserType,
+  unwind: Array<() => Promise<void>>,
+): Promise<Session> {
   const stack = await startStack({ presenceTtlMs: PRESENCE_TTL_MS });
+  unwind.push(async () => await stack.stop());
 
   // The invitation payload both pages fetch over HTTP. Written for real,
   // to a real file, and served by the real static server — `pnpm setup`'s
   // own output shape (`src/setup/main.ts`'s `HttpeersConfig`), with this
   // stack's actual relay address in it.
   const configDir = mkdtempSync(join(tmpdir(), "httpeers-browser-e2e-"));
+  unwind.push(async () => rmSync(configDir, { recursive: true, force: true }));
   const httpeersConfigPath = join(configDir, "httpeers.json");
   writeFileSync(
     httpeersConfigPath,
@@ -325,8 +375,10 @@ async function startSession(launcher: BrowserType): Promise<Session> {
     imagePeerDistDir: join(appRoot, "dist/image-peer"),
     httpeersConfigPath,
   });
+  unwind.push(async () => await servers.stop());
 
   const browser = await launcher.launch({ headless: true });
+  unwind.push(async () => await browser.close());
   const context = await browser.newContext();
 
   const faults: string[] = [];
@@ -351,14 +403,30 @@ async function startSession(launcher: BrowserType): Promise<Session> {
   return { browser, appPage, imagePage, stack, servers, configDir, faults };
 }
 
+/**
+ * Stop everything, in the order that produces the fewest lies: the browser
+ * first (a page still heartbeating while the hub goes down logs a failure
+ * belonging to nothing), then the servers, then the mesh, then the temp dir.
+ *
+ * EVERY STEP IS ATTEMPTED EVEN IF AN EARLIER ONE THREW, and no failure is
+ * silent. Swallowing them keeps a leak from failing the run — a leak here
+ * presents as a vitest hang, and a hang whose cause was caught and discarded
+ * is the worst of both. None has been observed; the log line is what makes
+ * the first one visible.
+ */
 async function stopSession(session: Session | undefined): Promise<void> {
   if (session == null) return;
-  // Browser first: a page still heartbeating while the hub goes down logs a
-  // failure that belongs to nothing. Then the servers, then the mesh.
-  await session.browser.close().catch(() => {});
-  await session.servers.stop().catch(() => {});
-  await session.stack.stop().catch(() => {});
-  rmSync(session.configDir, { recursive: true, force: true });
+  const steps: Array<[string, () => Promise<void>]> = [
+    ["browser", async () => await session.browser.close()],
+    ["static servers", async () => await session.servers.stop()],
+    ["relay + hub", async () => await session.stack.stop()],
+    ["config dir", async () => rmSync(session.configDir, { recursive: true, force: true })],
+  ];
+  for (const [what, step] of steps) {
+    await step().catch((err: unknown) => {
+      console.log(`[teardown] stopping the ${what} failed: ${String(err)}`);
+    });
+  }
 }
 
 /**
@@ -424,6 +492,16 @@ function assertStreamed(streamed: StreamedBody, expectedBytes: Uint8Array): void
   //    This is the one that most directly says "not buffered": it is the
   //    consumer holding bytes that the provider had not yet finished
   //    producing.
+  //
+  //    THIS ONE IS LATENCY-SENSITIVE AND 1 AND 2 ARE NOT. Both sides are
+  //    absolute times from the fetch, so a fixed setup cost — the dial, the
+  //    ServiceWorker round trip — lands on BOTH and pushes the ratio toward
+  //    1: on this machine 44/245 ms passes comfortably, and the same run on
+  //    a host 200 ms slower would read 244/444 and false-FAIL. It cannot
+  //    false-PASS (added latency never makes the first chunk look earlier
+  //    relative to the last), so the proof is not weakened by it — but on a
+  //    slower host, fix this by subtracting the observed first-arrival
+  //    baseline, not by loosening the ratio.
   expect(first).toBeLessThan(last * 0.5);
 }
 
@@ -453,7 +531,8 @@ describe.each(BROWSERS)("Task 15: two browser peers in $name", ({ name, launcher
         // the forwarding exists to prevent.
         throw new Error(
           `${name}: a page reported state "error" (image-peer=${image}, app=${app}).\n` +
-            `Page errors, newest last:\n${session.faults.join("\n") || "(none captured)"}`,
+            `Page errors and warnings, newest last:\n` +
+            `${session.faults.join("\n") || "(none captured)"}`,
         );
       }
       return image === "ready" && app === "ready";
@@ -464,6 +543,26 @@ describe.each(BROWSERS)("Task 15: two browser peers in $name", ({ name, launcher
   afterAll(async () => {
     await stopSession(session);
   }, 60_000);
+
+  /**
+   * On a FAILING test, quote what the pages said.
+   *
+   * The `beforeAll` already does this for a page that never came up, but the
+   * failure most in need of it is a later one — a mesh call that came back
+   * 502 while `edge-dispatch.ts`'s job 4 SWALLOWED the dial error that
+   * explains it and left only a `console.warn` behind. Printed output is
+   * hundreds of lines away from an assertion by the time vitest renders the
+   * summary; this puts it underneath.
+   */
+  afterEach((ctx) => {
+    if (ctx.task.result?.state !== "fail") return;
+    if (session?.faults.length) {
+      console.log(
+        `[${name}] page errors and warnings captured before this failure:\n` +
+          session.faults.join("\n"),
+      );
+    }
+  });
 
   it(
     "each page is controlled by its own ServiceWorker edge",
