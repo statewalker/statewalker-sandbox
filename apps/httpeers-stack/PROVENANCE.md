@@ -1602,3 +1602,39 @@ $ pnpm exec vitest run --no-file-parallelism
 $ (packages/httpeers.core) pnpm exec vitest run --no-file-parallelism
       Tests  148 passed (148)                 # untouched by this task
 ```
+
+## Task 14, fix round 1
+
+Five minors from review, all in `tests/`:
+
+1. **The TTL bound was 2.5 TTLs, not one.** `PRESENCE_TTL_MS + SWEEP_INTERVAL_MS + 2_000`
+   (5000 ms) against a measured ~2230 ms could not have failed if the sweep regressed. Now
+   `+500` (3500 ms), where `TTL + SWEEP` is the genuine ceiling and the 500 ms is poll
+   granularity and round trips.
+2. **The streaming assertion is now pairwise.** First-arrival-vs-last-send let a transport
+   stream the opening chunks and buffer the rest. Every arrival is now required to beat the
+   send of the first chunk it does not yet hold, with the send index derived from **bytes
+   delivered** (`ceil(delivered / PROVIDER_CHUNK_SIZE)`) rather than from a chunk index, so it
+   stays correct if the reader ever coalesces two frames. Proven with a half-buffering mutant
+   (stream 2, buffer 4): the old assertion passed it, the new one fails at chunk 2.
+   `providerSentAt.length === chunkSizes.length` relaxed to `> 1` — the provider windowing its
+   reads is what that line meant; frame coalescing is the platform's business.
+3. **`StackPeer.configuration` is derived, not hand-listed** —
+   `JSON.stringify({ ...init, hubPeerId, relayAddr, hubAddr })`. A hand-maintained snapshot
+   would have silently stopped covering any field a later task adds to `JoinInit`, and the
+   assertion it feeds is acceptance criterion 4 in its Node form.
+4. **A dead assertion replaced by a live one.** `expect(elapsedMs).toBeLessThan(budgetMs)` could
+   never fail — `waitForMeshState` already throws on the budget. In its place, the bound the
+   helper does *not* check: a peer may not be swept BEFORE its TTL runs out. Measured from
+   `StackPeer.lastBeatAt` (the last heartbeat the hub actually accepted, up to one beat interval
+   before `stopBeating()`), so the floor is exactly `PRESENCE_TTL_MS` with no fudge. Proven with
+   a mutant that ignores `presenceTtlMs`: the provider then leaves in 226 ms and the assertion
+   fails, while every other test in the file still passes.
+5. **A reciprocal pointer** in `tests/support/mesh.ts`'s module header explaining why there are
+   two harnesses — the reader arriving at `mesh.ts` first is the one who needs it.
+
+Re-measured over 8 consecutive runs of the new suite: streaming margin 199.7–203.1 ms of a
+200.2–203.5 ms send window with 5 pairwise checks each run; revocation 2.1–7.2 ms; the provider
+left the view 2230–2278 ms after its last accepted heartbeat against the 3500 ms budget. Full app
+suite 172/172 on 6 consecutive runs; `httpeers.core` 148/148 and still untouched; all typechecks
+clean.

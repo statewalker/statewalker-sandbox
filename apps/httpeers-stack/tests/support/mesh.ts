@@ -4,6 +4,17 @@
  * Task 7b. Real libp2p nodes, real dials; not the in-process `app.fetch`
  * style `hub.test.ts` (Task 7a) uses.
  *
+ * THERE IS A SECOND HARNESS, AND NEITHER REPLACES THE OTHER.
+ * `tests/e2e/harness.ts` (Task 14) boots the DEPLOYMENT — `startRelay` and
+ * `startHub` through their own entry points, identities from
+ * `RELAY_SEED`/`HUB_SEED`, the hub's TTL sweep timer running, peers holding
+ * real circuit-relay reservations. This file deliberately does none of that:
+ * it assembles a hub by hand over direct loopback TCP with nothing scheduled
+ * behind the test's back, which is what its three suites need to examine the
+ * protocol surface in isolation. Reach for that one when the deployment's own
+ * assembly or its timers are the subject; reach for this one otherwise. See
+ * that file's module comment for the full four-way difference.
+ *
  * `buildTestHub` assembles the same production wiring `src/hub/main.ts`
  * does (mounts factory, `DEFAULT_ACCESS_TREE`, the TTL sweep is NOT started
  * here — these suites call `hub.peer` methods over real time, well under

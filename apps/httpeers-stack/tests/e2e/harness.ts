@@ -131,13 +131,22 @@ export interface StackPeer extends TestPeer {
   stopBeating: () => void;
   /** This peer's own relayed (`/p2p-circuit`) multiaddr, as granted by the relay. */
   circuitAddr: string;
+  /** `performance.now()` at this peer's most recent SUCCESSFUL heartbeat — the instant its presence TTL last restarted. */
+  lastBeatAt: number;
   /**
-   * A JSON snapshot of EVERYTHING this harness configured this peer with —
-   * its roles, its own access tree, and every peer id and address it was
-   * handed at construction. Exists so a test can assert mechanically that a
-   * consumer never held a provider's peer id by any route other than the mesh
-   * view (design record §5.4, acceptance criterion 4), rather than asserting
-   * it by the absence of an argument a reader has to go looking for.
+   * A JSON snapshot of EVERYTHING this harness configured this peer with.
+   * Exists so a test can assert mechanically that a consumer never held a
+   * provider's peer id by any route other than the mesh view (design record
+   * §5.4, acceptance criterion 4), rather than asserting it by the absence of
+   * an argument a reader has to go looking for.
+   *
+   * DERIVED FROM `JoinInit` BY SPREAD, NEVER HAND-LISTED. A hand-maintained
+   * copy would silently stop covering any field a later task adds to
+   * `JoinInit`, and the assertion it feeds is acceptance criterion 4 in its
+   * Node form — exactly the place where a quietly narrowed check is
+   * expensive. (A field holding a FUNCTION would still be dropped by
+   * `JSON.stringify`; nothing in `JoinInit` carries a peer id that way today,
+   * and `mounts` — the only function-bearing field — serialises to `{}`.)
    */
   configuration: string;
 }
@@ -302,15 +311,14 @@ export async function startStack(): Promise<Stack> {
       const stackPeer: StackPeer = Object.assign(peer, {
         token: redemption.token,
         circuitAddr,
-        configuration: JSON.stringify({
-          roles: init.roles,
-          accessTree: init.accessTree,
-          hubPeerId,
-          relayAddr,
-          hubAddr,
-        }),
+        lastBeatAt: Number.NaN, // no heartbeat yet -- set by the first `beat()`
+        configuration: JSON.stringify({ ...init, hubPeerId, relayAddr, hubAddr }),
         async beat(advertisements?: TestAdvertisement[]) {
           stackPeer.token = await peer.heartbeat(hubPeerId, stackPeer.token, advertisements);
+          // AFTER the call resolves, not before: a beat the hub refused (a
+          // revoked member's 403) throws out of `heartbeat` and must not look
+          // like a presence refresh that restarted the TTL.
+          stackPeer.lastBeatAt = performance.now();
         },
         startBeating(advertisements?: TestAdvertisement[]) {
           clearInterval(timer); // replacing an already-running timer, never stacking a second one
