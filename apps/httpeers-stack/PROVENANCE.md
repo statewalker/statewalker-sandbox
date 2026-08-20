@@ -1153,3 +1153,30 @@ files, `src/browser/join.ts` (the `/webrtc` pre-dial and the keepalive timer's
 transport profile itself). `httpeers.core`'s own isolation grep (`src/tokens.ts`,
 `src/transport-duplex.ts`) is untouched -- nothing in `packages/httpeers.core` was
 modified by this task.
+
+### Task 11 fix round (review)
+
+Two Important findings, one Minor, all fixed -- full detail and verification transcripts
+in `.superpowers/sdd/2026-08-18-httpeers-stack/task-11-report.md`'s "Fix round" section.
+
+1. **`stop()` leaked the libp2p node.** `peer-runtime.ts` hands `node` to `createPeer` as a
+   caller-supplied node; `Peer.stop()` never stops a node it did not build
+   (`ownsNode = suppliedNode == null`, `packages/httpeers.core/src/peer.ts`). `stop()` now
+   calls `await node.stop()` in a `finally`, so it runs even if `join.stop()` / `edge.stop()`
+   / `peer.stop()` throws.
+2. **§9 of the task report claimed the whole `src/browser/` surface needed a browser to
+   test.** False of `join.ts` -- no browser API in its import list, and this app already had
+   the harness (`tests/support/mesh.ts`). Added `tests/browser-join.test.ts`: three tests
+   over a real hub and a real TCP peer, the load-bearing one proving each version counter
+   gates only its own section (a mesh-only hub change does not trigger a vocabulary or
+   revocations refetch) -- verified adversarial by temporarily breaking the gate and
+   confirming the test catches it, then reverting.
+3. **`heartbeatOnce` could throw an unhandled rejection.** Only the presence call was
+   inside a try/catch; `res.json()` and three follow-up call/parse pairs were not, and
+   `heartbeatOnce` runs as `void heartbeatOnce()` on a timer. The entire heartbeat body is
+   now inside one try/catch/finally. Confirmed the crash first (reproduced directly), then
+   confirmed the fix closes it (same reproduction, clean afterward) -- not inferred from
+   reading the code alone.
+
+**146 core (unchanged) / 93 → 96 app** (3 new, all in `tests/browser-join.test.ts`).
+`httpeers.core`'s isolation grep unchanged; nothing in `packages/httpeers.core` touched.

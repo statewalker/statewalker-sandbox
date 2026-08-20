@@ -180,10 +180,28 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
     peerId: peer.peerId,
     meshView: () => join.meshView(),
     async stop() {
-      join.stop();
-      await edge.stop();
-      await peer.stop();
-      onState("stopped");
+      try {
+        join.stop();
+        await edge.stop();
+        await peer.stop();
+      } finally {
+        // `peer.stop()` does NOT stop `node`: `node` was handed to
+        // `createPeer` as an already-constructed, SUPPLIED node
+        // (`CreatePeerInit.node`), and `httpeers.core`'s `Peer.stop()`
+        // only ever stops a node it built itself (`ownsNode =
+        // suppliedNode == null`, `peer.ts`) -- a caller-supplied node was
+        // never `createPeer`'s to tear down. `peer-runtime.ts` is the one
+        // place that built `node` (via `createBrowserNode`), so it is the
+        // one place positioned to close it; skipping this leaves the
+        // relay WebSocket and every WebRTC connection open past `stop()`
+        // returning (found on review -- a page that stops and restarts
+        // would accumulate connections, worse in the multi-tab case).
+        // Run in `finally`, not after the block above, so a failure in
+        // ANY earlier teardown step still leaves the node closed rather
+        // than leaking every connection it holds.
+        await node.stop();
+        onState("stopped");
+      }
     },
   };
 }

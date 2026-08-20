@@ -185,6 +185,18 @@ export function startJoin(init: JoinInit): JoinHandle {
   async function heartbeatOnce(): Promise<void> {
     if (heartbeatInFlight) return; // never overlap two in-flight heartbeats -- see the module comment on why this is safe to just skip a tick rather than queue.
     heartbeatInFlight = true;
+    // EVERYTHING BELOW IS INSIDE ONE try/catch, DELIBERATELY -- not only
+    // the presence call. `heartbeatOnce` is invoked as `void
+    // heartbeatOnce()` (fire-and-forget, on a `setInterval`), so ANY
+    // rejection that escapes it -- a dropped connection mid-call, a
+    // malformed JSON body from the hub, a follow-up GET failing after the
+    // presence POST already succeeded -- becomes an unhandled promise
+    // rejection, not the "next tick retries" behaviour the rest of this
+    // function's comments describe. A single catch-all below is what
+    // actually delivers that contract; catching only the first call and
+    // leaving the rest unprotected (an earlier version of this function)
+    // does not (found on review; reproduced by forcing an unconditional
+    // refetch and watching a follow-up call's rejection escape uncaught).
     try {
       seq += 1;
       // THE PEER'S OWN CURRENT MULTIADDRS -- `node.getMultiaddrs()`, read
@@ -197,21 +209,12 @@ export function startJoin(init: JoinInit): JoinHandle {
       const addrs = node.getMultiaddrs().map((addr) => addr.toString());
       const advertisements = init.advertisements?.() ?? [];
 
-      let res: Response;
-      try {
-        res = await peer.call(hubPeerId, "/.well-known/presence", {
-          method: "POST",
-          token,
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ seq, addrs, advertisements }),
-        });
-      } catch {
-        // Dial/transport failure -- leave every cached value as-is; the
-        // next tick retries. `KEEPALIVE_INTERVAL_MS`'s timer is what
-        // actually diagnoses and repairs a dropped connection to the hub;
-        // this heartbeat has no business doing that job too.
-        return;
-      }
+      const res = await peer.call(hubPeerId, "/.well-known/presence", {
+        method: "POST",
+        token,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ seq, addrs, advertisements }),
+      });
       if (!res.ok) return; // e.g. a revoked membership (403) or a hub-side rejection -- surfaced by the response simply not advancing any cache.
 
       const body = (await res.json()) as PresenceHeartbeatResponse;
@@ -252,6 +255,14 @@ export function startJoin(init: JoinInit): JoinHandle {
       revocationCache.update(body.versions.policy, revocationEntriesCache);
 
       init.onHeartbeat?.(body.versions);
+    } catch {
+      // Dial/transport failure, a malformed response body, or any other
+      // fault anywhere in the sequence above -- leave every cached value
+      // exactly as it was; the next tick retries from scratch.
+      // `KEEPALIVE_INTERVAL_MS`'s timer is what actually diagnoses and
+      // repairs a dropped connection to the hub; this heartbeat has no
+      // business doing that job too, only refusing to crash the page over
+      // it.
     } finally {
       heartbeatInFlight = false;
     }
