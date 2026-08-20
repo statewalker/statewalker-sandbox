@@ -224,10 +224,15 @@ describe("hub: invite, presence and the mesh view", () => {
   it("a role name that is not in the vocabulary is rejected at MemberStore.setRoles too — the guard lives at the store, not at whichever call site exists today", async () => {
     hub.invitations.create("INV-GRACE", ["member"], 60_000);
     await hub.peer.dispatch(
-      requestAs("grace", "/.well-known/invite", { method: "POST", body: JSON.stringify({ id: "INV-GRACE" }) }),
+      requestAs("grace", "/.well-known/invite", {
+        method: "POST",
+        body: JSON.stringify({ id: "INV-GRACE" }),
+      }),
     );
 
-    expect(() => hub.memberStore.setRoles("grace", ["superadmin"])).toThrow(/unknown role 'superadmin'/);
+    expect(() => hub.memberStore.setRoles("grace", ["superadmin"])).toThrow(
+      /unknown role 'superadmin'/,
+    );
     // Rejected before the write: grace's roles are unchanged.
     expect(hub.memberStore.get("grace")?.roles).toEqual(["member"]);
   });
@@ -299,19 +304,39 @@ describe("hub: invite, presence and the mesh view", () => {
         }),
       );
 
+      // ASSERTIONS CHANGED IN TASK 13, DELIBERATELY AND FOR ONE REASON:
+      // `createHubEndpoints` now posts the hub's OWN advertisement for the
+      // `/search` mount it has always served (design record §5.2's third
+      // piece, "a handler plus its `.access` entry plus its
+      // advertisement" -- missing until now, which left search
+      // undiscoverable by the consumer page; see `src/hub/endpoints.ts`).
+      // So `advertisements` is no longer empty for ANY caller, and the two
+      // whole-array `toEqual`s below could no longer hold whatever this
+      // test was actually checking.
+      //
+      // The SUBJECT is unchanged: whether a caller lacking the gating
+      // capability sees the GATED kind. That is now asserted on that kind
+      // specifically. The hub's own `search` advertisement is separately
+      // asserted VISIBLE to both callers, which is the other half of the
+      // same rule -- `mesh-view.ts`: "a kind absent [from
+      // advertisementAccess] is visible to any authenticated caller."
       // The invite response's token is itself a valid member-scoped token --
       // the provider does not need a second heartbeat to read the view.
       const asMember = await gated.peer.dispatch(
         requestAs("provider", "/.well-known/mesh", { headers: bearer(providerToken) }),
       );
-      expect((await json(asMember)).advertisements).toEqual([]);
+      const memberAds = (await json(asMember)).advertisements as Array<{ kind: string }>;
+      expect(memberAds.filter((ad) => ad.kind === "app:special")).toEqual([]);
+      expect(memberAds.map((ad) => ad.kind)).toContain("search");
 
       const asAdmin = await gated.peer.dispatch(
         requestAs("admin-bob", "/.well-known/mesh", { headers: bearer(adminToken) }),
       );
-      expect((await json(asAdmin)).advertisements).toEqual([
+      const adminAds = (await json(asAdmin)).advertisements as Array<{ kind: string }>;
+      expect(adminAds.filter((ad) => ad.kind === "app:special")).toEqual([
         { peerId: "provider", id: "svc", kind: "app:special", title: "Special Service" },
       ]);
+      expect(adminAds.map((ad) => ad.kind)).toContain("search");
     } finally {
       await gated.peer.stop();
     }
