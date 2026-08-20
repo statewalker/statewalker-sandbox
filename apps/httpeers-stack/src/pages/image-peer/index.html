@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>httpeers image peer</title>
+    <style>
+      body {
+        font: 14px/1.4 system-ui, sans-serif;
+        max-width: 640px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        color: #1a1a1a;
+      }
+      h1 {
+        font-size: 1.1rem;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.25rem 0.75rem;
+      }
+      dt {
+        font-weight: 600;
+      }
+      dd {
+        margin: 0;
+        font-family: ui-monospace, monospace;
+        word-break: break-all;
+      }
+      #warning {
+        background: #fff3cd;
+        border: 1px solid #e0c36a;
+        border-radius: 4px;
+        padding: 0.5rem 0.75rem;
+        margin: 1rem 0;
+      }
+      #gallery {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 0.75rem;
+        margin-top: 1rem;
+      }
+      #gallery figure {
+        margin: 0;
+        text-align: center;
+      }
+      #gallery img {
+        width: 100%;
+        height: auto;
+        border-radius: 4px;
+        border: 1px solid #ccc;
+        display: block;
+      }
+      #gallery figcaption {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+        overflow-wrap: break-word;
+      }
+      #serving {
+        font-weight: 600;
+      }
+      #serving[data-serving="true"] {
+        color: #1a7a1a;
+      }
+      #serving[data-serving="false"] {
+        color: #a1a1a1;
+      }
+      #join-form {
+        margin: 1rem 0;
+      }
+      #join-form input {
+        font-family: ui-monospace, monospace;
+        padding: 0.35rem 0.5rem;
+        min-width: 16rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>httpeers image peer</h1>
+
+    <p id="warning">
+      <strong>Closing this tab removes these images from the mesh.</strong>
+      This page serves the fixture gallery below over WebRTC while it stays
+      open — no page, no service.
+    </p>
+
+    <dl>
+      <dt>peer id</dt>
+      <dd id="peer-id">–</dd>
+      <dt>connection state</dt>
+      <dd id="state">not started</dd>
+      <dt>serving</dt>
+      <dd id="serving" data-serving="false">no</dd>
+    </dl>
+
+    <form id="join-form">
+      <label for="invite">invitation code</label>
+      <input id="invite" name="invite" type="text" autocomplete="off" placeholder="paste an invitation id" />
+      <button type="submit">join mesh</button>
+    </form>
+
+    <h2>fixture gallery</h2>
+    <div id="gallery"></div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

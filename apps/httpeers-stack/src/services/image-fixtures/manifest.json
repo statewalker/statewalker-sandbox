@@ -1,0 +1,26 @@
+[
+  {
+    "id": "relay-node",
+    "title": "The relay node, dawn colors",
+    "file": "relay-node.png",
+    "contentType": "image/png"
+  },
+  {
+    "id": "mesh-diagram",
+    "title": "Mesh topology sketch (café whiteboard, é)",
+    "file": "mesh-diagram.png",
+    "contentType": "image/png"
+  },
+  {
+    "id": "hub-desk",
+    "title": "Hub operator's desk 🖥️",
+    "file": "hub-desk.png",
+    "contentType": "image/png"
+  },
+  {
+    "id": "circuit-relay",
+    "title": "Circuit relay reservation, annotated",
+    "file": "circuit-relay.png",
+    "contentType": "image/png"
+  }
+]
