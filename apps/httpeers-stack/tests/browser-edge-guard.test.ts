@@ -19,11 +19,34 @@ describe("assertKeyMatchesPrefix", () => {
   });
 
   it("accepts a multi-segment prefix whose first segment equals the key", () => {
-    expect(() => assertKeyMatchesPrefix("mesh", "mesh/sub/path")).not.toThrow();
+    expect(() => assertKeyMatchesPrefix("mesh", "mesh/sub/path/")).not.toThrow();
   });
 
-  it("accepts a bare key with no trailing slash", () => {
-    expect(() => assertKeyMatchesPrefix("mesh", "mesh")).not.toThrow();
+  // TWO ASSERTIONS CHANGED IN TASK 13 (fix round 1), deliberately: this
+  // case used to read "accepts a bare key with no trailing slash", and the
+  // multi-segment case above used to pass "mesh/sub/path". Both now throw,
+  // because Ruling 58 turned `BrowserPeerHandle.baseUrl`'s trailing slash
+  // into a published contract -- `SwHttpRegistration.baseUrl` is
+  // `new URL("./" + prefix, rootUrl)`, so a slash-less prefix yields a
+  // slash-less baseUrl, and `${baseUrl}${peerId}/search` becomes
+  // `/meshPEERID/search`: unroutable, and silently falling through to the
+  // origin server. The old assertions were correct for a guard that only
+  // policed the FIRST segment; they are wrong for one that has to keep
+  // that promise too. Nothing in the app passed a slash-less prefix
+  // (`mountEdge` defaults to `${key}/`), so no behaviour changed -- only
+  // what the guard will now refuse.
+  it("throws on a bare key with no trailing slash", () => {
+    expect(() => assertKeyMatchesPrefix("mesh", "mesh")).toThrow(/does not end with/);
+  });
+
+  it("throws on a multi-segment prefix with no trailing slash", () => {
+    expect(() => assertKeyMatchesPrefix("mesh", "mesh/sub/path")).toThrow(/does not end with/);
+  });
+
+  it("the trailing-slash message names the contract it protects, not just the rule", () => {
+    // A guard that only says "invalid" sends the next reader to the wrong
+    // layer -- the whole point of note 39's remedy.
+    expect(() => assertKeyMatchesPrefix("mesh", "mesh")).toThrow(/baseUrl/);
   });
 
   it("throws when the prefix's first segment differs from the key -- the note 39 trap", () => {

@@ -28,16 +28,39 @@
  * (work item 1) prescribes here: throw before `SwHttpAdapter.register` is
  * ever called, so a mismatch is a loud construction-time error rather than
  * a silent 404 three layers away.
+ *
+ * THE SECOND RULE -- THE TRAILING SLASH -- IS NEWER AND HAS ITS OWN TRAP.
+ * `SwHttpRegistration.baseUrl` is `new URL("./" + prefix, rootUrl)`, so a
+ * prefix with no trailing slash (`"app"`, or `"app/sub"`) produces a
+ * baseUrl with none either. Since Ruling 58 that baseUrl is a published
+ * contract -- `BrowserPeerHandle.baseUrl`, documented as always ending in
+ * a slash, because every page-originated call composes
+ * `${baseUrl}${peerId}/...`. A slash-less baseUrl silently yields
+ * `/appPEERID/search`: a URL the ServiceWorker still routes (its key is
+ * the first segment, `appPEERID`... which matches nothing), so the request
+ * falls through to the origin server exactly like the first trap, and for
+ * a reason just as invisible. No caller does this today; the point of a
+ * guard is that none ever can.
  */
 export function assertKeyMatchesPrefix(key: string, prefix: string): void {
   const firstSegment = prefix.split("/")[0];
-  if (firstSegment === key) return;
-  throw new Error(
-    `mountEdge: prefix "${prefix}" does not start with adapter key "${key}" -- ` +
-      "the ServiceWorker dispatcher keys a registration by the URL's first path segment " +
-      "while the adapter matches the full base URL; a mismatch here means every mounting " +
-      "step reports success while the handler is never called, and the request silently " +
-      "falls through to the origin server (design note 39 §3). Refusing to start rather " +
-      "than mount a registration nothing can ever reach.",
-  );
+  if (firstSegment !== key) {
+    throw new Error(
+      `mountEdge: prefix "${prefix}" does not start with adapter key "${key}" -- ` +
+        "the ServiceWorker dispatcher keys a registration by the URL's first path segment " +
+        "while the adapter matches the full base URL; a mismatch here means every mounting " +
+        "step reports success while the handler is never called, and the request silently " +
+        "falls through to the origin server (design note 39 §3). Refusing to start rather " +
+        "than mount a registration nothing can ever reach.",
+    );
+  }
+  if (!prefix.endsWith("/")) {
+    throw new Error(
+      `mountEdge: prefix "${prefix}" does not end with "/" -- the resulting baseUrl would ` +
+        "not either, and every mesh call a page composes as `${baseUrl}${peerId}/...` would " +
+        "run the two together into one segment the ServiceWorker cannot route, falling " +
+        "through to the origin server. `BrowserPeerHandle.baseUrl` promises a trailing " +
+        "slash (Ruling 58); this is what makes that promise keepable.",
+    );
+  }
 }

@@ -25,10 +25,19 @@
  *    version's default (rolldown-backed) tree-shaking reducing it to a
  *    literal 0-byte file -- a ServiceWorker that registers fine and
  *    intercepts nothing. `treeshake: { moduleSideEffects: true }` did not
- *    fix it; only disabling tree-shaking outright did. Verified again for
- *    this build by reading `dist/app/sw.js` and finding the real
- *    `startHttpDispatcher` call in it, not by trusting the exit code or the
- *    file size.
+ *    fix it; only disabling tree-shaking outright did.
+ *
+ *    HOW TO CHECK IT, AND HOW NOT TO. Do NOT grep the built `sw.js` for
+ *    `startHttpDispatcher`: the identifier is renamed by minification and
+ *    that grep returns 0 on a perfectly good build. (Nor for
+ *    `addEventListener("fetch")` with double quotes -- the output uses
+ *    backticks.) What actually holds, and what was verified for this build
+ *    by reading the file: `dist/app/sw.js` is ~7.8 kB, ends in the minified
+ *    top-level call `k({self,log:console.log})` -- that IS
+ *    `startHttpDispatcher({ self, log: console.log })` -- and contains
+ *    exactly one `fetch` listener alongside the `install`/`activate`/
+ *    `skipWaiting`/`clients.claim` handlers. A 0-byte or handler-less file
+ *    is the regression to watch for; the exit code will not tell you.
  *
  *  - `resolve.conditions` STARTS WITH `"source"`, matching this app's
  *    `vitest.config.ts`, so `@statewalker/*` workspace packages resolve
