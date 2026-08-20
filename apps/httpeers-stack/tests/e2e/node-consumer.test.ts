@@ -352,7 +352,7 @@ describe("Task 14: a Node consumer over the real relay + hub", () => {
     );
   });
 
-  it("STREAMS: the image body arrives in more than one chunk, and the first chunk lands before the last is sent", async () => {
+  it("STREAMS: the image body arrives in more than one chunk, and EVERY chunk lands before the next one is sent", async () => {
     // Depends on: the denial test, which dialed the provider from `consumer`.
     providerSentAt.length = 0;
 
@@ -366,25 +366,48 @@ describe("Task 14: a Node consumer over the real relay + hub", () => {
     expect(bytes.length).toBe(Number(res.headers.get("content-length")));
     expect(chunkSizes.length).toBeGreaterThan(1);
 
-    // COUNTING CHUNKS IS NOT ENOUGH, which is why this test measures. A
-    // transport that buffered the whole body and re-sliced it on the way out
-    // would still deliver several chunks; what it could not do is deliver the
-    // FIRST one before the provider had finished producing the LAST. The
-    // provider stalls `PROVIDER_CHUNK_DELAY_MS` per chunk, so a buffering
-    // transport's first arrival necessarily lands after the final send.
+    // The provider really did window its reads rather than hand back the file
+    // in one piece. Deliberately NOT `providerSentAt.length === chunkSizes.length`:
+    // whether the consumer's reader coalesces two frames into one `read()` is
+    // the platform's business, and this test has no opinion about it.
+    expect(providerSentAt.length).toBeGreaterThan(1);
+
+    // COUNTING CHUNKS IS NOT ENOUGH, which is why this test measures, and
+    // comparing only the FIRST arrival against the LAST send is not enough
+    // either: a transport that streamed the opening chunks and then buffered
+    // the rest would pass that. This is the pairwise form — every arrival must
+    // beat the send of the first chunk it does NOT yet hold.
+    //
+    // `nextSend` is derived from bytes actually delivered rather than from a
+    // chunk index, so it stays correct if the reader coalesces: the provider
+    // windows reads at exactly `PROVIDER_CHUNK_SIZE`, so having `delivered`
+    // bytes in hand means having exactly the first `ceil(delivered/CHUNK)`
+    // sends, and the next one after that is the send this arrival must have
+    // beaten. A buffering transport fails at the first arrival whose
+    // successor send is still in the future; a half-buffering one fails at the
+    // arrival where it started buffering.
+    let delivered = 0;
+    let comparisons = 0;
+    for (let i = 0; i < chunkSizes.length; i++) {
+      delivered += chunkSizes[i]!;
+      const nextSend = Math.ceil(delivered / PROVIDER_CHUNK_SIZE);
+      if (nextSend >= providerSentAt.length) break; // nothing left of the body to have beaten
+      expect(arrivedAt[i]!).toBeLessThan(providerSentAt[nextSend]!);
+      comparisons += 1;
+    }
+    // Guards against the loop passing vacuously (e.g. a single-chunk body, or
+    // a fixture small enough that the first arrival already holds everything).
+    expect(comparisons).toBeGreaterThan(1);
+
+    // The headline number, kept because it is what the report quotes: how much
+    // of the provider's whole send window the transport actually resolved.
     const firstArrival = arrivedAt[0]!;
     const lastSend = providerSentAt[providerSentAt.length - 1]!;
-    expect(providerSentAt.length).toBe(chunkSizes.length);
-    expect(firstArrival).toBeLessThan(lastSend);
-
     const marginMs = lastSend - firstArrival;
-    // The margin cannot exceed the send window, and a real streaming
-    // transport resolves most of it: assert at least one whole chunk delay's
-    // worth, so a transport that streamed only the final chunk early would
-    // still fail.
     expect(marginMs).toBeGreaterThan(PROVIDER_CHUNK_DELAY_MS);
     console.log(
-      `[task-14] streaming: ${chunkSizes.length} chunks, first arrival ${marginMs.toFixed(1)}ms before last send ` +
+      `[task-14] streaming: ${chunkSizes.length} chunks, ${comparisons} pairwise arrival<send checks; ` +
+        `first arrival ${marginMs.toFixed(1)}ms before last send ` +
         `(send window ${(lastSend - providerSentAt[0]!).toFixed(1)}ms)`,
     );
   });
@@ -444,16 +467,23 @@ describe("Task 14: a Node consumer over the real relay + hub", () => {
     expect(stillThere?.advertisements.some((ad) => ad.kind === "images")).toBe(true);
 
     provider.stopBeating();
-    const stoppedAt = performance.now();
 
-    // The budget is the hub's own two timers, plus slack for the poll itself:
-    // an entry may be up to one TTL stale before the next sweep notices it.
-    // Not a call timeout -- see `waitForMeshState`.
-    const budgetMs = PRESENCE_TTL_MS + SWEEP_INTERVAL_MS + 2_000;
+    // THE BOUND IS THE HUB'S OWN TWO TIMERS, and deliberately little more:
+    // an entry can sit up to one TTL stale before the next sweep notices it,
+    // so `PRESENCE_TTL_MS + SWEEP_INTERVAL_MS` is the real ceiling and the
+    // extra 500 ms is poll granularity plus round trips, not head-room for a
+    // regression to hide in. `waitForMeshState` throws when it is exceeded --
+    // that IS the upper-bound assertion, which is why none is repeated below.
+    // Not a call timeout; see `waitForMeshState`.
+    const budgetMs = PRESENCE_TTL_MS + SWEEP_INTERVAL_MS + 500;
     const elapsedMs = await waitForMeshState("provider leaves the view", budgetMs, async () => {
       const view = await stack.meshView(admin);
       return view?.advertisements.some((ad) => ad.kind === "images") === false;
     });
+    // Measured from the last heartbeat the hub actually accepted, not from
+    // `stopBeating()` -- the two differ by up to one beat interval, and only
+    // the former is the instant the TTL last restarted.
+    const sinceLastBeatMs = performance.now() - provider.lastBeatAt;
 
     const view = await stack.meshView(admin);
     expect(view?.advertisements.some((ad) => ad.kind === "images")).toBe(false);
@@ -463,10 +493,15 @@ describe("Task 14: a Node consumer over the real relay + hub", () => {
     expect(member).toBeDefined();
     expect(member?.online).toBe(false);
 
-    expect(elapsedMs).toBeLessThan(budgetMs);
+    // THE LOWER BOUND, which the helper does not check: a peer may not be
+    // swept BEFORE its TTL has run out. A hub that dropped presence eagerly --
+    // or that ignored `presenceTtlMs` entirely -- would evict the provider
+    // sooner than this and fail here, while still satisfying every
+    // "within one TTL" assertion above.
+    expect(sinceLastBeatMs).toBeGreaterThanOrEqual(PRESENCE_TTL_MS);
     console.log(
-      `[task-14] presence sweep: provider left the view ${elapsedMs.toFixed(0)}ms after its last heartbeat ` +
-        `(TTL ${PRESENCE_TTL_MS}ms + sweep ${SWEEP_INTERVAL_MS}ms); measured from ${stoppedAt.toFixed(0)}`,
+      `[task-14] presence sweep: provider left the view ${sinceLastBeatMs.toFixed(0)}ms after its last accepted heartbeat ` +
+        `(${elapsedMs.toFixed(0)}ms after it stopped beating); TTL ${PRESENCE_TTL_MS}ms + sweep ${SWEEP_INTERVAL_MS}ms, budget ${budgetMs}ms`,
     );
   }, 20_000);
 });
