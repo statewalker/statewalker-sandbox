@@ -85,6 +85,10 @@ describe("join.ts against a real hub and a real TCP peer", () => {
     const { peer: recorded, calls } = recordingPeer(clientPeer);
     const revocationCache = new RevocationCache({ maxStalenessMs: 60_000 });
     const first = nextHeartbeat();
+    // Counts COMPLETED heartbeats: `startJoin` calls `onHeartbeat` as the last
+    // statement of `heartbeatOnce`, after every conditional refetch it was
+    // going to make has already run. See the wait below.
+    let heartbeats = 0;
 
     const join = startJoin({
       peer: recorded,
@@ -95,7 +99,10 @@ describe("join.ts against a real hub and a real TCP peer", () => {
       revocationCache,
       heartbeatIntervalMs: 50,
       keepaliveIntervalMs: 60_000,
-      onHeartbeat: first.onHeartbeat,
+      onHeartbeat: () => {
+        heartbeats += 1;
+        first.onHeartbeat();
+      },
     });
     stopJoin = join.stop;
 
@@ -128,11 +135,28 @@ describe("join.ts against a real hub and a real TCP peer", () => {
       hub.invitations.create("invite-second-member", ["member"], 60_000);
       await redeemInvitation(otherPeer, hub.peer.peerId, "invite-second-member");
 
-      // `onHeartbeat` was already bound to `first.onHeartbeat` at
-      // construction, so the second heartbeat is observed by polling
-      // `calls` directly -- bounded, event-driven on the underlying
-      // condition rather than a fixed sleep.
+      // WAIT FOR THE HEARTBEAT TO FINISH, NOT FOR IT TO START. `recordingPeer`
+      // pushes a path BEFORE awaiting the call, so `calls.includes(...)` goes
+      // true the moment the mesh request is ISSUED -- while `meshViewCache` is
+      // only assigned once the response has been read (`join.ts`'s
+      // `heartbeatOnce`). Waiting on `calls` alone therefore let the
+      // assertions below race an in-flight request, and both of them read
+      // state that request had not written yet: `meshView()` was still the
+      // pre-redemption view, and a `/.well-known/vocabulary` fetch that WOULD
+      // have followed had not been issued, so the negative assertions could
+      // pass vacuously. It held on an idle machine and failed roughly one run
+      // in four once Task 14's e2e suite (six libp2p nodes, a relay and a hub
+      // in this same worker) ran ahead of it and left the process busier.
+      // Fixed here by observing completion: `heartbeats` increments at the END
+      // of `heartbeatOnce`, so waiting for it to move past the beat that
+      // issued the mesh call means every fetch that beat was going to make has
+      // already been recorded in `calls`. No assertion changed.
       await vi.waitUntil(() => calls.includes("/.well-known/mesh"), {
+        timeout: 5_000,
+        interval: 20,
+      });
+      const beatThatFetchedMesh = heartbeats;
+      await vi.waitUntil(() => heartbeats > beatThatFetchedMesh, {
         timeout: 5_000,
         interval: 20,
       });
