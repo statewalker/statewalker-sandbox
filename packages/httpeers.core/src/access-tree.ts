@@ -3,31 +3,43 @@
  *
  * The design has said since the beginning that policy lives in `.access`
  * files resolved root to leaf with deny-by-default. Resolution rules:
- *  - walk from `/` down to the resource, collecting every `.access` entry
- *    on the way; a deeper entry overrides a shallower one
- *  - THE RESOURCE'S OWN EXACT PATH IS THE DEEPEST ENTRY OF ALL. `ancestors`
- *    only ever returns proper ancestor DIRECTORIES (it deliberately excludes
- *    the resource itself — see that function's own doc comment), so an entry
- *    keyed by the exact request path (no trailing slash, e.g. `/search`) is
- *    a separate, more specific match than anything the ancestor walk finds,
- *    and overrides it when both are present. Fixed post-review: earlier,
- *    `resolveAccess` walked ancestors ONLY, which made any exact-path key
- *    dead code — never consulted at all. That is a fail-CLOSED symptom for
- *    a resource with no ancestor directory of its own (a bare, one-segment
- *    top-level path like `/search` could never be granted, no matter what
- *    its own entry said) but a fail-OPEN one for a targeted deny nested
- *    under a granting directory (`/admin/`: grant, `/admin/secret`: deny —
- *    the deny was silently unreachable and the directory's grant applied).
- *    The second case is the one that makes this a defect, not a quirk: a
- *    policy author writing that deny got silence and a false sense of
- *    protection. See `access-tree.test.ts`'s "an exact-leaf deny overrides
- *    a granting ancestor".
- *  - because `/x` and `/x/` are now two DIFFERENT keys that could silently
- *    diverge (one governs the resource `x`, the other governs everything
- *    *inside* directory `x`) but that a policy author could easily expect to
- *    mean the same thing, `withAccessTree` rejects a tree declaring both, at
- *    construction — fail fast, not fail closed, same stance as every other
- *    structural check in this file.
+ *  - ONE SEMANTIC: A KEY GOVERNS ITS OWN PATH *AND* ITS SUBTREE. Walk every
+ *    prefix of the request path, shallowest first — `/`, `/a`, `/a/b`, …,
+ *    down to the full path itself — and take the DEEPEST prefix that has an
+ *    entry. `/x` and `/x/` are the same key (a trailing slash is stripped
+ *    before lookup, except for root `/` itself), so a policy author writes
+ *    ONE entry for "this resource and everything under it," not two that
+ *    might silently diverge. `{ "/": deny, "/images": grant }` therefore
+ *    governs `GET /images` (the collection) AND `GET /images/{id}` (a
+ *    member) from the same single entry — no separate directory key needed.
+ *  - THIS WAS NOT ALWAYS TRUE, AND GETTING IT WRONG COST TASK 12 REAL TIME
+ *    (see PROVENANCE.md). An earlier version of this resolver treated `/x`
+ *    (no trailing slash) as an EXACT-ONLY match and `/x/` (trailing slash)
+ *    as the ONLY way to govern anything nested under `x` — two distinct
+ *    keys, and `withAccessTree` refused a tree declaring both, "ambiguous,
+ *    pick one." That refusal was correct in spirit (silent divergence
+ *    between two spellings of "the same policy" is a real risk) but wrong
+ *    in effect: `/x` and `/x/` are not two spellings of the SAME scope
+ *    under the old semantic, they are two DIFFERENT scopes (the resource
+ *    itself vs. everything strictly inside it), and a policy author who
+ *    needed both — "gate the collection AND every member the same way" —
+ *    had no way to write that at all. A fixture-backed image service found
+ *    this directly: `{ "/": deny, "/images": grant }` granted `GET /images`
+ *    but silently denied every `GET /images/{id}`, with no error at
+ *    construction or request time to say so. See `access-tree.test.ts`'s
+ *    "a key governs both its own path and every path beneath it".
+ *  - THE DUPLICATE-KEY REJECTION SURVIVES, AND IS NOW HONEST. Canonicalizing
+ *    `/x`/`/x/` to one key means declaring BOTH in the same tree is a
+ *    genuine duplicate of one scope (two conflicting entries for the same
+ *    thing), not a forced choice between two scopes that were never
+ *    actually the same. `withAccessTree` still refuses this at
+ *    construction — fail fast, not fail closed — but the refusal no longer
+ *    forecloses an author's actual intent.
+ *  - A DEEPER ENTRY STILL OVERRIDES A SHALLOWER ONE, including the resource's
+ *    own exact path over an ancestor's: `/admin/`: grant, `/admin/secret`:
+ *    deny still denies `/admin/secret` specifically while `/admin/anything-
+ *    else` stays granted — see "an exact-leaf deny overrides a granting
+ *    ancestor" below, unchanged by this fix.
  *  - deny by default: no entry anywhere means no access
  *  - an entry grants to capabilities (`anyOf`), or denies outright
  *    (`anyOf: []`)
@@ -51,8 +63,8 @@
 import { lookupClaims } from "./peer-context.js";
 import type { FetchHandler, MeshClaims, UsesTransportIdentity } from "./types.js";
 import { json } from "./types.js";
-import { assertValid, expandRoles, validateVocabulary } from "./vocabulary.js";
 import type { Vocabulary } from "./vocabulary.js";
+import { assertValid, expandRoles, validateVocabulary } from "./vocabulary.js";
 
 export interface AccessEntry {
   /**
@@ -79,7 +91,15 @@ export interface Decision {
   reason: string;
 }
 
-/** Every directory prefix of `pathname`, shallowest first: / , /a/ , /a/b/ … */
+/**
+ * Every directory prefix of `pathname`, shallowest first: / , /a/ , /a/b/ …
+ * -- the resource's OWN final segment is deliberately excluded (dropped as
+ * "the resource, not a directory"). Used by `resolveAccess` below as the
+ * first half of its full prefix walk; kept as its own exported, separately
+ * tested function because it predates (and is reused by) that walk, and a
+ * caller debugging a policy benefits from being able to ask "what are this
+ * path's ancestor directories" without also pulling in canonicalization.
+ */
 export function ancestors(pathname: string): string[] {
   const out = ["/"];
   const parts = pathname.split("/").filter(Boolean);
@@ -92,8 +112,36 @@ export function ancestors(pathname: string): string[] {
   return out;
 }
 
+/** Strips exactly one trailing slash, except for root itself (`/` stays `/`). The canonical spelling every tree key is compared against. */
+function canonicalPath(path: string): string {
+  if (path === "/") return "/";
+  return path.endsWith("/") ? path.slice(0, -1) : path;
+}
+
 /**
- * Returns WHICH directory governed and WHY, not just a boolean. That is
+ * Looks up `canonicalKey` in `tree`, trying BOTH spellings a policy author
+ * might have used (`/images` or `/images/`) since `/x`/`/x/` canonicalize to
+ * the same key — see the module comment. Returns the entry AND the actual
+ * key the tree used, so `resolveAccess`'s reported `source` reflects what a
+ * reader of the tree would recognize, not a synthesized canonical string
+ * that might not appear in the tree at all.
+ */
+function lookupCanonical(
+  tree: AccessTree,
+  canonicalKey: string,
+): { entry: AccessEntry; key: string } | undefined {
+  if (canonicalKey === "/") {
+    const entry = tree["/"];
+    return entry != null ? { entry, key: "/" } : undefined;
+  }
+  if (tree[canonicalKey] != null) return { entry: tree[canonicalKey]!, key: canonicalKey };
+  const withSlash = `${canonicalKey}/`;
+  if (tree[withSlash] != null) return { entry: tree[withSlash]!, key: withSlash };
+  return undefined;
+}
+
+/**
+ * Returns WHICH entry governed and WHY, not just a boolean. That is
  * what makes a policy debuggable by someone who did not write it, and it
  * costs nothing.
  */
@@ -107,27 +155,23 @@ export function resolveAccess(
   let governing: AccessEntry | null = null;
   let source: string | null = null;
 
-  // Deeper overrides shallower: last one wins.
-  for (const dir of ancestors(pathname)) {
-    const entry = tree[dir];
-    if (entry != null) {
-      governing = entry;
-      source = dir;
-    }
-  }
+  // Every prefix of the request path, shallowest first, ending with the
+  // resource itself: `ancestors()` gives every proper ancestor DIRECTORY
+  // (ending in `/`), canonicalized here to strip that trailing slash; the
+  // resource's own canonical path is appended last, so it is checked last
+  // and — deeper overrides shallower, same rule as always — wins over
+  // whatever a shallower prefix granted or denied. This is what makes a key
+  // govern BOTH its own path and its subtree in one walk: a match found at
+  // a shallow prefix keeps governing every deeper prefix that has no entry
+  // of its own, all the way down to the resource itself.
+  const chain = [...ancestors(pathname).map(canonicalPath), canonicalPath(pathname)];
 
-  // The resource's own exact path is deeper than any ancestor DIRECTORY
-  // `ancestors` walked above (that function deliberately excludes the
-  // resource itself), so it is checked last and, when present, wins over
-  // whatever an ancestor directory granted or denied. See the module
-  // comment for why this is not optional: without it, an exact-path entry
-  // is dead code, silently unreachable in both directions (a lone grant
-  // never applies; a targeted deny nested under a granting directory never
-  // applies either).
-  const exact = tree[pathname];
-  if (exact != null) {
-    governing = exact;
-    source = pathname;
+  for (const key of chain) {
+    const found = lookupCanonical(tree, key);
+    if (found != null) {
+      governing = found.entry;
+      source = found.key;
+    }
   }
 
   if (governing == null) {
@@ -164,17 +208,22 @@ export function resolveAccess(
  * must be declared. Catches, in particular, a ROLE name written where a
  * capability belongs — the exact mistake the pre-vocabulary design invited.
  *
- * Also catches a tree that declares both `/x` (governs the exact resource
- * `x`) and `/x/` (governs everything INSIDE directory `x`) — two different
- * keys as of `resolveAccess`'s exact-match fix above, but ones a policy
- * author could easily expect to mean the same thing. Silently letting both
- * live is exactly the class of ambiguity this module refuses to start with
- * rather than resolve at runtime — see the module comment.
+ * Also catches a tree that declares both `/x` and `/x/` — as of the module
+ * comment's "ONE SEMANTIC" fix, these are the SAME canonical key (both
+ * govern resource `x` AND its subtree), so declaring both is a genuine
+ * duplicate of one scope with two conflicting entries, not a forced choice
+ * between two different scopes. Silently letting both live would mean
+ * whichever object-key iteration happens to run last silently wins — this
+ * module refuses to start rather than resolve that at request time.
  */
 export function validateAccessTree(vocab: Vocabulary, tree: AccessTree): string[] {
   const problems: string[] = [];
 
-  const checkCapabilities = (dir: string, entry: Omit<AccessEntry, "methods">, method?: string): void => {
+  const checkCapabilities = (
+    dir: string,
+    entry: Omit<AccessEntry, "methods">,
+    method?: string,
+  ): void => {
     for (const cap of entry.anyOf ?? []) {
       if (!(cap in vocab.capabilities)) {
         const where = method != null ? `${dir} [${method}]` : dir;

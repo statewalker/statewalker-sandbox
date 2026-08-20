@@ -17,12 +17,17 @@
  * belongs").
  */
 import { describe, expect, it } from "vitest";
-import { DEFAULT_ACCESS_TREE, ancestors, resolveAccess, withAccessTree } from "../src/access-tree.js";
 import type { AccessTree } from "../src/access-tree.js";
+import {
+  ancestors,
+  DEFAULT_ACCESS_TREE,
+  resolveAccess,
+  withAccessTree,
+} from "../src/access-tree.js";
 import { cacheClaims } from "../src/peer-context.js";
 import type { MeshClaims } from "../src/types.js";
-import { DEFAULT_VOCABULARY } from "../src/vocabulary.js";
 import type { Vocabulary } from "../src/vocabulary.js";
+import { DEFAULT_VOCABULARY } from "../src/vocabulary.js";
 
 const claims = (...roles: string[]): MeshClaims => ({
   sub: "peerA",
@@ -90,11 +95,18 @@ describe("A-1: root-to-leaf override", () => {
   });
 });
 
-describe("A-1: an exact-path entry is the deepest match of all", () => {
-  // Post-review fix: `resolveAccess` used to walk ONLY the proper ancestor
-  // directories `ancestors()` returns, which excludes the resource itself
-  // by construction -- an entry keyed by the exact resource path (no
+describe("A-1: a key governs its own path AND its subtree -- /x and /x/ are the same key", () => {
+  // Post-review fix (Task 6): `resolveAccess` used to walk ONLY the proper
+  // ancestor directories `ancestors()` returns, which excludes the resource
+  // itself by construction -- an entry keyed by the exact resource path (no
   // trailing slash) was therefore never consulted at all.
+  //
+  // Second fix (Task 12): that first fix treated `/x` (exact-only) and `/x/`
+  // (subtree-only) as two DIFFERENT keys, so a policy needing "gate the
+  // collection AND every member the same way" had no way to write that --
+  // `{ "/": deny, "/images": grant }` granted `GET /images` but silently
+  // denied every `GET /images/{id}`. `/x`/`/x/` now canonicalize to ONE key
+  // that governs both -- see the module comment's "ONE SEMANTIC" note.
 
   it("grants a bare, one-segment resource that has no ancestor directory of its own", () => {
     // The fail-CLOSED symptom: `/search` has only `/` as an ancestor, so a
@@ -113,6 +125,38 @@ describe("A-1: an exact-path entry is the deepest match of all", () => {
     expect(resolveAccess(tree, "/search", "GET", member, vocab).source).toBe("/search");
   });
 
+  it("a key governs BOTH its own path and every path beneath it -- the collection/member case", () => {
+    // The exact shape Task 12's image peer needed and the brief's own
+    // policy snippet did not, under the OLD semantic: one entry gating both
+    // the collection (`GET /images`) and every member (`GET /images/{id}`,
+    // arbitrarily nested). This is the module comment's "ONE SEMANTIC" fix
+    // -- `/images` is not merely an exact match, it is also an ancestor of
+    // everything under it.
+    const tree: AccessTree = {
+      "/": { anyOf: [] },
+      "/images": { anyOf: ["std:mesh.read"] },
+    };
+    expect(decide(tree, "/images", member).allowed).toBe(true);
+    expect(decide(tree, "/images/abc", member).allowed).toBe(true);
+    expect(decide(tree, "/images/abc", member).source).toBe("/images");
+    expect(decide(tree, "/images/abc/nested/deeper", member).allowed).toBe(true); // arbitrary depth, not just one level
+    expect(decide(tree, "/images/abc", null).allowed).toBe(false); // still gated -- not `public`
+  });
+
+  it("`/x` and `/x/` are the SAME key -- authored with a trailing slash, it still governs the bare resource too", () => {
+    // The flip side of the previous test: a directory-style entry (trailing
+    // slash, this codebase's usual style for anything with children) now
+    // ALSO governs the bare resource at that exact path, not just paths
+    // strictly beneath it.
+    const tree: AccessTree = {
+      "/": { anyOf: [] },
+      "/images/": { anyOf: ["std:mesh.read"] },
+    };
+    expect(decide(tree, "/images", member).allowed).toBe(true);
+    expect(decide(tree, "/images", member).source).toBe("/images/"); // reports the key as actually authored
+    expect(decide(tree, "/images/abc", member).allowed).toBe(true);
+  });
+
   it("an exact-leaf deny overrides a granting ancestor -- the fail-OPEN case", () => {
     // This is the case that makes the old behaviour a defect, not a quirk:
     // an operator writing a targeted deny under a granted directory got
@@ -128,14 +172,19 @@ describe("A-1: an exact-path entry is the deepest match of all", () => {
     expect(decide(tree, "/admin/secret", admin).source).toBe("/admin/secret");
   });
 
-  it("a tree declaring both '/x' and '/x/' is rejected at construction, naming both", () => {
+  it("a tree declaring both '/x' and '/x/' is rejected at construction, naming both -- now a genuine duplicate of one scope, not two", () => {
     const tree: AccessTree = {
       "/": { anyOf: [] },
       "/search": { anyOf: ["std:mesh.read"] },
       "/search/": { anyOf: ["std:mesh.admin"] },
     };
-    expect(() => withAccessTree({ tree, vocabulary: DEFAULT_VOCABULARY, usesTransportIdentity: async () => false }))
-      .toThrow(/'\/search'.*'\/search\/'/);
+    expect(() =>
+      withAccessTree({
+        tree,
+        vocabulary: DEFAULT_VOCABULARY,
+        usesTransportIdentity: async () => false,
+      }),
+    ).toThrow(/'\/search'.*'\/search\/'/);
   });
 });
 
