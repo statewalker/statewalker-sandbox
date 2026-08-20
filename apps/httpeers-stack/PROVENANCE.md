@@ -957,3 +957,199 @@ authorized), and `src/hub/main.ts` (new as of this task's Step 4 — the same
 loader, extended to the hub for the same reason). `httpeers.core`'s own isolation grep
 (`src/tokens.ts`, `src/transport-duplex.ts`) is untouched — nothing in
 `packages/httpeers.core` was modified by this task.
+
+## Task 11: the browser peer runtime and the ServiceWorker edge
+
+New files, all under `src/browser/`: `node-profile.ts` (the browser libp2p profile --
+WebSockets + WebRTC + Circuit-Relay-v2, identity persisted per-origin in IndexedDB, the
+relay dial and the poll-for-reservation split into two separate awaitable steps),
+`join.ts` (the `/webrtc` pre-dial, invitation redemption, and the two timers this runtime
+owns itself -- the heartbeat and the connection keepalive; the third, circuit-relay's own
+reservation refresh, is libp2p-managed and has no code here on purpose), `edge.ts` (mounts
+a peer's `dispatch` into `@statewalker/webrun-http-browser`'s `SwHttpAdapter` unchanged),
+and `edge-guard.ts` (the key/prefix guard, factored out of `edge.ts` -- see "Deviations"
+below), plus `peer-runtime.ts`'s `startBrowserPeer`, the orchestrator the brief's
+"Produces" line names. No file in `packages/httpeers.core` or `apps/httpeers-protos` was
+touched.
+
+### Where readiness actually comes from
+
+`node.dial(relayAddr)` resolving means the WebSocket link to the relay is open -- it says
+nothing about whether the relay has finished granting a circuit reservation, which lands
+asynchronously afterwards (design note 17 §4, and the validated relay test,
+`notes/.../16-httpeers-prototype-v2-envelope-transport/src/relay.test.ts`, which this
+task's poll loop repeats verbatim: `getMultiaddrs()` checked every 250 ms, up to 40
+times). `node-profile.ts` therefore splits node construction (`createBrowserNode`), the
+relay dial (`dialRelay`), and the reservation poll (`waitForCircuitReservation`) into
+three separate steps rather than one opaque await, so `peer-runtime.ts` can report
+`"connecting-relay"` and `"awaiting-reservation"` as genuinely distinct, observable
+lifecycle states.
+
+### The `/webrtc` pre-dial
+
+`join.ts`'s `preDialPeer(node, relayAddr, peerId)` builds
+`${relayAddr}/p2p-circuit/webrtc/p2p/${peerId}` and dials it explicitly. `peer-runtime.ts`
+calls it once, against the hub, between constructing the peer (`createPeer({ node, ... })`)
+and the first protocol call (`redeemInvitation`) -- libp2p's auto-dial may already hold a
+relay-only LIMITED connection to the hub from address exchange alone, and a limited
+connection silently refuses a custom protocol with no error naming the cause. A later task
+dialling any OTHER mesh peer (discovered through `meshView()`) must call the same function
+before its first `peer.call` to that peer, for the identical reason.
+
+### The version-vector refetch
+
+`join.ts`'s `startJoin` heartbeats every 5 s (`HEARTBEAT_INTERVAL_MS`), carrying this
+peer's own `node.getMultiaddrs()` (read fresh on every beat, never cached) and its
+advertisements. The response's `versions: { mesh, policy, vocabulary }` gates three
+independent GETs -- `/.well-known/mesh`, `/.well-known/vocabulary`,
+`/.well-known/revocations` -- each fetched only when its own counter has moved since the
+last time this peer fetched it; the four version numbers (three plus this peer's own last-
+seen watermark, x 3) are tracked in `startJoin`'s closure, not in a module-level or global
+variable. `RevocationCache.update(version, entries)` is called on EVERY successful
+heartbeat regardless of whether `versions.policy` moved -- gating the network fetch on the
+version but not the cache's own freshness stamp, because a cache that only ever touched on
+a version bump would go stale (and start refusing every token) during a long run of
+"nothing changed" heartbeats; see `REVOCATION_MAX_STALENESS_MS`'s doc comment for the
+arithmetic. Multiaddrs discovered through `meshView()` for some OTHER peer must never be
+read from libp2p's own `peerStore` (usually local-only until that peer's own reservation
+has landed) -- only from the mesh view the hub built out of that peer's own most recent
+heartbeat; see `peer-runtime.ts`'s module comment.
+
+### The three timers
+
+Reservation refresh is entirely libp2p-managed (`circuitRelayTransport`'s own internal
+renewal) -- no code for it exists in this task, deliberately: folding it into either of the
+other two would conflate three questions ("is my reservation valid," "does the hub still
+consider me a member," "is my connection to the hub open") that fail independently and
+mean different things. The presence heartbeat (5 s) and the connection keepalive (10 s,
+matching `workspaces/webrun-wire/apps/p2p-demo/server-page/main.ts`'s own precedent for
+the identical purpose) are two separate `setInterval` timers in `startJoin`, each
+independently stoppable via the returned `JoinHandle.stop()`.
+
+### The key/prefix guard, and why it has its own file
+
+`edge-guard.ts`'s `assertKeyMatchesPrefix(key, prefix)` throws unless `prefix`'s first
+`/`-delimited segment equals `key` -- the exact trap design note 39 §3 found:
+`SwHttpDispatcher` (the ServiceWorker side) keys a registration by the incoming URL's
+first path segment, while `SwHttpAdapter.register` (the page side) matches the full base
+URL; a mismatch reports success at every step while the handler is never called once.
+`mountEdge` (`edge.ts`) calls it before constructing `SwHttpAdapter` at all. **This is a
+deliberate deviation from the brief's literal two-file split** (`edge.ts` alone was named):
+the guard is pure logic and needs no browser, per the team lead's override of the brief's
+"no tests" line, but `edge.ts` itself imports `@statewalker/webrun-http-browser/sw` --
+which, as below, only resolves once that package's `dist/` has actually been built.
+Leaving the guard inside `edge.ts` would have made its own unit test hostage to that
+package's build state for no reason connected to what the test is actually verifying.
+Factoring it into its own dependency-free file lets `tests/browser-edge-guard.test.ts` run
+regardless. `edge.ts` re-exports it, so nothing about the public shape changed.
+
+### `@statewalker/webrun-http-browser`: the known defect, verified precisely
+
+Confirmed exactly as the brief predicted: the workspace package (linked via
+`workspace:*`, resolved to `workspaces/webrun-wire/packages/webrun-http-browser`) has NO
+committed `dist/` (`workspaces/webrun-wire/.gitignore` ignores it), and its own
+`package.json` `exports` map points `.`/`./sw` at `./dist/index.js`/`./dist/sw.js` with no
+`"source"` condition to fall back to -- unlike `httpeers.core` and every sibling
+`webrun-wire` package this task read, which point straight at `./src/index.ts`. Verified
+by temporarily removing an already-built `dist/`:
+
+```
+$ mv workspaces/webrun-wire/packages/webrun-http-browser/dist /tmp/backup
+$ pnpm exec tsc --noEmit   # in apps/httpeers-stack
+src/browser/edge.ts(33,31): error TS2307: Cannot find module '@statewalker/webrun-http-browser/sw' or its corresponding type declarations.
+```
+
+Building the dependency's own package (`pnpm --filter @statewalker/webrun-http-browser
+build`, or letting `turbo`'s `^build`/`^typecheck` dependency graph do it automatically --
+verified both ways) makes the import resolve cleanly; typecheck is then clean with no
+further changes needed. **This worktree currently has that `dist/` built** (as part of
+this task's own verification), which is why `pnpm run typecheck`/`pnpm run test` both pass
+in the commands below. A GENUINELY FRESH CHECKOUT WILL NOT: `turbo.json`'s `"test"` task
+declares `dependsOn: []` (unlike `"build"`/`"typecheck"`, both `dependsOn: ["^build"]`), so
+`turbo test --filter=@statewalker/httpeers-stack` on a fresh checkout fails at this
+package's own `typecheck:tests` gate (its `test` script runs that first) with the same
+`TS2307` above -- verified directly. Neither `turbo.json` (shared, umbrella-wide config)
+nor `webrun-http-browser`'s own source (a different fragment) was touched to work around
+this, per this task's scope; `pnpm --filter @statewalker/webrun-http-browser build` (or
+running `turbo build`/`turbo typecheck` for this package first, which reaches the same
+dependency) is the fix a fresh checkout needs before `pnpm test` succeeds here. Flagged to
+the team lead as a real, load-bearing gap in the current pipeline, not merely recorded and
+set aside.
+
+### Deviations from the brief's literal shape
+
+- **`edge-guard.ts` added** beyond the brief's four named files -- see above.
+- **`startBrowserPeer`'s init carries more than the brief's four named fields**
+  (`{ key, mounts, accessTree, onState }`): `invitationId` (nothing else in the brief names
+  where the invitation a page redeems comes from), `dev` (required, no default -- the
+  connection-gater relaxation local development needs and production must not carry;
+  see `node-profile.ts`'s `CreateBrowserNodeInit.dev` doc comment for why this has no
+  inferred default of its own), and optional `httpeersConfigUrl`, `serviceWorkerUrl`,
+  `advertisements`. The brief's own signature line reads as illustrative, not exhaustive --
+  none of these were omittable and still produce a working join.
+- **`vocabulary` is `../policy.ts`'s `VOCABULARY`, not `httpeers.core`'s
+  `DEFAULT_VOCABULARY`.** `createPeer` requires `accessTree`/`vocabulary` supplied
+  together; the caller's `accessTree` must be evaluated against the SAME vocabulary
+  `../hub/main.ts` mints tokens against (`VOCABULARY`, Task 8's `policy.ts`), or every
+  role->capability expansion on this peer's own incoming requests is wrong. This mirrors
+  `hub/main.ts`'s own choice exactly (see that module's own comment), not a new decision.
+
+### What could not be verified without a browser
+
+Nothing in `src/browser/` runs under Node -- IndexedDB, ServiceWorker registration,
+`RTCPeerConnection`, and the browser-only libp2p transports (`@libp2p/webrtc`,
+`@libp2p/websockets`, `@libp2p/circuit-relay-v2` client side) all require a real browser
+context. Untouched by this task, deliberately, per the team lead's explicit scoping to
+Task 15's Playwright suite: whether `waitForCircuitReservation` actually observes a
+`p2p-circuit` address inside a real browser tab; whether the `/webrtc` pre-dial actually
+prevents the limited-connection failure it targets; whether `mountEdge`'s registration is
+actually reachable through a real `fetch()` from the page (i.e. that
+`assertKeyMatchesPrefix`'s precondition, once satisfied, is sufficient and not merely
+necessary); whether two tabs of the same origin collide the way design note 39 §6 predicts
+(E-2, explicitly out of this task's scope); and the full join sequence end to end against
+a running relay + hub. Everything here was checked as far as static typing and the one
+piece of pure logic (the key/prefix guard) allow, and no further.
+
+### Counts and verification
+
+```
+$ pnpm install                              # from the umbrella root, never from workspaces/statewalker-sandbox
+Already up to date
+
+# packages/httpeers.core (untouched by this task -- re-run as a baseline check)
+$ pnpm exec tsc --noEmit && pnpm exec tsc -p tsconfig.tests.json --noEmit
+(clean, both)
+$ grep -rlE "^import.*libp2p" src/
+src/tokens.ts
+src/transport-duplex.ts
+$ pnpm exec vitest run
+ Test Files  12 passed (12)
+      Tests  146 passed (146)
+
+# apps/httpeers-stack
+$ pnpm exec tsc --noEmit && pnpm exec tsc -p tsconfig.tests.json --noEmit
+(clean, both)
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  9 passed (9)
+      Tests  93 passed (93)
+$ grep -rlE 'from "(@chainsafe/libp2p|@libp2p/|libp2p)' src/
+src/hub/main.ts
+src/setup/keys.ts
+src/relay/main.ts
+src/browser/join.ts
+src/browser/node-profile.ts
+$ grep -rlE 'from "(@chainsafe/libp2p|@libp2p/|libp2p)' tests/
+tests/setup.test.ts
+```
+
+**146 core (unchanged) / 86 → 93 app** (7 new, all in `tests/browser-edge-guard.test.ts`;
+every previously-passing file is unmodified and still passing). `biome check --write`
+applied to the new files (import ordering and line wrapping only; no logic change).
+
+**Where libp2p imports live in `apps/httpeers-stack` now**: unchanged from Task 10
+(`src/hub/main.ts`, `src/setup/keys.ts`, `src/relay/main.ts`) plus this task's two new
+files, `src/browser/join.ts` (the `/webrtc` pre-dial and the keepalive timer's
+`getConnections`/`peerIdFromString`) and `src/browser/node-profile.ts` (the browser
+transport profile itself). `httpeers.core`'s own isolation grep (`src/tokens.ts`,
+`src/transport-duplex.ts`) is untouched -- nothing in `packages/httpeers.core` was
+modified by this task.
