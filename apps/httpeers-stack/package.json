@@ -29,13 +29,16 @@
     "@libp2p/identify": "4.1.12",
     "@libp2p/interface": "3.2.5",
     "@libp2p/peer-id": "6.0.14",
+    "@libp2p/webrtc": "6.0.29",
     "@libp2p/websockets": "10.1.19",
+    "@multiformats/multiaddr": "13.0.3",
     "@statewalker/httpeers.core": "workspace:*",
+    "@statewalker/webrun-http-browser": "workspace:*",
     "hono": "catalog:",
+    "idb-keyval": "catalog:",
     "libp2p": "3.3.8"
   },
   "devDependencies": {
-    "@multiformats/multiaddr": "13.0.3",
     "@types/node": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
