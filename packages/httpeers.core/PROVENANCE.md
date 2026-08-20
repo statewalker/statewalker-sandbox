@@ -1297,3 +1297,83 @@ already imported no libp2p, and still don't.
 
 Landed in its own commit, again separate from the app-level review-round fix — see
 `httpeers-stack`'s Task 8 report for that commit SHA and the full review-round writeup.
+
+## Task 12 (review) — `resolveAccess`: a key now governs its own path AND its subtree
+
+Found while implementing `httpeers-stack`'s Task 12 (the image peer page), verified with a
+standalone script against `resolveAccess`/`validateAccessTree` before a line of the
+endpoint was written: the brief's own `.access` snippet, `{ "/": { anyOf: [] }, "/images":
+{ anyOf: ["app:images.read"] } }`, granted `GET /images` but **denied** every `GET
+/images/{id}` — `resolveAccess(tree, "/images", ...).allowed` was `true`,
+`resolveAccess(tree, "/images/abc", ...).allowed` was `false`. Fixed inside the app first
+(one exact access-tree leaf per fixture id — see `httpeers-stack`'s `PROVENANCE.md`, Task
+12), then flagged by the team lead as a real flaw in this package: the Task 8 (pre-work)
+fix above made `/x` (no trailing slash) an EXACT-ONLY match and `/x/` (trailing slash) the
+ONLY way to govern anything nested under `x` — two distinct keys, with `withAccessTree`
+refusing a tree that declared both, "ambiguous, pick one." That refusal was right in
+spirit but wrong in effect: `/x` and `/x/` were never actually two spellings of the same
+scope under that semantic, they were two DIFFERENT scopes (the resource itself vs.
+everything strictly inside it), so a policy author needing "gate the collection AND every
+member the same way" — a service whose sub-resources cannot be enumerated in policy ahead
+of time, unlike a small bundled fixture set — had no way to write that at all.
+
+**The fix** (`src/access-tree.ts`): one semantic — a key governs its own path *and*
+everything beneath it. `resolveAccess` now walks every prefix of the request path
+(`ancestors(pathname)`, canonicalized by stripping each entry's trailing slash, plus the
+canonicalized resource path itself appended last), taking the DEEPEST prefix with a tree
+entry; a new `lookupCanonical` helper checks both spellings (`/images` and `/images/`) for
+each canonical prefix and returns whichever key the tree actually used, so a reported
+`Decision.source` still names the key as authored rather than a synthesized string.
+`ancestors()` itself is unchanged (still returns proper ancestor directories only, trailing
+slash, resource excluded) — the new walk is built ON TOP of it, not a replacement, so its
+own dedicated test and every caller of `ancestors()` directly is unaffected.
+`validateAccessTree`'s existing "`/x`/`/x/` both declared" rejection needed NO code change
+— canonicalizing lookups is what makes that check honest (a genuine duplicate of one scope
+now, not a forced choice between two scopes that were never the same); only its doc
+comment was reworded to say so.
+
+**Tests** (`tests/access-tree.test.ts`, in the renamed `describe("A-1: a key governs its
+own path AND its subtree -- /x and /x/ are the same key", ...)`, 2 new cases added to the
+existing 3):
+- a key governs both its own path and every path beneath it, at arbitrary depth (the
+  collection/member case Task 12 needed) — and remains gated, not `public`, for an
+  anonymous caller;
+- a directory-style entry (trailing slash) now also governs the bare resource at that exact
+  path, reporting the key as actually authored in `Decision.source`.
+
+**Every pre-existing test in this file passes unchanged, byte-for-byte, with no edits to
+any assertion** — confirmed by running the full suite before writing a single new test:
+148 - 2 = 146, matching the pre-fix count exactly, so nothing this fix touches was already
+relying on the old two-scopes-can't-both-exist behavior. In particular:
+
+- **the eleven-case equivalence table (`DEFAULT_ACCESS_TREE`) is untouched and still
+  passes** — none of `DEFAULT_ACCESS_TREE`'s directory entries (`/.well-known/`, `/test/`,
+  `/admin/`) collide with a bare counterpart, so canonicalization changes nothing about any
+  of those eleven decisions;
+- **the Task 8 (pre-work) fail-open case still holds** — `/admin/` grants, `/admin/secret`
+  denies, and the exact-leaf deny still wins over the ancestor grant, because "deeper
+  overrides shallower" is exactly the same rule, just applied over a longer canonical
+  prefix chain than before;
+- **the "declares both `/x` and `/x/`" construction-time rejection still throws, still
+  naming both** — same assertion, same regex, now documented as catching a genuine
+  duplicate rather than a forced choice.
+
+```
+$ pnpm run typecheck && pnpm run typecheck:tests
+(clean, both)
+
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  12 passed (12)
+      Tests  148 passed (148)
+
+$ grep -rlE "^import.*libp2p" src/
+src/tokens.ts
+src/transport-duplex.ts
+```
+
+148 = 146 + 2 new. Isolation grep unaffected — this fix touches only `access-tree.ts` and
+its own test file, neither of which import libp2p.
+
+Landed in its own commit, separate from `httpeers-stack`'s Task 12 app-level simplification
+(dropping the per-fixture-id leaves the app-level fix had used as a workaround) — see that
+task's report for the commit SHAs and the full writeup.
