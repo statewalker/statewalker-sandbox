@@ -13,7 +13,7 @@
  * `@statewalker/webrun-files-mem` or any other concrete implementation, so
  * swapping the in-memory fixture store for OPFS or a real file picker later
  * is a change to what gets passed as `files`, never to `createImagesEndpoint`
- * or to `buildImagesAccessTree`.
+ * or to `IMAGES_ACCESS_TREE`.
  *
  * TITLES GO IN THE JSON LIST, NEVER IN A HEADER. Same reasoning as
  * `search.ts`'s own module comment: HTTP header values are latin1 by
@@ -68,7 +68,7 @@ export interface ImagesEndpointInit {
   chunkSize?: number;
 }
 
-/** `GET /images` (list) and `GET /images/{id}` (streamed bytes) -- see the module comment. Capability gating is `buildImagesAccessTree`'s job, not this handler's (same split `search.ts`'s `createSearchEndpoint` uses against `policy.ts`). */
+/** `GET /images` (list) and `GET /images/{id}` (streamed bytes) -- see the module comment. Capability gating is `IMAGES_ACCESS_TREE`'s job, not this handler's (same split `search.ts`'s `createSearchEndpoint` uses against `policy.ts`). */
 export function createImagesEndpoint(init: ImagesEndpointInit): FetchHandler {
   const chunkSize = init.chunkSize ?? DEFAULT_CHUNK_SIZE;
   const byId = new Map(init.images.map((img) => [img.id, img]));
@@ -131,54 +131,26 @@ export function createImagesEndpoint(init: ImagesEndpointInit): FetchHandler {
  * advertises," made concrete. Gates every route `createImagesEndpoint`
  * serves behind `app:images.read` (declared in `../policy.ts`'s
  * `VOCABULARY`, already granted to `member`); denies everything else
- * (`"/"`: `anyOf: []`).
+ * (`"/"`: `anyOf: []`) -- exactly the brief's own two-line snippet, no more.
  *
- * ONE ENTRY PER IMAGE, NOT A DIRECTORY GRANT -- AND THIS IS DELIBERATE, NOT
- * A STYLE CHOICE. `httpeers.core`'s `resolveAccess` (`access-tree.ts`)
- * grants a bare, one-segment resource like `/images` ONLY via an exact-path
- * match (`ancestors('/images')` is `['/']` -- the walk drops the final
- * segment as "the resource itself," so `/images` has no directory ancestor
- * of its own); it grants a NESTED resource like `/images/{id}` only via an
- * ANCESTOR directory entry keyed `/images/` (trailing slash). A tree cannot
- * declare both `/images` and `/images/` -- `withAccessTree` throws
- * `'/images' and '/images/' are declared -- ambiguous: pick one` at
- * construction (`validateAccessTree`'s own ambiguity check). Verified
- * directly, not assumed: with the brief's literal two-entry tree (`{ "/":
- * anyOf: [], "/images": anyOf: ["app:images.read"] }`), `resolveAccess(tree,
- * "/images", ...)` grants but `resolveAccess(tree, "/images/abc", ...)`
- * falls through to `"/"` and is DENIED -- `GET /images` would work and
- * `GET /images/{id}` never would, silently (the exact failure mode this
- * function's own doc warns about matching the brief's "if `/images` behaves
- * as though no policy governs it, that is the thing to suspect first").
- *
- * The fix used here stays entirely inside this application (no change to
- * `httpeers.core`, whose isolation and shared-library status make it out of
- * scope for a policy bug specific to one provider's route shape): declare
- * one EXACT leaf per fixture id (`/images/relay-node`, `/images/mesh-diagram`,
- * …) alongside the bare `/images` leaf, all granting the same capability.
- * This is not a workaround bolted onto the brief's tree -- it is what "the
- * provider decides who may read" means for a provider whose whole catalogue
- * is known upfront: every resource this peer is willing to serve gets its
- * own explicit grant, and an id NOT in `images` (a typo, a stale link, a
- * probe) gets no entry at all and is denied by the same "no `.access` entry
- * governs this path" fallthrough `/nothing/here` gets elsewhere in this
- * stack (`tests/integration.test.ts`'s "denies an unmapped path by
- * default") -- consistent with, not a departure from, this project's
- * existing deny-by-default convention.
+ * WHY THIS WORKS AS ONE ENTRY, NOT ONE PER IMAGE. An earlier version of this
+ * tree (pre-review) declared one exact leaf per fixture id
+ * (`/images/relay-node`, `/images/mesh-diagram`, …) alongside `/images`,
+ * because `httpeers.core`'s `resolveAccess` used to treat `/images` (no
+ * trailing slash) as an EXACT-ONLY match with no way to also govern
+ * `/images/{id}`. That was a real gap -- verified directly against the
+ * library before writing this file at all, see this app's `PROVENANCE.md`
+ * (Task 12) for the reproduction -- but the right fix was in the library,
+ * not a per-catalogue workaround here: a workaround that enumerates every
+ * id it grants cannot generalize to a provider whose sub-resources are not
+ * known ahead of time. Fixed in `httpeers.core`'s `resolveAccess` (a key now
+ * governs its own path AND its subtree, so `/images` alone grants both `GET
+ * /images` and `GET /images/{id}` at any depth -- see that package's own
+ * `PROVENANCE.md`, "Task 12 (review)"). This tree is the simplification that
+ * fix makes possible: exactly what the brief specified, verified against
+ * the fixed library by `tests/images.test.ts`, not merely trusted.
  */
-export function buildImagesAccessTree(images: ImageInfo[]): AccessTree {
-  const tree: AccessTree = {
-    "/": { anyOf: [] },
-    "/images": { anyOf: ["app:images.read"] },
-  };
-  for (const img of images) {
-    // The HTTP path `GET /images/{id}` is served at -- deliberately NOT
-    // `imagePath(img.id)`, which names where this image's BYTES live inside
-    // `files` (an unrelated, internal `FilesApi` namespace). Conflating the
-    // two here would be a real bug: an access-tree key must match the
-    // request's `pathname` exactly, not this provider's private storage
-    // layout.
-    tree[`/images/${img.id}`] = { anyOf: ["app:images.read"] };
-  }
-  return tree;
-}
+export const IMAGES_ACCESS_TREE: AccessTree = {
+  "/": { anyOf: [] },
+  "/images": { anyOf: ["app:images.read"] },
+};

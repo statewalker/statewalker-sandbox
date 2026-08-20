@@ -1340,10 +1340,12 @@ except `@statewalker/webrun-http-browser`'s `./sw-worker` export, whose export m
 package's `dist/` built, exactly as Task 11 already found for `edge.ts`'s `./sw` import.
 This worktree's `webrun-files`/`webrun-files-mem` packages ALSO needed a first build
 (`pnpm --filter @statewalker/webrun-files --filter @statewalker/webrun-files-mem build`) --
-neither had a committed `dist/` before this task, the same class of gap Task 11 flagged for
-`webrun-http-browser`, now hit a second time by a different pair of packages. Not fixed at
-the `turbo.json`/workspace level (shared, out of this task's scope); flagged to the team
-lead below.
+neither had a committed `dist/` before this task. Originally flagged below as a pipeline
+gap; **corrected on review** -- `turbo.json`'s `"test"` task already declares `dependsOn:
+["^build"]`, so `turbo test` (what `pnpm test` resolves to at the umbrella level) builds
+both automatically, the same way it already does for `webrun-http-browser`. Only a direct
+`vitest`/`tsc` invocation bypassing `turbo` -- what every command transcript in this
+section runs, for speed while iterating -- needs the build done by hand.
 
 ### What was verified under Node, and what genuinely needed a browser
 
@@ -1380,14 +1382,16 @@ did not stand up (out of this task's scope, Task 15's job).
 
 ### Flagged to the team lead, not fixed here (out of this task's scope)
 
-- `webrun-files`/`webrun-files-mem` had no committed `dist/` in this worktree before this
-  task (same class of gap as Task 11's `webrun-http-browser` finding) -- `tsc --noEmit`
-  fails with `TS2307` for both packages on a checkout that has not built them first. This
-  worktree now has both built (a side effect of this task's own verification), so
-  `pnpm run typecheck`/`pnpm run test` pass here; a genuinely fresh checkout will not, until
-  `pnpm --filter @statewalker/webrun-files --filter @statewalker/webrun-files-mem build`
-  (or an equivalent `turbo build`/`turbo typecheck`) runs first -- same root cause and same
-  fix Task 11 already named for `webrun-http-browser`, just two more packages hitting it.
+- **Corrected on review — not actually a pipeline gap.** Originally flagged: `webrun-files`/
+  `webrun-files-mem` had no committed `dist/` in this worktree before this task, so a
+  direct `tsc --noEmit` failed `TS2307` for both. Team lead pointed out `turbo.json`'s
+  `"test"` task already declares `dependsOn: ["^build"]` -- confirmed directly -- so `turbo
+  test` (what `pnpm test` resolves to at the umbrella level) builds both packages
+  automatically first, the same way it already does for Task 11's `webrun-http-browser`
+  finding. Only a direct `vitest`/`tsc` invocation that bypasses `turbo` entirely -- what
+  every command in this section's own transcripts runs, for speed while iterating -- still
+  needs the dependency built by hand. Not a gap in the pipeline; a property of running
+  outside the orchestrator.
 - `vite.image-peer.config.ts` disables tree-shaking build-wide (`rolldownOptions.treeshake:
   false`) to keep `sw.js` non-empty -- see "The build" above. A narrower, per-module fix
   (annotate only `webrun-http-browser`'s `./sw-worker` entry as side-effecting) was
@@ -1436,3 +1440,67 @@ dist/image-peer/assets/main-*.js         579.04 kB   # dominated by libp2p/webrt
 previously-passing file is unmodified and still passing). `httpeers.core`'s isolation grep
 unchanged (`src/tokens.ts`, `src/transport-duplex.ts`) -- nothing in `packages/httpeers.core`
 was touched by this task.
+
+## Task 12 (review) — the access-tree bug was in `httpeers.core`, not this app; simplified
+
+Review of the initial submission (above) confirmed the finding was real (verified again
+directly against `resolveAccess`) but disagreed with where the fix belonged. The
+per-fixture-id leaves this app's `buildImagesAccessTree` declared were correct FOR a
+bundled fixture set with a known, enumerable catalogue, but do not generalise: a real image
+store with arbitrary, unbounded ids could never enumerate its keys in policy. The `/x`-vs-
+`/x/` duplicate rejection `httpeers.core` threw was also, on its own terms, a genuine gap in
+the LIBRARY — a policy author needing "gate the collection AND every member the same way"
+had no way to write that at all, regardless of which application hit it first.
+
+**Fixed in `httpeers.core`, its own commit**, separate from this app's: `resolveAccess` now
+treats a key as governing its own path AND its entire subtree (`/x`/`/x/` canonicalize to
+the same key), so `{ "/": deny, "/images": grant }` — the brief's own two-line snippet,
+unmodified — grants both `GET /images` and `GET /images/{id}` at any depth. Full writeup,
+the two new core tests, and confirmation that the eleven-case equivalence table and the
+Task 8 (pre-work) fail-open case both hold unchanged: `packages/httpeers.core/PROVENANCE.md`,
+"Task 12 (review) — `resolveAccess`: a key now governs its own path AND its subtree."
+
+**Simplified here, a second commit**: `buildImagesAccessTree(images)` (the per-fixture-id
+function) is gone, replaced by a plain constant, `IMAGES_ACCESS_TREE`, exactly the brief's
+own tree with no enumeration:
+
+```ts
+export const IMAGES_ACCESS_TREE: AccessTree = {
+  "/": { anyOf: [] },
+  "/images": { anyOf: ["app:images.read"] },
+};
+```
+
+`src/pages/image-peer/main.ts` now imports this constant directly instead of calling a
+function with the loaded `images` array.
+
+**One test in `tests/images.test.ts` needed a genuinely revised expectation, not just a
+mechanical rename — flagged honestly rather than kept passing by accident.** "an id outside
+the catalogue is denied by the access tree itself (403)" is no longer true: `IMAGES_ACCESS_TREE`
+grants the whole `/images` subtree to any capability holder, so a member's request for an
+unknown id now PASSES the access check and reaches the handler, which returns 404 (the
+handler is the one place that actually knows the catalogue — see `src/services/images.ts`'s
+`GET /images/:id` route). Renamed to "an id outside the catalogue is a 404 through the full
+peer stack -- access is granted at the collection level, existence is the handler's job",
+asserting 404 instead of 403, with the reasoning above written into the test itself. Every
+other test in the file passed unchanged against the simplified tree with no edits beyond
+import/reference renames (`buildImagesAccessTree` → `IMAGES_ACCESS_TREE`).
+
+```
+$ pnpm run typecheck && pnpm run typecheck:tests    # apps/httpeers-stack
+(clean, both)
+
+$ pnpm exec vitest run --no-file-parallelism
+ Test Files  11 passed (11)
+      Tests  108 passed (108)
+
+$ pnpm exec vite build --config vite.image-peer.config.ts
+dist/image-peer/sw.js                      7.83 kB   # unaffected by this change
+dist/image-peer/assets/main-*.js         579.18 kB
+✓ built in ~0.2s
+```
+
+108 unchanged from the initial submission (12 in `tests/images.test.ts`, one of them
+genuinely rewritten as above, not just renamed) — the simplification is a pure refactor of
+`src/services/images.ts`/`src/pages/image-peer/main.ts` against an already-fixed library,
+not a change in what this app tests or asserts beyond that one honest correction.
