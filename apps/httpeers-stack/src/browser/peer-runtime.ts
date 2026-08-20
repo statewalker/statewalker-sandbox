@@ -164,10 +164,33 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
 
   onState("connecting-relay");
   const node = await createBrowserNode({ dev: init.dev });
-  await dialRelay(node, relayAddr);
 
-  onState("awaiting-reservation");
-  await waitForCircuitReservation(node);
+  // EVERYTHING FROM HERE ON IS UNWOUND IF IT FAILS. `node` is running the
+  // moment `createBrowserNode` returns, and a `startBrowserPeer` that threw
+  // partway used to leave it running -- holding the relay WebSocket open,
+  // keeping its reservation, and (in a page that retries) accumulating one
+  // more on every attempt. The page's own `catch` (see
+  // `../pages/app/main.ts`) can render the error but has no handle to close.
+  // Same rule as `stop()`'s `finally` below, applied to the failure path.
+  const unwind: Array<() => Promise<void>> = [async () => await node.stop()];
+  const startFailed = async (): Promise<void> => {
+    for (const step of unwind.reverse()) await step().catch(() => {});
+  };
+
+  try {
+    await dialRelay(node, relayAddr);
+
+    onState("awaiting-reservation");
+    await waitForCircuitReservation(node);
+  } catch (err) {
+    await startFailed();
+    throw new Error(
+      `startBrowserPeer: could not reserve a circuit slot through the relay at "${relayAddr}" -- ` +
+        "this page cannot join the mesh without one. Is the relay running, and is httpeers.json's " +
+        `relayAddrs[0] the address it is actually listening on? Cause: ${String(err)}`,
+      { cause: err },
+    );
+  }
 
   onState("starting-peer");
   const revocationCache = new RevocationCache({ maxStalenessMs: REVOCATION_MAX_STALENESS_MS });
@@ -179,6 +202,7 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
     hubPeerId: config.hubPeerId,
     revocationCache,
   });
+  unwind.push(async () => await peer.stop());
 
   onState("dialing-hub");
   // See `join.ts`'s `preDialPeer` doc comment: this applies to the hub
@@ -186,19 +210,46 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   // already hold a relay-only limited connection to it from address
   // exchange alone, and a limited connection silently refuses the
   // `/httpeers/1.0.0` protocol `redeemInvitation` is about to open.
-  await preDialPeer(node, relayAddr, config.hubPeerId);
+  //
+  // CAUGHT, AND NOT BECAUSE THE PAGE CAN CARRY ON WITHOUT IT -- it cannot;
+  // `redeemInvitation` on the very next line rides this connection. It is
+  // caught because of what libp2p says when the hub holds no reservation:
+  // "The dial request has no valid addresses for peer", a sentence that
+  // names neither the hub, nor the relay, nor the reservation, and sent two
+  // separate investigations down the wrong path (Task 14). The remedy is
+  // the same one every time, so it belongs in the message.
+  try {
+    await preDialPeer(node, relayAddr, config.hubPeerId);
+  } catch (err) {
+    await startFailed();
+    throw new Error(
+      `startBrowserPeer: could not reach the hub (${config.hubPeerId}) over the relay at ` +
+        `"${relayAddr}". A page reaches the hub at <relay>/p2p-circuit/webrtc/p2p/<hub>, which ` +
+        "requires the hub to hold its OWN circuit reservation -- check that the hub process is " +
+        `running and reported a relayed address at startup. Cause: ${String(err)}`,
+      { cause: err },
+    );
+  }
 
   onState("joining");
-  const redemption = await redeemInvitation(peer, config.hubPeerId, init.invitationId);
-  const join = startJoin({
-    peer,
-    node,
-    hubPeerId: config.hubPeerId,
-    relayAddr,
-    initialToken: redemption.token,
-    revocationCache,
-    advertisements: init.advertisements,
-  });
+  let redemption: Awaited<ReturnType<typeof redeemInvitation>>;
+  let join: ReturnType<typeof startJoin>;
+  try {
+    redemption = await redeemInvitation(peer, config.hubPeerId, init.invitationId);
+    join = startJoin({
+      peer,
+      node,
+      hubPeerId: config.hubPeerId,
+      relayAddr,
+      initialToken: redemption.token,
+      revocationCache,
+      advertisements: init.advertisements,
+    });
+  } catch (err) {
+    await startFailed();
+    throw err;
+  }
+  unwind.push(async () => join.stop());
 
   onState("mounting-edge");
   // `peer.dispatch` is NOT mounted raw. `edge-dispatch.ts` is the one place
@@ -208,15 +259,25 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   // `kind` off. See that module's comment; in particular, it is what keeps
   // a page an ordinary `fetch()` client with no token of its own, and it
   // leaves inbound traffic from other peers untouched.
-  const edge = await mountEdge({
-    key: init.key,
-    serviceWorkerUrl: init.serviceWorkerUrl,
-    dispatch: createEdgeDispatch({
-      dispatch: peer.dispatch,
+  let edge: Awaited<ReturnType<typeof mountEdge>>;
+  try {
+    edge = await mountEdge({
       key: init.key,
-      token: () => join.token(),
-    }),
-  });
+      serviceWorkerUrl: init.serviceWorkerUrl,
+      dispatch: createEdgeDispatch({
+        dispatch: peer.dispatch,
+        key: init.key,
+        token: () => join.token(),
+      }),
+    });
+  } catch (err) {
+    // A ServiceWorker that will not register is the last thing that can go
+    // wrong, and by this point this page is a joined, heartbeating member of
+    // the mesh -- unwinding is not tidiness, it is the difference between a
+    // failed page and a phantom member the hub keeps listing as online.
+    await startFailed();
+    throw err;
+  }
 
   onState("ready");
 

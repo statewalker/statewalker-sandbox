@@ -14,15 +14,13 @@
  * `httpeers-plan/prototypes/21-browser-webrtc-prototype-validated/app.ts`)
  * both landed on -- not a guess assembled from the libp2p docs.
  *
- * READINESS IS POLLED, NOT AWAITED (design note 17 §4). `node.dial(relay)`
- * resolving means the WebSocket connection to the relay opened -- it says
- * nothing about whether the relay has finished granting a reservation.
- * That reservation lands asynchronously afterwards, so `waitForCircuitReservation`
- * below polls `getMultiaddrs()` until a `p2p-circuit` address actually
- * appears, on the same schedule (250 ms x 40 attempts = 10 s ceiling) the
- * validated relay test used (`prototypes/16-.../src/relay.test.ts`).
- * Treating `dial`'s resolution as "ready" is exactly the race that note
- * documents this project already got bitten by once.
+ * DIALING THE RELAY AND WAITING FOR THE RESERVATION LIVE IN
+ * `../reservation.ts`, re-exported below so this module still reads as the
+ * one place a page asks "how do I get a browser node onto the mesh". They
+ * moved there in Task 20 because they touch nothing transport-specific and
+ * three callers now need them -- this file, `../hub/main.ts`, and
+ * `tests/e2e/harness.ts`, the last of which had hand-copied the poll loop
+ * rather than import it through this module's `@libp2p/webrtc` dependency.
  *
  * IDENTITY PERSISTS PER ORIGIN, IN INDEXEDDB. Each page (the main app, the
  * image peer) is its own origin (`../static-server/main.ts`'s "TWO PORTS
@@ -43,7 +41,6 @@ import { privateKeyFromProtobuf, privateKeyToProtobuf } from "@libp2p/crypto/key
 import { identify } from "@libp2p/identify";
 import { webRTC } from "@libp2p/webrtc";
 import { webSockets } from "@libp2p/websockets";
-import { multiaddr } from "@multiformats/multiaddr";
 import type { Ed25519PrivateKey, Libp2p } from "@statewalker/httpeers.core";
 import { generateMeshKey } from "@statewalker/httpeers.core";
 import { get, set } from "idb-keyval";
@@ -121,43 +118,16 @@ export async function createBrowserNode(init: CreateBrowserNodeInit): Promise<Li
   });
 }
 
-/** Dial the relay named by `relayAddr` (`httpeers.json`'s `relayAddrs[0]`). Resolving means the WebSocket link is up -- NOT that a circuit reservation exists yet; see `waitForCircuitReservation`. */
-export async function dialRelay(node: Libp2p, relayAddr: string): Promise<void> {
-  await node.dial(multiaddr(relayAddr));
-}
-
-/** How often `waitForCircuitReservation` re-checks `getMultiaddrs()`. */
-export const RESERVATION_POLL_INTERVAL_MS = 250;
-/** How many times it checks before giving up -- 40 x 250 ms = 10 s, the ceiling the validated relay test (`relay.test.ts`) used. */
-export const RESERVATION_POLL_ATTEMPTS = 40;
-
-export interface WaitForCircuitReservationInit {
-  intervalMs?: number;
-  attempts?: number;
-}
-
 /**
- * Poll `node.getMultiaddrs()` until a `p2p-circuit` address appears,
- * returning it as a string. See this module's own "READINESS IS POLLED,
- * NOT AWAITED" note for why this exists instead of trusting `dialRelay`'s
- * resolution: the reservation is granted by the relay asynchronously,
- * after the dial itself has already resolved.
+ * Re-exported from `../reservation.ts`, which is where they live now -- see
+ * this module's own note on the move. A page that imports them from here
+ * keeps working, and a reader looking for "what happens after
+ * `createBrowserNode`" still finds the answer named in this file.
  */
-export async function waitForCircuitReservation(
-  node: Libp2p,
-  init: WaitForCircuitReservationInit = {},
-): Promise<string> {
-  const intervalMs = init.intervalMs ?? RESERVATION_POLL_INTERVAL_MS;
-  const attempts = init.attempts ?? RESERVATION_POLL_ATTEMPTS;
-
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const found = node.getMultiaddrs().find((addr) => addr.toString().includes("p2p-circuit"));
-    if (found != null) return found.toString();
-    await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
-  }
-
-  throw new Error(
-    `node-profile: no p2p-circuit reservation appeared within ${attempts * intervalMs}ms of dialing the relay -- ` +
-      "the relay may be unreachable, or its reservation limits already exhausted.",
-  );
-}
+export {
+  dialRelay,
+  RESERVATION_POLL_ATTEMPTS,
+  RESERVATION_POLL_INTERVAL_MS,
+  type WaitForCircuitReservationInit,
+  waitForCircuitReservation,
+} from "../reservation.js";
