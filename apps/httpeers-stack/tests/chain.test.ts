@@ -65,112 +65,86 @@ afterAll(async () => {
 });
 
 describe("R-2: chaining", () => {
-  it(
-    "C1: A can reach C directly",
-    async () => {
-      const res = await alice.call(hub.peer.peerId, "/test/whoami", { token: aliceToken });
-      expect(res.status).toBe(200);
-      expect(((await res.json()) as any).you).toBe(alice.peerId);
-    },
-    20_000,
-  );
+  it("C1: A can reach C directly", async () => {
+    const res = await alice.call(hub.peer.peerId, "/test/whoami", { token: aliceToken });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).you).toBe(alice.peerId);
+  }, 20_000);
 
-  it(
-    "C2: an explicitly-enabled relay DOES forward -- the prefix composes",
-    async () => {
-      const relay = await createPeer({
-        hubPeerId: hub.peer.peerId,
-        listen: ["/ip4/127.0.0.1/tcp/0"],
-        allowRelay: true,
-      });
-      await relay.libp2p.dial(multiaddr(hub.peer.addrs()[0]));
-      await alice.libp2p.dial(multiaddr(relay.addrs()[0]));
-      const res = await alice.call(relay.peerId, `/${hub.peer.peerId}/test/whoami`, { token: aliceToken });
-      // Reached the hub (403 from the binding) rather than 404ing at the relay.
-      expect(res.status).toBe(403);
-      await relay.stop();
-    },
-    30_000,
-  );
+  it("C2: an explicitly-enabled relay DOES forward -- the prefix composes", async () => {
+    const relay = await createPeer({
+      hubPeerId: hub.peer.peerId,
+      listen: ["/ip4/127.0.0.1/tcp/0"],
+      allowRelay: true,
+    });
+    await relay.libp2p.dial(multiaddr(hub.peer.addrs()[0]));
+    await alice.libp2p.dial(multiaddr(relay.addrs()[0]));
+    const res = await alice.call(relay.peerId, `/${hub.peer.peerId}/test/whoami`, {
+      token: aliceToken,
+    });
+    // Reached the hub (403 from the binding) rather than 404ing at the relay.
+    expect(res.status).toBe(403);
+    await relay.stop();
+  }, 30_000);
 
-  it(
-    "C3: even if relaying were allowed, the far end proves B and not A",
-    async () => {
-      // Kept as a statement about the binding: C sees Bob's connection while
-      // Alice's token says sub=alice, so the far end would reject regardless.
-      // Chaining fails closed at BOTH ends -- defence in depth.
-      const relay = await createPeer({
-        hubPeerId: hub.peer.peerId,
-        listen: ["/ip4/127.0.0.1/tcp/0"],
-        allowRelay: true,
-      });
-      await relay.libp2p.dial(multiaddr(hub.peer.addrs()[0]));
-      await alice.libp2p.dial(multiaddr(relay.addrs()[0]));
-      const res = await alice.call(relay.peerId, `/${hub.peer.peerId}/test/whoami`, { token: aliceToken });
-      expect(res.status).toBe(403);
-      expect(((await res.json()) as any).error).toMatch(/does not match connected peer/);
-      await relay.stop();
-    },
-    30_000,
-  );
+  it("C3: even if relaying were allowed, the far end proves B and not A", async () => {
+    // Kept as a statement about the binding: C sees Bob's connection while
+    // Alice's token says sub=alice, so the far end would reject regardless.
+    // Chaining fails closed at BOTH ends -- defence in depth.
+    const relay = await createPeer({
+      hubPeerId: hub.peer.peerId,
+      listen: ["/ip4/127.0.0.1/tcp/0"],
+      allowRelay: true,
+    });
+    await relay.libp2p.dial(multiaddr(hub.peer.addrs()[0]));
+    await alice.libp2p.dial(multiaddr(relay.addrs()[0]));
+    const res = await alice.call(relay.peerId, `/${hub.peer.peerId}/test/whoami`, {
+      token: aliceToken,
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as any).error).toMatch(/does not match connected peer/);
+    await relay.stop();
+  }, 30_000);
 
-  it(
-    "C4: B forwarding with ITS OWN token succeeds",
-    async () => {
-      // The proxy speaking for itself works. Identity is Bob's, not Alice's --
-      // which is correct, and is also why a real reverse proxy cannot simply
-      // forward a caller's token. Delegation (a token naming ACTOR and SUBJECT)
-      // is undesigned; see note 30 section 6.
-      const res = await bob.call(hub.peer.peerId, "/test/whoami", { token: bobToken });
-      expect(res.status).toBe(200);
-      expect(((await res.json()) as any).you).toBe(bob.peerId);
-    },
-    20_000,
-  );
+  it("C4: B forwarding with ITS OWN token succeeds", async () => {
+    // The proxy speaking for itself works. Identity is Bob's, not Alice's --
+    // which is correct, and is also why a real reverse proxy cannot simply
+    // forward a caller's token. Delegation (a token naming ACTOR and SUBJECT)
+    // is undesigned; see note 30 section 6.
+    const res = await bob.call(hub.peer.peerId, "/test/whoami", { token: bobToken });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).you).toBe(bob.peerId);
+  }, 20_000);
 
-  it(
-    "C5: a remote peer may NOT make us relay -- refused at B, not at C",
-    async () => {
-      // THE SECURITY TEST. Mallory is not a member and has no token. She must
-      // not be able to make Bob dial the hub and pump a stream on her behalf.
-      // Before the fix this returned 401 -- from the HUB, meaning Bob had
-      // already done the work.
-      const res = await mallory.call(bob.peerId, `/${hub.peer.peerId}/test/whoami`, {});
-      expect(res.status).toBe(403);
-      expect(((await res.json()) as any).error).toMatch(/relay/i);
-    },
-    20_000,
-  );
+  it("C5: a remote peer may NOT make us relay -- refused at B, not at C", async () => {
+    // THE SECURITY TEST. Mallory is not a member and has no token. She must
+    // not be able to make Bob dial the hub and pump a stream on her behalf.
+    // Before the fix this returned 401 -- from the HUB, meaning Bob had
+    // already done the work.
+    const res = await mallory.call(bob.peerId, `/${hub.peer.peerId}/test/whoami`, {});
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as any).error).toMatch(/relay/i);
+  }, 20_000);
 
-  it(
-    "C5b: a member may not relay either -- relaying is its own capability",
-    async () => {
-      const res = await alice.call(bob.peerId, `/${hub.peer.peerId}/test/whoami`, { token: aliceToken });
-      expect(res.status).toBe(403);
-    },
-    20_000,
-  );
+  it("C5b: a member may not relay either -- relaying is its own capability", async () => {
+    const res = await alice.call(bob.peerId, `/${hub.peer.peerId}/test/whoami`, {
+      token: aliceToken,
+    });
+    expect(res.status).toBe(403);
+  }, 20_000);
 
-  it(
-    "C6: a LOCAL request from Mallory is refused by Bob",
-    async () => {
-      // Contrast with C5: the local branch was always guarded.
-      const res = await mallory.call(bob.peerId, "/test/whoami", {});
-      expect(res.status).toBe(401);
-    },
-    20_000,
-  );
+  it("C6: a LOCAL request from Mallory is refused by Bob", async () => {
+    // Contrast with C5: the local branch was always guarded.
+    const res = await mallory.call(bob.peerId, "/test/whoami", {});
+    expect(res.status).toBe(401);
+  }, 20_000);
 
-  it(
-    "C7: a chain through a non-relay terminates at the first hop",
-    async () => {
-      // NOTE: this does NOT prove cycles are impossible. Two relay-enabled
-      // peers can still loop; there is no hop limit yet.
-      const res = await alice.call(bob.peerId, `/${hub.peer.peerId}/${bob.peerId}/test/whoami`, {
-        token: aliceToken,
-      });
-      expect(res.status).toBe(403);
-    },
-    20_000,
-  );
+  it("C7: a chain through a non-relay terminates at the first hop", async () => {
+    // NOTE: this does NOT prove cycles are impossible. Two relay-enabled
+    // peers can still loop; there is no hop limit yet.
+    const res = await alice.call(bob.peerId, `/${hub.peer.peerId}/${bob.peerId}/test/whoami`, {
+      token: aliceToken,
+    });
+    expect(res.status).toBe(403);
+  }, 20_000);
 });

@@ -40,7 +40,11 @@ async function buildHub(stateFilePath: string): Promise<TestHub> {
   // `revocation.ts`'s "ONE HUB-ISSUED CLOCK, NOT TWO".
   const clock = createMonotonicClock();
   const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS, now: clock });
-  const persistent = createPersistentHub({ filePath: stateFilePath, vocabulary: VOCABULARY, createMemberStore });
+  const persistent = createPersistentHub({
+    filePath: stateFilePath,
+    vocabulary: VOCABULARY,
+    createMemberStore,
+  });
 
   const peer = await createPeer({
     accessTree: HUB_ACCESS,
@@ -85,7 +89,10 @@ describe("Task 8: GET /search", () => {
 
     hub.invitations.create("MEMBER-CODE", ["member"], 60_000);
     const res = await hub.peer.dispatch(
-      requestAs("alice", "/.well-known/invite", { method: "POST", body: JSON.stringify({ id: "MEMBER-CODE" }) }),
+      requestAs("alice", "/.well-known/invite", {
+        method: "POST",
+        body: JSON.stringify({ id: "MEMBER-CODE" }),
+      }),
     );
     memberToken = ((await res.json()) as { token: string }).token;
   });
@@ -121,19 +128,25 @@ describe("Task 8: GET /search", () => {
   });
 
   it("a missing q is a 400 with a reason", async () => {
-    const res = await hub.peer.dispatch(requestAs("alice", "/search", { headers: bearer(memberToken) }));
+    const res = await hub.peer.dispatch(
+      requestAs("alice", "/search", { headers: bearer(memberToken) }),
+    );
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toMatch(/q/);
   });
 
   it("an empty q is a 400 with a reason", async () => {
-    const res = await hub.peer.dispatch(requestAs("alice", "/search?q=", { headers: bearer(memberToken) }));
+    const res = await hub.peer.dispatch(
+      requestAs("alice", "/search?q=", { headers: bearer(memberToken) }),
+    );
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toMatch(/q/);
   });
 
   it("a whitespace-only q is also a 400, not a query for literal whitespace", async () => {
-    const res = await hub.peer.dispatch(requestAs("alice", "/search?q=%20%20", { headers: bearer(memberToken) }));
+    const res = await hub.peer.dispatch(
+      requestAs("alice", "/search?q=%20%20", { headers: bearer(memberToken) }),
+    );
     expect(res.status).toBe(400);
   });
 

@@ -49,12 +49,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  CreatePeerInit,
-  MemberStore,
-  Peer,
-  PeerIdStr,
-} from "@statewalker/httpeers.core";
+import type { CreatePeerInit, MemberStore, Peer, PeerIdStr } from "@statewalker/httpeers.core";
 import {
   createMemberStore,
   createMonotonicClock,

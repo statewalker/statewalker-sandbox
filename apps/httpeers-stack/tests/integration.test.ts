@@ -231,7 +231,9 @@ describe("mesh view and presence", () => {
 
 describe("router", () => {
   it("serves a self-addressed /{peerId}/path locally", async () => {
-    const res = await alice.call(hub.peer.peerId, `/${hub.peer.peerId}/test/whoami`, { token: aliceToken });
+    const res = await alice.call(hub.peer.peerId, `/${hub.peer.peerId}/test/whoami`, {
+      token: aliceToken,
+    });
     expect(res.status).toBe(200);
     expect(((await res.json()) as any).servedBy).toBe(hub.peer.peerId);
   });
