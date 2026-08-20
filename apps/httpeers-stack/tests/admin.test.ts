@@ -88,7 +88,12 @@ async function buildHub(stateFilePath: string): Promise<TestHub> {
       }).mounts,
   });
 
-  return { peer, memberStore: persistent.memberStore, invitations: persistent.invitations, revocations };
+  return {
+    peer,
+    memberStore: persistent.memberStore,
+    invitations: persistent.invitations,
+    revocations,
+  };
 }
 
 function requestAs(peerId: string, path: string, init: RequestInit = {}): Request {
@@ -101,10 +106,18 @@ function bearer(token: string): HeadersInit {
   return { authorization: `Bearer ${token}` };
 }
 
-async function invite(hub: TestHub, peerId: string, code: string, roles: string[]): Promise<string> {
+async function invite(
+  hub: TestHub,
+  peerId: string,
+  code: string,
+  roles: string[],
+): Promise<string> {
   hub.invitations.create(code, roles, 60_000);
   const res = await hub.peer.dispatch(
-    requestAs(peerId, "/.well-known/invite", { method: "POST", body: JSON.stringify({ id: code }) }),
+    requestAs(peerId, "/.well-known/invite", {
+      method: "POST",
+      body: JSON.stringify({ id: code }),
+    }),
   );
   expect(res.status).toBe(200);
   return ((await res.json()) as { token: string }).token;
@@ -124,59 +137,58 @@ describe("Task 8: admin revocation and the search mount", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it(
-    "an admin revokes a member; that member's next /search is refused, with a reason naming revocation -- within one heartbeat",
-    async () => {
-      const adminToken = await invite(hub, "root-admin", "ADMIN-CODE", ["admin"]);
-      const bobToken = await invite(hub, "bob", "BOB-CODE", ["member"]);
+  it("an admin revokes a member; that member's next /search is refused, with a reason naming revocation -- within one heartbeat", async () => {
+    const adminToken = await invite(hub, "root-admin", "ADMIN-CODE", ["admin"]);
+    const bobToken = await invite(hub, "bob", "BOB-CODE", ["member"]);
 
-      // Bob can search before revocation.
-      const before = await hub.peer.dispatch(
-        requestAs("bob", "/search?q=relay", { headers: bearer(bobToken) }),
-      );
-      expect(before.status).toBe(200);
-      expect(((await before.json()) as { results: unknown[] }).results.length).toBeGreaterThan(0);
+    // Bob can search before revocation.
+    const before = await hub.peer.dispatch(
+      requestAs("bob", "/search?q=relay", { headers: bearer(bobToken) }),
+    );
+    expect(before.status).toBe(200);
+    expect(((await before.json()) as { results: unknown[] }).results.length).toBeGreaterThan(0);
 
-      // The admin revokes bob over the endpoint this task adds.
-      const t0 = Date.now();
-      const del = await hub.peer.dispatch(
-        requestAs("root-admin", "/admin/members/bob", { method: "DELETE", headers: bearer(adminToken) }),
-      );
-      expect(del.status).toBe(200);
-      expect(await del.json()).toMatchObject({ ok: true, removed: "bob" });
+    // The admin revokes bob over the endpoint this task adds.
+    const t0 = Date.now();
+    const del = await hub.peer.dispatch(
+      requestAs("root-admin", "/admin/members/bob", {
+        method: "DELETE",
+        headers: bearer(adminToken),
+      }),
+    );
+    expect(del.status).toBe(200);
+    expect(await del.json()).toMatchObject({ ok: true, removed: "bob" });
 
-      // Bob's NEXT /search call, with the SAME (still cryptographically
-      // valid, unexpired) token he already held -- no intervening
-      // heartbeat, no fresh token -- is refused, and the reason names
-      // revocation.
-      const after = await hub.peer.dispatch(
-        requestAs("bob", "/search?q=relay", { headers: bearer(bobToken) }),
-      );
-      const elapsed = Date.now() - t0;
-      expect(after.status).toBe(403);
-      expect(((await after.json()) as { error: string }).error).toMatch(/revoked/);
-      // Bounded, not merely eventual: well under one heartbeat interval.
-      expect(elapsed).toBeLessThan(PRESENCE_TTL_MS);
+    // Bob's NEXT /search call, with the SAME (still cryptographically
+    // valid, unexpired) token he already held -- no intervening
+    // heartbeat, no fresh token -- is refused, and the reason names
+    // revocation.
+    const after = await hub.peer.dispatch(
+      requestAs("bob", "/search?q=relay", { headers: bearer(bobToken) }),
+    );
+    const elapsed = Date.now() - t0;
+    expect(after.status).toBe(403);
+    expect(((await after.json()) as { error: string }).error).toMatch(/revoked/);
+    // Bounded, not merely eventual: well under one heartbeat interval.
+    expect(elapsed).toBeLessThan(PRESENCE_TTL_MS);
 
-      // NOT route-scoped: the SAME token, still on the SAME hub, is refused
-      // on a completely different mount too (`/.well-known/mesh`) -- proof
-      // the enforcement is the binding middleware's `isRevoked`, applied
-      // uniformly before any handler runs, not a check that happens to live
-      // on `/search`.
-      const meshAfter = await hub.peer.dispatch(
-        requestAs("bob", "/.well-known/mesh", { headers: bearer(bobToken) }),
-      );
-      expect(meshAfter.status).toBe(403);
-      expect(((await meshAfter.json()) as { error: string }).error).toMatch(/revoked/);
+    // NOT route-scoped: the SAME token, still on the SAME hub, is refused
+    // on a completely different mount too (`/.well-known/mesh`) -- proof
+    // the enforcement is the binding middleware's `isRevoked`, applied
+    // uniformly before any handler runs, not a check that happens to live
+    // on `/search`.
+    const meshAfter = await hub.peer.dispatch(
+      requestAs("bob", "/.well-known/mesh", { headers: bearer(bobToken) }),
+    );
+    expect(meshAfter.status).toBe(403);
+    expect(((await meshAfter.json()) as { error: string }).error).toMatch(/revoked/);
 
-      // The member registry itself no longer lists bob.
-      expect(hub.memberStore.list().map((m) => m.peerId)).not.toContain("bob");
-      // And the policy version moved -- what makes a REMOTE provider's next
-      // pulled heartbeat see the same change (revocation-e2e.test.ts's E3/E4).
-      expect(hub.revocations.policyVersion()).toBeGreaterThan(1);
-    },
-    20_000,
-  );
+    // The member registry itself no longer lists bob.
+    expect(hub.memberStore.list().map((m) => m.peerId)).not.toContain("bob");
+    // And the policy version moved -- what makes a REMOTE provider's next
+    // pulled heartbeat see the same change (revocation-e2e.test.ts's E3/E4).
+    expect(hub.revocations.policyVersion()).toBeGreaterThan(1);
+  }, 20_000);
 
   it("a revoked admin cannot call DELETE /admin/members/... -- the case that justifies enforcing hub-wide, not route by route", async () => {
     const rootToken = await invite(hub, "root-admin", "ROOT-CODE", ["admin"]);

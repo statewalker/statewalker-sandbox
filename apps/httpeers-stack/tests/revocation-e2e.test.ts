@@ -84,18 +84,14 @@ afterAll(async () => {
 });
 
 describe("A-2 end to end", () => {
-  it(
-    "E1: the heartbeat carries a version vector",
-    async () => {
-      const res = await alice.call(hub.peer.peerId, "/.well-known/presence", {
-        method: "POST",
-        body: JSON.stringify({ seq: 1, addrs: alice.addrs() }),
-      });
-      const body = (await res.json()) as any;
-      expect(body.versions).toMatchObject({ mesh: expect.any(Number), policy: expect.any(Number) });
-    },
-    20_000,
-  );
+  it("E1: the heartbeat carries a version vector", async () => {
+    const res = await alice.call(hub.peer.peerId, "/.well-known/presence", {
+      method: "POST",
+      body: JSON.stringify({ seq: 1, addrs: alice.addrs() }),
+    });
+    const body = (await res.json()) as any;
+    expect(body.versions).toMatchObject({ mesh: expect.any(Number), policy: expect.any(Number) });
+  }, 20_000);
 
   it("E2: tokens carry iat, and it comes from the hub", async () => {
     const claims = await verifyToken(aliceToken, { issuer: hub.peer.peerId });
@@ -103,120 +99,113 @@ describe("A-2 end to end", () => {
     expect(claims!.iat).toBeLessThanOrEqual(claims!.exp);
   });
 
-  it(
-    "E3: a provider pulls the list only when the policy version moves",
-    async () => {
-      providerToken = await provider.heartbeat(hub.peer.peerId, providerToken);
-      const v0 = provider.revocations.knownVersion();
-      providerToken = await provider.heartbeat(hub.peer.peerId, providerToken);
-      expect(provider.revocations.knownVersion()).toBe(v0); // unchanged: no refetch needed
+  it("E3: a provider pulls the list only when the policy version moves", async () => {
+    providerToken = await provider.heartbeat(hub.peer.peerId, providerToken);
+    const v0 = provider.revocations.knownVersion();
+    providerToken = await provider.heartbeat(hub.peer.peerId, providerToken);
+    expect(provider.revocations.knownVersion()).toBe(v0); // unchanged: no refetch needed
 
-      hub.memberStore.remove(alice.peerId);
-      hub.revocations.revoke(alice.peerId);
-      providerToken = await provider.heartbeat(hub.peer.peerId, providerToken);
-      expect(provider.revocations.knownVersion()).toBeGreaterThan(v0);
-    },
-    30_000,
-  );
+    hub.memberStore.remove(alice.peerId);
+    hub.revocations.revoke(alice.peerId);
+    providerToken = await provider.heartbeat(hub.peer.peerId, providerToken);
+    expect(provider.revocations.knownVersion()).toBeGreaterThan(v0);
+  }, 30_000);
 
-  it(
-    "E4: THE MEASUREMENT -- revoked token refused, and how long it took",
-    async () => {
-      // Fresh member, valid token, provider accepting it.
-      hub.invitations.create("BOB", ["member"], 60_000);
-      const bob = await buildTestPeer({ hubPeerId: hub.peer.peerId, listen: ["/ip4/127.0.0.1/tcp/0"] });
-      await bob.libp2p.dial(multiaddr(hub.peer.addrs()[0]!));
-      await bob.libp2p.dial(multiaddr(provider.addrs()[0]!));
-      const bobToken = (
-        (await (
-          await bob.call(hub.peer.peerId, "/.well-known/invite", {
-            method: "POST",
-            body: JSON.stringify({ id: "BOB" }),
-          })
-        ).json()) as any
-      ).token;
+  it("E4: THE MEASUREMENT -- revoked token refused, and how long it took", async () => {
+    // Fresh member, valid token, provider accepting it.
+    hub.invitations.create("BOB", ["member"], 60_000);
+    const bob = await buildTestPeer({
+      hubPeerId: hub.peer.peerId,
+      listen: ["/ip4/127.0.0.1/tcp/0"],
+    });
+    await bob.libp2p.dial(multiaddr(hub.peer.addrs()[0]!));
+    await bob.libp2p.dial(multiaddr(provider.addrs()[0]!));
+    const bobToken = (
+      (await (
+        await bob.call(hub.peer.peerId, "/.well-known/invite", {
+          method: "POST",
+          body: JSON.stringify({ id: "BOB" }),
+        })
+      ).json()) as any
+    ).token;
 
-      providerToken = await provider.heartbeat(hub.peer.peerId, providerToken);
-      expect((await bob.call(provider.peerId, "/test/whoami", { token: bobToken })).status).toBe(200);
+    providerToken = await provider.heartbeat(hub.peer.peerId, providerToken);
+    expect((await bob.call(provider.peerId, "/test/whoami", { token: bobToken })).status).toBe(200);
 
-      // Revoke, then measure to the first refusal.
-      const t0 = Date.now();
-      hub.memberStore.remove(bob.peerId);
-      hub.revocations.revoke(bob.peerId);
-      providerToken = await provider.heartbeat(hub.peer.peerId, providerToken); // one heartbeat
-      const res = await bob.call(provider.peerId, "/test/whoami", { token: bobToken });
-      const elapsed = Date.now() - t0;
+    // Revoke, then measure to the first refusal.
+    const t0 = Date.now();
+    hub.memberStore.remove(bob.peerId);
+    hub.revocations.revoke(bob.peerId);
+    providerToken = await provider.heartbeat(hub.peer.peerId, providerToken); // one heartbeat
+    const res = await bob.call(provider.peerId, "/test/whoami", { token: bobToken });
+    const elapsed = Date.now() - t0;
 
-      expect(res.status).toBe(403);
-      expect(((await res.json()) as any).error).toMatch(/revoked/);
-      console.log(`\n  TIMING: revocation took effect in ${elapsed} ms (one heartbeat)\n`);
-      expect(elapsed).toBeLessThan(2000);
-      await bob.stop();
-    },
-    40_000,
-  );
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as any).error).toMatch(/revoked/);
+    console.log(`\n  TIMING: revocation took effect in ${elapsed} ms (one heartbeat)\n`);
+    expect(elapsed).toBeLessThan(2000);
+    await bob.stop();
+  }, 40_000);
 
-  it(
-    "E5: a role downgrade invalidates the old token but does not lock the peer out",
-    async () => {
-      hub.invitations.create("CAR", ["member", "admin"], 60_000);
-      const carol = await buildTestPeer({ hubPeerId: hub.peer.peerId, listen: ["/ip4/127.0.0.1/tcp/0"] });
-      await carol.libp2p.dial(multiaddr(hub.peer.addrs()[0]!));
-      await carol.libp2p.dial(multiaddr(provider.addrs()[0]!));
-      let carolToken = (
-        (await (
-          await carol.call(hub.peer.peerId, "/.well-known/invite", {
-            method: "POST",
-            body: JSON.stringify({ id: "CAR" }),
-          })
-        ).json()) as any
-      ).token;
+  it("E5: a role downgrade invalidates the old token but does not lock the peer out", async () => {
+    hub.invitations.create("CAR", ["member", "admin"], 60_000);
+    const carol = await buildTestPeer({
+      hubPeerId: hub.peer.peerId,
+      listen: ["/ip4/127.0.0.1/tcp/0"],
+    });
+    await carol.libp2p.dial(multiaddr(hub.peer.addrs()[0]!));
+    await carol.libp2p.dial(multiaddr(provider.addrs()[0]!));
+    let carolToken = (
+      (await (
+        await carol.call(hub.peer.peerId, "/.well-known/invite", {
+          method: "POST",
+          body: JSON.stringify({ id: "CAR" }),
+        })
+      ).json()) as any
+    ).token;
 
-      hub.memberStore.setRoles(carol.peerId, ["member"]);
-      hub.revocations.changeRoles(carol.peerId, ["member"]);
-      providerToken = await provider.heartbeat(hub.peer.peerId, providerToken);
+    hub.memberStore.setRoles(carol.peerId, ["member"]);
+    hub.revocations.changeRoles(carol.peerId, ["member"]);
+    providerToken = await provider.heartbeat(hub.peer.peerId, providerToken);
 
-      // The stale token is refused...
-      const stale = await carol.call(provider.peerId, "/test/whoami", { token: carolToken });
-      expect(stale.status).toBe(403);
-      expect(((await stale.json()) as any).error).toMatch(/roles changed/);
+    // The stale token is refused...
+    const stale = await carol.call(provider.peerId, "/test/whoami", { token: carolToken });
+    expect(stale.status).toBe(403);
+    expect(((await stale.json()) as any).error).toMatch(/roles changed/);
 
-      // ...but one heartbeat restores service, with the reduced roles.
-      carolToken = await carol.heartbeat(hub.peer.peerId, carolToken);
-      const fresh = await carol.call(provider.peerId, "/test/whoami", { token: carolToken });
-      expect(fresh.status).toBe(200);
-      expect(((await fresh.json()) as any).roles).toEqual(["member"]);
-      await carol.stop();
-    },
-    40_000,
-  );
+    // ...but one heartbeat restores service, with the reduced roles.
+    carolToken = await carol.heartbeat(hub.peer.peerId, carolToken);
+    const fresh = await carol.call(provider.peerId, "/test/whoami", { token: carolToken });
+    expect(fresh.status).toBe(200);
+    expect(((await fresh.json()) as any).roles).toEqual(["member"]);
+    await carol.stop();
+  }, 40_000);
 
-  it(
-    "E6: the hub is never on the critical path -- a provider enforces offline",
-    async () => {
-      hub.invitations.create("DAN", ["member"], 60_000);
-      const dan = await buildTestPeer({ hubPeerId: hub.peer.peerId, listen: ["/ip4/127.0.0.1/tcp/0"] });
-      await dan.libp2p.dial(multiaddr(hub.peer.addrs()[0]!));
-      await dan.libp2p.dial(multiaddr(provider.addrs()[0]!));
-      const danToken = (
-        (await (
-          await dan.call(hub.peer.peerId, "/.well-known/invite", {
-            method: "POST",
-            body: JSON.stringify({ id: "DAN" }),
-          })
-        ).json()) as any
-      ).token;
+  it("E6: the hub is never on the critical path -- a provider enforces offline", async () => {
+    hub.invitations.create("DAN", ["member"], 60_000);
+    const dan = await buildTestPeer({
+      hubPeerId: hub.peer.peerId,
+      listen: ["/ip4/127.0.0.1/tcp/0"],
+    });
+    await dan.libp2p.dial(multiaddr(hub.peer.addrs()[0]!));
+    await dan.libp2p.dial(multiaddr(provider.addrs()[0]!));
+    const danToken = (
+      (await (
+        await dan.call(hub.peer.peerId, "/.well-known/invite", {
+          method: "POST",
+          body: JSON.stringify({ id: "DAN" }),
+        })
+      ).json()) as any
+    ).token;
 
-      hub.memberStore.remove(dan.peerId);
-      hub.revocations.revoke(dan.peerId);
-      providerToken = await provider.heartbeat(hub.peer.peerId, providerToken); // last contact with the hub
+    hub.memberStore.remove(dan.peerId);
+    hub.revocations.revoke(dan.peerId);
+    providerToken = await provider.heartbeat(hub.peer.peerId, providerToken); // last contact with the hub
 
-      const res = await dan.call(provider.peerId, "/test/whoami", { token: danToken });
-      expect(res.status).toBe(403);
-      await dan.stop();
-    },
-    40_000,
-  );
+    const res = await dan.call(provider.peerId, "/test/whoami", { token: danToken });
+    expect(res.status).toBe(403);
+    await dan.stop();
+  }, 40_000);
 
   // ADDITIVE, not a replacement for E6 above -- E6 is promoted from the
   // archive verbatim (fidelity matters), including its own limit: it only
@@ -228,65 +217,64 @@ describe("A-2 end to end", () => {
   // merely left uncalled, before the refusal. Both exist on purpose: one
   // preserves the promoted suite unmodified, the other closes the gap
   // between what E6 asserts and what its name says.
-  it(
-    "E6b: enforcement continues with the hub actually stopped",
-    async () => {
-      // Self-contained hub/provider/member, independent of the shared
-      // suite fixtures above -- stopping a hub here must not affect any
-      // other test in this file.
-      const localHub = await buildTestHub();
-      const localProvider = await buildTestPeer({
-        hubPeerId: localHub.peer.peerId,
-        listen: ["/ip4/127.0.0.1/tcp/0"],
-        mounts: (ctx) => {
-          const mounts = createMounts();
-          mounts.provide("/test", createTestSurfaceHandler(ctx.peerId));
-          return mounts;
-        },
-      });
-      const eve = await buildTestPeer({ hubPeerId: localHub.peer.peerId, listen: ["/ip4/127.0.0.1/tcp/0"] });
+  it("E6b: enforcement continues with the hub actually stopped", async () => {
+    // Self-contained hub/provider/member, independent of the shared
+    // suite fixtures above -- stopping a hub here must not affect any
+    // other test in this file.
+    const localHub = await buildTestHub();
+    const localProvider = await buildTestPeer({
+      hubPeerId: localHub.peer.peerId,
+      listen: ["/ip4/127.0.0.1/tcp/0"],
+      mounts: (ctx) => {
+        const mounts = createMounts();
+        mounts.provide("/test", createTestSurfaceHandler(ctx.peerId));
+        return mounts;
+      },
+    });
+    const eve = await buildTestPeer({
+      hubPeerId: localHub.peer.peerId,
+      listen: ["/ip4/127.0.0.1/tcp/0"],
+    });
 
-      await localProvider.libp2p.dial(multiaddr(localHub.peer.addrs()[0]!));
-      await eve.libp2p.dial(multiaddr(localHub.peer.addrs()[0]!));
-      await eve.libp2p.dial(multiaddr(localProvider.addrs()[0]!));
+    await localProvider.libp2p.dial(multiaddr(localHub.peer.addrs()[0]!));
+    await eve.libp2p.dial(multiaddr(localHub.peer.addrs()[0]!));
+    await eve.libp2p.dial(multiaddr(localProvider.addrs()[0]!));
 
-      localHub.invitations.create("LOCAL-PROVIDER", ["member"], 60_000);
-      let localProviderToken = (
-        (await (
-          await localProvider.call(localHub.peer.peerId, "/.well-known/invite", {
-            method: "POST",
-            body: JSON.stringify({ id: "LOCAL-PROVIDER" }),
-          })
-        ).json()) as any
-      ).token;
+    localHub.invitations.create("LOCAL-PROVIDER", ["member"], 60_000);
+    let localProviderToken = (
+      (await (
+        await localProvider.call(localHub.peer.peerId, "/.well-known/invite", {
+          method: "POST",
+          body: JSON.stringify({ id: "LOCAL-PROVIDER" }),
+        })
+      ).json()) as any
+    ).token;
 
-      localHub.invitations.create("EVE", ["member"], 60_000);
-      const eveToken = (
-        (await (
-          await eve.call(localHub.peer.peerId, "/.well-known/invite", {
-            method: "POST",
-            body: JSON.stringify({ id: "EVE" }),
-          })
-        ).json()) as any
-      ).token;
+    localHub.invitations.create("EVE", ["member"], 60_000);
+    const eveToken = (
+      (await (
+        await eve.call(localHub.peer.peerId, "/.well-known/invite", {
+          method: "POST",
+          body: JSON.stringify({ id: "EVE" }),
+        })
+      ).json()) as any
+    ).token;
 
-      // Revoke Eve, then let the provider pull the change into its own
-      // cache -- this is the ONLY contact the provider will ever make
-      // about this revocation.
-      localHub.memberStore.remove(eve.peerId);
-      localHub.revocations.revoke(eve.peerId);
-      localProviderToken = await localProvider.heartbeat(localHub.peer.peerId, localProviderToken);
+    // Revoke Eve, then let the provider pull the change into its own
+    // cache -- this is the ONLY contact the provider will ever make
+    // about this revocation.
+    localHub.memberStore.remove(eve.peerId);
+    localHub.revocations.revoke(eve.peerId);
+    localProviderToken = await localProvider.heartbeat(localHub.peer.peerId, localProviderToken);
 
-      // Now stop the hub for real -- not "don't call it again", but
-      // "cannot be called again."
-      await localHub.stop();
+    // Now stop the hub for real -- not "don't call it again", but
+    // "cannot be called again."
+    await localHub.stop();
 
-      const res = await eve.call(localProvider.peerId, "/test/whoami", { token: eveToken });
-      expect(res.status).toBe(403);
-      expect(((await res.json()) as any).error).toMatch(/revoked/);
+    const res = await eve.call(localProvider.peerId, "/test/whoami", { token: eveToken });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as any).error).toMatch(/revoked/);
 
-      await Promise.all([localProvider.stop(), eve.stop()]);
-    },
-    40_000,
-  );
+    await Promise.all([localProvider.stop(), eve.stop()]);
+  }, 40_000);
 });
