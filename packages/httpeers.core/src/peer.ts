@@ -118,16 +118,20 @@ export interface CreatePeerInit {
    */
   listen?: string[];
   /**
-   * This peer's own signing key, for a self-constructed node. Ignored when
-   * `node` is supplied (that node's identity is already fixed). Omit to
-   * have `createPeer` generate one and retain it — `createLibp2p` never
-   * hands a generated key back out, so if nothing above it keeps the
-   * reference before the node is built, it is gone for good, and this peer
-   * could never later mint a token that self-certifies as its own peerId
-   * (`mintToken`/`verifyToken`'s self-certification check in `tokens.ts`
-   * ties a valid token's `mesh` to the actual signing key's peerId). Not
-   * exposed on the returned `Peer` — retaining it here, for a later task's
-   * minting logic to close over, is the point; publishing it is not.
+   * This peer's own signing key. When `node` is supplied, only key
+   * *generation* is skipped -- the value itself is not ignored: it is
+   * still what `mintTokenForMounts` below closes over, so a `node` handed
+   * in without one builds and starts fine, and only fails lazily, at the
+   * first `mintToken` call a mounts factory actually makes. For a
+   * self-constructed node, omit it to have `createPeer` generate one and
+   * retain it — `createLibp2p` never hands a generated key back out, so if
+   * nothing above it keeps the reference before the node is built, it is
+   * gone for good, and this peer could never later mint a token that
+   * self-certifies as its own peerId (`mintToken`/`verifyToken`'s
+   * self-certification check in `tokens.ts` ties a valid token's `mesh` to
+   * the actual signing key's peerId). Not exposed on the returned `Peer`
+   * — retaining it here, for a later task's minting logic to close over,
+   * is the point; publishing it is not.
    */
   privateKey?: Ed25519PrivateKey;
   /** Defaults to the node's own peerId (caller- or self-constructed). */
