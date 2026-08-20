@@ -21,7 +21,6 @@
  * request that reaches a handler really is untouched".
  */
 import {
-  ANONYMOUS,
   createMounts,
   createPeer,
   json,
@@ -196,7 +195,6 @@ describe("Ruling 59: the runtime attaches the membership token, not the page", (
 
     expect(spy.seen[0]).toBe(inbound);
     expect(spy.seen[0]!.headers.has("authorization")).toBe(false);
-    expect(ANONYMOUS).toBeDefined(); // the sentinel this case is about
   });
 });
 
@@ -300,6 +298,26 @@ describe("against a real peer router (createPeer, not a spy)", () => {
   /** This peer's own `mintToken`, captured out of the `mounts` factory -- the only way to get a token a real router will accept. */
   let mintToken: (sub: string, roles: string[], ttlMs?: number) => Promise<string>;
 
+  /**
+   * The token the wrapper under test attaches, standing in for what
+   * `JoinHandle.token()` returns in production.
+   *
+   * A GENUINELY MINTED TOKEN FOR THIS PEER, NOT A LITERAL, AND THE
+   * DIFFERENCE IS THE WHOLE POINT OF THE TOKENLESS-INBOUND TEST BELOW.
+   * `getClaims` (`peer.ts`) swallows ANY verification failure into `claims =
+   * null`, and `newPeerHandlers` then answers 401 "membership token
+   * required" -- exactly the status a request with no header at all
+   * produces. So with an unverifiable literal here, that test would pass
+   * whether or not the wrapper wrongly attached it: both branches land on
+   * 401 and the counterfactual is unreachable. Verified directly (an earlier
+   * version of this suite used the literal and did not discriminate; the
+   * review caught it). With a real self-token, a wrongly-attached header
+   * yields claims whose `sub` is THIS peer against a binding naming another,
+   * which is a 403 on a different code path -- so the 401 assertion below
+   * genuinely rules the mutant out.
+   */
+  let selfToken: string;
+
   beforeEach(async () => {
     echoed = [];
     peer = await createPeer({
@@ -324,6 +342,7 @@ describe("against a real peer router (createPeer, not a spy)", () => {
         return mounts;
       },
     });
+    selfToken = await mintToken(peer.peerId, ["member"]);
   });
 
   afterEach(async () => {
@@ -334,7 +353,7 @@ describe("against a real peer router (createPeer, not a spy)", () => {
     const dispatch = createEdgeDispatch({
       dispatch: peer.dispatch,
       key: KEY,
-      token: () => TOKEN,
+      token: () => selfToken,
     });
 
     const callerToken = await mintToken("12D3KooSomeOtherPeer", ["member"]);
@@ -345,34 +364,36 @@ describe("against a real peer router (createPeer, not a spy)", () => {
     const res = await dispatch(inbound);
 
     expect(res.status).toBe(200);
-    // The proof that matters, against the real chain rather than a spy: a
-    // peer that can reach us cannot borrow our membership. The request
-    // traversed `createPeerRouter`'s self-addressed branch (which re-creates
-    // the `Request` and carries the binding over with `copyPeerBinding`) and
-    // the whole binding/access middleware -- and arrived carrying the
-    // CALLER's token, never `TOKEN`.
+    // Against the real chain rather than a spy: a peer that can reach us
+    // cannot borrow our membership. The request traversed
+    // `createPeerRouter`'s self-addressed branch (which re-creates the
+    // `Request` and carries the binding over with `copyPeerBinding`) and the
+    // whole binding/access middleware -- and arrived carrying the CALLER's
+    // token, never ours.
     expect(echoed).toEqual([{ path: "/test/whoami", authorization: `Bearer ${callerToken}` }]);
-    expect(echoed[0]!.authorization).not.toContain(TOKEN);
+    expect(echoed[0]!.authorization).not.toContain(selfToken);
   });
 
   it("an inbound call with NO token is refused for lacking one -- not for carrying a mismatched one", async () => {
     const dispatch = createEdgeDispatch({
       dispatch: peer.dispatch,
       key: KEY,
-      token: () => TOKEN,
+      token: () => selfToken,
     });
 
     const inbound = new Request(`http://peer/${peer.peerId}/test/whoami`);
     registerPeer(inbound, "12D3KooSomeOtherPeer");
     const res = await dispatch(inbound);
 
-    // The real router discriminates the two failure modes for us, which is
-    // what makes this a proof rather than an assertion about a spy. Had the
-    // wrapper attached OUR token to this inbound request, `newPeerHandlers`
-    // would have found claims whose `sub` is this peer and a binding naming
-    // a different one, and answered 403 "token subject does not match
-    // connected peer". A 401 "membership token required" is only reachable
-    // if no authorization header was added at all.
+    // The real router discriminates the two failure modes, which is what
+    // makes this test add something to the spy-level assertions above rather
+    // than restate them. Had the wrapper attached OUR token to this inbound
+    // request, `newPeerHandlers` would have found claims whose `sub` is this
+    // peer against a binding naming a different one, and answered 403 "token
+    // subject does not match connected peer". A 401 "membership token
+    // required" is only reachable if no authorization header was added at
+    // all. This holds ONLY because `selfToken` is genuinely minted -- see its
+    // declaration above for what breaks if it is a literal.
     expect(res.status).toBe(401);
     expect(((await res.json()) as { error: string }).error).toMatch(/membership token required/);
     expect(echoed).toEqual([]);
@@ -382,7 +403,7 @@ describe("against a real peer router (createPeer, not a spy)", () => {
     const dispatch = createEdgeDispatch({
       dispatch: peer.dispatch,
       key: KEY,
-      token: () => TOKEN,
+      token: () => selfToken,
     });
 
     // A syntactically valid peer id this node has no address for -- the
@@ -406,7 +427,7 @@ describe("against a real peer router (createPeer, not a spy)", () => {
     const dispatch = createEdgeDispatch({
       dispatch: peer.dispatch,
       key: KEY,
-      token: () => TOKEN,
+      token: () => selfToken,
     });
 
     // `httpeers.core` has two rules that meet here and disagree:

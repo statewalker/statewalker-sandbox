@@ -285,8 +285,20 @@ async function loadImages(): Promise<void> {
   if (imagesState.status !== "present") {
     // Includes the departed case -- Step 5. No call is made to a provider
     // the view already says is gone, and no timeout is needed to find out.
+    //
+    // ONLY `departed` IS UNREACHABILITY. "Waiting for the first mesh view"
+    // and "nobody is advertising this service" are neither failures nor
+    // absences of a thing that was there -- rendering them in the same tone
+    // as a provider that vanished would blur exactly the distinction
+    // `discovery.ts` keeps four separate states in order to make. The
+    // neutral tone matches no rule in the stylesheet, which is what renders
+    // it plainly.
     galleryEl.replaceChildren();
-    setStatus(imagesStatusEl, "unreachable", describeProvider("images", imagesState));
+    setStatus(
+      imagesStatusEl,
+      imagesState.status === "departed" ? "unreachable" : "neutral",
+      describeProvider("images", imagesState),
+    );
     return;
   }
 
