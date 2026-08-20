@@ -217,6 +217,34 @@ function readRelayAddr(configPath: string): string {
   return relayAddr;
 }
 
+/**
+ * Of the `/p2p-circuit` addresses a reservation produces, return the one a
+ * browser should actually dial -- the `/webrtc`-suffixed one.
+ *
+ * WHY THIS IS NOT COSMETIC. A reservation yields BOTH variants:
+ * `.../p2p-circuit/p2p/<hub>` and `.../p2p-circuit/webrtc/p2p/<hub>`.
+ * `waitForCircuitReservation` returns whichever it happens to see first,
+ * which is the right answer to the question IT asks ("has a reservation
+ * landed?") and the wrong one to publish, because this value is printed as
+ * the hub's relayed address and written into `.httpeers/hub-ready`. Someone
+ * copy-pasting the bare variant gets a LIMITED connection that refuses
+ * `/httpeers/1.0.0` -- the exact failure `tests/e2e/node-consumer.test.ts`
+ * pins, and a genuinely confusing five minutes for the person who hits it.
+ *
+ * Falls back to `reserved` if no `/webrtc` variant is present, rather than
+ * throwing or waiting: a node built through `StartHubInit.node` need not
+ * listen on `/webrtc` at all, and the reservation is real either way. The
+ * run-as-a-process block warns when it sees that fall-back rather than
+ * printing a bare circuit address as if it were dialable.
+ */
+function preferWebRtcCircuitAddr(node: Libp2p, reserved: string): string {
+  const upgraded = node
+    .getMultiaddrs()
+    .map((addr) => addr.toString())
+    .find((addr) => addr.includes("p2p-circuit") && addr.includes("/webrtc"));
+  return upgraded ?? reserved;
+}
+
 export async function startHub(init: StartHubInit = {}) {
   const stateFilePath = init.stateFilePath ?? "./.httpeers/hub-state.json";
   const keyPath = init.keyPath ?? DEFAULT_HUB_KEY_PATH;
@@ -249,9 +277,28 @@ export async function startHub(init: StartHubInit = {}) {
   const node = suppliedNode ?? (await createHubNode({ privateKey, listen: init.listen ?? [] }));
   const ownsNode = suppliedNode == null;
 
-  /** Stop the node if and only if this function built it. Used by both the failure path below and `stop()`. */
+  /** Stop the node if and only if this function built it. Used by both `startFailed` and `stop()`. */
   const releaseNode = async (): Promise<void> => {
     if (ownsNode) await node.stop();
+  };
+
+  // EVERY RESOURCE THIS FUNCTION ACQUIRES IS UNWOUND IF A LATER STEP THROWS,
+  // and that is not symmetry for its own sake. `node` is started and holding
+  // a relay connection and a reservation the moment it exists; a `startHub`
+  // that threw afterwards used to leave it running. Under vitest that
+  // presents as a HANG rather than a failure -- the suite reports nothing
+  // wrong and simply never exits -- which is the worst shape a bug can take
+  // in a test run. `../browser/peer-runtime.ts`'s `startBrowserPeer` carries
+  // the same stack for the same reason; the two are deliberately alike.
+  const unwind: Array<() => Promise<void>> = [];
+  if (ownsNode) unwind.push(releaseNode);
+  const startFailed = async (): Promise<void> => {
+    // A COPY, so `startFailed` is idempotent in order. `reverse()` mutates in
+    // place, so unwinding twice off the same array would run the steps
+    // forwards the second time -- harmless today (every catch below rethrows,
+    // so this runs at most once) and silently wrong the moment someone adds a
+    // path that does not.
+    for (const step of [...unwind].reverse()) await step().catch(() => {});
   };
 
   // THE RESERVATION IS PART OF STARTING, NOT A BACKGROUND ERRAND. `startHub`
@@ -263,12 +310,13 @@ export async function startHub(init: StartHubInit = {}) {
   if (init.relayAddr != null) {
     try {
       await dialRelay(node, init.relayAddr);
-      circuitAddr = await waitForCircuitReservation(node);
+      const reserved = await waitForCircuitReservation(node);
+      circuitAddr = preferWebRtcCircuitAddr(node, reserved);
     } catch (err) {
       // Loudly, and with the node closed. A hub that came up anyway would be
       // a hub no browser can reach, reporting success -- exactly the failure
       // Task 20 exists to end.
-      await releaseNode().catch(() => {});
+      await startFailed();
       throw new Error(
         `hub: could not reserve a circuit slot through the relay at "${init.relayAddr}" -- ` +
           "no browser can reach this hub without one. Is the relay running, and is this the " +
@@ -278,45 +326,57 @@ export async function startHub(init: StartHubInit = {}) {
     }
   }
 
-  const peer = await createPeer({
-    node,
-    // STILL REQUIRED ALONGSIDE `node`, despite `CreatePeerInit.privateKey`'s
-    // doc comment saying it is "ignored when `node` is supplied". That
-    // sentence is about node CONSTRUCTION only: `peer.ts` skips generating a
-    // key for a supplied node, but the `mintToken` closure it hands the
-    // `mounts` factory still closes over whatever `privateKey` it was given,
-    // and throws lazily when there was none. Dropping it here would leave the
-    // hub unable to mint a single token -- and only at the first redemption,
-    // not at startup. (Reported as a doc defect in `httpeers.core`, which
-    // Task 20 may not modify.)
-    privateKey,
-    accessTree: HUB_ACCESS,
-    vocabulary,
-    usesTransportIdentity: usesTransportIdentity(),
-    now: clock,
-    // The hub enforces revocation on ITS OWN endpoints by consulting its own
-    // live `RevocationRegistry` directly -- no cache, no pull: it already
-    // holds the source of truth in this same process. This is the SAME
-    // `revocations` instance `createHubEndpoints` below uses to bump the
-    // policy version on `DELETE /admin/members/{peerId}`, so a revoked
-    // token stops working on the very next request to ANY hub mount, not
-    // just the one route someone remembered to check.
-    revocationCache: revocations,
-    mounts: (ctx) => {
-      const hub = createHubEndpoints({
-        selfPeerId: ctx.peerId,
-        mintToken: ctx.mintToken,
-        memberStore: persistent.memberStore,
-        invitations: persistent.invitations,
-        vocabulary,
-        revocations,
-        presenceTtlMs: init.presenceTtlMs ?? DEFAULT_PRESENCE_TTL_MS,
-        advertisementAccess: init.advertisementAccess,
-      });
-      sweep = hub.sweep;
-      return hub.mounts;
-    },
-  });
+  // WRAPPED, because `createPeer` and the `mounts` factory below both run
+  // real code that can throw -- `createHubEndpoints` validates its access
+  // tree against the vocabulary, for one -- and by this point `node` is up
+  // and holding a reservation. See `unwind` above for what an unstopped node
+  // does to a test run.
+  let peer: Awaited<ReturnType<typeof createPeer>>;
+  try {
+    peer = await createPeer({
+      node,
+      // STILL REQUIRED ALONGSIDE `node`, despite `CreatePeerInit.privateKey`'s
+      // doc comment saying it is "ignored when `node` is supplied". That
+      // sentence is about node CONSTRUCTION only: `peer.ts` skips generating a
+      // key for a supplied node, but the `mintToken` closure it hands the
+      // `mounts` factory still closes over whatever `privateKey` it was given,
+      // and throws lazily when there was none. Dropping it here would leave the
+      // hub unable to mint a single token -- and only at the first redemption,
+      // not at startup. (Reported as a doc defect in `httpeers.core`, which
+      // Task 20 may not modify.)
+      privateKey,
+      accessTree: HUB_ACCESS,
+      vocabulary,
+      usesTransportIdentity: usesTransportIdentity(),
+      now: clock,
+      // The hub enforces revocation on ITS OWN endpoints by consulting its own
+      // live `RevocationRegistry` directly -- no cache, no pull: it already
+      // holds the source of truth in this same process. This is the SAME
+      // `revocations` instance `createHubEndpoints` below uses to bump the
+      // policy version on `DELETE /admin/members/{peerId}`, so a revoked
+      // token stops working on the very next request to ANY hub mount, not
+      // just the one route someone remembered to check.
+      revocationCache: revocations,
+      mounts: (ctx) => {
+        const hub = createHubEndpoints({
+          selfPeerId: ctx.peerId,
+          mintToken: ctx.mintToken,
+          memberStore: persistent.memberStore,
+          invitations: persistent.invitations,
+          vocabulary,
+          revocations,
+          presenceTtlMs: init.presenceTtlMs ?? DEFAULT_PRESENCE_TTL_MS,
+          advertisementAccess: init.advertisementAccess,
+        });
+        sweep = hub.sweep;
+        return hub.mounts;
+      },
+    });
+  } catch (err) {
+    await startFailed();
+    throw err;
+  }
+  unwind.push(async () => await peer.stop());
 
   const timer = setInterval(() => sweep?.(), SWEEP_INTERVAL_MS);
   timer.unref?.();
@@ -325,11 +385,16 @@ export async function startHub(init: StartHubInit = {}) {
     peer,
     node,
     /**
-     * The relayed address a browser dials this hub at, or `undefined` when
-     * no `relayAddr` was given. Not read back out of `peer.addrs()` by the
-     * caller for a reason: this is the address whose ARRIVAL `startHub`
-     * waited for, so holding it here is the proof the reservation landed
-     * rather than a re-derivation that might pick up a different entry.
+     * The relayed address a browser dials this hub at -- the
+     * `/webrtc`-suffixed variant where one exists (`preferWebRtcCircuitAddr`),
+     * because the bare `/p2p-circuit` sibling is a limited connection that
+     * refuses `/httpeers/1.0.0`. `undefined` when no `relayAddr` was given.
+     *
+     * Its PRESENCE, not its exact value, is what `startHub` waited for, and
+     * that is the ordering guarantee worth having: a caller holding this
+     * knows the reservation landed before `startHub` resolved, so a page
+     * that reads `httpeers.json` and dials immediately cannot race the
+     * bootstrap.
      */
     circuitAddr,
     revocations,
@@ -377,7 +442,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   writeFileSync(readyPath, `${hub.peer.peerId}\n${hub.circuitAddr ?? ""}\n`);
 
   console.log(`hub peerId: ${hub.peer.peerId}`);
-  console.log(`hub relayed addr: ${hub.circuitAddr}`);
+  // LABELLED FOR WHAT IT IS, because `hub addrs:` below prints the bare
+  // `/p2p-circuit` sibling too and the two differ by one path segment. That
+  // sibling is a limited connection on which libp2p refuses
+  // `/httpeers/1.0.0`, so dialing it looks like a mesh bug rather than a
+  // wrong address.
+  console.log(`hub relayed addr (dial this -- the /webrtc suffix is required): ${hub.circuitAddr}`);
+  if (hub.circuitAddr != null && !hub.circuitAddr.includes("/webrtc")) {
+    console.warn(
+      "hub: warning -- the reservation produced no /webrtc address, so the address above is a " +
+        "BARE circuit address. libp2p refuses /httpeers/1.0.0 over one, so no browser can use " +
+        "it. Does this hub's node listen on /webrtc and carry the WebRTC transport?",
+    );
+  }
   console.log("hub addrs:");
   for (const addr of hub.peer.addrs()) console.log(`  ${addr}`);
 
