@@ -147,6 +147,20 @@ export interface JoinHandle {
   meshView(): MeshView | null;
   /** The vocabulary as of the last time `versions.vocabulary` moved -- `null` until the first heartbeat lands. */
   vocabulary(): Vocabulary | null;
+  /**
+   * This peer's CURRENT membership token, read at call time.
+   *
+   * A GETTER, NOT A VALUE, AND THAT IS THE WHOLE POINT. The hub mints a
+   * fresh token on every heartbeat response (see `heartbeatOnce` below,
+   * `token = body.token`), so the token rotates roughly every
+   * `HEARTBEAT_INTERVAL_MS`. Anything that read this once and cached the
+   * string would be sending a stale token within seconds; a caller that
+   * calls this per outbound request always has the live one. This exists
+   * for `edge-dispatch.ts`, which attaches it to requests originating at
+   * this peer's own ServiceWorker edge -- see that module for why the PAGE
+   * is never handed a token of its own.
+   */
+  token(): string;
   stop(): void;
 }
 
@@ -292,6 +306,7 @@ export function startJoin(init: JoinInit): JoinHandle {
   return {
     meshView: () => meshViewCache,
     vocabulary: () => vocabularyCache,
+    token: () => token, // read at call time, never snapshotted -- see `JoinHandle.token`.
     stop() {
       clearInterval(heartbeatTimer);
       clearInterval(keepaliveTimer);

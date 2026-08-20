@@ -23,7 +23,11 @@
  *      other peer: the hub declares no listen address of its own).
  *   5. redeem the invitation, mint the first token, start the heartbeat +
  *      keepalive timers (`join.ts`'s `startJoin`).
- *   6. mount the ServiceWorker edge (`edge.ts`'s `mountEdge`).
+ *   6. mount the ServiceWorker edge (`edge.ts`'s `mountEdge`), with
+ *      `edge-dispatch.ts` wrapped around `peer.dispatch` -- the module that
+ *      makes a page's plain `fetch()` reach the mesh without the page
+ *      holding a token, knowing the mount prefix, or parsing an error
+ *      message. See its own comment.
  *
  * A PEER'S ADDRS COME FROM THE MESH VIEW, NEVER FROM THE PEERSTORE. This
  * is the flip side of `join.ts`'s heartbeat sending THIS peer's own
@@ -43,6 +47,7 @@ import { createPeer, RevocationCache } from "@statewalker/httpeers.core";
 import type { MeshView } from "../hub/mesh-view.js";
 import { VOCABULARY } from "../policy.js";
 import { mountEdge } from "./edge.js";
+import { createEdgeDispatch } from "./edge-dispatch.js";
 import type { AdvertisementInput } from "./join.js";
 import { preDialPeer, REVOCATION_MAX_STALENESS_MS, redeemInvitation, startJoin } from "./join.js";
 import { createBrowserNode, dialRelay, waitForCircuitReservation } from "./node-profile.js";
@@ -102,6 +107,34 @@ export interface StartBrowserPeerInit {
 
 export interface BrowserPeerHandle {
   peerId: string;
+  /**
+   * The same-origin URL prefix a plain `fetch()` reaches the mesh through --
+   * always ending in a slash, so a call composes as
+   * `${baseUrl}${peerId}/some/path`.
+   *
+   * NOT OPTIONAL, AND NOT COSMETIC. The ServiceWorker keys its channel
+   * lookup on the URL's FIRST path segment, so this edge is necessarily
+   * mounted under `/${key}/` and can never live at `/`
+   * (`edge-guard.ts`'s `assertKeyMatchesPrefix`). A page composing a
+   * root-relative `/${peerId}/search` would therefore miss the edge
+   * entirely and fall through to the static server as a 404 -- the request
+   * never reaches the mesh, and nothing says so. Every page-originated mesh
+   * call must be composed from this value.
+   */
+  baseUrl: string;
+  /**
+   * The mesh's own identity -- `httpeers.json`'s `hubPeerId`, fetched at
+   * runtime, echoed here so a page never has to configure it.
+   *
+   * This is the ONE peer id a page may legitimately hold without
+   * discovering it, and only because it is not a discovery at all: it is
+   * the mesh identity every token's `mesh` claim restates, and the address
+   * of the hub-owned surfaces (`/admin/*`, `/.well-known/*`) that are not
+   * services on the bulletin board and are therefore not advertised. Every
+   * actual SERVICE -- search included -- is still resolved by `kind` out of
+   * `meshView()`.
+   */
+  hubPeerId: string;
   /** The mesh view as of the last heartbeat that reported a moved `versions.mesh` -- `null` before the first heartbeat lands. See the module comment's "A PEER'S ADDRS COME FROM THE MESH VIEW" note before dialing anything discovered through this. */
   meshView(): MeshView | null;
   stop(): Promise<void>;
@@ -168,16 +201,29 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   });
 
   onState("mounting-edge");
+  // `peer.dispatch` is NOT mounted raw. `edge-dispatch.ts` is the one place
+  // that knows what a request originating at this peer's own edge needs --
+  // the mount prefix stripped, the current membership token attached, and a
+  // thrown `PeerCallError` turned into a Response the page can read a
+  // `kind` off. See that module's comment; in particular, it is what keeps
+  // a page an ordinary `fetch()` client with no token of its own, and it
+  // leaves inbound traffic from other peers untouched.
   const edge = await mountEdge({
     key: init.key,
     serviceWorkerUrl: init.serviceWorkerUrl,
-    dispatch: peer.dispatch,
+    dispatch: createEdgeDispatch({
+      dispatch: peer.dispatch,
+      key: init.key,
+      token: () => join.token(),
+    }),
   });
 
   onState("ready");
 
   return {
     peerId: peer.peerId,
+    baseUrl: edge.baseUrl,
+    hubPeerId: config.hubPeerId,
     meshView: () => join.meshView(),
     async stop() {
       try {
