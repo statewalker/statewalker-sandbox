@@ -1660,24 +1660,37 @@ the owner. Neither was needed: Door 1 works here, proven at runtime rather than 
 
 `node-datachannel@0.32.3`'s `scripts.install` is
 `prebuild-install -r napi || (npm install … && npm run _prebuild)`. pnpm 10 blocks dependency
-lifecycle scripts unless the package is listed in `onlyBuiltDependencies`, and the umbrella
-declares that setting **nowhere** (`pnpm-workspace.yaml`, `.npmrc`, root `package.json` — all
-checked). So the script never ran and `.../node-datachannel/build/` did not exist. It is not a
-broken package and not a platform limitation: running the package's own `prebuild-install` in a
-scratch copy downloaded `node-datachannel-v0.32.3-napi-v8-linux-x64.tar.gz` (HTTP 200) and
-unpacked `build/Release/node_datachannel.node` — a **prebuilt N-API binary**, no compilation, no
-toolchain involved.
+lifecycle scripts unless the package is listed in `onlyBuiltDependencies`, and at the time this
+task started the umbrella declared that setting nowhere (`pnpm-workspace.yaml`, `.npmrc`, root
+`package.json` — all checked). So the script never ran and `.../node-datachannel/build/` did not
+exist. It was not a broken package and not a platform limitation: running the package's own
+`prebuild-install` in a scratch copy downloaded
+`node-datachannel-v0.32.3-napi-v8-linux-x64.tar.gz` (HTTP 200) and unpacked
+`build/Release/node_datachannel.node` — a **prebuilt N-API binary**, no compilation, no toolchain
+involved.
 
-**Required umbrella-level change (outside this submodule, requested from the coordinator):** add
-to the umbrella root's `pnpm-workspace.yaml`
+**Resolved at the umbrella level, outside this submodule.** The umbrella root's
+`pnpm-workspace.yaml` now carries a top-level
 
 ```yaml
 onlyBuiltDependencies:
   - node-datachannel
 ```
 
-then `pnpm rebuild node-datachannel`. Until that lands the binary is present in this working
-tree only because it was placed there by hand, and it will not survive a reinstall.
+**If you ever need to redo the install by hand, the command is `pnpm rebuild -r node-datachannel`.**
+The `-r` is not optional and its absence is not loud: without it, `pnpm rebuild` considers only the
+root project's own dependencies, finds `node-datachannel` among none of them, and **exits zero
+having done nothing**. A stale binary already sitting in `node_modules` then looks exactly like a
+successful rebuild. A plain `pnpm install` from the umbrella root also works and has no such trap.
+
+Verify rather than assume, since the failure mode above is silent:
+
+```
+$ ls node_modules/.pnpm/node-datachannel@*/node_modules/node-datachannel/build/Release/
+node_datachannel.node
+$ (from apps/httpeers-stack) node -e "import('@libp2p/webrtc').then(m => console.log(Object.keys(m)))"
+[ 'webRTC', 'webRTCDirect' ]
+```
 
 ### What changed
 

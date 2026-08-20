@@ -174,7 +174,12 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   // Same rule as `stop()`'s `finally` below, applied to the failure path.
   const unwind: Array<() => Promise<void>> = [async () => await node.stop()];
   const startFailed = async (): Promise<void> => {
-    for (const step of unwind.reverse()) await step().catch(() => {});
+    // A COPY, so `startFailed` is idempotent in order. `reverse()` mutates in
+    // place, so unwinding twice off the same array would run the steps
+    // forwards the second time -- harmless today (every catch below rethrows,
+    // so this runs at most once) and silently wrong the moment someone adds a
+    // path that does not.
+    for (const step of [...unwind].reverse()) await step().catch(() => {});
   };
 
   try {
