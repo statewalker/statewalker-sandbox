@@ -31,14 +31,13 @@
  * when the query parameter is absent -- there is no third source anywhere
  * in this codebase to read one from.
  */
-import type { AccessTree } from "@statewalker/httpeers.core";
 import { createMounts } from "@statewalker/httpeers.core";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import type { AdvertisementInput } from "../../browser/join.js";
 import type { BrowserPeerState } from "../../browser/peer-runtime.js";
 import { startBrowserPeer } from "../../browser/peer-runtime.js";
 import type { ImageInfo } from "../../services/images.js";
-import { buildImagesAccessTree, createImagesEndpoint, imagePath } from "../../services/images.js";
+import { createImagesEndpoint, IMAGES_ACCESS_TREE, imagePath } from "../../services/images.js";
 import { loadFixtureImages } from "./fixtures.js";
 
 const peerIdEl = document.querySelector<HTMLElement>("#peer-id")!;
@@ -105,8 +104,6 @@ async function joinWithInvitation(invitationId: string): Promise<void> {
   const mounts = createMounts();
   mounts.provide("/images", createImagesEndpoint({ files, images }));
 
-  const accessTree: AccessTree = buildImagesAccessTree(images);
-
   const advertisements = (): AdvertisementInput[] => [
     { id: "images", kind: "images", title: "Images" },
   ];
@@ -121,7 +118,7 @@ async function joinWithInvitation(invitationId: string): Promise<void> {
     const peer = await startBrowserPeer({
       key: "images",
       mounts,
-      accessTree,
+      accessTree: IMAGES_ACCESS_TREE,
       invitationId,
       advertisements,
       dev,
