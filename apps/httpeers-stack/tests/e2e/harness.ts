@@ -222,8 +222,23 @@ async function createStackNode(): Promise<Libp2p> {
   });
 }
 
+export interface StartStackInit {
+  /**
+   * The hub's presence TTL. Defaults to `PRESENCE_TTL_MS` (2 s), which is
+   * right for leg 1: every peer there beats on this harness's own
+   * `BEAT_INTERVAL_MS` (600 ms) timer.
+   *
+   * A BROWSER PEER CANNOT RUN AT 2 s. `src/browser/join.ts`'s
+   * `HEARTBEAT_INTERVAL_MS` is 5 s and a page has no knob for it, so a hub
+   * sweeping at a 2 s TTL would drop every page between its own beats — the
+   * mesh would flap for reasons that have nothing to do with what is under
+   * test. `browser.test.ts` passes a TTL comfortably above that interval.
+   */
+  presenceTtlMs?: number;
+}
+
 /** Boot a relay and a hub, both from seeded on-disk keys, with state in a scratch temp dir. */
-export async function startStack(): Promise<Stack> {
+export async function startStack(init: StartStackInit = {}): Promise<Stack> {
   const dir = mkdtempSync(join(tmpdir(), "httpeers-stack-e2e-"));
   const relayKeyPath = join(dir, "relay.key");
   const hubKeyPath = join(dir, "hub.key");
@@ -260,7 +275,7 @@ export async function startStack(): Promise<Stack> {
     stateFilePath: join(dir, "hub-state.json"),
     keyPath: hubKeyPath,
     listen: ["/ip4/127.0.0.1/tcp/0"],
-    presenceTtlMs: PRESENCE_TTL_MS,
+    presenceTtlMs: init.presenceTtlMs ?? PRESENCE_TTL_MS,
     relayAddr,
   });
   // The hub's DIRECT address, for the `hubDial: "tcp"` path — picked by
