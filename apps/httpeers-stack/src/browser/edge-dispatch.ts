@@ -144,9 +144,18 @@ export interface EdgeDispatchInit {
    * is correct for a caller whose peers are already connected (every Node
    * suite in this app) and broken for a browser page (see job 4).
    *
-   * Called once per outbound request that names a peer other than this one;
-   * an implementation is expected to be cheap when a route already exists,
-   * because it is on the path of every single mesh call the page makes.
+   * CALLED FOR EVERY PEER-ID-SHAPED FIRST SEGMENT, INCLUDING THIS PEER'S
+   * OWN. This module knows the shape of a peer id (`targetPeerId`) and not
+   * which one it is: `createEdgeDispatch` is never told its own peer id, and
+   * giving it one only to skip a call would duplicate a check the
+   * implementation has to make anyway. `join.ts`'s `createRouteEnsurer` is
+   * where "that is us" is recognised and returns immediately. An
+   * implementation that does not know its own id must therefore tolerate
+   * being asked to route to itself.
+   *
+   * Called once per outbound request that names a peer; an implementation is
+   * expected to be cheap when a route already exists, because it is on the
+   * path of every single mesh call the page makes.
    */
   ensureRoute?: (peerId: PeerIdStr) => Promise<void>;
 }
