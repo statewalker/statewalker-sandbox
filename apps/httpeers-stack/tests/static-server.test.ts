@@ -283,7 +283,7 @@ describe("static-server: /httpeers.json absent", () => {
     const res = await fetch(`http://127.0.0.1:${port}/httpeers.json`);
     expect(res.status).toBe(503);
     const body = await res.json();
-    expect(body.error).toMatch(/setup/i);
+    expect(body.error).toMatch(/bootstrap/i);
   });
 
   it("still serves index.html and 404s an unknown path normally", async () => {

@@ -24,7 +24,7 @@
  * payload. An ephemeral key would silently invalidate that config on
  * every restart, with a symptom -- peers failing to connect -- that
  * points nowhere near the relay. So the key MUST come from
- * `.httpeers/relay.key`, written once by `pnpm setup`; if it is missing,
+ * `.httpeers/relay.key`, written once by `pnpm bootstrap`; if it is missing,
  * this process fails loudly and exits rather than papering over the gap
  * with a fresh identity nobody asked for.
  *
@@ -51,7 +51,7 @@ import { createLibp2p, type Libp2p } from "libp2p";
 /** `RELAY_PORT`'s default -- matches the brief and the design spec's `/ip4/0.0.0.0/tcp/9090/ws` example. */
 export const DEFAULT_RELAY_PORT = 9090;
 
-/** Where `pnpm setup` (Task 10) writes the relay's signing key, and where this process reads it back from. */
+/** Where `pnpm bootstrap` (Task 10) writes the relay's signing key, and where this process reads it back from. */
 export const DEFAULT_RELAY_KEY_PATH = "./.httpeers/relay.key";
 
 export interface RelayTlsInit {
@@ -89,7 +89,7 @@ function loadRelayKey(keyPath: string): Ed25519PrivateKey {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       console.error(`relay: no signing key found at "${keyPath}".`);
       console.error(
-        'relay: run "pnpm setup" first -- it generates the relay and hub keys this process needs.',
+        'relay: run "pnpm bootstrap" first -- it generates the relay and hub keys this process needs.',
       );
       console.error(
         "relay: refusing to start with a freshly generated key: this relay's peerId is embedded in",

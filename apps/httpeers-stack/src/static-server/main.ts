@@ -55,7 +55,7 @@ export const DEFAULT_APP_DIST_DIR = "dist/app";
 /** See the module comment's "DIST DIRECTORY LAYOUT" note. */
 export const DEFAULT_IMAGE_PEER_DIST_DIR = "dist/image-peer";
 
-/** Where `pnpm setup` (Task 10) writes the invitation payload, and where both origins read it back from. */
+/** Where `pnpm bootstrap` (Task 10) writes the invitation payload, and where both origins read it back from. */
 export const DEFAULT_HTTPEERS_CONFIG_PATH = "./httpeers.json";
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -195,7 +195,7 @@ function serveHttpeersConfig(res: ServerResponse, configPath: string, isHead: bo
         isHead,
         503,
         { "Content-Type": "application/json; charset=utf-8" },
-        JSON.stringify({ error: 'httpeers.json not found -- run "pnpm setup" first' }),
+        JSON.stringify({ error: 'httpeers.json not found -- run "pnpm bootstrap" first' }),
       );
       return;
     }

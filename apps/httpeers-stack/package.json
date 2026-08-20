@@ -15,7 +15,7 @@
     "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit",
     "lint": "biome check --write .",
     "format": "biome format --write .",
-    "setup": "tsx src/setup/main.ts",
+    "bootstrap": "tsx src/setup/main.ts",
     "start": "bash scripts/start.sh",
     "start:relay": "tsx src/relay/main.ts",
     "start:hub": "tsx src/hub/main.ts",

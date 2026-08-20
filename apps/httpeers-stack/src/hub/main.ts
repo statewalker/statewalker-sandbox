@@ -15,7 +15,7 @@
  * (Task 10's setup CLI) kept naming the OLD peerId as the identity every
  * daemon and browser page is told to trust. So, mirroring the relay's own
  * contract exactly: the key MUST come from `.httpeers/hub.key`, written
- * once by `pnpm setup`; if it is missing, this process fails loudly and
+ * once by `pnpm bootstrap`; if it is missing, this process fails loudly and
  * exits rather than papering over the gap with a fresh identity nobody
  * asked for. (This module's own comment previously deferred this to
  * "a later task" — Task 10 is that task; see its own PROVENANCE.md entry.)
@@ -24,7 +24,7 @@
  * `@libp2p/crypto/keys`'s own `privateKeyToProtobuf`/`privateKeyFromProtobuf`
  * round-trip through. Same loader shape as `../relay/main.ts`'s
  * `loadRelayKey`, deliberately not shared code: each process's "fail
- * loudly, name the missing file, tell the operator to run `pnpm setup`"
+ * loudly, name the missing file, tell the operator to run `pnpm bootstrap`"
  * message is specific to which key is missing.
  *
  * THE TTL SWEEP IS THE HUB'S ONLY SCHEDULER (note 09 §6). "A peer went
@@ -75,10 +75,10 @@ export const SWEEP_INTERVAL_MS = 1_000;
 /** The longest life of a token this hub mints — sets the revocation registry's pruning horizon. */
 const MAX_TOKEN_TTL_MS = 5 * 60_000;
 
-/** Where `pnpm setup` (Task 10) writes the hub's signing key, and where this process reads it back from. */
+/** Where `pnpm bootstrap` (Task 10) writes the hub's signing key, and where this process reads it back from. */
 export const DEFAULT_HUB_KEY_PATH = "./.httpeers/hub.key";
 
-/** Where `pnpm setup` wrote the invitation payload this process reads `relayAddrs[0]` out of. Same file `../static-server/main.ts` serves to pages. */
+/** Where `pnpm bootstrap` wrote the invitation payload this process reads `relayAddrs[0]` out of. Same file `../static-server/main.ts` serves to pages. */
 export const DEFAULT_HTTPEERS_CONFIG_PATH = "./httpeers.json";
 
 /**
@@ -164,7 +164,7 @@ function loadHubKey(keyPath: string): Ed25519PrivateKey {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       console.error(`hub: no signing key found at "${keyPath}".`);
       console.error(
-        'hub: run "pnpm setup" first -- it generates the relay and hub keys this process needs.',
+        'hub: run "pnpm bootstrap" first -- it generates the relay and hub keys this process needs.',
       );
       console.error(
         "hub: refusing to start with a freshly generated key: this hub's peerId IS the mesh",
@@ -199,7 +199,7 @@ function readRelayAddr(configPath: string): string {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       console.error(`hub: no invitation payload found at "${configPath}".`);
-      console.error('hub: run "pnpm setup" first -- it writes httpeers.json.');
+      console.error('hub: run "pnpm bootstrap" first -- it writes httpeers.json.');
       console.error(
         "hub: without the relay's address this hub would hold no circuit reservation, and no",
       );
@@ -320,7 +320,7 @@ export async function startHub(init: StartHubInit = {}) {
       throw new Error(
         `hub: could not reserve a circuit slot through the relay at "${init.relayAddr}" -- ` +
           "no browser can reach this hub without one. Is the relay running, and is this the " +
-          `address "pnpm setup" wrote into httpeers.json? Cause: ${String(err)}`,
+          `address "pnpm bootstrap" wrote into httpeers.json? Cause: ${String(err)}`,
         { cause: err },
       );
     }
@@ -423,7 +423,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const port = process.env.HUB_PORT != null ? Number(process.env.HUB_PORT) : DEFAULT_HUB_PORT;
   const readyPath = process.env.HUB_READY_FILE ?? DEFAULT_HUB_READY_PATH;
 
-  // `RELAY_ADDR` overrides, but the FILE is the normal path: `pnpm setup`
+  // `RELAY_ADDR` overrides, but the FILE is the normal path: `pnpm bootstrap`
   // wrote `httpeers.json` precisely so no process has to be told the relay's
   // address twice, and `scripts/start.sh` already refuses to run without it.
   const relayAddr = process.env.RELAY_ADDR ?? readRelayAddr(configPath);

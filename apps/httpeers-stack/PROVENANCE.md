@@ -549,7 +549,7 @@ string/Buffer) — not assumed.
 multiaddr `httpeers.json` (Task 10) hands out; an ephemeral key would silently invalidate
 that config on every restart, with a symptom (peers can't connect) that points nowhere
 near the relay. `loadRelayKey` reads `.httpeers/relay.key` (`DEFAULT_RELAY_KEY_PATH`);
-on `ENOENT` it prints an explicit "run `pnpm setup` first" message to stderr and calls
+on `ENOENT` it prints an explicit "run `pnpm bootstrap` first" message to stderr and calls
 `process.exit(1)` — verified manually (see "Manual verification" below), not just
 asserted in prose.
 
@@ -597,7 +597,7 @@ invitation payload (`DEFAULT_HTTPEERS_CONFIG_PATH` = `./httpeers.json`, matching
 plan's Task 10 §2 shape, `{ relayAddrs, hubPeerId }`), not a per-page build artifact.
 Read fresh off disk on every request (no caching layer) and passed through byte-for-byte
 — the server never parses it, since the pages are the ones that need to. Missing file →
-**503** with a JSON body naming `"run \"pnpm setup\" first"`, never a 404: an absent
+**503** with a JSON body naming `"run \"pnpm bootstrap\" first"`, never a 404: an absent
 config is a different condition from a missing route (brief's own framing), and a 503
 here is what lets the page say "run setup" instead of "not found".
 
@@ -731,7 +731,7 @@ run only via `import.meta.url === file://...` guard is otherwise unexercised by
 
 ## Task 10: the setup CLI — keys and the invitation payload
 
-The CLI that turns a fresh checkout into a runnable stack: `pnpm setup` generates (or,
+The CLI that turns a fresh checkout into a runnable stack: `pnpm bootstrap` generates (or,
 on a later run, simply reads back) this deployment's persistent identity, and writes
 `httpeers.json` — the invitation payload note 07 §4 describes, and the shape
 `../static-server/main.ts` (Task 9) already serves with its own distinct 503 when it is
@@ -802,7 +802,7 @@ Ctrl-C. **Does not scrape stdout for a multiaddr** — deliberately, unlike
 run, making its own multiaddr log line the only way to hand the address to the other
 processes it boots. This stack's identities are not ephemeral (Task 9's relay,
 now Task 10's hub too — see Step 4 below): everything a dialer needs already sits in
-`httpeers.json`, a durable file written once by `pnpm setup`. Only the trap/cleanup shape
+`httpeers.json`, a durable file written once by `pnpm bootstrap`. Only the trap/cleanup shape
 (`pids=()`, `trap cleanup EXIT INT TERM`, `kill -- "-$pid"` against each child's process
 group) is copied from that script's pattern; its stdout-parsing loop is not.
 
@@ -812,7 +812,7 @@ slot through the relay rather than binding a fixed, externally-knowable port of 
 (`httpeers.json`'s own shape has no hub port to poll), so a short fixed pause after
 starting it, checking only that the process is still alive, is what stands in for
 "ready" there. `httpeers.json`'s absence is checked before anything is started, and the
-script exits 1 with `run "pnpm setup" first` — not a partial boot.
+script exits 1 with `run "pnpm bootstrap" first` — not a partial boot.
 
 ### Step 4: `src/hub/main.ts` was also modified — the one deviation from the brief's file list, made in scope after asking
 
@@ -829,7 +829,7 @@ consistent), but a config that describes a mesh that no longer exists the moment
 restarts.**
 
 Confirmed as a real, live defect before fixing it, not inferred from the comment alone:
-booted the stack (`pnpm setup` then `tsx src/hub/main.ts`) before this change and
+booted the stack (`pnpm bootstrap` then `tsx src/hub/main.ts`) before this change and
 captured two different peerIds — `httpeers.json` named
 `12D3KooWEEh6igGmzfhZ8Eq6jLiCLvWnFyWkQxsHANdXUJyRSNoE`, the hub that actually started was
 `12D3KooWC8z5ws5M3Kv9zRPm6LgmVT4Uh4koHcyMztDCSivAytgu` — different on every run.
@@ -839,7 +839,7 @@ in `hub/main.ts`, structurally identical to `../relay/main.ts`'s `loadRelayKey` 
 `.httpeers/hub.key` (`DEFAULT_HUB_KEY_PATH`, now the canonical constant `setup/main.ts`
 imports rather than re-declaring, so the path can't drift between the writer and the two
 readers), decodes via `privateKeyFromProtobuf`, type-guards to `Ed25519`, and on `ENOENT`
-prints a "run `pnpm setup` first" message to stderr and calls `process.exit(1)` — same
+prints a "run `pnpm bootstrap` first" message to stderr and calls `process.exit(1)` — same
 shape as the relay's message, worded for the hub's own stakes (identity, not just
 address). `startHub` now threads the loaded key through to `createPeer({ privateKey,
 ... })`, the exact seam Task 7a left for this. `StartHubInit` gained an optional
@@ -854,7 +854,7 @@ address). `startHub` now threads the loaded key through to `createPeer({ private
 `createHubEndpoints`, bypassing `main.ts` entirely — confirmed by the full suite still
 passing unchanged (see counts below), not merely by this grep.
 
-**End-to-end re-verification after the fix**: `pnpm setup` then `tsx src/hub/main.ts`
+**End-to-end re-verification after the fix**: `pnpm bootstrap` then `tsx src/hub/main.ts`
 now boots with the SAME peerId `httpeers.json` names —
 `12D3KooWCXYEeYzHWgTw3mqQpaYxWmWZeqPNRvLrrfjXz5QxYtu9` on both sides, captured directly
 from the two processes' own output, a fresh run distinct from the pre-fix capture above.
@@ -1738,7 +1738,7 @@ $ (packages/httpeers.core) pnpm exec vitest run --no-file-parallelism
 $ tsc --noEmit && tsc -p tsconfig.tests.json --noEmit     # both clean, app and core
 ```
 
-The real deployment was also run (`pnpm setup` then `scripts/start.sh`): the hub printed
+The real deployment was also run (`pnpm bootstrap` then `scripts/start.sh`): the hub printed
 `hub relayed addr: …/p2p-circuit/webrtc/p2p/<hub>`, the script's readiness wait gated on it, and
 the new SIGINT handler tore the hub down cleanly.
 

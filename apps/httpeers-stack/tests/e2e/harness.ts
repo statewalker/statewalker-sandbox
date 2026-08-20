@@ -20,7 +20,7 @@
  *      capability at all), the persistent hub state file and the search mount
  *      are all the production ones.
  *   2. Identities come from `RELAY_SEED`/`HUB_SEED` through
- *      `setup/keys.ts`'s `loadOrGenerateKey`, the same path `pnpm setup`
+ *      `setup/keys.ts`'s `loadOrGenerateKey`, the same path `pnpm bootstrap`
  *      takes (`setup/main.ts:138-139` reads those two env vars).
  *   3. The hub's TTL SWEEP TIMER IS RUNNING (`SWEEP_INTERVAL_MS`, 1 s, set up
  *      by `startHub` itself). `buildTestHub` never starts it; "a provider
@@ -244,7 +244,7 @@ export async function startStack(init: StartStackInit = {}): Promise<Stack> {
   const hubKeyPath = join(dir, "hub.key");
 
   // Both keys are DERIVED FROM THE SEEDS, then read back by the very loaders
-  // `startRelay`/`startHub` use — the same two-step `pnpm setup` performs
+  // `startRelay`/`startHub` use — the same two-step `pnpm bootstrap` performs
   // (write once, every later process reads the file). `peerIdOf` here is what
   // lets a test assert the running processes' identities against the seeds.
   const relayPeerId = peerIdOf(

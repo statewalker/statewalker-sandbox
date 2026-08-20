@@ -1,5 +1,5 @@
 /**
- * `pnpm setup`: turns a fresh checkout into a runnable stack by generating
+ * `pnpm bootstrap`: turns a fresh checkout into a runnable stack by generating
  * (or, on a later run, simply reading back) this deployment's persistent
  * identity, and writing `httpeers.json` -- the invitation payload.
  *
@@ -57,7 +57,7 @@ function relayAddrFamily(host: string): "ip4" | "ip6" | "dns4" {
   }
 }
 
-/** Where `pnpm setup` writes the invitation payload -- matches `../static-server/main.ts`'s `DEFAULT_HTTPEERS_CONFIG_PATH`. */
+/** Where `pnpm bootstrap` writes the invitation payload -- matches `../static-server/main.ts`'s `DEFAULT_HTTPEERS_CONFIG_PATH`. */
 export const DEFAULT_CONFIG_PATH = "./httpeers.json";
 /** `RELAY_HOST`'s default -- a loopback dial address for local/dev runs, matching the design record's own example. */
 export const DEFAULT_RELAY_HOST = "127.0.0.1";

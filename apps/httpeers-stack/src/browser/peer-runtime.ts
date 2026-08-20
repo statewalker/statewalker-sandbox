@@ -151,7 +151,7 @@ async function fetchHttpeersConfig(url: string): Promise<HttpeersConfig> {
   if (!res.ok) {
     throw new Error(
       `startBrowserPeer: GET ${url} -> ${res.status} ${res.statusText} -- ` +
-        'has the server been through "pnpm setup" yet?',
+        'has the server been through "pnpm bootstrap" yet?',
     );
   }
   return (await res.json()) as HttpeersConfig;

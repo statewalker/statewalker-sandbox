@@ -352,7 +352,7 @@ async function buildSession(
   unwind.push(async () => await stack.stop());
 
   // The invitation payload both pages fetch over HTTP. Written for real,
-  // to a real file, and served by the real static server — `pnpm setup`'s
+  // to a real file, and served by the real static server — `pnpm bootstrap`'s
   // own output shape (`src/setup/main.ts`'s `HttpeersConfig`), with this
   // stack's actual relay address in it.
   const configDir = mkdtempSync(join(tmpdir(), "httpeers-browser-e2e-"));

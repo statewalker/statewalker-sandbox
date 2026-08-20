@@ -1,8 +1,8 @@
 /**
- * Task 10, Step 4: `pnpm setup` -- key generation and the invitation
+ * Task 10, Step 4: `pnpm bootstrap` -- key generation and the invitation
  * payload. Every case here operates against a scratch directory
  * (`mkdtempSync`), never the real `.httpeers/`/`httpeers.json` this repo's
- * own `pnpm setup` would write, so this suite is safe to run alongside a
+ * own `pnpm bootstrap` would write, so this suite is safe to run alongside a
  * real checked-out deployment.
  */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

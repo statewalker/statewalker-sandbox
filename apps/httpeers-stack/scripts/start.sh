@@ -6,7 +6,7 @@
 # a child's stdout for its multiaddr or peerId. That demo's identities are
 # ephemeral (a fresh key every run), so parsing the relay's freshly printed
 # multiaddr out of its log was the only way to hand it to the other
-# processes. This stack's identities are NOT ephemeral: `pnpm setup`
+# processes. This stack's identities are NOT ephemeral: `pnpm bootstrap`
 # generates `.httpeers/{relay,hub}.key` once and reuses them thereafter, and
 # writes everything a dialer needs -- relayAddrs, hubPeerId -- into
 # `httpeers.json`, a durable file every process (and, over HTTP, every
@@ -14,6 +14,11 @@
 # extract from a log line. Only the trap/cleanup shape below is borrowed
 # from that script's pattern, which is sound; its stdout-parsing is not
 # copied.
+#
+# The setup script is named `bootstrap`, not `setup`: `pnpm setup` is a
+# pnpm built-in (it configures the user's shell environment) and wins over
+# a same-named package script, silently doing nothing instead of running
+# it. `pnpm bootstrap` is not a pnpm command, so it reaches the script.
 #
 # Env knobs:
 #   RELAY_PORT -- the relay's WS listen port (default 9090, matches
@@ -32,7 +37,7 @@ RELAY_PORT="${RELAY_PORT:-9090}"
 HUB_READY_FILE="${HUB_READY_FILE:-$ROOT/.httpeers/hub-ready}"
 
 if [[ ! -f "$ROOT/httpeers.json" ]]; then
-  echo "[httpeers-stack] httpeers.json not found -- run \"pnpm setup\" first." >&2
+  echo "[httpeers-stack] httpeers.json not found -- run \"pnpm bootstrap\" first." >&2
   exit 1
 fi
 
