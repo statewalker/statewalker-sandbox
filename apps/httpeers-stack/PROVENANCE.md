@@ -1094,21 +1094,49 @@ set aside.
   role->capability expansion on this peer's own incoming requests is wrong. This mirrors
   `hub/main.ts`'s own choice exactly (see that module's own comment), not a new decision.
 
-### What could not be verified without a browser
+### What could not be verified without a browser (corrected on review)
 
-Nothing in `src/browser/` runs under Node -- IndexedDB, ServiceWorker registration,
-`RTCPeerConnection`, and the browser-only libp2p transports (`@libp2p/webrtc`,
-`@libp2p/websockets`, `@libp2p/circuit-relay-v2` client side) all require a real browser
-context. Untouched by this task, deliberately, per the team lead's explicit scoping to
-Task 15's Playwright suite: whether `waitForCircuitReservation` actually observes a
-`p2p-circuit` address inside a real browser tab; whether the `/webrtc` pre-dial actually
-prevents the limited-connection failure it targets; whether `mountEdge`'s registration is
-actually reachable through a real `fetch()` from the page (i.e. that
-`assertKeyMatchesPrefix`'s precondition, once satisfied, is sufficient and not merely
-necessary); whether two tabs of the same origin collide the way design note 39 §6 predicts
-(E-2, explicitly out of this task's scope); and the full join sequence end to end against
-a running relay + hub. Everything here was checked as far as static typing and the one
-piece of pure logic (the key/prefix guard) allow, and no further.
+**This originally read "Nothing in `src/browser/` runs under Node," which was false of
+`join.ts`.** That module imports only `@libp2p/interface`, `@libp2p/peer-id`,
+`@multiformats/multiaddr`, `httpeers.core`, and a type-only import from
+`../hub/mesh-view.js` -- no browser API at all -- and this app already ships the harness to
+exercise it (`tests/support/mesh.ts`'s `buildTestHub`/`buildTestPeer`, real libp2p peers
+over TCP against a real hub, already used by three existing suites). Review correctly
+named this a scoping-honesty problem, not a browser-dependency one: "cannot verify without
+a browser" and "did not verify" are different claims, and this section made the first when
+the true state was the second.
+
+**`redeemInvitation`, `startJoin` (the heartbeat, its version-vector gating, and the
+keepalive's connection check), and `preDialPeer`'s multiaddr construction are now covered
+by `tests/browser-join.test.ts`** (added in the fix round below) -- three tests over a real
+hub and a real TCP peer, including the property that matters most: each version counter
+gates only its own section, proven by bumping the hub's mesh version alone and asserting
+the vocabulary/revocations endpoints are not refetched. Verified adversarial (mutation
+tested twice independently, once by this task and once by review): flipping the per-section
+version gates to `if (true)` makes the test fail with the right message; reverting makes it
+pass again.
+
+What remains genuinely, unavoidably browser-only, per the team lead's explicit scoping to
+Task 15's Playwright suite:
+
+- `node-profile.ts`'s actual transport construction and identity persistence -- WebRTC,
+  WebSockets, and IndexedDB, none of which run, or are meaningfully fakeable, under Node.
+- Actual circuit-reservation timing: whether `waitForCircuitReservation` really observes a
+  `p2p-circuit` address inside a real browser tab dialling a real relay.
+- The `/webrtc` pre-dial's real effect on a limited connection: this task's test proves
+  `preDialPeer` builds the right multiaddr and calls `dial` with it; it cannot prove what a
+  real relay+WebRTC stack does with that dial, since the Node-side harness has no
+  circuit-relay-v2/WebRTC transport to dial through.
+- ServiceWorker reachability through a real page `fetch()` -- i.e. that
+  `assertKeyMatchesPrefix`'s precondition, once satisfied, is sufficient and not merely
+  necessary for the edge to work.
+- The two-tab / multi-adapter case (design note 39 §6's E-2) -- explicitly out of this
+  task's scope.
+- The full join sequence end to end against a running relay + hub + browser.
+
+Everything else -- every module's types, the guard's logic, the shape of every wire call
+against `../hub/endpoints.ts`'s actual handlers, and now `join.ts`'s runtime behaviour over
+a real hub and a real TCP peer -- was checked directly, not merely reasoned about.
 
 ### Counts and verification
 
@@ -1164,13 +1192,10 @@ in `.superpowers/sdd/2026-08-18-httpeers-stack/task-11-report.md`'s "Fix round" 
    (`ownsNode = suppliedNode == null`, `packages/httpeers.core/src/peer.ts`). `stop()` now
    calls `await node.stop()` in a `finally`, so it runs even if `join.stop()` / `edge.stop()`
    / `peer.stop()` throws.
-2. **§9 of the task report claimed the whole `src/browser/` surface needed a browser to
-   test.** False of `join.ts` -- no browser API in its import list, and this app already had
-   the harness (`tests/support/mesh.ts`). Added `tests/browser-join.test.ts`: three tests
-   over a real hub and a real TCP peer, the load-bearing one proving each version counter
-   gates only its own section (a mesh-only hub change does not trigger a vocabulary or
-   revocations refetch) -- verified adversarial by temporarily breaking the gate and
-   confirming the test catches it, then reverting.
+2. **This file's own "What could not be verified without a browser" section (above) claimed
+   the whole `src/browser/` surface needed a browser to test.** False of `join.ts` -- see
+   that section, corrected in place, for the full account and what `tests/browser-join.test.ts`
+   now covers. Not restated here to avoid a second, driftable account of the same fact.
 3. **`heartbeatOnce` could throw an unhandled rejection.** Only the presence call was
    inside a try/catch; `res.json()` and three follow-up call/parse pairs were not, and
    `heartbeatOnce` runs as `void heartbeatOnce()` on a timer. The entire heartbeat body is
