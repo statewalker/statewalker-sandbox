@@ -20,6 +20,8 @@
     "start:relay": "tsx src/relay/main.ts",
     "start:hub": "tsx src/hub/main.ts",
     "start:static": "tsx src/static-server/main.ts",
+    "dev:app": "vite --config vite.app.config.ts",
+    "build:app": "vite build --config vite.app.config.ts",
     "dev:image-peer": "vite --config vite.image-peer.config.ts",
     "build:image-peer": "vite build --config vite.image-peer.config.ts"
   },

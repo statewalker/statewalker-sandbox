@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>httpeers app</title>
+    <style>
+      body {
+        font: 14px/1.4 system-ui, sans-serif;
+        max-width: 760px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        color: #1a1a1a;
+      }
+      h1 {
+        font-size: 1.1rem;
+      }
+      h2 {
+        font-size: 0.95rem;
+        margin-top: 1.75rem;
+        border-bottom: 1px solid #e2e2e2;
+        padding-bottom: 0.25rem;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.25rem 0.75rem;
+      }
+      dt {
+        font-weight: 600;
+      }
+      dd {
+        margin: 0;
+        font-family: ui-monospace, monospace;
+        word-break: break-all;
+      }
+      .provider {
+        font-family: ui-monospace, monospace;
+        font-size: 0.85rem;
+        word-break: break-all;
+        margin: 0.25rem 0;
+      }
+      .provider[data-status="present"] {
+        color: #1a7a1a;
+      }
+      .provider[data-status="departed"] {
+        color: #a11a1a;
+        font-weight: 600;
+      }
+      .provider[data-status="absent"],
+      .provider[data-status="unknown"] {
+        color: #6a6a6a;
+      }
+      .status {
+        margin: 0.5rem 0;
+        padding: 0.4rem 0.6rem;
+        border-radius: 4px;
+        background: #f2f2f2;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+      }
+      .status[data-tone="denied"] {
+        background: #fdecea;
+        border: 1px solid #e0a0a0;
+      }
+      .status[data-tone="unreachable"] {
+        background: #fff3cd;
+        border: 1px solid #e0c36a;
+      }
+      .status[data-tone="failed"] {
+        background: #fdecea;
+        border: 1px solid #e0a0a0;
+      }
+      .status[data-tone="ok"] {
+        background: #eaf7ea;
+        border: 1px solid #a0d0a0;
+      }
+      .status:empty {
+        display: none;
+      }
+      form {
+        margin: 0.75rem 0;
+      }
+      input[type="text"] {
+        font-family: ui-monospace, monospace;
+        padding: 0.35rem 0.5rem;
+        min-width: 18rem;
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+        margin: 0.5rem 0;
+      }
+      #search-results li {
+        margin-bottom: 0.75rem;
+      }
+      #search-results .title {
+        font-weight: 600;
+      }
+      #search-results .url {
+        font-family: ui-monospace, monospace;
+        font-size: 0.8rem;
+        color: #4a4a8a;
+        word-break: break-all;
+      }
+      #members li {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-family: ui-monospace, monospace;
+        font-size: 0.8rem;
+        margin-bottom: 0.3rem;
+        word-break: break-all;
+      }
+      #members .roles {
+        color: #6a6a6a;
+      }
+      #members .self {
+        color: #6a6a6a;
+      }
+      #gallery {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 0.75rem;
+        margin-top: 0.5rem;
+      }
+      #gallery figure {
+        margin: 0;
+        text-align: center;
+      }
+      #gallery img {
+        width: 100%;
+        height: auto;
+        border-radius: 4px;
+        border: 1px solid #ccc;
+        display: block;
+      }
+      #gallery figure[data-failed="true"] img {
+        border-color: #e0a0a0;
+        background: #fdecea;
+        min-height: 60px;
+      }
+      #gallery figcaption {
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+        overflow-wrap: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>httpeers app</h1>
+
+    <p>
+      This page configures no peer ids. It joins the mesh, reads the hub's
+      view, finds providers by the <em>kind</em> they advertise, and calls
+      them with an ordinary <code>fetch()</code>.
+    </p>
+
+    <dl>
+      <dt>peer id</dt>
+      <dd id="peer-id">–</dd>
+      <dt>connection state</dt>
+      <dd id="state">not started</dd>
+      <dt>mesh base url</dt>
+      <dd id="base-url">–</dd>
+    </dl>
+
+    <form id="join-form">
+      <label for="invite">invitation code</label>
+      <input id="invite" name="invite" type="text" autocomplete="off" placeholder="paste an invitation id" />
+      <button type="submit">join mesh</button>
+    </form>
+
+    <h2>discovered providers</h2>
+    <p class="provider" id="search-provider" data-status="unknown">search: not started</p>
+    <p class="provider" id="images-provider" data-status="unknown">images: not started</p>
+
+    <h2>search</h2>
+    <form id="search-form">
+      <label for="q">query</label>
+      <input id="q" name="q" type="text" autocomplete="off" placeholder="relay" />
+      <button type="submit">search</button>
+    </form>
+    <p class="status" id="search-status"></p>
+    <ul id="search-results"></ul>
+
+    <h2>images</h2>
+    <p>
+      <button type="button" id="load-images">load images</button>
+    </p>
+    <p class="status" id="images-status"></p>
+    <div id="gallery"></div>
+
+    <h2>members</h2>
+    <p class="status" id="admin-status"></p>
+    <ul id="members"></ul>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
