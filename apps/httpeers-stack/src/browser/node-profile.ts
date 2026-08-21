@@ -22,57 +22,37 @@
  * `tests/e2e/harness.ts`, the last of which had hand-copied the poll loop
  * rather than import it through this module's `@libp2p/webrtc` dependency.
  *
- * IDENTITY PERSISTS PER ORIGIN, IN INDEXEDDB. Each page (the main app, the
- * image peer) is its own origin (`../static-server/main.ts`'s "TWO PORTS
- * IS A CORRECTNESS REQUIREMENT" note) and therefore its own IndexedDB, so
- * each gets its OWN signing key and therefore its own peerId. That is
- * deliberate, not an oversight: two pages sharing one identity would be
- * two independent libp2p nodes racing to be "the" peer for that identity,
- * which is a different and worse problem than two distinct mesh members.
- * The key is round-tripped through `@libp2p/crypto`'s protobuf encoding --
- * the exact same format `../hub/main.ts` / `../relay/main.ts` use for
- * their own on-disk key files, just written to IndexedDB instead of a
- * file, because a browser has no filesystem to write one to.
+ * IDENTITY PERSISTS PER ORIGIN, IN INDEXEDDB -- and it lives in
+ * `./identity.ts` now, re-exported below. It moved there in Task 24
+ * because the hub page needs the key itself, not just a node built from
+ * it: `createLibp2p` never hands a generated key back out, and the hub must
+ * pass the very same key to `createPeer` so its `mintToken` closure signs
+ * as the mesh. See that module for the format contract and for why
+ * per-origin identities are deliberate.
  */
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
-import { privateKeyFromProtobuf, privateKeyToProtobuf } from "@libp2p/crypto/keys";
 import { identify } from "@libp2p/identify";
 import { webRTC } from "@libp2p/webrtc";
 import { webSockets } from "@libp2p/websockets";
 import type { Ed25519PrivateKey, Libp2p } from "@statewalker/httpeers.core";
-import { generateMeshKey } from "@statewalker/httpeers.core";
-import { get, set } from "idb-keyval";
 import { createLibp2p } from "libp2p";
-
-/** Where this origin's identity key lives in IndexedDB (via `idb-keyval`, the same store `@statewalker/webrun-http-browser` already uses). */
-export const IDENTITY_STORAGE_KEY = "httpeers:identity-key";
+import { loadOrCreateIdentity } from "./identity.js";
 
 /**
- * Load this origin's persisted identity, or generate and persist one on
- * first run. Reuses `httpeers.core`'s own `generateMeshKey` rather than
- * calling `@libp2p/crypto`'s `generateKeyPair` directly a second time --
- * one call site for "how this mesh mints a fresh identity," matching the
- * lesson note 22 §5/§6 draws about reading this workspace's own source
- * before re-deriving something already sitting in it.
+ * Re-exported from `./identity.ts`, which is where they live now -- see
+ * this module's own note on the move. A page that imports
+ * `IDENTITY_STORAGE_KEY` from here keeps working.
  */
-async function loadOrCreateIdentity(): Promise<Ed25519PrivateKey> {
-  const stored = await get<Uint8Array>(IDENTITY_STORAGE_KEY);
-  if (stored != null) {
-    const key = privateKeyFromProtobuf(stored);
-    if (key.type !== "Ed25519") {
-      throw new Error(
-        `node-profile: identity key stored at "${IDENTITY_STORAGE_KEY}" is a ${key.type} key -- ` +
-          "only Ed25519 is supported (design note 05 §2).",
-      );
-    }
-    return key;
-  }
-  const key = await generateMeshKey();
-  await set(IDENTITY_STORAGE_KEY, privateKeyToProtobuf(key));
-  return key;
-}
+export {
+  clearIdentity,
+  decodeIdentity,
+  encodeIdentity,
+  IDENTITY_STORAGE_KEY,
+  loadOrCreateIdentity,
+  peerIdOf,
+} from "./identity.js";
 
 export interface CreateBrowserNodeInit {
   /**
@@ -94,6 +74,20 @@ export interface CreateBrowserNodeInit {
    * "DIST DIRECTORY LAYOUT" note) actually knows.
    */
   dev: boolean;
+  /**
+   * This node's signing key. Defaults to this origin's persisted identity
+   * (`./identity.ts`'s `loadOrCreateIdentity`) -- which is what both
+   * ordinary pages want and neither has to say.
+   *
+   * SUPPLIED BY A CALLER THAT NEEDS THE KEY FOR SOMETHING ELSE TOO, which
+   * today means the hub page: `createLibp2p` never gives a key back out,
+   * and the hub must hand the SAME key to `createPeer` (`mintToken` signs
+   * with it, and a mesh whose hub node and hub signer were different keys
+   * would mint tokens no peer could match to the hub it is talking to).
+   * Loading it once and passing it here is the only way to guarantee they
+   * are the same key rather than two reads that happen to agree.
+   */
+  privateKey?: Ed25519PrivateKey;
 }
 
 /**
@@ -105,7 +99,7 @@ export interface CreateBrowserNodeInit {
  * rather than one opaque await.
  */
 export async function createBrowserNode(init: CreateBrowserNodeInit): Promise<Libp2p> {
-  const privateKey = await loadOrCreateIdentity();
+  const privateKey = init.privateKey ?? (await loadOrCreateIdentity());
 
   return createLibp2p({
     privateKey,
