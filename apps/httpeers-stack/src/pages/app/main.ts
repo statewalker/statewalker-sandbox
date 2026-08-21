@@ -35,16 +35,28 @@
  * library -- is exactly what the record asked for.
  *
  * WHERE THE INVITATION COMES FROM: identical to `../image-peer/main.ts`'s
- * -- a `?invite=` query parameter, or a paste-in form when it is absent.
- * `StartBrowserPeerInit.invitationId` is required with no default and there
- * is no third source anywhere in this codebase; see that page's own module
- * comment for the full reasoning.
+ * -- a `?invite=` query parameter, a `?join=` blob, or a paste-in form when
+ * neither is present. See that page's own module comment for the full
+ * reasoning, including why the blob form exists at all (a mesh whose hub is
+ * a browser page has no entry in `httpeers.json` and cannot).
+ *
+ * A `?join=` BLOB IS NOT A CONFIGURED PEER ID, and the check above still
+ * holds. The blob carries the MESH identity in the same breath as the
+ * invitation that admits this page -- from the hub that minted both -- and
+ * `handle.hubPeerId` is where it lands, exactly as `httpeers.json`'s value
+ * did. No service peer id enters this file by any route.
  *
  * NO PAGE-LOCAL TIMEOUT, ANYWHERE (Step 5 as amended). The transport owns
  * that policy and reports it as a typed `kind`; see `./outcome.ts`.
  */
 import { createMounts } from "@statewalker/httpeers.core";
-import type { BrowserPeerHandle, BrowserPeerState } from "../../browser/peer-runtime.js";
+import type { JoinInput } from "../../browser/join-blob.js";
+import { readJoinInputFromSearch, readJoinInputFromText } from "../../browser/join-blob.js";
+import type {
+  BrowserPeerHandle,
+  BrowserPeerState,
+  HttpeersConfig,
+} from "../../browser/peer-runtime.js";
 import { startBrowserPeer } from "../../browser/peer-runtime.js";
 import type { MeshView } from "../../hub/mesh-view.js";
 import type { ImageInfo } from "../../services/images.js";
@@ -369,7 +381,18 @@ function refresh(): void {
   }
 }
 
-async function joinWithInvitation(invitationId: string): Promise<void> {
+/** A blob names its own mesh; a bare invitation id means "whichever mesh `httpeers.json` names". See the module comment. */
+function configOf(input: JoinInput): HttpeersConfig | undefined {
+  return input.kind === "blob"
+    ? { relayAddrs: input.blob.relayAddrs, hubPeerId: input.blob.hubPeerId }
+    : undefined;
+}
+
+function invitationIdOf(input: JoinInput): string {
+  return input.kind === "blob" ? input.blob.invitationId : input.invitationId;
+}
+
+async function joinWithInvitation(input: JoinInput): Promise<void> {
   joinForm.remove();
   stateEl.textContent = "loading-config";
 
@@ -389,7 +412,8 @@ async function joinWithInvitation(invitationId: string): Promise<void> {
       key: EDGE_KEY,
       mounts,
       accessTree,
-      invitationId,
+      invitationId: invitationIdOf(input),
+      config: configOf(input),
       dev,
       onState: (state: BrowserPeerState) => {
         stateEl.textContent = state;
@@ -418,14 +442,33 @@ searchForm.addEventListener("submit", (ev) => {
 
 loadImagesButton.addEventListener("click", () => void loadImages());
 
-const invitationFromQuery = new URLSearchParams(location.search).get("invite");
-if (invitationFromQuery != null && invitationFromQuery.trim() !== "") {
-  void joinWithInvitation(invitationFromQuery.trim());
+/** A malformed `?join=` is a legible complaint, not a blank page: someone pasted a link and half of it arrived. */
+function readQuery(): JoinInput | null {
+  try {
+    return readJoinInputFromSearch(location.search);
+  } catch (err) {
+    stateEl.textContent = "error";
+    setStatus(adminStatusEl, "failed", String(err));
+    console.error("app: the join link in this URL is not usable:", err);
+    return null;
+  }
+}
+
+const fromQuery = readQuery();
+if (fromQuery != null) {
+  void joinWithInvitation(fromQuery);
 } else {
   joinForm.addEventListener("submit", (ev) => {
     ev.preventDefault();
-    const id = inviteInput.value.trim();
-    if (id === "") return;
-    void joinWithInvitation(id);
+    let input: JoinInput | null;
+    try {
+      input = readJoinInputFromText(inviteInput.value);
+    } catch (err) {
+      setStatus(adminStatusEl, "failed", String(err));
+      console.error("app: that is not a usable invitation or join link:", err);
+      return;
+    }
+    if (input == null) return;
+    void joinWithInvitation(input);
   });
 }

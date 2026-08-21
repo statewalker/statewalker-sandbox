@@ -28,16 +28,28 @@
  * There is no HTTP endpoint for that today -- `GET /admin/invitations`
  * (`../../hub/endpoints.ts`) only reports `{ok, issuedBy, caller}`, not a
  * mint -- so this happens by calling `InvitationStore.create` directly
- * against the hub's own process (`../../hub/persist.ts`), and handing the
+ * against the hub's own process (`../../hub/hub-state.ts`), and handing the
  * resulting id to whoever opens this page. This page accepts it two ways: a
  * `?invite=` query parameter (for a shared link, e.g. from Task 15's own
- * harness) or a plain paste-in form when the query parameter is absent --
- * there is no third source anywhere in this codebase to read one from.
+ * harness) or a plain paste-in form when the query parameter is absent.
+ *
+ * AND, SINCE TASK 24, A THIRD FORM THAT IS NOT A THIRD SOURCE. A `?join=`
+ * blob (`../../browser/join-blob.ts`) carries an invitation id AND the mesh
+ * it belongs to -- `relayAddrs` + `hubPeerId` -- because a mesh whose hub is
+ * a BROWSER PAGE (`../hub/`) has no entry in `httpeers.json` and cannot:
+ * that file is written by `pnpm bootstrap` from a key file, and the hub
+ * page's identity is generated in a tab long afterwards. A bare `?invite=`
+ * still means "the mesh `httpeers.json` names", i.e. the Node hub; a
+ * `?join=` blob means "the mesh this blob names". Both are supported
+ * deliberately -- the Node hub is not going anywhere -- and the paste-in
+ * form accepts either, or a whole join link pasted verbatim.
  */
 import { createMounts } from "@statewalker/httpeers.core";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import type { AdvertisementInput } from "../../browser/join.js";
-import type { BrowserPeerState } from "../../browser/peer-runtime.js";
+import type { JoinInput } from "../../browser/join-blob.js";
+import { readJoinInputFromSearch, readJoinInputFromText } from "../../browser/join-blob.js";
+import type { BrowserPeerState, HttpeersConfig } from "../../browser/peer-runtime.js";
 import { startBrowserPeer } from "../../browser/peer-runtime.js";
 import type { ImageInfo } from "../../services/images.js";
 import { createImagesEndpoint, IMAGES_ACCESS_TREE, imagePath } from "../../services/images.js";
@@ -98,7 +110,18 @@ fixturesLoaded
     console.error("image-peer: failed to load fixtures:", err);
   });
 
-async function joinWithInvitation(invitationId: string): Promise<void> {
+/** A blob names its own mesh; a bare invitation id means "whichever mesh `httpeers.json` names". See the module comment. */
+function configOf(input: JoinInput): HttpeersConfig | undefined {
+  return input.kind === "blob"
+    ? { relayAddrs: input.blob.relayAddrs, hubPeerId: input.blob.hubPeerId }
+    : undefined;
+}
+
+function invitationIdOf(input: JoinInput): string {
+  return input.kind === "blob" ? input.blob.invitationId : input.invitationId;
+}
+
+async function joinWithInvitation(input: JoinInput): Promise<void> {
   joinForm.remove();
   setState("loading-config");
 
@@ -134,7 +157,8 @@ async function joinWithInvitation(invitationId: string): Promise<void> {
       key: "images",
       mounts,
       accessTree: IMAGES_ACCESS_TREE,
-      invitationId,
+      invitationId: invitationIdOf(input),
+      config: configOf(input),
       advertisements,
       dev,
       onState: setState,
@@ -147,14 +171,32 @@ async function joinWithInvitation(invitationId: string): Promise<void> {
   }
 }
 
-const invitationFromQuery = new URLSearchParams(location.search).get("invite");
-if (invitationFromQuery != null && invitationFromQuery.trim() !== "") {
-  void joinWithInvitation(invitationFromQuery.trim());
+/** A malformed `?join=` is a legible complaint, not a blank page: someone pasted a link and half of it arrived. */
+function readQuery(): JoinInput | null {
+  try {
+    return readJoinInputFromSearch(location.search);
+  } catch (err) {
+    setState("error");
+    console.error("image-peer: the join link in this URL is not usable:", err);
+    return null;
+  }
+}
+
+const fromQuery = readQuery();
+if (fromQuery != null) {
+  void joinWithInvitation(fromQuery);
 } else {
   joinForm.addEventListener("submit", (ev) => {
     ev.preventDefault();
-    const id = inviteInput.value.trim();
-    if (id === "") return;
-    void joinWithInvitation(id);
+    let input: JoinInput | null;
+    try {
+      input = readJoinInputFromText(inviteInput.value);
+    } catch (err) {
+      setState("error");
+      console.error("image-peer: that is not a usable invitation or join link:", err);
+      return;
+    }
+    if (input == null) return;
+    void joinWithInvitation(input);
   });
 }

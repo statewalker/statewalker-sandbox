@@ -4,8 +4,11 @@
  * through a ServiceWorker. Orchestrates, in order:
  *
  *   1. fetch `httpeers.json` -- `../static-server/main.ts` already serves
- *      it at `/httpeers.json` on both origins, because a browser cannot
- *      read the file `../setup/main.ts` wrote.
+ *      it at `/httpeers.json` on every origin, because a browser cannot
+ *      read the file `../setup/main.ts` wrote. Skipped when the caller
+ *      supplies `StartBrowserPeerInit.config` instead, which is how a page
+ *      joins a mesh whose hub is another browser page and therefore has no
+ *      entry in that file at all; see that field.
  *   2. build the browser libp2p node, dial the relay, wait for the
  *      circuit reservation to actually land (`node-profile.ts`).
  *   3. wire `httpeers.core`'s `createPeer` over that node, against THIS
@@ -99,10 +102,28 @@ export interface StartBrowserPeerInit {
   mounts: Mounts;
   /** This peer's own `.access` tree, evaluated against `../policy.ts`'s `VOCABULARY` -- see the module comment. */
   accessTree: AccessTree;
-  /** The invitation id this page redeems on first join -- `../hub/persist.ts`'s `InvitationStore.redeem`. */
+  /** The invitation id this page redeems on first join -- `../hub/hub-state.ts`'s `InvitationStore.redeem`. */
   invitationId: string;
   onState?: (state: BrowserPeerState) => void;
-  /** Defaults to `DEFAULT_HTTPEERS_CONFIG_URL`. */
+  /**
+   * The mesh to join, INSTEAD of fetching `httpeers.json`.
+   *
+   * WHY A PAGE MIGHT HAVE ONE. `httpeers.json` can only name a hub whose
+   * peerId was knowable before the deployment ran -- which is true of the
+   * Node hub (`../hub/main.ts` loads a key `pnpm bootstrap` generated) and
+   * false of the browser hub page (Task 24), whose identity is created in a
+   * tab, in IndexedDB, long after bootstrap. A page joining THAT mesh is
+   * handed its `relayAddrs`/`hubPeerId` in a join blob instead
+   * (`./join-blob.ts`), and passes them here.
+   *
+   * This is not a peer id the page configured or guessed: it is the mesh
+   * identity, carried in the same invitation that admits the page, from the
+   * hub that minted it. Every actual SERVICE is still discovered by `kind`
+   * out of the mesh view -- see `../pages/app/main.ts`'s "THE ONE THING TO
+   * CHECK IN THIS FILE".
+   */
+  config?: HttpeersConfig;
+  /** Defaults to `DEFAULT_HTTPEERS_CONFIG_URL`. Ignored when `config` is supplied. */
   httpeersConfigUrl?: string;
   serviceWorkerUrl?: string;
   /** This peer's own advertisements, read fresh on every heartbeat. Defaults to none. */
@@ -129,8 +150,9 @@ export interface BrowserPeerHandle {
    */
   baseUrl: string;
   /**
-   * The mesh's own identity -- `httpeers.json`'s `hubPeerId`, fetched at
-   * runtime, echoed here so a page never has to configure it.
+   * The mesh's own identity -- `httpeers.json`'s `hubPeerId` fetched at
+   * runtime, or the one the join blob carried (`StartBrowserPeerInit.config`)
+   * -- echoed here so a page never has to configure it.
    *
    * This is the ONE peer id a page may legitimately hold without
    * discovering it, and only because it is not a discovery at all: it is
@@ -162,7 +184,7 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   const onState = init.onState ?? ((): void => {});
 
   onState("loading-config");
-  const config = await fetchHttpeersConfig(configUrl);
+  const config = init.config ?? (await fetchHttpeersConfig(configUrl));
   const relayAddr = config.relayAddrs[0];
   if (relayAddr == null) {
     throw new Error("startBrowserPeer: httpeers.json's relayAddrs is empty -- nothing to dial.");
