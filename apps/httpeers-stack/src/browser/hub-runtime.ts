@@ -392,7 +392,9 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
     const path = `/admin/members/${encodeURIComponent(peerId)}`;
     const handler = hubMounts?.match(path);
     if (handler == null) {
-      throw new Error(`startBrowserHub: nothing is mounted at "${path}" -- cannot remove a member.`);
+      throw new Error(
+        `startBrowserHub: nothing is mounted at "${path}" -- cannot remove a member.`,
+      );
     }
     // The origin is a placeholder: this request never reaches a network, and
     // the handler routes on the pathname alone.

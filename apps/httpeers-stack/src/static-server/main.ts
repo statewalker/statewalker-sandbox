@@ -62,6 +62,7 @@ import { extname, resolve, sep } from "node:path";
 // throws in a tab). Re-exported here so every existing importer, this
 // module included, still reads them from where they are used.
 export { APP_PORT, HUB_PAGE_PORT, IMAGE_PEER_PORT } from "../ports.js";
+
 import { APP_PORT, HUB_PAGE_PORT, IMAGE_PEER_PORT } from "../ports.js";
 
 /** See the module comment's "DIST DIRECTORY LAYOUT" note. */

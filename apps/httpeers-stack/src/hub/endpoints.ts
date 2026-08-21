@@ -42,14 +42,14 @@ import { Hono } from "hono";
 import type { SearchUpstream } from "../services/search.js";
 import { createSearchEndpoint, fixtureUpstream, SEARCH_ADVERTISEMENT } from "../services/search.js";
 import { createAdminEndpoints } from "./admin.js";
-import type { AdvertisementPayload, MeshView } from "./mesh-view.js";
-import { buildMeshView } from "./mesh-view.js";
 // `./hub-state.js`, not `./persist.js`: the latter is the NODE facade (it
 // imports `node:fs`), and this module is bundled into the browser hub page
 // (`../pages/hub/`) as well as into the Node hub. The import is type-only
 // and therefore erased either way, but pointing it at the portable half is
 // what stops a future value import here from quietly breaking that page.
 import type { InvitationStore } from "./hub-state.js";
+import type { AdvertisementPayload, MeshView } from "./mesh-view.js";
+import { buildMeshView } from "./mesh-view.js";
 
 /** The capability that grants admin visibility — sees `hidden` members and gates `/admin/*` (Task 8's `DELETE /admin/members/{peerId}` included). */
 export const ADMIN_CAPABILITY = "std:mesh.admin";
@@ -436,8 +436,7 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
     mounts,
     // Every capability in the vocabulary, so the hub's own view is
     // unfiltered -- see this field's doc comment on `HubEndpoints`.
-    meshView: () =>
-      viewFor(init.selfPeerId, new Set(Object.keys(init.vocabulary.capabilities))),
+    meshView: () => viewFor(init.selfPeerId, new Set(Object.keys(init.vocabulary.capabilities))),
     sweep() {
       const expired = presenceStore.sweep();
       if (expired.length === 0) return;

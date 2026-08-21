@@ -66,9 +66,9 @@ import {
 } from "@statewalker/httpeers.core";
 import { HUB_ACCESS, VOCABULARY } from "../policy.js";
 import { dialRelay, waitForCircuitReservation } from "../reservation.js";
+import { APP_PORT, IMAGE_PEER_PORT } from "../static-server/main.js";
 import { createHubEndpoints, DEFAULT_PRESENCE_TTL_MS, usesTransportIdentity } from "./endpoints.js";
 import { createHubNode } from "./node-profile.js";
-import { APP_PORT, IMAGE_PEER_PORT } from "../static-server/main.js";
 import { createPersistentHub } from "./persist.js";
 
 /** How often the hub checks for stale presence. See the module comment. */
@@ -440,7 +440,9 @@ export const JOIN_INVITATION_TTL_MS = 30 * 60_000;
  * honour: it would write a file the hub never reads and the join would fail
  * `not-found`. Anything that mints has to be the hub itself.
  */
-function printJoinUrls(hub: { invitations: { create: (id: string, roles: string[], ttlMs: number) => unknown } }): void {
+function printJoinUrls(hub: {
+  invitations: { create: (id: string, roles: string[], ttlMs: number) => unknown };
+}): void {
   const mint = (roles: string[]): string => {
     const id = randomUUID();
     hub.invitations.create(id, roles, JOIN_INVITATION_TTL_MS);
@@ -456,7 +458,9 @@ function printJoinUrls(hub: { invitations: { create: (id: string, roles: string[
   const imagePeer = mint(["member"]);
 
   console.log("");
-  console.log(`join URLs (one invitation each, single-use, valid ${JOIN_INVITATION_TTL_MS / 60_000} min):`);
+  console.log(
+    `join URLs (one invitation each, single-use, valid ${JOIN_INVITATION_TTL_MS / 60_000} min):`,
+  );
   console.log(`  app page          http://127.0.0.1:${APP_PORT}/?invite=${appMember}`);
   console.log(`  app page as admin http://127.0.0.1:${APP_PORT}/?invite=${appAdmin}`);
   console.log(`  image peer        http://127.0.0.1:${IMAGE_PEER_PORT}/?invite=${imagePeer}`);
