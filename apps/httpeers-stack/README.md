@@ -10,11 +10,14 @@ call each other's services over the mesh.
   other peer, including the two browser pages, reaches the mesh through it.
   Listens on **port 9090**.
 - **hub** (`src/hub/main.ts`) — the mesh's membership, presence, and
-  invitation authority. It has no listening port of its own; it holds a
-  circuit-relay reservation through the relay and is reached over
-  `/p2p-circuit/webrtc`, the same path a browser page uses. (It also has a
-  bookkeeping default, `DEFAULT_HUB_PORT = 9091`, used only in tests that
-  dial it directly over loopback TCP.)
+  invitation authority. Browser pages never dial it directly: they reach it
+  over `/p2p-circuit/webrtc` through the relay, the same reservation the hub
+  itself holds. It also binds a real TCP listener on **port 9091**, on
+  `0.0.0.0` (every interface, not just loopback) — a fixed, knowable address
+  for a same-host Node peer to dial directly. **On a server this is a
+  wildcard bind**: it is reachable from the network, not just from
+  `localhost`, so put it behind a firewall or a private network the same way
+  you would the relay if you don't want it reachable from outside.
 - **static server** (`src/static-server/main.ts`) — serves the two browser
   pages and `httpeers.json` (the invitation payload) over plain HTTP, one
   origin per page:
@@ -56,10 +59,20 @@ Once both commands have run, open:
 
 Each page needs an invitation id to join the mesh, passed as a `?invite=`
 query parameter (e.g. `http://127.0.0.1:5175/?invite=<id>`), or typed into
-the page's own paste-in form if the query parameter is absent. Invitations
-are created programmatically against the running hub process (via
-`InvitationStore.create`, `src/hub/persist.ts`) — there is no HTTP endpoint
-to mint one, only `GET /admin/invitations` to list ones already issued.
+the page's own paste-in form if the query parameter is absent.
+
+**There is currently no operator-reachable way to mint one.** Invitations
+are minted by `InvitationStore.create(id, roles, ttlMs)`
+(`src/hub/persist.ts`), but nothing in `src/` outside the test suite ever
+calls it — only tests do. `GET /admin/invitations` does not list issued
+invitations either, despite its name and its own comment saying
+"listing only": it currently returns only `{ ok, issuedBy, caller }`, no
+invitation data. Joining a running `pnpm start` deployment as a real
+operator needs one of these to be built: a `POST /admin/invitations`
+endpoint on the hub, or a small script that shares the hub's persistent
+state file and calls `InvitationStore.create` directly. Until then, the
+only way to get an invitation id is through a test (e.g.
+`tests/e2e/harness.ts`), not through this deployment as it stands.
 
 ## Stopping it
 

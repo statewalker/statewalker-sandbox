@@ -628,7 +628,7 @@ asserts against, directly, per the brief's instruction.
 | "returns 404, not 500, for an unknown GET path" | The brief's baseline case. |
 | "returns 404, not 500, for a POST to an unknown path -- the duplex/passthrough regression case" | The brief's explicitly-called-out case (note 39). Sends a JSON body with `content-type: application/json` on the POST — not a bodyless request — so the assertion is not weakened to "POST with no body happens to work." |
 | "never resolves a '..'-shaped path to a file outside its distDir" | Sent via a raw `node:http` client (`rawGet`), not `fetch`/`URL` — `fetch`'s own client-side URL normalization would silently rewrite a literal `..` away before the request left the client, which would make this assertion pass for the wrong reason. Confirms the response is 404, not 500 and not a leaked file, regardless of whether `new URL()`'s own path-shortening or `resolveDistFile`'s explicit root check is what stops it (both are in play; this test does not need to distinguish which). |
-| "gives a clear 503, not a 404, when httpeers.json has not been generated yet" | A separate `createOriginServer` pointed at a config path that is never written — 503, JSON body, error text matches `/setup/i`. |
+| "gives a clear 503, not a 404, when httpeers.json has not been generated yet" | A separate `createOriginServer` pointed at a config path that is never written — 503, JSON body, error text matches `/bootstrap/i`. |
 | "still serves index.html and 404s an unknown path normally" | The 503 branch does not degrade the rest of that same origin's routing. |
 
 54 → 63 app tests (9 new, all in the new file; no existing assertion in any of the six
@@ -700,7 +700,7 @@ run only via `import.meta.url === file://...` guard is otherwise unexercised by
 `vitest run`:
 
 - `tsx src/relay/main.ts` with no `.httpeers/relay.key` present → printed the "run `pnpm
-  setup` first" message to stderr and exited `1`, no `.httpeers/` directory created.
+  bootstrap` first" message to stderr and exited `1`, no `.httpeers/` directory created.
 - `tsx src/relay/main.ts` with a manually-generated protobuf key at
   `.httpeers/relay.key` → printed a real peerId and three multiaddrs (loopback + two LAN
   interfaces) on `/ws`, then handled `SIGINT` by logging and stopping cleanly.
@@ -794,7 +794,9 @@ addresses change.
 ### Step 3: the scripts
 
 `package.json` gained `setup`, `start` (`bash scripts/start.sh`), `start:relay`,
-`start:hub`, `start:static` — verbatim as briefed.
+`start:hub`, `start:static` — verbatim as briefed. (Task 22 later renamed `setup` to
+`bootstrap`: `pnpm setup` is itself a pnpm built-in, which shadows a same-named package
+script rather than running it — see that task's own report.)
 
 `scripts/start.sh` boots relay → hub → static server and tears all three down on
 Ctrl-C. **Does not scrape stdout for a multiaddr** — deliberately, unlike

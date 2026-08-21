@@ -696,6 +696,24 @@ describe.each(BROWSERS)("Task 15: two browser peers in $name", ({ name, launcher
 
       await waitForState(`${name}: the gallery rendered`, 60_000, async () => {
         const tone = await session.appPage.getAttribute("#images-status", "data-tone");
+        // "ok" covers two distinct moments -- `setStatus(imagesStatusEl,
+        // "ok", "loading the catalogue…")` right after the click, AND the
+        // final success text -- so it is still a legitimate "not yet"
+        // here. But `outcome.status` (`outcome.ts`) can also land on
+        // "denied"/"unreachable"/"failed", and those are terminal: the call
+        // already finished and will never become "ok" on its own. Polling
+        // the full budget on an already-known failure, the same mistake
+        // this file's own `beforeAll` wait was written NOT to make (see its
+        // "error" check above), would burn 60s to report a generic timeout
+        // over a cause the page told us within seconds.
+        if (tone === "denied" || tone === "unreachable" || tone === "failed") {
+          const text = await session.appPage.textContent("#images-status");
+          throw new Error(
+            `${name}: #images-status reported "${tone}" instead of loading: ${text}\n` +
+              `Page errors and warnings, newest last:\n` +
+              `${session.faults.join("\n") || "(none captured)"}`,
+          );
+        }
         if (tone !== "ok") return false;
         // The catalogue arriving is not the image arriving. `<img>` loading is
         // the browser's own asynchronous job, started when `renderGallery` set

@@ -8,7 +8,7 @@ coverage/
 .env
 .env.local
 # httpeers-stack: generated signing keys, the hub's persisted state snapshot,
-# and the invitation payload `pnpm setup` writes (real secrets/derived data,
+# and the invitation payload `pnpm bootstrap` writes (real secrets/derived data,
 # not source).
 .httpeers/
 httpeers.json
