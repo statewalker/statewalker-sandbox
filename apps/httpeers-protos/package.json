@@ -14,10 +14,12 @@
     "demo:07-access-tree": "tsx 07-access-tree/main.ts",
     "demo:08-revocation": "tsx 08-revocation/main.ts",
     "demo:09-role-vocabulary": "tsx 09-role-vocabulary/main.ts",
-    "demo:all": "pnpm demo:01-identity && pnpm demo:02-http-over-p2p && pnpm demo:03-access-control && pnpm demo:04-backpressure && pnpm demo:05-router-mounts && pnpm demo:06-open-relay && pnpm demo:07-access-tree && pnpm demo:08-revocation && pnpm demo:09-role-vocabulary",
-    "typecheck": "tsc --noEmit"
+    "demo:all": "pnpm demo:01-identity && pnpm demo:02-http-over-p2p && pnpm demo:03-access-control && pnpm demo:04-backpressure && pnpm demo:05-router-mounts && pnpm demo:06-open-relay && pnpm demo:07-access-tree && pnpm demo:08-revocation && pnpm demo:09-role-vocabulary && pnpm demo:10-token-chain",
+    "typecheck": "tsc --noEmit",
+    "demo:10-token-chain": "tsx 10-token-chain/main.ts"
   },
   "dependencies": {
+    "@biscuit-auth/biscuit-wasm": "0.6.0",
     "@chainsafe/libp2p-noise": "17.0.0",
     "@chainsafe/libp2p-yamux": "8.0.1",
     "@libp2p/interface": "3.2.5",
