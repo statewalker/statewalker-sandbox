@@ -36,17 +36,33 @@
  * stuck key with no way out is worse than no persistence at all, the reset
  * control below exists -- and says, in the terms above, what it destroys.
  *
- * WHY MEMBERSHIP AND PRESENCE ARE READ IN-PROCESS. This page is inside the
- * hub; `HubEndpoints.presence` and `MemberStore.list` are two references
- * away. Rendering them by dispatching HTTP requests to itself would add a
- * token, a router hop and a JSON round trip to read a `Map` it is holding.
- * The HTTP endpoints remain the only way any OTHER peer sees this.
+ * SAVED IS NOT ACTIVE, AND THE TABLE BELOW KEEPS THEM APART. "Saved" is
+ * membership: a `MemberRecord` in the persisted snapshot, which survives a
+ * reload. "Active" is presence: a heartbeat inside the TTL window. A member
+ * that is saved but not active has closed its tab; an active one is live
+ * right now. Both come from ONE source -- `HubEndpoints.meshView`, which is
+ * `mesh-view.ts`'s `buildMeshView`, the same projection `GET
+ * /.well-known/mesh` serves every remote peer. This page deliberately does
+ * NOT re-derive `online` by joining a member list against a presence list:
+ * that would be a second notion of the same fact, free to disagree with the
+ * one everybody else reads.
+ *
+ * THIS PAGE CALLS ITS OWN ENDPOINTS, AND NOT THROUGH THE EDGE. It is the
+ * hub, so `meshView()` and `removeMember()` are local calls. Reading is a
+ * plain in-process accessor; removal goes through the hub's own mounted
+ * `DELETE /admin/members/{peerId}` handler via the mount table. Neither
+ * goes through the ServiceWorker edge or `peer.dispatch`: a self-call along
+ * either path hits `httpeers.core`'s binding middleware, which throws
+ * `PeerBindingLostError` on a request that has no remote peer to prove.
+ * See `../../browser/hub-runtime.ts`'s `removeMember` for the full note,
+ * including what the direct call bypasses and why that is not a privilege
+ * escalation.
  */
 import type { BrowserHubHandle, BrowserHubState } from "../../browser/hub-runtime.js";
 import { startBrowserHub } from "../../browser/hub-runtime.js";
 import { clearIdentity, loadOrCreateIdentity, peerIdOf } from "../../browser/identity.js";
 import type { JoinBlob } from "../../browser/join-blob.js";
-import { joinUrl } from "../../browser/join-blob.js";
+import { encodeJoinBlob, joinUrl } from "../../browser/join-blob.js";
 import type { BrowserSnapshotStore } from "../../browser/snapshot-store.js";
 import { createIdbSnapshotStore } from "../../browser/snapshot-store.js";
 // `../../ports.js`, NOT `../../static-server/main.js`: that module's
@@ -78,6 +94,7 @@ const baseUrlEl = el("base-url");
 const errorEl = el("error");
 const invitationsEl = el("invitations");
 const membersEl = el<HTMLTableSectionElement>("members");
+const adminStatusEl = el("admin-status");
 const resetButton = el<HTMLButtonElement>("reset");
 const mintButtons = {
   app: el<HTMLButtonElement>("mint-app"),
@@ -131,8 +148,71 @@ function pageUrl(port: number): string {
   return `${location.protocol}//${location.hostname}:${port}/`;
 }
 
-function renderInvitation(target: MintTarget, blob: JoinBlob): void {
+/** One minted invitation, and everything the panel needs to keep rendering it. */
+interface MintedInvitation {
+  id: string;
+  target: MintTarget;
+  roles: string[];
+  expiresAt: number;
+  blob: string;
+  link: string;
+  /** The row's own `<dd>` for the status, re-read on every refresh. */
+  statusEl: HTMLElement;
+  box: HTMLElement;
+}
+
+const minted: MintedInvitation[] = [];
+
+/**
+ * One copy button plus the value it copies, rendered as selectable text
+ * either way.
+ *
+ * `navigator.clipboard` is unavailable on an insecure origin that is not
+ * loopback, and can be refused even where it exists. Saying so beats a
+ * button that silently does nothing -- and the value beside it is
+ * `user-select: all`, so a failed copy costs one manual selection.
+ */
+function appendCopyRow(dl: HTMLElement, label: string, value: string, href?: string): void {
+  const dt = document.createElement("dt");
+  dt.textContent = label;
+
+  const dd = document.createElement("dd");
+  dd.className = "value";
+  if (href != null) {
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    a.textContent = value;
+    dd.append(a);
+  } else {
+    dd.textContent = value;
+  }
+
+  const actions = document.createElement("dd");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Copy";
+  const copied = document.createElement("span");
+  copied.className = "copied";
+  button.addEventListener("click", () => {
+    navigator.clipboard?.writeText(value).then(
+      () => {
+        copied.textContent = " copied";
+      },
+      () => {
+        copied.textContent = " could not copy — select it";
+      },
+    );
+  });
+  actions.append(button, copied);
+
+  dl.append(dt, dd, actions);
+}
+
+function renderInvitation(target: MintTarget, blob: JoinBlob, expiresAt: number): void {
   const link = joinUrl(pageUrl(target.port), blob);
+  const encoded = encodeJoinBlob(blob);
 
   const box = document.createElement("div");
   box.className = "invite";
@@ -142,48 +222,85 @@ function renderInvitation(target: MintTarget, blob: JoinBlob): void {
   title.textContent = target.label;
   const roles = document.createElement("span");
   roles.className = "roles";
-  roles.textContent = `roles: ${target.roles.join(", ")} · single use · ${INVITATION_TTL_MS / 60_000} min`;
-  const copy = document.createElement("button");
-  copy.type = "button";
-  copy.textContent = "Copy link";
-  const copied = document.createElement("span");
-  copied.className = "copied";
-  copy.addEventListener("click", () => {
-    // `navigator.clipboard` is unavailable on an insecure origin that is not
-    // loopback, and can be refused even where it exists. The link itself is
-    // rendered as selectable text below either way, so a failed copy costs
-    // the operator a manual selection and nothing else -- said out loud
-    // rather than leaving a button that silently does nothing.
-    navigator.clipboard?.writeText(link).then(
-      () => {
-        copied.textContent = "copied";
-      },
-      () => {
-        copied.textContent = "could not copy -- select the link below";
-      },
-    );
+  roles.textContent = `single use · valid ${INVITATION_TTL_MS / 60_000} min`;
+  header.append(title, roles);
+
+  const dl = document.createElement("dl");
+
+  const statusDt = document.createElement("dt");
+  statusDt.textContent = "status";
+  const statusEl = document.createElement("dd");
+  const statusPad = document.createElement("dd");
+  dl.append(statusDt, statusEl, statusPad);
+
+  const rolesDt = document.createElement("dt");
+  rolesDt.textContent = "roles";
+  const rolesDd = document.createElement("dd");
+  rolesDd.textContent = target.roles.join(", ");
+  const rolesPad = document.createElement("dd");
+  dl.append(rolesDt, rolesDd, rolesPad);
+
+  appendCopyRow(dl, "id", blob.invitationId);
+  // THE BLOB IS THE PRIMARY ARTEFACT, listed above the link: it is what a
+  // page's own join prompt consumes, and it is the only thing that carries
+  // this mesh's identity. The link is that same blob attached to a URL.
+  appendCopyRow(dl, "blob", encoded);
+  appendCopyRow(dl, "link", link, link);
+
+  box.append(header, dl);
+
+  minted.push({
+    id: blob.invitationId,
+    target,
+    roles: target.roles,
+    expiresAt,
+    blob: encoded,
+    link,
+    statusEl,
+    box,
   });
-  header.append(title, roles, copy, copied);
 
-  const linkEl = document.createElement("div");
-  linkEl.className = "link";
-  linkEl.textContent = link;
-
-  box.append(header, linkEl);
   // Newest first: the operator's attention is on the one they just minted.
-  invitationsEl.prepend(box);
+  if (invitationsEl.firstElementChild?.classList.contains("empty")) {
+    invitationsEl.replaceChildren(box);
+  } else {
+    invitationsEl.prepend(box);
+  }
 }
 
-function renderMembersAndPresence(hub: BrowserHubHandle): void {
-  const members = hub.members();
-  const presenceByPeer = new Map(hub.presence().map((p) => [p.peerId, p]));
+/**
+ * Refresh each minted invitation's status from the hub's own state.
+ *
+ * "Unspent" is asked of `spentInvitationIds` -- the very set `redeem`
+ * consults, and the one that survives a reload -- rather than tracked
+ * locally, so this panel cannot claim a code is still usable when the hub
+ * would refuse it.
+ */
+function refreshInvitationStatuses(hub: BrowserHubHandle): void {
+  const spent = hub.spentInvitationIds();
+  const now = Date.now();
+  for (const inv of minted) {
+    const isSpent = spent.has(inv.id);
+    // Spent is checked FIRST, matching `redeem`'s own order: a code that was
+    // redeemed and has since passed its expiry is "redeemed", not "expired".
+    const status = isSpent ? "redeemed" : inv.expiresAt <= now ? "expired" : "unspent";
+    inv.statusEl.textContent = status;
+    inv.statusEl.className = `status-${status}`;
+    inv.box.dataset.spent = String(status !== "unspent");
+  }
+}
+
+function renderMembers(hub: BrowserHubHandle): void {
+  // ONE source for both facts -- see the module comment. `online` is
+  // `buildMeshView`'s, not this page's.
+  const { members } = hub.meshView();
 
   if (members.length === 0) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
     cell.className = "empty";
     cell.colSpan = 5;
-    cell.textContent = "no members yet -- mint a link above and open it";
+    cell.textContent = "no members yet — mint an invitation above and open its link";
     row.append(cell);
     membersEl.replaceChildren(row);
     return;
@@ -191,9 +308,6 @@ function renderMembersAndPresence(hub: BrowserHubHandle): void {
 
   membersEl.replaceChildren(
     ...members.map((member) => {
-      const presence = presenceByPeer.get(member.peerId);
-      const online = presence != null;
-
       const row = document.createElement("tr");
 
       const peer = document.createElement("td");
@@ -203,20 +317,73 @@ function renderMembersAndPresence(hub: BrowserHubHandle): void {
       const roles = document.createElement("td");
       roles.textContent = member.roles.join(", ");
 
-      const onlineCell = document.createElement("td");
-      onlineCell.dataset.online = String(online);
-      onlineCell.textContent = online ? "yes" : "no";
-
-      const seq = document.createElement("td");
-      seq.textContent = presence != null ? String(presence.seq) : "—";
+      const state = document.createElement("td");
+      state.dataset.online = String(member.online);
+      // Both words, always: "saved" alone would read as a downgrade rather
+      // than as the other half of a pair, and an operator needs to see that
+      // a peer is still a member even while its tab is closed.
+      state.textContent = member.online ? "saved + active" : "saved, not active";
 
       const addrs = document.createElement("td");
-      addrs.textContent = presence != null ? String(presence.addrs.length) : "—";
+      addrs.textContent = String(member.addrs.length);
 
-      row.append(peer, roles, onlineCell, seq, addrs);
+      const actions = document.createElement("td");
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.className = "revoke";
+      revoke.textContent = "Revoke";
+      revoke.addEventListener("click", () => void revokeMember(hub, member.peerId, revoke));
+      actions.append(revoke);
+
+      row.append(peer, roles, state, addrs, actions);
       return row;
     }),
   );
+}
+
+/**
+ * Remove a member, and SHOW WHAT THAT DID.
+ *
+ * Removal is two things, not one (`../../hub/admin.ts`):
+ * `MemberStore.remove` drops membership, and `revocations.revoke` records
+ * the change and bumps the policy version. The second is why a removed
+ * peer's *live, unexpired* token stops working instead of lingering until
+ * it expires — every peer notices the moved version on its next heartbeat
+ * and pulls the new deny-list. Reporting the new policy version is how this
+ * panel shows that the revocation half actually happened, rather than
+ * implying the row simply vanished from a list.
+ */
+async function revokeMember(
+  hub: BrowserHubHandle,
+  peerId: string,
+  button: HTMLButtonElement,
+): Promise<void> {
+  const confirmed = confirm(
+    `Revoke ${peerId}?\n\n` +
+      "This removes it from the mesh AND revokes its tokens: the token it is holding right " +
+      "now stops working on its next call, rather than lasting until it expires.\n\n" +
+      "It can rejoin only with a new invitation.",
+  );
+  if (!confirmed) return;
+
+  button.disabled = true;
+  try {
+    const result = await hub.removeMember(peerId);
+    adminStatusEl.dataset.tone = "done";
+    adminStatusEl.textContent =
+      `Removed ${result.removed} and revoked its tokens — policy version is now ` +
+      `${result.policyVersion}. Its current token no longer verifies; peers pick the change ` +
+      "up on their next heartbeat.";
+    // IMMEDIATELY, not on the next poll tick. An operator who pressed
+    // revoke and saw the row sit there for a second would reasonably
+    // conclude it had failed.
+    renderMembers(hub);
+  } catch (err) {
+    button.disabled = false;
+    adminStatusEl.dataset.tone = "error";
+    adminStatusEl.textContent = `Could not revoke ${peerId}: ${String(err)}`;
+    console.error("hub page: revoke failed:", err);
+  }
 }
 
 // --- startup --------------------------------------------------------------
@@ -269,18 +436,26 @@ async function main(): Promise<void> {
     const target = MINT_TARGETS[name as keyof typeof mintButtons];
     button.disabled = false;
     button.addEventListener("click", () => {
+      // A NEW id on every press. Invitations are single-use, so an operator
+      // pressing this twice must get two distinct codes -- reusing one would
+      // hand out a link that is already dead.
       const id = newInvitationId();
-      hub.invitations.create(id, target.roles, INVITATION_TTL_MS);
-      renderInvitation(target, {
-        relayAddrs: [hub.relayAddr],
-        hubPeerId: hub.peerId,
-        invitationId: id,
-      });
+      const record = hub.invitations.create(id, target.roles, INVITATION_TTL_MS);
+      renderInvitation(
+        target,
+        { relayAddrs: [hub.relayAddr], hubPeerId: hub.peerId, invitationId: id },
+        record.expiresAt,
+      );
+      // Immediately, for the same reason revoking re-renders immediately.
+      refreshInvitationStatuses(hub);
     });
   }
 
-  renderMembersAndPresence(hub);
-  setInterval(() => renderMembersAndPresence(hub), VIEW_POLL_INTERVAL_MS);
+  renderMembers(hub);
+  setInterval(() => {
+    renderMembers(hub);
+    refreshInvitationStatuses(hub);
+  }, VIEW_POLL_INTERVAL_MS);
 }
 
 // Wired up BEFORE `main()` runs and independently of whether it succeeds --

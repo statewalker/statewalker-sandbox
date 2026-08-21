@@ -125,19 +125,41 @@
         font-size: 0.75rem;
         color: #555;
       }
-      .invite .link {
+      .invite dl {
+        grid-template-columns: max-content 1fr max-content;
+        align-items: baseline;
+        gap: 0.35rem 0.6rem;
+      }
+      .invite dt {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #555;
+      }
+      .invite .value {
         font-family: ui-monospace, monospace;
         font-size: 0.75rem;
         word-break: break-all;
         background: #f7f7f7;
         border: 1px solid #e0e0e0;
         border-radius: 3px;
-        padding: 0.4rem 0.5rem;
+        padding: 0.3rem 0.45rem;
         user-select: all;
       }
       .invite .copied {
         font-size: 0.75rem;
         color: #1c6b2f;
+      }
+      .invite[data-spent="true"] {
+        opacity: 0.55;
+      }
+      .status-unspent {
+        color: #1c6b2f;
+        font-weight: 600;
+      }
+      .status-redeemed,
+      .status-expired {
+        color: #8a6d1f;
+        font-weight: 600;
       }
       .mint {
         display: flex;
@@ -147,6 +169,15 @@
       }
       [data-tone="error"] {
         color: #a03028;
+      }
+      [data-tone="done"] {
+        color: #1c6b2f;
+      }
+      button.revoke {
+        border-color: #c0453a;
+        color: #8c2f27;
+        font-size: 0.75rem;
+        padding: 0.15rem 0.5rem;
       }
     </style>
   </head>
@@ -176,27 +207,39 @@
 
     <h2>Invitations</h2>
     <p>
-      Each button mints <strong>one single-use invitation</strong> and renders a complete join link
-      carrying it, this hub's peer id, and the relay to reach it through. Open the link (or paste it
-      into the page's own join box). One link admits exactly one page: a link that has been used
-      already fails with <code>already-redeemed</code>.
+      Each button mints <strong>one new single-use invitation</strong>. Press one whenever another
+      page needs to join: a code that has been redeemed fails every later attempt with
+      <code>already-redeemed</code>, so every page needs its own.
+    </p>
+    <p>
+      The <strong>blob</strong> is what the other pages consume &mdash; it carries the relay
+      addresses, this hub's peer id, and the invitation id together, which is the only way they can
+      find this mesh (the peer id is generated at runtime and is not in <code>httpeers.json</code>).
+      The link is the same blob attached to that page's URL, for opening directly.
     </p>
     <div class="mint">
       <button id="mint-app" type="button" disabled>App page &mdash; member</button>
       <button id="mint-app-admin" type="button" disabled>App page &mdash; admin</button>
       <button id="mint-image-peer" type="button" disabled>Image peer &mdash; member</button>
     </div>
-    <div id="invitations"></div>
+    <div id="invitations">
+      <p class="empty">none minted yet</p>
+    </div>
 
-    <h2>Members and presence</h2>
+    <h2>Members</h2>
+    <p>
+      <strong>Saved</strong> is membership: it comes from the persisted snapshot and survives a
+      reload. <strong>Active</strong> is presence: it comes from heartbeats and expires on a TTL. A
+      member that is saved but not active has closed its tab; an active one is live right now.
+    </p>
     <table>
       <thead>
         <tr>
           <th>peer</th>
           <th>roles</th>
-          <th>online</th>
-          <th>seq</th>
+          <th>state</th>
           <th>addrs</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="members">
@@ -205,6 +248,7 @@
         </tr>
       </tbody>
     </table>
+    <p id="admin-status"></p>
 
     <h2>Identity</h2>
     <p class="note danger">

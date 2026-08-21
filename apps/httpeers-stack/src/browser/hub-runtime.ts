@@ -50,14 +50,13 @@
  * is unchanged, and the app page still discovers search by `kind` with no
  * idea anything moved.
  */
-import type { Ed25519PrivateKey, PeerIdStr } from "@statewalker/httpeers.core";
+import type { Ed25519PrivateKey, Mounts, PeerIdStr } from "@statewalker/httpeers.core";
 import {
   createMemberStore,
   createMonotonicClock,
   createPeer,
   RevocationRegistry,
 } from "@statewalker/httpeers.core";
-import type { LivePresence } from "../hub/endpoints.js";
 import {
   createHubEndpoints,
   DEFAULT_PRESENCE_TTL_MS,
@@ -65,6 +64,7 @@ import {
 } from "../hub/endpoints.js";
 import type { InvitationStore, SnapshotStore } from "../hub/hub-state.js";
 import { createHubState } from "../hub/hub-state.js";
+import type { MeshView } from "../hub/mesh-view.js";
 import { HUB_ACCESS, VOCABULARY } from "../policy.js";
 import { dialRelay, waitForCircuitReservation } from "../reservation.js";
 import { mountEdge } from "./edge.js";
@@ -127,11 +127,33 @@ export interface BrowserHubHandle {
   baseUrl: string;
   /** Mint invitations. One per page, never one per mesh -- see `./join-blob.ts`. */
   invitations: InvitationStore;
-  /** Who is a member, right now. */
-  members: () => Array<{ peerId: string; roles: string[]; updatedAt: number }>;
-  /** Who is online, right now -- `../hub/endpoints.ts`'s `HubEndpoints.presence`. */
-  presence: () => LivePresence[];
+  /**
+   * Which invitation ids have already been redeemed. Read straight off the
+   * snapshot, because that IS the set `redeem` consults -- its spent check
+   * runs first and unconditionally (`../hub/hub-state.ts`). A UI asking
+   * "is this code still usable?" must ask the same set, not a tally of its
+   * own that a reload would disagree with.
+   */
+  spentInvitationIds: () => ReadonlySet<string>;
+  /** Members and their liveness, as `GET /.well-known/mesh` would serve it -- `../hub/endpoints.ts`'s `HubEndpoints.meshView`. */
+  meshView: () => MeshView;
+  /** Remove a member and revoke its tokens -- see `removeMember` below for the call path and why it is not the edge. */
+  removeMember: (peerId: PeerIdStr) => Promise<RemoveMemberResult>;
   stop(): Promise<void>;
+}
+
+/** What `DELETE /admin/members/{peerId}` answers -- `../hub/admin.ts`. */
+export interface RemoveMemberResult {
+  ok: boolean;
+  removed: PeerIdStr;
+  /**
+   * The revocation registry's version AFTER the removal. It moved, and that
+   * movement is the whole mechanism: `RevocationRegistry.revoke` bumps it
+   * internally, every peer notices on its next heartbeat, and each then
+   * pulls the new deny-list. That is why a removed peer's live, unexpired
+   * token stops working rather than lingering until it expires.
+   */
+  policyVersion: number;
 }
 
 async function fetchRelayAddr(url: string): Promise<string> {
@@ -221,7 +243,8 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
   });
 
   let sweep: (() => void) | undefined;
-  let presence: (() => LivePresence[]) | undefined;
+  let meshView: (() => MeshView) | undefined;
+  let hubMounts: Mounts | undefined;
   let mintToken: ((sub: string, roles: string[], ttlMs?: number) => Promise<string>) | undefined;
 
   let peer: Awaited<ReturnType<typeof createPeer>>;
@@ -258,8 +281,9 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
           advertisementAccess: init.advertisementAccess,
         });
         sweep = hub.sweep;
-        presence = hub.presence;
+        meshView = hub.meshView;
         mintToken = ctx.mintToken;
+        hubMounts = hub.mounts;
         return hub.mounts;
       },
     });
@@ -337,14 +361,60 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
 
   onState("ready");
 
+  /**
+   * `DELETE /admin/members/{peerId}`, against THIS hub's own mounted
+   * handler -- `../hub/admin.ts`, reached through `Mounts.match`.
+   *
+   * NOT THROUGH THE SERVICEWORKER EDGE, AND NOT THROUGH `peer.dispatch`.
+   * The hub page calling its own endpoints is a SELF-call, and this
+   * codebase does not support one along either of those paths:
+   * `edge-dispatch.ts` passes a locally-originated request (no binding)
+   * straight to `peer.dispatch`, and `httpeers.core`'s `newPeerHandlers`
+   * -- which every dispatched request goes through -- throws
+   * `PeerBindingLostError` the moment `getPeerId` returns `undefined`,
+   * which is exactly what a request that arrived from nowhere does. The
+   * binding middleware exists to answer "which REMOTE peer is this, and
+   * does it match the token"; a request from the hub's own page has no
+   * remote peer for it to prove, so it is not a question that has an
+   * answer. Going through the mount table is not a workaround for that --
+   * it is the layer that was actually being asked for.
+   *
+   * WHAT THIS BYPASSES, SAID PLAINLY: the `.access` gate on `/admin/`
+   * (`std:mesh.admin`). That gate authorises REMOTE callers, and this
+   * caller is the hub itself -- the process holding the signing key that
+   * would have minted any token it could present, and holding the
+   * `MemberStore` the handler mutates. There is no privilege here to
+   * escalate to. Nothing about this widens the network surface: no route
+   * is added, and a remote `DELETE /admin/members/...` is gated exactly as
+   * it always was.
+   */
+  const removeMember = async (peerId: PeerIdStr): Promise<RemoveMemberResult> => {
+    const path = `/admin/members/${encodeURIComponent(peerId)}`;
+    const handler = hubMounts?.match(path);
+    if (handler == null) {
+      throw new Error(`startBrowserHub: nothing is mounted at "${path}" -- cannot remove a member.`);
+    }
+    // The origin is a placeholder: this request never reaches a network, and
+    // the handler routes on the pathname alone.
+    const res = await handler(new Request(`http://hub.invalid${path}`, { method: "DELETE" }));
+    if (!res.ok) {
+      throw new Error(
+        `startBrowserHub: DELETE ${path} -> ${res.status} ${res.statusText} (${await res.text()})`,
+      );
+    }
+    return (await res.json()) as RemoveMemberResult;
+  };
+
   return {
     peerId: peer.peerId,
     relayAddr,
     circuitAddr,
     baseUrl: edge.baseUrl,
     invitations: state.invitations,
-    members: () => state.memberStore.list(),
-    presence: () => presence?.() ?? [],
+    spentInvitationIds: () => new Set(init.snapshotStore.read().spentInvitationIds),
+    meshView: () =>
+      meshView?.() ?? { version: 0, self: peer.peerId, members: [], advertisements: [] },
+    removeMember,
     async stop() {
       clearInterval(sweepTimer);
       clearInterval(renewTimer);

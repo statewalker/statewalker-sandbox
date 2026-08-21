@@ -87,6 +87,25 @@ logic over the same `SnapshotStore` seam, in a browser. Search moves with it:
 whoever is the hub advertises and serves `/search`, so the app page discovers
 it by `kind` exactly as before and needs no change.
 
+The page does three things:
+
+- **Mints invitations on demand.** A button per target page, pressed whenever
+  another page needs to join. Each press produces a *new* single-use code —
+  a redeemed one fails every later attempt with `already-redeemed`, so every
+  page needs its own. Each row shows the id, its roles, whether it is still
+  unspent (asked of the hub's own spent-id set, so the panel cannot claim a
+  code is usable when the hub would refuse it), the **blob**, and a link.
+- **Lists members, separating saved from active.** *Saved* is membership,
+  from the persisted snapshot; it survives a reload. *Active* is presence,
+  from heartbeats; it expires on a TTL. Both come from `buildMeshView` — the
+  same projection `GET /.well-known/mesh` serves every remote peer — rather
+  than from a second notion computed in the page.
+- **Revokes a membership.** Removal is two things: it drops membership *and*
+  revokes the peer's tokens, so the token it is holding right now stops
+  working on its next call instead of lasting until it expires. The page
+  reports the new policy version, which is the evidence that the second half
+  happened.
+
 Three things differ from the Node hub, and they are the whole of the
 difference:
 

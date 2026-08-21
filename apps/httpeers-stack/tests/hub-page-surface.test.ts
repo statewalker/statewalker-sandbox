@@ -1,7 +1,7 @@
 /**
  * The parts of Task 24's hub page that are testable without a browser: the
  * hub's own state running over the BROWSER snapshot store, the in-process
- * presence accessor the page renders from, and the third static origin the
+ * mesh-view accessor the page renders members from, and the third static origin the
  * page is served on.
  *
  * WHAT NEEDS A BROWSER AND IS THEREFORE NOT HERE (named, never skipped --
@@ -111,12 +111,12 @@ describe("the hub's state over the browser snapshot store", () => {
   });
 });
 
-// --- the in-process presence accessor -------------------------------------
+// --- the in-process mesh view, and removal -------------------------------------
 
 interface TestHub {
   peer: Peer;
   endpoints: HubEndpoints;
-  members: () => Array<{ peerId: string; roles: string[] }>;
+  revocations: RevocationRegistry;
   invite: (roles: string[]) => string;
   stop: () => Promise<void>;
 }
@@ -162,7 +162,7 @@ async function buildHubHoldingEndpoints(dir: string): Promise<TestHub> {
   return {
     peer,
     endpoints: endpoints!,
-    members: () => state.memberStore.list(),
+    revocations,
     invite(roles) {
       counter += 1;
       const id = `inv-${counter}`;
@@ -173,21 +173,35 @@ async function buildHubHoldingEndpoints(dir: string): Promise<TestHub> {
   };
 }
 
-interface PresenceResponse {
-  presence: Array<{ peerId: PeerIdStr; seq: number; expiresAt: number; addrs: string[] }>;
+interface MeshResponse {
+  version: number;
+  self: PeerIdStr;
+  members: Array<{ peerId: PeerIdStr; roles: string[]; online: boolean; addrs: string[] }>;
+  advertisements: Array<{ peerId: PeerIdStr; id: string; kind: string; title: string }>;
 }
 
-describe("HubEndpoints.presence -- what the hub page renders from", () => {
+describe("HubEndpoints.meshView -- what the hub page renders members from", () => {
   let dir: string;
   let hub: TestHub;
   let member: Awaited<ReturnType<typeof buildTestPeer>>;
+
+  /** Join the mesh and send one heartbeat. Returns the freshest token. */
+  async function joinAndBeat(roles = ["member"]): Promise<string> {
+    const id = hub.invite(roles);
+    const res = await member.call(hub.peer.peerId, "/.well-known/invite", {
+      method: "POST",
+      body: JSON.stringify({ id }),
+    });
+    const { token } = (await res.json()) as { token: string };
+    return await member.heartbeat(hub.peer.peerId, token);
+  }
 
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), "httpeers-hub-page-"));
     hub = await buildHubHoldingEndpoints(dir);
     // Listening, so it has real addresses of its own to report on a
-    // heartbeat -- `presence()` carries them, and "the addrs came through"
-    // is half of what the first test asserts.
+    // heartbeat -- the view carries them, and "the addrs came through" is
+    // part of what the first test asserts.
     member = await buildTestPeer({ hubPeerId: hub.peer.peerId, listen: ["/ip4/127.0.0.1/tcp/0"] });
     // Dialled explicitly: these are two loopback nodes with no relay and no
     // discovery between them, so nothing else would give the member the
@@ -201,46 +215,93 @@ describe("HubEndpoints.presence -- what the hub page renders from", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("reports exactly what GET /.well-known/presence reports, addrs included", async () => {
-    const id = hub.invite(["member"]);
-    const res = await member.call(hub.peer.peerId, "/.well-known/invite", {
-      method: "POST",
-      body: JSON.stringify({ id }),
-    });
-    const { token } = (await res.json()) as { token: string };
-    const fresh = await member.heartbeat(hub.peer.peerId, token);
+  it("agrees with GET /.well-known/mesh, member for member", async () => {
+    const token = await joinAndBeat(["admin"]);
 
-    const overHttp = await member.call(hub.peer.peerId, "/.well-known/presence", { token: fresh });
-    const httpBody = (await overHttp.json()) as PresenceResponse;
+    const overHttp = await member.call(hub.peer.peerId, "/.well-known/mesh", { token });
+    const httpBody = (await overHttp.json()) as MeshResponse;
+    const inProcess = hub.endpoints.meshView();
 
     // The point of the accessor: an in-process UI must not be able to show a
-    // different "who is online" from the one every remote peer reads.
-    expect(hub.endpoints.presence()).toEqual(httpBody.presence);
-    expect(httpBody.presence).toHaveLength(1);
-    expect(httpBody.presence[0]!.peerId).toBe(member.peerId);
-    expect(httpBody.presence[0]!.addrs.length).toBeGreaterThan(0);
+    // different membership -- or a different `online` -- from the one every
+    // remote peer reads. `self` differs by construction (the hub's own view
+    // is the hub's), and nothing else may.
+    expect(inProcess.members).toEqual(httpBody.members);
+    expect(inProcess.version).toBe(httpBody.version);
+    expect(inProcess.self).toBe(hub.peer.peerId);
+    expect(httpBody.self).toBe(member.peerId);
+
+    expect(inProcess.members).toHaveLength(1);
+    expect(inProcess.members[0]!.peerId).toBe(member.peerId);
+    expect(inProcess.members[0]!.addrs.length).toBeGreaterThan(0);
   });
 
-  it("is live, not a snapshot -- a swept peer is gone from the next call", async () => {
-    const id = hub.invite(["member"]);
-    const res = await member.call(hub.peer.peerId, "/.well-known/invite", {
-      method: "POST",
-      body: JSON.stringify({ id }),
-    });
-    const { token } = (await res.json()) as { token: string };
-    await member.heartbeat(hub.peer.peerId, token);
-
-    expect(hub.endpoints.presence()).toHaveLength(1);
+  it("distinguishes saved from active -- a swept peer stays a member but goes offline", async () => {
+    await joinAndBeat();
+    expect(hub.endpoints.meshView().members[0]!.online).toBe(true);
 
     // Past the 1 s TTL this hub was built with, then sweep.
     await new Promise((resolve) => setTimeout(resolve, 1_100));
     hub.endpoints.sweep();
 
-    expect(hub.endpoints.presence()).toEqual([]);
-    // ...and the member is still a MEMBER. Presence is liveness, not
-    // membership, and the hub page renders them as two separate columns
-    // precisely because a peer that went away is still someone who joined.
-    expect(hub.members().map((m) => m.peerId)).toEqual([member.peerId]);
+    const after = hub.endpoints.meshView().members;
+    // STILL SAVED. Presence is liveness, not membership: a peer that closed
+    // its tab is offline and is still someone who joined. The hub page
+    // renders these as one cell precisely so they cannot be confused.
+    expect(after).toHaveLength(1);
+    expect(after[0]!.peerId).toBe(member.peerId);
+    expect(after[0]!.online).toBe(false);
+  });
+
+  it("the hub's own view is unfiltered -- it sees a `hidden` member", async () => {
+    await joinAndBeat(["hidden"]);
+
+    // `buildMeshView` omits `hidden` members from anyone without
+    // `std:mesh.admin`. The hub is the machine holding the list; an operator
+    // shown a filtered version of their own mesh would be misled about what
+    // they are administering.
+    const members = hub.endpoints.meshView().members;
+    expect(members).toHaveLength(1);
+    expect(members[0]!.roles).toContain("hidden");
+  });
+
+  it("removing a member drops it from the view AND bumps the policy version", async () => {
+    await joinAndBeat();
+    expect(hub.endpoints.meshView().members).toHaveLength(1);
+    const before = hub.revocations.policyVersion();
+
+    // Exactly the path the hub page uses: the mounted handler, reached
+    // through the mount table -- NOT the ServiceWorker edge and NOT
+    // `peer.dispatch`, either of which would hit `httpeers.core`'s binding
+    // middleware and throw `PeerBindingLostError` on a request with no
+    // remote peer to prove. See `src/browser/hub-runtime.ts`'s
+    // `removeMember`.
+    const path = `/admin/members/${member.peerId}`;
+    const handler = hub.endpoints.mounts.match(path)!;
+    expect(handler).not.toBeNull();
+    const res = await handler(new Request(`http://hub.invalid${path}`, { method: "DELETE" }));
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; removed: string; policyVersion: number };
+    expect(body).toMatchObject({ ok: true, removed: member.peerId });
+
+    // Both halves. Dropping membership alone would leave the peer's live,
+    // unexpired token working until it expired; the bumped policy version is
+    // what every peer notices on its next heartbeat, and it is what the hub
+    // page reports back to the operator.
+    expect(hub.endpoints.meshView().members).toEqual([]);
+    expect(body.policyVersion).toBeGreaterThan(before);
+
+    // The token the peer is HOLDING -- minted before the removal -- now
+    // fails, which is the half that "removed from a list" would not give
+    // you. A token minted after the change would still be fine, and that
+    // asymmetry is `RevocationRegistry.check`'s whole contract, so both
+    // directions are asserted rather than just the one that reads well.
+    const revokedAt = hub.revocations.list().find((e) => e.peerId === member.peerId)!.changedAt;
+    expect(hub.revocations.check({ sub: member.peerId, iat: revokedAt - 1 })).toBe(
+      "membership revoked",
+    );
+    expect(hub.revocations.check({ sub: member.peerId, iat: revokedAt })).toBeNull();
   });
 });
 

@@ -1943,11 +1943,25 @@ it) behind a confirmation that says exactly that.
 
 ## Design notes
 
-- **`HubEndpoints.presence()`** is new: a read-only accessor over the same expression
-  `GET /.well-known/presence` serves. A page inside the hub would otherwise have to mint
-  itself a token and dispatch a request to itself to read a `Map` it is holding. It adds
-  no route, no capability, and no way in from the network; one expression feeds both, so
-  an in-process UI cannot show a different "who is online" from the one remote peers read.
+- **`HubEndpoints.meshView()`** is new: a read-only accessor over the same expression
+  `GET /.well-known/mesh` serves. A page inside the hub would otherwise have to mint
+  itself a token and dispatch a request to itself to read three registries it is
+  holding. It adds no route, no capability, and no way in from the network; one
+  expression feeds both, so an in-process UI cannot show a different membership — or a
+  different `online` — from the one remote peers read. The hub's own view passes every
+  capability in the vocabulary, so it is unfiltered: `hidden` members included, because
+  there is nobody to hide from on the machine that holds the list.
+- **The page calls its own endpoints, and not through the edge.** A hub page reaching
+  its own peer is a SELF-call, which this codebase does not support along either the
+  ServiceWorker edge or `peer.dispatch`: both end at `httpeers.core`'s binding
+  middleware, which throws `PeerBindingLostError` when `getPeerId` returns `undefined` —
+  and a request that originated in the page has no remote peer for it to prove. Reads go
+  through the in-process accessor above; `DELETE /admin/members/{peerId}` goes through
+  the hub's own mounted handler via `Mounts.match`. That bypasses the `.access` gate on
+  `/admin/`, which is stated plainly at the call site: that gate authorises *remote*
+  callers, and this caller is the process holding both the signing key and the
+  `MemberStore` the handler mutates. No route is added and the remote path is gated
+  exactly as before.
 - **The hub mints itself a token** for its own ServiceWorker edge. It is the only peer
   entitled to: an ordinary page gets its edge token by joining, and this one cannot join
   itself. The token is ordinary in every other respect (`admin` roles from `policy.ts`,
