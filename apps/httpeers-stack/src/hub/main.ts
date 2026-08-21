@@ -52,6 +52,7 @@
  * `startHub` leaves it alone and the caller stops it. Same split
  * `../browser/peer-runtime.ts` makes for the browser side.
  */
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { privateKeyFromProtobuf } from "@libp2p/crypto/keys";
@@ -67,6 +68,7 @@ import { HUB_ACCESS, VOCABULARY } from "../policy.js";
 import { dialRelay, waitForCircuitReservation } from "../reservation.js";
 import { createHubEndpoints, DEFAULT_PRESENCE_TTL_MS, usesTransportIdentity } from "./endpoints.js";
 import { createHubNode } from "./node-profile.js";
+import { APP_PORT, IMAGE_PEER_PORT } from "../static-server/main.js";
 import { createPersistentHub } from "./persist.js";
 
 /** How often the hub checks for stale presence. See the module comment. */
@@ -417,6 +419,53 @@ export async function startHub(init: StartHubInit = {}) {
   };
 }
 
+/**
+ * How long a printed join URL stays usable. Long enough to open a browser and
+ * paste, short enough that a URL left in a terminal from this morning is not a
+ * standing way in.
+ */
+export const JOIN_INVITATION_TTL_MS = 30 * 60_000;
+
+/**
+ * ONE INVITATION PER PAGE, NOT ONE PER MESH. Invitations are single-use by
+ * construction (`persist.ts`'s `redeem` moves the id to `spentInvitationIds`
+ * and the spent check runs first, unconditionally), so a shared code would let
+ * exactly ONE page in and fail every other with `already-redeemed`.
+ *
+ * MINTED IN-PROCESS, which is the whole reason this lives here rather than in
+ * a `pnpm invite` CLI. Pending invitations are never persisted -- they sit in
+ * an in-memory `Map` and only SPENT ids reach the snapshot -- and
+ * `createPersistentHub` reads that snapshot exactly once, at construction,
+ * with no watcher. So a second process cannot mint an invitation this hub will
+ * honour: it would write a file the hub never reads and the join would fail
+ * `not-found`. Anything that mints has to be the hub itself.
+ */
+function printJoinUrls(hub: { invitations: { create: (id: string, roles: string[], ttlMs: number) => unknown } }): void {
+  const mint = (roles: string[]): string => {
+    const id = randomUUID();
+    hub.invitations.create(id, roles, JOIN_INVITATION_TTL_MS);
+    return id;
+  };
+
+  // `member` carries `app:search.query` and `app:images.read` (`policy.ts`),
+  // which is everything both pages need to work. The extra admin URL exists
+  // because the app page's revoke control is only exercisable by an admin --
+  // opened as a member it renders the 403 instead, which is also worth seeing.
+  const appMember = mint(["member"]);
+  const appAdmin = mint(["admin"]);
+  const imagePeer = mint(["member"]);
+
+  console.log("");
+  console.log(`join URLs (one invitation each, single-use, valid ${JOIN_INVITATION_TTL_MS / 60_000} min):`);
+  console.log(`  app page          http://127.0.0.1:${APP_PORT}/?invite=${appMember}`);
+  console.log(`  app page as admin http://127.0.0.1:${APP_PORT}/?invite=${appAdmin}`);
+  console.log(`  image peer        http://127.0.0.1:${IMAGE_PEER_PORT}/?invite=${imagePeer}`);
+  console.log("");
+  console.log("  Open the image peer FIRST -- the app page discovers it through the hub,");
+  console.log("  so a provider that has not joined yet shows as absent rather than broken.");
+  console.log("");
+}
+
 // Run directly (e.g. `tsx src/hub/main.ts`) rather than only as a library import.
 if (import.meta.url === `file://${process.argv[1]}`) {
   const configPath = process.env.HTTPEERS_CONFIG ?? DEFAULT_HTTPEERS_CONFIG_PATH;
@@ -457,6 +506,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   console.log("hub addrs:");
   for (const addr of hub.peer.addrs()) console.log(`  ${addr}`);
+
+  printJoinUrls(hub);
 
   // The relay has had these since Task 7; the hub never did, so a Ctrl-C
   // left its reservation and its state file to be reclaimed by process
