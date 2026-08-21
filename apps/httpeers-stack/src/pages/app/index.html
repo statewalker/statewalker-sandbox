@@ -75,11 +75,26 @@
         background: #eaf7ea;
         border: 1px solid #a0d0a0;
       }
+      .status[data-tone="neutral"] {
+        background: #f2f2f2;
+      }
       .status:empty {
         display: none;
       }
       form {
         margin: 0.75rem 0;
+      }
+      form[hidden],
+      button[hidden] {
+        display: none;
+      }
+      #session-controls {
+        display: flex;
+        gap: 0.5rem;
+        margin: 0.75rem 0;
+      }
+      #reset-identity {
+        margin-left: auto;
       }
       input[type="text"] {
         font-family: ui-monospace, monospace;
@@ -158,18 +173,39 @@
 
     <dl>
       <dt>peer id</dt>
-      <dd id="peer-id">–</dd>
+      <dd id="peer-id">reading…</dd>
       <dt>connection state</dt>
       <dd id="state">not started</dd>
       <dt>mesh base url</dt>
       <dd id="base-url">–</dd>
     </dl>
 
-    <form id="join-form">
-      <label for="invite">invitation code</label>
-      <input id="invite" name="invite" type="text" autocomplete="off" placeholder="paste an invitation id" />
+    <p class="status" id="session-status"></p>
+
+    <form id="join-form" hidden>
+      <label for="invite">invitation</label>
+      <input
+        id="invite"
+        name="invite"
+        type="text"
+        autocomplete="off"
+        placeholder="an invitation id, a join blob, or a whole join link"
+      />
       <button type="submit">join mesh</button>
     </form>
+
+    <p id="session-controls">
+      <!--
+        Three controls, and the third is deliberately not beside the other
+        two: "disconnect" stops this page and keeps its membership, so
+        "reconnect" undoes it exactly. "reset identity" throws the saved key
+        away and makes the next run a peer the hub has never seen; it warns
+        before doing so.
+      -->
+      <button type="button" id="disconnect" hidden>disconnect</button>
+      <button type="button" id="reconnect" hidden>reconnect</button>
+      <button type="button" id="reset-identity" hidden>reset identity</button>
+    </p>
 
     <h2>discovered providers</h2>
     <p class="provider" id="search-provider" data-status="unknown">search: not started</p>

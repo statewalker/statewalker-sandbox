@@ -19,6 +19,13 @@
  * `console.error` from `startBrowserPeer`'s catch lands in the vitest output
  * next to the assertion that failed.
  *
+ * SINCE TASK 28 IT ALSO COVERS RESUMING. Both pages persist a libp2p
+ * identity in their origin's IndexedDB, so a reload is not a new peer: it is
+ * the same peer coming back, and it must come back WITHOUT redeeming the
+ * (now spent) invitation still sitting in its URL. That reload is the one
+ * thing in this task that no Node test can reach -- it needs a real
+ * IndexedDB surviving a real navigation -- so it is asserted here.
+ *
  * THE PAGES ARE BUILT BY THIS FILE, EVERY RUN. `dist/app` and
  * `dist/image-peer` are what the static server serves, and a stale bundle is
  * a silent failure: it looks like a passing suite testing code that is no
@@ -635,6 +642,65 @@ describe.each(BROWSERS)("Task 15: two browser peers in $name", ({ name, launcher
       expect(await session.appPage.textContent("#base-url")).toBe(
         `http://127.0.0.1:${session.servers.appPort}/app/`,
       );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "both pages RESUME across a reload -- same peer id, and the spent invitation in the URL is not retried",
+    async () => {
+      // TASK 28'S CENTRAL CLAIM, IN THE ONLY PLACE IT CAN ACTUALLY BE
+      // CHECKED. Both pages were opened with `?invite=`, which a reload
+      // keeps in the URL -- and that invitation is now SPENT. Until Task 28
+      // this reload failed `already-redeemed` and the page never came back;
+      // now the page resumes its membership before redemption is ever
+      // reached, so the spent invitation is simply not used.
+      //
+      // The identity is what makes that possible, and the peer id is how it
+      // is observed: same key out of the same IndexedDB, therefore the same
+      // peer id, therefore a peer the hub still lists as a member. A page
+      // that had quietly minted a new identity would come back with a
+      // different id and a fresh redemption -- which is exactly what this
+      // assertion would catch.
+      const before = {
+        app: await peerIdOfPage(session.appPage),
+        image: await peerIdOfPage(session.imagePage),
+      };
+
+      await Promise.all([session.appPage.reload(), session.imagePage.reload()]);
+
+      const elapsed = await waitForState(`${name}: both pages resume`, 60_000, async () => {
+        const [image, app] = await Promise.all([
+          session.imagePage.textContent("#state"),
+          session.appPage.textContent("#state"),
+        ]);
+        if (image === "error" || app === "error") {
+          throw new Error(
+            `${name}: a page reported state "error" after reload (image-peer=${image}, ` +
+              `app=${app}).\nPage errors and warnings, newest last:\n` +
+              `${session.faults.join("\n") || "(none captured)"}`,
+          );
+        }
+        return image === "ready" && app === "ready";
+      });
+      console.log(`[${name}] both pages resumed in ${elapsed.toFixed(0)}ms`);
+
+      expect(await peerIdOfPage(session.appPage)).toBe(before.app);
+      expect(await peerIdOfPage(session.imagePage)).toBe(before.image);
+
+      // And the page says which of the two ways in it took, rather than
+      // leaving an operator to infer it -- `session.ts`'s `joinedBy`.
+      for (const [label, page] of [
+        ["app", session.appPage],
+        ["image-peer", session.imagePage],
+      ] as const) {
+        expect(await page.textContent("#session-status"), `${label}: resume message`).toMatch(
+          /resumed/i,
+        );
+      }
+
+      // The invitation in the URL is still there and was still not needed.
+      expect(session.appPage.url()).toContain("invite=");
     },
     TEST_TIMEOUT_MS,
   );

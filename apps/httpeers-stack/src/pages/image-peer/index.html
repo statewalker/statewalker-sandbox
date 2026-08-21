@@ -72,7 +72,42 @@
       #join-form input {
         font-family: ui-monospace, monospace;
         padding: 0.35rem 0.5rem;
-        min-width: 16rem;
+        min-width: 20rem;
+      }
+      form[hidden],
+      button[hidden] {
+        display: none;
+      }
+      #session-controls {
+        display: flex;
+        gap: 0.5rem;
+        margin: 1rem 0;
+      }
+      #reset-identity {
+        margin-left: auto;
+      }
+      #session-status {
+        margin: 0.75rem 0;
+        padding: 0.4rem 0.6rem;
+        border-radius: 4px;
+        background: #f2f2f2;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+      }
+      #session-status[data-tone="ok"] {
+        background: #eaf7ea;
+        border: 1px solid #a0d0a0;
+      }
+      #session-status[data-tone="unreachable"] {
+        background: #fff3cd;
+        border: 1px solid #e0c36a;
+      }
+      #session-status[data-tone="failed"] {
+        background: #fdecea;
+        border: 1px solid #e0a0a0;
+      }
+      #session-status:empty {
+        display: none;
       }
     </style>
   </head>
@@ -82,23 +117,44 @@
     <p id="warning">
       <strong>Closing this tab removes these images from the mesh.</strong>
       This page serves the fixture gallery below over WebRTC while it stays
-      open — no page, no service.
+      open — no page, no service. Its identity is saved in this browser, so
+      reopening it resumes the same provider without a new invitation.
     </p>
 
     <dl>
       <dt>peer id</dt>
-      <dd id="peer-id">–</dd>
+      <dd id="peer-id">reading…</dd>
       <dt>connection state</dt>
       <dd id="state">not started</dd>
       <dt>serving</dt>
       <dd id="serving" data-serving="false">no</dd>
     </dl>
 
-    <form id="join-form">
-      <label for="invite">invitation code</label>
-      <input id="invite" name="invite" type="text" autocomplete="off" placeholder="paste an invitation id" />
+    <p id="session-status"></p>
+
+    <form id="join-form" hidden>
+      <label for="invite">invitation</label>
+      <input
+        id="invite"
+        name="invite"
+        type="text"
+        autocomplete="off"
+        placeholder="an invitation id, a join blob, or a whole join link"
+      />
       <button type="submit">join mesh</button>
     </form>
+
+    <p id="session-controls">
+      <!--
+        "disconnect" stops serving and keeps this page's membership, so
+        "reconnect" undoes it exactly. "reset identity" throws the saved key
+        away and brings the images back under a peer id the hub has never
+        seen; it warns before doing so.
+      -->
+      <button type="button" id="disconnect" hidden>disconnect</button>
+      <button type="button" id="reconnect" hidden>reconnect</button>
+      <button type="button" id="reset-identity" hidden>reset identity</button>
+    </p>
 
     <h2>fixture gallery</h2>
     <div id="gallery"></div>

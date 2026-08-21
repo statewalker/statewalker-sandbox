@@ -34,11 +34,21 @@
  * (`BrowserPeerHandle.baseUrl`) and the shape -- one plain `fetch`, no
  * library -- is exactly what the record asked for.
  *
- * WHERE THE INVITATION COMES FROM: identical to `../image-peer/main.ts`'s
- * -- a `?invite=` query parameter, a `?join=` blob, or a paste-in form when
- * neither is present. See that page's own module comment for the full
- * reasoning, including why the blob form exists at all (a mesh whose hub is
- * a browser page has no entry in `httpeers.json` and cannot).
+ * THIS PAGE HAS AN IDENTITY, AND IT RESUMES (Task 28). The libp2p key lives
+ * in this origin's IndexedDB and is reused on every visit, so the peer id
+ * below is stable across reloads. That makes joining two different acts:
+ * a first join REDEEMS an invitation, and every later visit RESUMES the
+ * membership that redemption produced -- with no invitation, because an
+ * invitation is single-use and there is not a second one to spend. All of that, and the three
+ * controls beside it (join, disconnect, reset identity), live in
+ * `../../browser/session.ts`; this file renders what that module decides
+ * and holds no session state of its own.
+ *
+ * WHERE AN INVITATION COMES FROM WHEN ONE IS NEEDED: identical to
+ * `../image-peer/main.ts`'s -- a `?invite=` query parameter, a `?join=`
+ * blob, or the paste-in form. See that page's own module comment for the
+ * full reasoning, including why the blob form exists at all (a mesh whose
+ * hub is a browser page has no entry in `httpeers.json` and cannot).
  *
  * A `?join=` BLOB IS NOT A CONFIGURED PEER ID, and the check above still
  * holds. The blob carries the MESH identity in the same breath as the
@@ -50,14 +60,9 @@
  * that policy and reports it as a typed `kind`; see `./outcome.ts`.
  */
 import { createMounts } from "@statewalker/httpeers.core";
-import type { JoinInput } from "../../browser/join-blob.js";
-import { readJoinInputFromSearch, readJoinInputFromText } from "../../browser/join-blob.js";
-import type {
-  BrowserPeerHandle,
-  BrowserPeerState,
-  HttpeersConfig,
-} from "../../browser/peer-runtime.js";
-import { startBrowserPeer } from "../../browser/peer-runtime.js";
+import type { BrowserPeerHandle } from "../../browser/peer-runtime.js";
+import type { PeerSession, SessionState } from "../../browser/session.js";
+import { createPeerSession } from "../../browser/session.js";
 import type { MeshView } from "../../hub/mesh-view.js";
 import type { ImageInfo } from "../../services/images.js";
 // TYPE-ONLY, AND IT HAS TO STAY THAT WAY. `services/search.ts` reads its
@@ -91,6 +96,10 @@ const stateEl = el("state");
 const baseUrlEl = el("base-url");
 const joinForm = el<HTMLFormElement>("join-form");
 const inviteInput = el<HTMLInputElement>("invite");
+const sessionStatusEl = el("session-status");
+const disconnectButton = el<HTMLButtonElement>("disconnect");
+const reconnectButton = el<HTMLButtonElement>("reconnect");
+const resetButton = el<HTMLButtonElement>("reset-identity");
 const searchProviderEl = el("search-provider");
 const imagesProviderEl = el("images-provider");
 const searchForm = el<HTMLFormElement>("search-form");
@@ -381,54 +390,100 @@ function refresh(): void {
   }
 }
 
-/** A blob names its own mesh; a bare invitation id means "whichever mesh `httpeers.json` names". See the module comment. */
-function configOf(input: JoinInput): HttpeersConfig | undefined {
-  return input.kind === "blob"
-    ? { relayAddrs: input.blob.relayAddrs, hubPeerId: input.blob.hubPeerId }
-    : undefined;
-}
+/**
+ * Render whatever `../../browser/session.ts` has decided. EVERY state this
+ * page can be in comes through here -- there is no second place that
+ * enables a button or writes a status line, which is what keeps "the join
+ * form is open" and "this page is not joined" from ever disagreeing.
+ */
+function renderSession(state: SessionState): void {
+  handle = state.handle;
 
-function invitationIdOf(input: JoinInput): string {
-  return input.kind === "blob" ? input.blob.invitationId : input.invitationId;
-}
+  peerIdEl.textContent = state.identity ?? "none saved yet";
+  baseUrlEl.textContent = state.handle?.baseUrl ?? "–";
 
-async function joinWithInvitation(input: JoinInput): Promise<void> {
-  joinForm.remove();
-  stateEl.textContent = "loading-config";
+  joinForm.hidden = !state.controls.join;
+  disconnectButton.hidden = !state.controls.disconnect;
+  reconnectButton.hidden = !state.controls.reconnect;
+  resetButton.hidden = !state.controls.reset;
 
-  // A CONSUMER SERVES NOTHING, AND SAYS SO. No mounts, and an `.access`
-  // tree that denies everything: this peer answers no path for any caller.
-  // Stating that explicitly is not ceremony -- `createPeer` evaluates this
-  // tree against every inbound request, so an empty-but-permissive tree
-  // here would silently make a page that offers no service reachable for
-  // one anyway.
-  const mounts = createMounts();
-  const accessTree = { "/": { anyOf: [] } };
-
-  const dev = location.hostname === "localhost" || location.hostname === "127.0.0.1";
-
-  try {
-    handle = await startBrowserPeer({
-      key: EDGE_KEY,
-      mounts,
-      accessTree,
-      invitationId: invitationIdOf(input),
-      config: configOf(input),
-      dev,
-      onState: (state: BrowserPeerState) => {
-        stateEl.textContent = state;
-      },
-    });
-    peerIdEl.textContent = handle.peerId;
-    baseUrlEl.textContent = handle.baseUrl;
-    refresh();
-    setInterval(refresh, VIEW_POLL_INTERVAL_MS);
-  } catch (err) {
-    stateEl.textContent = "error";
-    setStatus(adminStatusEl, "failed", `could not join the mesh: ${String(err)}`);
-    console.error("app: failed to join the mesh:", err);
+  const phase = state.phase;
+  switch (phase.kind) {
+    case "checking":
+      stateEl.textContent = "reading the saved identity";
+      clearStatus(sessionStatusEl);
+      break;
+    case "starting":
+      stateEl.textContent = phase.peerState;
+      clearStatus(sessionStatusEl);
+      break;
+    case "live":
+      stateEl.textContent = "ready";
+      if (phase.note != null) setStatus(sessionStatusEl, "neutral", phase.note);
+      else if (phase.joinedBy === "resumed")
+        setStatus(
+          sessionStatusEl,
+          "ok",
+          "Resumed the membership saved in this browser -- no invitation was needed.",
+        );
+      else setStatus(sessionStatusEl, "ok", "Joined by redeeming an invitation.");
+      break;
+    case "needs-invitation":
+      stateEl.textContent = "not joined";
+      setStatus(
+        sessionStatusEl,
+        phase.reason === "no-identity" ? "neutral" : "unreachable",
+        phase.message,
+      );
+      break;
+    case "disconnected":
+      stateEl.textContent = "disconnected";
+      // The gallery and the provider lines describe a mesh this page is no
+      // longer in; leaving them up would be the page claiming a view it
+      // cannot refresh. NOT `renderProviders(null)`: that renders "waiting
+      // for the first mesh view", which is a page that is joining, not one
+      // that has stopped.
+      renderProvider(searchProviderEl, "search", { status: "unknown" });
+      renderProvider(imagesProviderEl, "images", { status: "unknown" });
+      searchProviderEl.textContent = "search: not connected";
+      imagesProviderEl.textContent = "images: not connected";
+      clearStatus(searchStatusEl);
+      clearStatus(imagesStatusEl);
+      clearStatus(adminStatusEl);
+      galleryEl.replaceChildren();
+      searchResultsEl.replaceChildren();
+      membersEl.replaceChildren();
+      renderedMeshVersion = null;
+      setStatus(sessionStatusEl, "neutral", phase.message);
+      break;
+    case "blocked":
+      stateEl.textContent = "blocked";
+      setStatus(sessionStatusEl, "failed", phase.message);
+      break;
+    case "failed":
+      stateEl.textContent = "error";
+      setStatus(sessionStatusEl, "failed", phase.message);
+      break;
   }
 }
+
+// --- the session ----------------------------------------------------------
+
+// A CONSUMER SERVES NOTHING, AND SAYS SO. No mounts, and an `.access` tree
+// that denies everything: this peer answers no path for any caller. Stating
+// that explicitly is not ceremony -- `createPeer` evaluates this tree
+// against every inbound request, so an empty-but-permissive tree here would
+// silently make a page that offers no service reachable for one anyway.
+const session: PeerSession = createPeerSession({
+  key: EDGE_KEY,
+  mounts: createMounts(),
+  accessTree: { "/": { anyOf: [] } },
+  // Local-loopback dev only -- see `../../browser/node-profile.ts`'s
+  // `CreateBrowserNodeInit.dev` doc comment.
+  dev: location.hostname === "localhost" || location.hostname === "127.0.0.1",
+  search: location.search,
+  onChange: renderSession,
+});
 
 searchForm.addEventListener("submit", (ev) => {
   ev.preventDefault();
@@ -442,33 +497,37 @@ searchForm.addEventListener("submit", (ev) => {
 
 loadImagesButton.addEventListener("click", () => void loadImages());
 
-/** A malformed `?join=` is a legible complaint, not a blank page: someone pasted a link and half of it arrived. */
-function readQuery(): JoinInput | null {
-  try {
-    return readJoinInputFromSearch(location.search);
-  } catch (err) {
-    stateEl.textContent = "error";
-    setStatus(adminStatusEl, "failed", String(err));
-    console.error("app: the join link in this URL is not usable:", err);
-    return null;
-  }
-}
+joinForm.addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  void session.join(inviteInput.value);
+});
 
-const fromQuery = readQuery();
-if (fromQuery != null) {
-  void joinWithInvitation(fromQuery);
-} else {
-  joinForm.addEventListener("submit", (ev) => {
-    ev.preventDefault();
-    let input: JoinInput | null;
-    try {
-      input = readJoinInputFromText(inviteInput.value);
-    } catch (err) {
-      setStatus(adminStatusEl, "failed", String(err));
-      console.error("app: that is not a usable invitation or join link:", err);
-      return;
-    }
-    if (input == null) return;
-    void joinWithInvitation(input);
-  });
-}
+disconnectButton.addEventListener("click", () => void session.disconnect());
+reconnectButton.addEventListener("click", () => void session.reconnect());
+
+/**
+ * SEPARATELY NAMED AND SEPARATELY WARNED, because it is not disconnecting.
+ * Disconnect keeps this page's membership and can be undone by pressing
+ * reconnect; this throws the identity away, which makes the next run a
+ * DIFFERENT peer that the hub has never heard of. A control that quietly
+ * did the second under the name of the first would be a nasty surprise.
+ */
+resetButton.addEventListener("click", () => {
+  const confirmed = confirm(
+    "Reset this page's identity?\n\n" +
+      "This is NOT the same as disconnecting:\n" +
+      "  * a new peer id, so this page becomes a peer the hub has never seen\n" +
+      "  * the membership it holds now is left behind on the hub as a stale record\n" +
+      "  * rejoining needs a NEW invitation -- the old one is already spent\n\n" +
+      "Use disconnect instead if you only want to stop this page for now.",
+  );
+  if (!confirmed) return;
+  void session.resetIdentity();
+});
+
+// The view poll runs for the life of the page and no-ops while nothing is
+// joined -- started once here rather than inside a join, so a disconnect and
+// a reconnect cannot leave two of them running.
+setInterval(refresh, VIEW_POLL_INTERVAL_MS);
+
+void session.start();
