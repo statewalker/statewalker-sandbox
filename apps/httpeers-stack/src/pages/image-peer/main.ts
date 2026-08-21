@@ -24,12 +24,15 @@
  * design note 07 §4's "one generated file that is the invitation" describes
  * how the DAEMONS bootstrap, not how a browser page redeems membership.
  * `StartBrowserPeerInit.invitationId` is a required string with no default
- * (Task 11's own module comment); an admin still has to create one (`POST
- * /admin/invitations`) and hand the resulting id to whoever opens this
- * page. This page accepts it two ways: a `?invite=` query parameter (for a
- * shared link, e.g. from Task 15's own harness) or a plain paste-in form
- * when the query parameter is absent -- there is no third source anywhere
- * in this codebase to read one from.
+ * (Task 11's own module comment); an admin still has to create one first.
+ * There is no HTTP endpoint for that today -- `GET /admin/invitations`
+ * (`../../hub/endpoints.ts`) only reports `{ok, issuedBy, caller}`, not a
+ * mint -- so this happens by calling `InvitationStore.create` directly
+ * against the hub's own process (`../../hub/persist.ts`), and handing the
+ * resulting id to whoever opens this page. This page accepts it two ways: a
+ * `?invite=` query parameter (for a shared link, e.g. from Task 15's own
+ * harness) or a plain paste-in form when the query parameter is absent --
+ * there is no third source anywhere in this codebase to read one from.
  */
 import { createMounts } from "@statewalker/httpeers.core";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";

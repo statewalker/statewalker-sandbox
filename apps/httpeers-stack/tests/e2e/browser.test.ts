@@ -388,9 +388,11 @@ async function buildSession(
   forwardPageOutput("app", appPage, faults);
 
   // Two invitations, minted through the hub's own store — the same call
-  // `POST /admin/invitations` reaches, and the only way into this mesh.
-  // Each page takes its own from `?invite=`; there is no other source in
-  // this codebase.
+  // `InvitationStore.create` (`../../src/hub/persist.ts`) that a real
+  // operator would need, since there is no HTTP endpoint for it (see
+  // `src/pages/image-peer/main.ts`'s module comment) — and the only way
+  // into this mesh. Each page takes its own from `?invite=`; there is no
+  // other source in this codebase.
   const imageInvite = stack.invite(["member"]);
   const appInvite = stack.invite(["member"]);
 
@@ -450,17 +452,43 @@ async function stopSession(session: Session | undefined): Promise<void> {
  * WHAT IS ASSERTED INSTEAD, ALL ON THE CONSUMER'S OWN CLOCK: the provider
  * stalls `PROVIDER_CHUNK_DELAY_MS` before each chunk, so a STREAMING
  * transport delivers chunk k at roughly `k * delay` — the arrivals are
- * SPREAD, with the first one early. A BUFFERING transport cannot produce
- * that shape whatever it does with chunk boundaries: it has nothing to hand
- * over until the provider has finished producing, so every chunk arrives in
- * one burst at the end, the gaps collapse to ~0, and the first arrival is
- * indistinguishable from the last.
+ * SPREAD, with the gaps between them real. A BUFFERING transport cannot
+ * produce that shape whatever it does with chunk boundaries: it has nothing
+ * to hand over until the provider has finished producing, so every chunk
+ * arrives in one burst at the end and the gaps collapse to ~0.
  *
  * FALSIFIED, NOT ASSUMED. The mutant — `createImagesEndpoint` draining its
  * own `ReadableStream` into memory and re-enqueuing the identical chunk
- * sizes with no delay — was built and run: the count and the sizes below
- * still pass, and both timing assertions fail. The numbers are in this
- * task's report.
+ * sizes with a 2ms release stall — was built and run against BOTH
+ * assertions below, in both browsers, twice (once at Task 15, once again
+ * in this task's fix round after the assertions changed): count and sizes
+ * still pass, both timing assertions still fail, by a wide margin every
+ * time.
+ *
+ * A THIRD ASSERTION WAS TRIED AND DELIBERATELY DROPPED. "The first chunk
+ * arrived before half the total time had passed" (comparing `arrivedAt[0]`
+ * against `arrivedAt.at(-1)`) sounds like a natural third proof, and an
+ * earlier version of this function had it. It does not survive contact with
+ * a second browser: it needs a per-request baseline (dial + ServiceWorker
+ * round trip) subtracted out first, since that cost lands on both
+ * timestamps and pushes the ratio toward 1 as it grows, independent of
+ * streaming behaviour. The obvious way to measure that baseline — how long
+ * `fetch()` itself takes to resolve, before any body byte is read — turns
+ * out not to mean the same thing in both browsers: in Chromium it is
+ * headers-received, strictly before any chunk; in Firefox, measured
+ * directly, `fetch()` did not resolve until the FIRST BODY CHUNK was
+ * already available (`headersAt` landed exactly on `arrivedAt[0]`, every
+ * time, real traffic or mutant). Subtracting it there does not remove a
+ * fixed cost — it zeroes the numerator outright, so the "corrected"
+ * assertion passed against the buffering mutant too, unconditionally, in
+ * Firefox only. That is precisely the outcome the top of this comment
+ * calls "worse than no assertion, because it looks like one" — so rather
+ * than ship a check that quietly stops testing anything in one browser,
+ * it is gone. The two assertions below were re-verified alone against the
+ * mutant, in both browsers, and remain sufficient: real, evenly-spread
+ * per-chunk gaps make one arrival early relative to the rest as a matter of
+ * arithmetic, so this loses no coverage the first two did not already
+ * carry.
  */
 function assertStreamed(streamed: StreamedBody, expectedBytes: Uint8Array): void {
   expect(streamed.status).toBe(200);
@@ -480,29 +508,30 @@ function assertStreamed(streamed: StreamedBody, expectedBytes: Uint8Array): void
   const gaps = streamed.arrivedAt.slice(1).map((at, i) => at - streamed.arrivedAt[i]!);
 
   // 1. The arrivals are spread across at least half the time the provider
-  //    spent producing them. A burst delivery scores ~0 here.
+  //    spent producing them. A burst delivery scores ~0 here. `last - first`
+  //    is a difference of two same-clock timestamps, so any fixed setup
+  //    cost common to both (the dial, the ServiceWorker round trip) cancels
+  //    out on its own -- this assertion needs no correction for it, and
+  //    under CPU contention this is the one of the three that has never
+  //    been observed to flake (a review round measured it directly).
   expect(last - first).toBeGreaterThan((streamed.sizes.length - 1) * PROVIDER_CHUNK_DELAY_MS * 0.5);
 
-  // 2. Every gap is a real gap. Half the provider's stall is a wide margin
-  //    against scheduler jitter and Firefox's coarser `performance.now()`,
-  //    and still an order of magnitude above the ~0 a buffered burst gives.
-  for (const gap of gaps) expect(gap).toBeGreaterThan(PROVIDER_CHUNK_DELAY_MS * 0.5);
-
-  // 3. The first chunk arrived EARLY — long before the body was finished.
-  //    This is the one that most directly says "not buffered": it is the
-  //    consumer holding bytes that the provider had not yet finished
-  //    producing.
-  //
-  //    THIS ONE IS LATENCY-SENSITIVE AND 1 AND 2 ARE NOT. Both sides are
-  //    absolute times from the fetch, so a fixed setup cost — the dial, the
-  //    ServiceWorker round trip — lands on BOTH and pushes the ratio toward
-  //    1: on this machine 44/245 ms passes comfortably, and the same run on
-  //    a host 200 ms slower would read 244/444 and false-FAIL. It cannot
-  //    false-PASS (added latency never makes the first chunk look earlier
-  //    relative to the last), so the proof is not weakened by it — but on a
-  //    slower host, fix this by subtracting the observed first-arrival
-  //    baseline, not by loosening the ratio.
-  expect(first).toBeLessThan(last * 0.5);
+  // 2. The TYPICAL gap is a real gap -- the MEDIAN, not every individual
+  //    one. A review round caught this failing per-gap under CPU
+  //    contention (observed: 11 ms and 8 ms against the original 20 ms
+  //    floor, in two independent runs): the consumer can be descheduled
+  //    for long enough that two already-stalled chunks get drained
+  //    together on the next turn, collapsing ONE gap while the rest stay
+  //    at ~40 ms -- real streaming, momentarily starved, not buffering.
+  //    The median tolerates a minority of such collapses (with 5 gaps here,
+  //    up to 2 can be arbitrarily low without moving it) while a genuinely
+  //    buffered burst -- EVERY gap near 0, not just one -- still fails it
+  //    the same way it always did: falsified against the drain-and-re-enqueue
+  //    mutant (see the module comment above) with the SAME 20 ms floor, not
+  //    a loosened one.
+  const sortedGaps = [...gaps].sort((a, b) => a - b);
+  const medianGap = sortedGaps[Math.floor(sortedGaps.length / 2)]!;
+  expect(medianGap).toBeGreaterThan(PROVIDER_CHUNK_DELAY_MS * 0.5);
 }
 
 const BROWSERS = [
@@ -699,14 +728,41 @@ describe.each(BROWSERS)("Task 15: two browser peers in $name", ({ name, launcher
         // "ok" covers two distinct moments -- `setStatus(imagesStatusEl,
         // "ok", "loading the catalogue…")` right after the click, AND the
         // final success text -- so it is still a legitimate "not yet"
-        // here. But `outcome.status` (`outcome.ts`) can also land on
-        // "denied"/"unreachable"/"failed", and those are terminal: the call
-        // already finished and will never become "ok" on its own. Polling
-        // the full budget on an already-known failure, the same mistake
-        // this file's own `beforeAll` wait was written NOT to make (see its
-        // "error" check above), would burn 60s to report a generic timeout
-        // over a cause the page told us within seconds.
-        if (tone === "denied" || tone === "unreachable" || tone === "failed") {
+        // here. Every OTHER tone `main.ts` ever sets on `#images-status` is
+        // terminal in the same sense: `outcome.ts`'s `CallOutcome.status`
+        // can land on "denied"/"unreachable"/"failed", and `loadImages`'s
+        // own pre-call branch (`imagesState.status !== "present"`) sets
+        // "neutral" for "waiting for the first mesh view" / "nobody is
+        // advertising this" and "unreachable" for "departed" -- and in
+        // EITHER case `loadImages` returns without making a call, so
+        // nothing here re-triggers it. In this test's natural run order the
+        // preceding test has already asserted `present`, so "neutral" is
+        // unreachable from here in the full-file run -- but it IS reachable
+        // running this test alone (`vitest -t "gallery rendered"`), which is
+        // exactly what someone chasing a failure does, so leaving it out
+        // would silently reintroduce the 60s-timeout mistake for the one
+        // person most likely to hit it. Listing every non-"ok" tone here
+        // (rather than an allow-list of just "ok") is deliberate: a tone
+        // this file has not been taught about should fail loudly, not poll
+        // silently for the full budget.
+        //
+        // ONE BOUNDED FALSE-EXIT WINDOW, ACCEPTED: `renderProviders` can
+        // flip this to "unreachable" on a `present -> departed` transition
+        // that lands WHILE the images call above is still in flight and
+        // then itself succeeds (the call reads `imagesState` from before
+        // the transition, so it isn't cancelled by it). This throws on that
+        // transient tone even though the in-flight call would have
+        // resolved "ok". It needs a real presence lapse (the hub's TTL,
+        // ~8s) landing inside the ~100ms poll window this call was made in,
+        // and the un-fixed version would have masked the same lapse with a
+        // false PASS instead, which is worse -- so this is left as a known,
+        // narrow trade rather than something to fix.
+        if (
+          tone === "denied" ||
+          tone === "unreachable" ||
+          tone === "failed" ||
+          tone === "neutral"
+        ) {
           const text = await session.appPage.textContent("#images-status");
           throw new Error(
             `${name}: #images-status reported "${tone}" instead of loading: ${text}\n` +

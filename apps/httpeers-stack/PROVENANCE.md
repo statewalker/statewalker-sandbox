@@ -599,7 +599,7 @@ Read fresh off disk on every request (no caching layer) and passed through byte-
 — the server never parses it, since the pages are the ones that need to. Missing file →
 **503** with a JSON body naming `"run \"pnpm bootstrap\" first"`, never a 404: an absent
 config is a different condition from a missing route (brief's own framing), and a 503
-here is what lets the page say "run setup" instead of "not found".
+here is what lets the page say "run bootstrap" instead of "not found".
 
 **ServiceWorker script headers**: `Cache-Control: no-cache, no-store, must-revalidate`,
 `Pragma: no-cache`, `Service-Worker-Allowed: /` — applied only to the resolved file that

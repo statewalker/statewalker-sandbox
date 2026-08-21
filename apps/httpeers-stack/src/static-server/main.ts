@@ -32,7 +32,7 @@
  * `/httpeers.json` IS SERVED FROM OUTSIDE EACH DIST DIRECTORY -- it is one
  * shared invitation payload (Task 10's setup CLI writes it once, at the
  * app package root), not a per-page build artifact. A missing file is a
- * 503 ("run setup"), never a 404 ("not found") -- those are different
+ * 503 ("run bootstrap"), never a 404 ("not found") -- those are different
  * conditions and the page needs to be able to tell them apart.
  */
 
@@ -189,7 +189,7 @@ function serveHttpeersConfig(res: ServerResponse, configPath: string, isHead: bo
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       // Absent config is a DIFFERENT condition from a missing route: the
-      // page should be able to say "run setup", not "not found".
+      // page should be able to say "run bootstrap", not "not found".
       respond(
         res,
         isHead,
