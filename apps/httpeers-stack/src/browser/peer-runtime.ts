@@ -24,8 +24,11 @@
  *      -- `join.ts`'s `preDialPeer`, see its own doc comment for why this
  *      is not optional (applies to the hub exactly as it would to any
  *      other peer: the hub declares no listen address of its own).
- *   5. redeem the invitation, mint the first token, start the heartbeat +
- *      keepalive timers (`join.ts`'s `startJoin`).
+ *   5. get in: RESUME first (`join.ts`'s `resumeMembership` -- a tokenless
+ *      presence write, which the hub answers with a fresh token if it still
+ *      lists this peer as a member), and only redeem an invitation if the
+ *      hub says it does not. Then start the heartbeat + keepalive timers
+ *      (`join.ts`'s `startJoin`). See "RESUME BEFORE REDEEM" below.
  *   6. mount the ServiceWorker edge (`edge.ts`'s `mountEdge`), with
  *      `edge-dispatch.ts` wrapped around `peer.dispatch` -- the module that
  *      makes a page's plain `fetch()` reach the mesh without the page
@@ -44,19 +47,41 @@
  * Any later task that wants to dial a peer discovered through
  * `BrowserPeerHandle.meshView()` must read that peer's `addrs` from the
  * returned `MeshViewMember`, not from `libp2p.peerStore`.
+ *
+ * RESUME BEFORE REDEEM, ALWAYS, EVEN WHEN AN INVITATION WAS SUPPLIED (Task
+ * 28). Until this task this function redeemed unconditionally on every
+ * start, which was correct for exactly one run of a page: an invitation is
+ * single-use (`../hub/hub-state.ts`), and a page whose identity persists in
+ * IndexedDB -- which every page's has since Task 24, via
+ * `./node-profile.ts`'s default `loadOrCreateIdentity()` -- would fail its
+ * SECOND run with `already-redeemed` and never join again. So the order is
+ * resume, then redeem.
+ *
+ * That order holds even when the caller HAS an invitation, and the deciding
+ * case is the plainest one there is: reloading the page. A join link is a
+ * URL, `?join=` survives a reload, and a reload must not burn a fresh
+ * invitation (or fail against a spent one) to get back to where the page
+ * already was. The cost is that an invitation handed to a page that is
+ * already a member goes unused -- INCLUDING one minted to change that
+ * page's roles, which is a real limitation and is why the caller is told
+ * which way it got in (`BrowserPeerHandle.joinedBy`) rather than left to
+ * assume. Joining as a genuinely new peer is what resetting the identity is
+ * for.
  */
-import type { AccessTree, Mounts } from "@statewalker/httpeers.core";
+import type { AccessTree, Ed25519PrivateKey, Mounts } from "@statewalker/httpeers.core";
 import { createPeer, RevocationCache } from "@statewalker/httpeers.core";
 import type { MeshView } from "../hub/mesh-view.js";
 import { VOCABULARY } from "../policy.js";
 import { mountEdge } from "./edge.js";
 import { createEdgeDispatch } from "./edge-dispatch.js";
-import type { AdvertisementInput } from "./join.js";
+import type { AdvertisementInput, PresenceRefusal } from "./join.js";
 import {
   createRouteEnsurer,
+  nextInitialSeq,
   preDialPeer,
   REVOCATION_MAX_STALENESS_MS,
   redeemInvitation,
+  resumeMembership,
   startJoin,
 } from "./join.js";
 import { createBrowserNode, dialRelay, waitForCircuitReservation } from "./node-profile.js";
@@ -90,6 +115,7 @@ export type BrowserPeerState =
   | "awaiting-reservation"
   | "starting-peer"
   | "dialing-hub"
+  | "resuming"
   | "joining"
   | "mounting-edge"
   | "ready"
@@ -102,9 +128,37 @@ export interface StartBrowserPeerInit {
   mounts: Mounts;
   /** This peer's own `.access` tree, evaluated against `../policy.ts`'s `VOCABULARY` -- see the module comment. */
   accessTree: AccessTree;
-  /** The invitation id this page redeems on first join -- `../hub/hub-state.ts`'s `InvitationStore.redeem`. */
-  invitationId: string;
+  /**
+   * The invitation id this page redeems IF the resume attempt finds it is
+   * not a member -- `../hub/hub-state.ts`'s `InvitationStore.redeem`.
+   *
+   * OPTIONAL SINCE TASK 28, and its absence is an ordinary case rather than
+   * a degraded one: a page reloading into a membership it already holds has
+   * no invitation, wants none, and would fail if it tried to use one. When
+   * it is absent and the hub does not know this identity, this function
+   * throws a `JoinFailedError` with `reason: "not-a-member"` -- which is a
+   * page's cue to ask for an invitation, not an error to log and forget.
+   */
+  invitationId?: string;
+  /**
+   * This peer's signing key, and therefore its identity. Defaults to this
+   * origin's persisted one (`./identity.ts`'s `loadOrCreateIdentity`, via
+   * `./node-profile.ts`), which is what it has always been.
+   *
+   * SUPPLIED BY A CALLER THAT NEEDED THE PEER ID BEFORE THE NODE EXISTED,
+   * which since Task 28 means both consumer pages: a page that starts by
+   * saying "this browser holds identity X, and this hub does not know it"
+   * has to have read the key to name X, and reading it twice risks reading
+   * two different things. See `./session.ts`.
+   */
+  privateKey?: Ed25519PrivateKey;
   onState?: (state: BrowserPeerState) => void;
+  /**
+   * The hub refused a heartbeat AFTER this page was live -- a membership
+   * revoked under it, or a second node running its identity. See
+   * `./join.ts`'s `PresenceRefusal`; forwarded to `startJoin` unchanged.
+   */
+  onPresenceRefused?: (refusal: PresenceRefusal) => void;
   /**
    * The mesh to join, INSTEAD of fetching `httpeers.json`.
    *
@@ -163,9 +217,79 @@ export interface BrowserPeerHandle {
    * `meshView()`.
    */
   hubPeerId: string;
+  /**
+   * The relay this peer reserved through -- `relayAddrs[0]`, whether that
+   * came from `httpeers.json` or from a join blob. Echoed so a caller can
+   * REMEMBER the mesh it just joined without re-deriving where the value
+   * came from; `./mesh-memory.ts` is the one that does.
+   */
+  relayAddr: string;
+  /**
+   * Which of the two ways in this was. `"resumed"` means the hub already
+   * listed this peer and no invitation was used -- worth saying on screen,
+   * because an operator who pasted one is entitled to know it went unspent
+   * (see the module comment's "RESUME BEFORE REDEEM").
+   */
+  joinedBy: JoinMethod;
   /** The mesh view as of the last heartbeat that reported a moved `versions.mesh` -- `null` before the first heartbeat lands. See the module comment's "A PEER'S ADDRS COME FROM THE MESH VIEW" note before dialing anything discovered through this. */
   meshView(): MeshView | null;
+  /**
+   * Stop this peer: drop presence, KEEP MEMBERSHIP.
+   *
+   * THE DISTINCTION IS THE WHOLE POINT OF THE CONTROL BUILT ON IT (Task
+   * 28's "disconnect"). Presence is a TTL'd heartbeat, so a stopped peer
+   * leaves the mesh view within one presence TTL and its advertisements go
+   * with it. Membership is a persisted `MemberRecord` on the hub, and
+   * nothing here touches it -- which is exactly why the page can come back
+   * later by RESUMING, with no new invitation. Surrendering membership is a
+   * different act with a different cost (a fresh invitation to return), it
+   * is `DELETE /admin/members/{peerId}`, and it is not this.
+   */
   stop(): Promise<void>;
+}
+
+/** How a peer got into the mesh -- see `BrowserPeerHandle.joinedBy`. */
+export type JoinMethod = "resumed" | "redeemed";
+
+/** What went wrong, in terms a page can act on -- see `JoinFailedError`. */
+export type JoinFailureReason =
+  | "not-a-member"
+  | "duplicate-identity"
+  | "presence-refused"
+  | "invitation-refused";
+
+/**
+ * The join did not happen, and the reason is one a page has to RENDER
+ * rather than log: each of these asks the operator for something different.
+ *
+ * `not-a-member` -- the hub does not list this identity and there was no
+ * invitation to redeem. Ask for one. This is the hub-reset / revoked-
+ * membership case, and the one that is otherwise baffling: the page is
+ * fine, the hub is reachable, and it simply does not know this peer.
+ *
+ * `duplicate-identity` -- another live node is running this identity (see
+ * `./join.ts`'s `PresenceRefusal`). Not something to retry: refuse, and
+ * offer a fresh identity.
+ *
+ * `presence-refused` -- the hub answered the resume probe with something
+ * else entirely; `detail.refusal.message` carries what it said.
+ *
+ * `invitation-refused` -- redemption itself failed (`already-redeemed`,
+ * `expired`, `not-found`). `detail.cause` carries the hub's own words.
+ *
+ * A dial or transport failure is NOT one of these and is not wrapped here:
+ * those already throw with the messages this module composed for them
+ * (relay unreachable, hub unreachable), which name a different fix.
+ */
+export class JoinFailedError extends Error {
+  constructor(
+    readonly reason: JoinFailureReason,
+    message: string,
+    readonly detail: { hubPeerId: string; refusal?: PresenceRefusal; cause?: unknown },
+  ) {
+    super(message, { cause: detail.cause });
+    this.name = "JoinFailedError";
+  }
 }
 
 async function fetchHttpeersConfig(url: string): Promise<HttpeersConfig> {
@@ -191,7 +315,7 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   }
 
   onState("connecting-relay");
-  const node = await createBrowserNode({ dev: init.dev });
+  const node = await createBrowserNode({ dev: init.dev, privateKey: init.privateKey });
 
   // EVERYTHING FROM HERE ON IS UNWOUND IF IT FAILS. `node` is running the
   // moment `createBrowserNode` returns, and a `startBrowserPeer` that threw
@@ -264,19 +388,102 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
     );
   }
 
-  onState("joining");
-  let redemption: Awaited<ReturnType<typeof redeemInvitation>>;
+  // RESUME FIRST, REDEEM ONLY IF THE HUB SAYS IT DOES NOT KNOW THIS PEER --
+  // see the module comment's "RESUME BEFORE REDEEM" for why the order is
+  // this way round even when an invitation is in hand.
+  //
+  // The probe is an ordinary presence write and therefore IS this run's
+  // first heartbeat: on the resume path this peer is already reported,
+  // already advertised and already in the mesh view before `startJoin` ever
+  // ticks. Its `seq` is handed to `startJoin` as `initialSeq` so the run's
+  // sequence keeps climbing across the join rather than restarting under
+  // the number the hub has already accepted.
+  onState("resuming");
+  const seq = nextInitialSeq();
+  const advertisements = init.advertisements?.();
+  let resume: Awaited<ReturnType<typeof resumeMembership>>;
+  try {
+    resume = await resumeMembership({
+      peer,
+      hubPeerId: config.hubPeerId,
+      addrs: node.getMultiaddrs().map((addr) => addr.toString()),
+      advertisements,
+      seq,
+    });
+  } catch (err) {
+    await startFailed();
+    throw new Error(
+      `startBrowserPeer: could not ask the hub (${config.hubPeerId}) whether this peer is ` +
+        `still a member -- the call did not reach it. Cause: ${String(err)}`,
+      { cause: err },
+    );
+  }
+
+  let initialToken: string;
+  let joinedBy: JoinMethod;
+
+  if (resume.status === "resumed") {
+    initialToken = resume.token;
+    joinedBy = "resumed";
+  } else if (resume.refusal.kind === "duplicate-identity") {
+    // NOT retried, and not joined around. Two libp2p nodes running one
+    // identity is a genuine failure -- see `./join.ts`'s `PresenceRefusal`
+    // -- and carrying on would leave two peers fighting over one presence
+    // record, one mesh-view entry and one set of advertisements.
+    await startFailed();
+    throw new JoinFailedError(
+      "duplicate-identity",
+      `another live peer is already using this identity (${peer.peerId}) on this mesh. Two ` +
+        "libp2p nodes cannot share one peer id: they would take turns overwriting each " +
+        "other's presence. Close the other tab, or start this page on a fresh identity.",
+      { hubPeerId: config.hubPeerId, refusal: resume.refusal },
+    );
+  } else if (resume.refusal.kind !== "not-a-member") {
+    await startFailed();
+    throw new JoinFailedError(
+      "presence-refused",
+      `the hub (${config.hubPeerId}) refused this peer's first heartbeat: ` +
+        `${resume.refusal.message}`,
+      { hubPeerId: config.hubPeerId, refusal: resume.refusal },
+    );
+  } else if (init.invitationId == null) {
+    await startFailed();
+    throw new JoinFailedError(
+      "not-a-member",
+      `the hub (${config.hubPeerId}) does not list this peer (${peer.peerId}) as a member. ` +
+        "The identity saved in this browser is fine -- this hub simply does not know it, " +
+        "which is what a hub whose state was reset, or a membership that was revoked, looks " +
+        "like. An invitation is the way back in.",
+      { hubPeerId: config.hubPeerId, refusal: resume.refusal },
+    );
+  } else {
+    onState("joining");
+    try {
+      const redemption = await redeemInvitation(peer, config.hubPeerId, init.invitationId);
+      initialToken = redemption.token;
+      joinedBy = "redeemed";
+    } catch (err) {
+      await startFailed();
+      throw new JoinFailedError(
+        "invitation-refused",
+        `the hub (${config.hubPeerId}) would not accept that invitation. ${String(err)}`,
+        { hubPeerId: config.hubPeerId, cause: err },
+      );
+    }
+  }
+
   let join: ReturnType<typeof startJoin>;
   try {
-    redemption = await redeemInvitation(peer, config.hubPeerId, init.invitationId);
     join = startJoin({
       peer,
       node,
       hubPeerId: config.hubPeerId,
       relayAddr,
-      initialToken: redemption.token,
+      initialToken,
+      initialSeq: seq,
       revocationCache,
       advertisements: init.advertisements,
+      onPresenceRefused: init.onPresenceRefused,
     });
   } catch (err) {
     await startFailed();
@@ -329,6 +536,8 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
     peerId: peer.peerId,
     baseUrl: edge.baseUrl,
     hubPeerId: config.hubPeerId,
+    relayAddr,
+    joinedBy,
     meshView: () => join.meshView(),
     async stop() {
       try {

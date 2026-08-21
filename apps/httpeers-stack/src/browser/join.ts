@@ -1,8 +1,18 @@
 /**
- * Joining the mesh: the `/webrtc` pre-dial, invitation redemption, and the
- * two timers this runtime owns itself (the third -- circuit-relay's own
- * reservation refresh -- is libp2p-managed; there is no code for it here,
- * on purpose, see `startJoin`'s doc comment).
+ * Joining the mesh: the `/webrtc` pre-dial, invitation redemption, the
+ * membership RESUME probe, and the two timers this runtime owns itself (the
+ * third -- circuit-relay's own reservation refresh -- is libp2p-managed;
+ * there is no code for it here, on purpose, see `startJoin`'s doc comment).
+ *
+ * THERE ARE TWO WAYS INTO A MESH, NOT ONE (Task 28). `redeemInvitation` is
+ * the first join and can only ever happen once per invitation -- the id is
+ * moved to `spentInvitationIds` on redemption and the spent check runs
+ * first, unconditionally (`../hub/hub-state.ts`). A page that persists its
+ * identity and reloads is therefore NOT making a first join: it is already
+ * a member, and redeeming again would fail `already-redeemed` forever.
+ * `resumeMembership` below is the other way in, and it needs no new hub
+ * route because the hub already has one that answers exactly this question
+ * -- see that function.
  */
 
 import type { PeerId } from "@libp2p/interface";
@@ -150,7 +160,150 @@ export interface AdvertisementInput {
   title: string;
 }
 
-interface HeartbeatVersions {
+/**
+ * Why a presence write was refused, named rather than left as a status
+ * code. Three outcomes, and they call for three different things on screen.
+ *
+ * `not-a-member` -- HTTP 403, `../hub/endpoints.ts`'s presence handler
+ * finding no `MemberRecord` for the transport-proven peer. It means one of:
+ * this identity has never joined this mesh, its membership was revoked
+ * (`/admin/members/{peerId}`), or the hub's own state was reset. All three
+ * are "this hub does not know you"; an invitation is the way back in.
+ * NOTE that a REVOKED member also lands here rather than on a token check:
+ * `usesTransportIdentity()` makes a presence POST a bootstrap request, so
+ * the token it carries is never examined and the revocation cache is never
+ * consulted -- membership itself is what the handler looks up.
+ *
+ * `duplicate-identity` -- HTTP 409 `stale-sequence`, and it is the one
+ * genuinely surprising diagnosis in this file, so here is why it is sound.
+ * The hub tracks the highest `seq` it ever accepted per peer and refuses
+ * anything at or below it (`lastSeqByPeer`, which the TTL sweep
+ * deliberately does not clear). This runtime's own sequence numbers are
+ * seeded from the wall clock (`nextInitialSeq`) and only ever increase, so
+ * NOTHING THIS PAGE HAS EVER SENT can be at or below the number it is
+ * sending now -- not an earlier beat, not an earlier page load, not a
+ * delayed duplicate of either. A 409 therefore means some OTHER live node
+ * posted a heartbeat under this peerId, which is to say two libp2p nodes
+ * are running one identity: two tabs of the same origin is the ordinary
+ * way to get there. That is a real failure (two nodes racing to be "the"
+ * peer for one id -- `./identity.ts`'s own note) and not a cosmetic one, so
+ * it is reported rather than retried into.
+ *
+ * `refused` -- anything else, carried verbatim for the page to render.
+ */
+export type PresenceRefusal =
+  | { kind: "not-a-member"; status: number; message: string }
+  | { kind: "duplicate-identity"; status: number; message: string }
+  | { kind: "refused"; status: number; message: string };
+
+/** Turn a refused presence response into one of the three cases above. Pure, so a test can pin the mapping without a hub. */
+export function classifyPresenceRefusal(status: number, body: string): PresenceRefusal {
+  if (status === 403) {
+    return {
+      kind: "not-a-member",
+      status,
+      message: "this hub does not list this peer as a member",
+    };
+  }
+  if (status === 409) {
+    return {
+      kind: "duplicate-identity",
+      status,
+      message: "the hub has already accepted a newer heartbeat for this peer id",
+    };
+  }
+  return { kind: "refused", status, message: body === "" ? `HTTP ${status}` : body };
+}
+
+/**
+ * The sequence number a fresh run starts from: THE WALL CLOCK, not zero.
+ *
+ * THIS IS NOT A STYLE CHOICE, IT IS WHAT MAKES RESUMING POSSIBLE AT ALL.
+ * The hub keeps `lastSeqByPeer` for the life of the process and refuses any
+ * presence write at or below it (`../hub/endpoints.ts`). A page that
+ * persists its identity and starts counting from 1 again after a reload
+ * would be refused `stale-sequence` on every beat until it had climbed back
+ * past wherever its previous run left off -- minutes of a live, joined page
+ * silently failing to report presence, and a mesh view in which it never
+ * appears. Seeding from `Date.now()` makes every run start above every
+ * previous run's numbers by construction (a run advances its own counter by
+ * 1 per beat while the clock advances by thousands), which is also exactly
+ * the property `PresenceRefusal`'s duplicate-identity diagnosis rests on.
+ *
+ * The hub compares numbers and nothing else -- it never reads a seq as a
+ * time -- so this borrows the clock's monotonicity without giving the value
+ * any meaning it has to keep.
+ */
+export function nextInitialSeq(): number {
+  return Date.now();
+}
+
+/** What `resumeMembership` found. */
+export type ResumeOutcome =
+  | { status: "resumed"; token: string; versions: HeartbeatVersions; ttl: number }
+  | { status: "refused"; refusal: PresenceRefusal };
+
+export interface ResumeMembershipInit {
+  peer: Peer;
+  hubPeerId: PeerIdStr;
+  /** This peer's own current multiaddrs, exactly as a heartbeat reports them -- see `startJoin`. */
+  addrs: string[];
+  /** This peer's own advertisements. Omitted (not `[]`) when absent: the hub's handler branches on `advertisements !== undefined`, and `[]` WITHDRAWS. */
+  advertisements?: AdvertisementInput[];
+  /** This probe's sequence number -- `nextInitialSeq()`, and the number `startJoin` must then continue from. */
+  seq: number;
+}
+
+/**
+ * "Does this hub still consider me a member?" -- asked, and answered,
+ * WITHOUT A TOKEN, and answered by an endpoint that already exists.
+ *
+ * THE ORDERING TRAP THIS WALKS AROUND. Proving membership normally needs a
+ * token, and a token is what joining produces; a page resuming a membership
+ * has neither, and every ordinary hub read (`/.well-known/mesh` included)
+ * is gated on claims it cannot yet present. But `POST
+ * /.well-known/presence` is one of exactly two BOOTSTRAP routes
+ * (`usesTransportIdentity()` in `../hub/endpoints.ts`): `httpeers.core`'s
+ * binding middleware sees it, skips the token check and the access tree
+ * entirely, and hands the handler the peer id the libp2p handshake itself
+ * proved. That handler then looks the peer up in the member store and
+ * either mints a fresh token or answers 403. Which is precisely the
+ * question, precisely the proof, and precisely the credential -- so this
+ * needs no new route, and adding one would have been adding a second,
+ * weaker answer to a question the hub already answers.
+ *
+ * IT IS ALSO THE FIRST HEARTBEAT, NOT A PROBE BESIDE ONE. The body is an
+ * ordinary presence write, so a successful resume has already reported this
+ * peer's addresses and advertisements and is already visible in the mesh
+ * view -- there is no window where the page is "resumed" but absent. Its
+ * `seq` is the one `startJoin` continues from (`JoinInit.initialSeq`).
+ *
+ * Transport failures are NOT caught here: a call that never reached the hub
+ * is a different fact from a hub that answered, and only the caller knows
+ * what to say about it (`./peer-runtime.ts` does).
+ */
+export async function resumeMembership(init: ResumeMembershipInit): Promise<ResumeOutcome> {
+  const res = await init.peer.call(init.hubPeerId, "/.well-known/presence", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      seq: init.seq,
+      addrs: init.addrs,
+      ...(init.advertisements !== undefined ? { advertisements: init.advertisements } : {}),
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    return { status: "refused", refusal: classifyPresenceRefusal(res.status, body) };
+  }
+
+  const parsed = (await res.json()) as PresenceHeartbeatResponse;
+  return { status: "resumed", token: parsed.token, versions: parsed.versions, ttl: parsed.ttl };
+}
+
+/** The three version counters a heartbeat response reports; each gates only its own section. See `startJoin`. */
+export interface HeartbeatVersions {
   mesh: number;
   policy: number;
   vocabulary: number;
@@ -205,8 +358,17 @@ export interface JoinInit {
   node: Libp2p;
   hubPeerId: PeerIdStr;
   relayAddr: string;
-  /** The token `redeemInvitation` minted -- `startJoin` owns rotating it from here on; the heartbeat response mints a fresh one every call. */
+  /** The token that got this peer in -- `redeemInvitation`'s, or `resumeMembership`'s. `startJoin` owns rotating it from here on; the heartbeat response mints a fresh one every call. */
   initialToken: string;
+  /**
+   * The sequence number the FIRST heartbeat continues from -- the one
+   * `resumeMembership` already spent, when there was a resume. Defaults to
+   * `nextInitialSeq()`; see that function for why the default is the wall
+   * clock and not zero, and why passing the probe's own number here (rather
+   * than drawing a second one) is what keeps this run's sequence strictly
+   * increasing across the join itself.
+   */
+  initialSeq?: number;
   revocationCache: RevocationCache;
   /** This peer's own advertisements, read fresh on every heartbeat. Defaults to none. */
   advertisements?: () => AdvertisementInput[];
@@ -214,6 +376,15 @@ export interface JoinInit {
   keepaliveIntervalMs?: number;
   /** Fired after each successful heartbeat, whether or not any version moved -- for a caller that wants to observe liveness, not just react to a version bump. */
   onHeartbeat?: (versions: HeartbeatVersions) => void;
+  /**
+   * Fired when the hub REFUSED a heartbeat -- a membership that went away
+   * under a live page, or a second node running this identity. Both are
+   * things an operator has to be told rather than left to infer from a page
+   * that quietly stops appearing in the mesh; see `PresenceRefusal`.
+   * Transport failures do NOT come through here: those are the keepalive
+   * timer's business and the next tick retries them.
+   */
+  onPresenceRefused?: (refusal: PresenceRefusal) => void;
 }
 
 export interface JoinHandle {
@@ -261,7 +432,7 @@ export function startJoin(init: JoinInit): JoinHandle {
   const keepaliveIntervalMs = init.keepaliveIntervalMs ?? KEEPALIVE_INTERVAL_MS;
 
   let token = init.initialToken;
-  let seq = 0;
+  let seq = init.initialSeq ?? nextInitialSeq();
   let heartbeatInFlight = false;
 
   let meshViewCache: MeshView | null = null;
@@ -303,7 +474,19 @@ export function startJoin(init: JoinInit): JoinHandle {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ seq, addrs, advertisements }),
       });
-      if (!res.ok) return; // e.g. a revoked membership (403) or a hub-side rejection -- surfaced by the response simply not advancing any cache.
+      if (!res.ok) {
+        // A refusal is not a transport fault and must not be swallowed with
+        // one: 403 means this peer is no longer a member (revoked, or the
+        // hub's state was reset) and 409 means a SECOND node is beating
+        // under this identity. Both are permanent until someone acts, so a
+        // page that only stopped advancing its caches would sit there
+        // looking joined. Every cache is still left exactly as it was --
+        // that part was always right.
+        init.onPresenceRefused?.(
+          classifyPresenceRefusal(res.status, await res.text().catch(() => "")),
+        );
+        return;
+      }
 
       const body = (await res.json()) as PresenceHeartbeatResponse;
       token = body.token; // rotates every heartbeat -- the hub mints a fresh token on each call.
