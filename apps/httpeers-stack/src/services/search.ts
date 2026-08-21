@@ -30,12 +30,28 @@
  * `?since=` regardless — that is a design preference, not a workaround for
  * a transport limitation). `GET /search` reads `q` from the ordinary
  * request URL with no fallback and no guard.
+ *
+ * THIS MODULE MUST STAY FREE OF `node:` IMPORTS, and that is a hard
+ * constraint, not a style preference. `../hub/endpoints.ts` imports it as a
+ * VALUE (`createSearchEndpoint`, `fixtureUpstream`, `SEARCH_ADVERTISEMENT`
+ * — deliberately kept together, see `SEARCH_ADVERTISEMENT` below), so
+ * everything reachable from here lands in any bundle that contains the
+ * hub's HTTP surface. Since Task 24 that includes a BROWSER bundle: the hub
+ * page (`../pages/hub/`) runs the very same `createHubEndpoints` in a tab.
+ * Until then this file read `search-fixtures.json` with
+ * `readFileSync(fileURLToPath(new URL(...)))` AT MODULE SCOPE, which is not
+ * a warning in a browser build but a hard failure at the first line of the
+ * bundle — before any page code runs, with nothing on screen to say why.
+ * The import below is the fix: `resolveJsonModule` (this app's
+ * `tsconfig.json`) types it, Node 24 loads it natively under the required
+ * `with { type: "json" }` attribute, and Vite/rolldown inlines it into the
+ * browser bundle. The fixtures are unchanged, and so is every behaviour
+ * built on them.
  */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import type { FetchHandler } from "@statewalker/httpeers.core";
 import { json } from "@statewalker/httpeers.core";
 import { Hono } from "hono";
+import FIXTURES_JSON from "./search-fixtures.json" with { type: "json" };
 
 export interface SearchResult {
   id: string;
@@ -46,8 +62,7 @@ export interface SearchResult {
 
 export type SearchUpstream = (query: string) => Promise<SearchResult[]>;
 
-const fixturesPath = fileURLToPath(new URL("./search-fixtures.json", import.meta.url));
-const FIXTURES: SearchResult[] = JSON.parse(readFileSync(fixturesPath, "utf8"));
+const FIXTURES: SearchResult[] = FIXTURES_JSON;
 
 /**
  * Case-insensitive substring match over `title` and `snippet`. Deterministic
