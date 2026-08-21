@@ -49,6 +49,31 @@ export function writeSnapshot(filePath: string, snapshot: HubSnapshot): void {
 }
 
 /**
+ * Where a hub's snapshot lives. THE ONLY THING IN THIS FILE THAT KNOWS ABOUT
+ * STORAGE -- everything below it is storage-agnostic, which is what lets the
+ * same hub logic run in a browser page as well as in the Node process.
+ *
+ * `write` is synchronous on purpose: every mutation below calls it and then
+ * returns, so an async store would open a window where the caller has been
+ * told a member was added while the snapshot still says otherwise. A browser
+ * implementation that can only write asynchronously must therefore keep an
+ * in-memory copy authoritative and flush behind it, rather than making these
+ * methods async.
+ */
+export interface SnapshotStore {
+  read(): HubSnapshot;
+  write(snapshot: HubSnapshot): void;
+}
+
+/** The Node store: one JSON file, the behaviour every existing caller already had. */
+export function createFileSnapshotStore(filePath: string): SnapshotStore {
+  return {
+    read: () => readSnapshot(filePath),
+    write: (snapshot) => writeSnapshot(filePath, snapshot),
+  };
+}
+
+/**
  * Wraps a `MemberStore` so every mutation is followed by a synchronous
  * snapshot write — members and spent invitation ids share one file, so one
  * write keeps both consistent with each other by construction (no window
@@ -82,20 +107,32 @@ export interface InvitationStore {
  * comment.
  */
 export function createPersistentHub(init: {
-  filePath: string;
+  /** The Node path. Exactly one of `filePath` or `store` is required; `store` wins if both are given. */
+  filePath?: string;
+  /** Any other backing store -- a browser page passes one of these instead of a path. */
+  store?: SnapshotStore;
   vocabulary: Vocabulary;
   now?: () => number;
   createMemberStore: (vocabulary: Vocabulary, clock?: () => number) => MemberStore;
 }): PersistentHub {
   const now = init.now ?? Date.now;
-  const snapshot = readSnapshot(init.filePath);
+  const store =
+    init.store ??
+    (init.filePath != null
+      ? createFileSnapshotStore(init.filePath)
+      : (() => {
+          // Loud at construction rather than a hub that comes up and silently
+          // forgets every member on restart.
+          throw new Error("createPersistentHub: pass either `filePath` or `store`");
+        })());
+  const snapshot = store.read();
 
   const innerMembers = init.createMemberStore(init.vocabulary, now);
   for (const m of snapshot.members) innerMembers.add(m.peerId, m.roles);
   const spentIds = new Set(snapshot.spentInvitationIds);
 
   const save = (): void => {
-    writeSnapshot(init.filePath, {
+    store.write({
       members: innerMembers.list(),
       spentInvitationIds: [...spentIds],
     });
