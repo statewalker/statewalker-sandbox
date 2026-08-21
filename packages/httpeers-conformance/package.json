@@ -1,0 +1,33 @@
+{
+  "name": "@statewalker/httpeers-conformance",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "One test per numbered criterion of the httpeers block API. Measures an implementation against the spec.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+  },
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "sync-criteria": "node scripts/sync-criteria.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check --write .",
+    "report:gap": "vitest run --config vitest.gap.config.ts"
+  },
+  "dependencies": {
+    "@biscuit-auth/biscuit-wasm": "0.6.0",
+    "@statewalker/httpeers.core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
