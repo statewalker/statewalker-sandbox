@@ -32,10 +32,33 @@ import { privateKeyFromProtobuf, privateKeyToProtobuf } from "@libp2p/crypto/key
 import { peerIdFromPrivateKey } from "@libp2p/peer-id";
 import type { Ed25519PrivateKey } from "@statewalker/httpeers.core";
 import { generateMeshKey } from "@statewalker/httpeers.core";
-import { del, get, set } from "idb-keyval";
+import type { AsyncBytesBackend } from "./kv.js";
+import { idbBytesBackend } from "./kv.js";
 
 /** Where this origin's identity key lives in IndexedDB (via `idb-keyval`, the same store `@statewalker/webrun-http-browser` already uses). */
 export const IDENTITY_STORAGE_KEY = "httpeers:identity-key";
+
+/**
+ * Where the key is kept, injectable -- `./kv.ts`'s bytes seam, defaulting
+ * to the real IndexedDB.
+ *
+ * ADDED IN TASK 28 SO THE STORE'S OWN BEHAVIOUR IS NODE-TESTABLE, not just
+ * its codec. "A first run has no key", "a second run gets the same peerId
+ * back", and "after a reset the next run is a different peerId" are the
+ * three facts the two consumer pages' whole resume story rests on, and all
+ * three used to be unreachable from Node because `idb-keyval` needs a real
+ * IndexedDB. The stored VALUE is unchanged -- raw protobuf bytes, exactly
+ * as Task 24 wrote them -- so a page that already holds a key reads it back
+ * identically; see `./kv.ts` on why the bytes seam is separate from the
+ * string one.
+ */
+export interface IdentityStoreInit {
+  backend?: AsyncBytesBackend;
+  storageKey?: string;
+}
+
+const backendOf = (init: IdentityStoreInit): AsyncBytesBackend => init.backend ?? idbBytesBackend();
+const keyOf = (init: IdentityStoreInit): string => init.storageKey ?? IDENTITY_STORAGE_KEY;
 
 /**
  * Decode the protobuf bytes this store holds, refusing anything that is not
@@ -77,12 +100,36 @@ export function peerIdOf(key: Ed25519PrivateKey): string {
  * lesson note 22 §5/§6 draws about reading this workspace's own source
  * before re-deriving something already sitting in it.
  */
-export async function loadOrCreateIdentity(): Promise<Ed25519PrivateKey> {
-  const stored = await get<Uint8Array>(IDENTITY_STORAGE_KEY);
-  if (stored != null) return decodeIdentity(stored);
+export async function loadOrCreateIdentity(
+  init: IdentityStoreInit = {},
+): Promise<Ed25519PrivateKey> {
+  const stored = await readIdentity(init);
+  if (stored != null) return stored;
   const key = await generateMeshKey();
-  await set(IDENTITY_STORAGE_KEY, encodeIdentity(key));
+  await backendOf(init).set(keyOf(init), encodeIdentity(key));
   return key;
+}
+
+/**
+ * This origin's persisted identity, or `null` when it has never had one.
+ *
+ * THE DIFFERENCE BETWEEN THIS AND `loadOrCreateIdentity` IS A SENTENCE ON
+ * SCREEN. A page that starts by trying to RESUME a membership has to tell
+ * an operator which of two situations it is in, and they are not alike:
+ * "this browser has never joined anything" is a first run, and "this
+ * browser holds an identity the hub does not recognise" is a hub reset or a
+ * revoked membership -- the second being the one that is otherwise baffling
+ * (Task 28, requirement 3). `loadOrCreateIdentity` cannot tell them apart
+ * by construction, because it has already created the key by the time it
+ * returns. So the read is its own step, and creation happens only when the
+ * page actually goes on to join.
+ */
+export async function readIdentity(
+  init: IdentityStoreInit = {},
+): Promise<Ed25519PrivateKey | null> {
+  const stored = await backendOf(init).get(keyOf(init));
+  if (stored == null) return null;
+  return decodeIdentity(stored);
 }
 
 /**
@@ -99,6 +146,6 @@ export async function loadOrCreateIdentity(): Promise<Ed25519PrivateKey> {
  * that page): members carried into a new mesh would be peers that never
  * joined it.
  */
-export async function clearIdentity(): Promise<void> {
-  await del(IDENTITY_STORAGE_KEY);
+export async function clearIdentity(init: IdentityStoreInit = {}): Promise<void> {
+  await backendOf(init).del(keyOf(init));
 }

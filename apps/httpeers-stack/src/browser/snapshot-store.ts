@@ -44,38 +44,30 @@
  * a `Map` to survive here and not there -- and it sidesteps
  * `DataCloneError` on any value a future `HubSnapshot` field might hold.
  */
-import { del, get, set } from "idb-keyval";
 import type { HubSnapshot, SnapshotStore } from "../hub/hub-state.js";
 import { EMPTY_SNAPSHOT } from "../hub/hub-state.js";
-
-/** Where the hub page's snapshot lives in IndexedDB, beside `./identity.ts`'s key and namespaced the same way. */
-export const HUB_SNAPSHOT_STORAGE_KEY = "httpeers:hub-snapshot";
+import type { AsyncKeyValueBackend } from "./kv.js";
+import { idbBackend } from "./kv.js";
 
 /**
  * The asynchronous key/value storage this store writes through.
  *
- * INJECTED SO THE LOGIC ABOVE IS NODE-TESTABLE. Everything this module
+ * INJECTED SO THIS MODULE'S LOGIC IS NODE-TESTABLE. Everything this module
  * actually decides -- authoritative in-memory copy, serialised flushes,
  * coalescing, what a corrupt stored value means -- is storage-independent,
  * and `idb-keyval` needs a real IndexedDB that Node does not have. The seam
- * keeps the browser-only part down to `idbBackend()` below, which is three
+ * keeps the browser-only part down to `idbBackend()`, which is three
  * one-line delegations, and lets `tests/browser-snapshot-store.test.ts`
  * exercise the rest for real instead of skipping it.
+ *
+ * BOTH NAMES LIVE IN `./kv.ts` NOW and are re-exported here unchanged --
+ * three modules want this seam and only one of them is a hub. A caller that
+ * imports either name from here keeps working.
  */
-export interface AsyncKeyValueBackend {
-  get(key: string): Promise<string | undefined>;
-  set(key: string, value: string): Promise<void>;
-  del(key: string): Promise<void>;
-}
+export { type AsyncKeyValueBackend, idbBackend } from "./kv.js";
 
-/** The real thing: `idb-keyval`, the same IndexedDB store `./identity.ts` and `@statewalker/webrun-http-browser` already use. */
-export function idbBackend(): AsyncKeyValueBackend {
-  return {
-    get: (key) => get<string>(key),
-    set: (key, value) => set(key, value),
-    del: (key) => del(key),
-  };
-}
+/** Where the hub page's snapshot lives in IndexedDB, beside `./identity.ts`'s key and namespaced the same way. */
+export const HUB_SNAPSHOT_STORAGE_KEY = "httpeers:hub-snapshot";
 
 export interface BrowserSnapshotStore extends SnapshotStore {
   /**
