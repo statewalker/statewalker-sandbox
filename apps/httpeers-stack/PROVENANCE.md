@@ -1850,3 +1850,112 @@ Chromium, one run: both pages ready in 615 ms, both providers discovered 3 ms la
 streamed in 6 chunks `[64,64,64,64,64,41]` arriving at 44/84/124/165/205/245 ms, the provider left
 the app's view 9.0 s after its tab closed, and the revoked search rendered
 `refused (403): membership revoked`.
+
+---
+
+# Task 24 — the hub as a browser page
+
+A **second implementation** of the hub, in a tab. `src/hub/main.ts`,
+`scripts/start.sh`, `pnpm bootstrap` and every existing test are untouched; the Node
+hub remains the default way this stack comes up. What is new is `src/pages/hub/` plus
+the browser-side machinery it needs, and what it demonstrates is that the hub's HTTP
+surface really is transport-neutral: the same `createHubEndpoints`, the same
+`policy.ts` vocabulary and `.access` tree, the same state logic over the same
+`SnapshotStore` seam, running in a browser.
+
+## Not promoted, not new either: what was already there
+
+`createHubEndpoints`, `createHubState` (née `createPersistentHub`), `HUB_ACCESS`/
+`VOCABULARY`, `createSearchEndpoint` + `SEARCH_ADVERTISEMENT`, `reservation.ts`'s
+`dialRelay`/`waitForCircuitReservation`, `browser/edge.ts`'s `mountEdge`,
+`browser/edge-dispatch.ts`, `browser/join.ts`'s `createRouteEnsurer`, and
+`browser/node-profile.ts`'s `createBrowserNode` are all used **unchanged**, by import.
+Search moving with the hub required no code at all: `createHubEndpoints` already posts
+`SEARCH_ADVERTISEMENT` into its own advertisement store at construction, so a hub page
+advertises and serves search exactly as the Node hub does and the app page still
+discovers it by `kind`.
+
+## Two modules were not browser-safe, and the seam was only as portable as they were
+
+Task 23 added the `SnapshotStore` seam so the hub's state could live anywhere. It could
+not: **`hub/persist.ts`, which declares that seam, imports `node:fs`/`node:path` at
+module scope.** Vite does not fail such a build — it substitutes a stub that throws on
+first property access — so the failure would have landed at runtime, in a tab, naming
+`node:fs` and nothing about the hub. `services/search.ts` was worse: it ran
+`readFileSync(fileURLToPath(new URL('./search-fixtures.json', import.meta.url)))` **at
+module scope**, and `hub/endpoints.ts` imports it as a *value*, so any bundle carrying
+the hub's HTTP surface would have died on the first line, before any page code ran.
+
+Fixed, both without changing a single caller:
+
+| Module | Change |
+| --- | --- |
+| `services/search.ts` | `readFileSync` → `import FIXTURES_JSON from "./search-fixtures.json" with { type: "json" }`. `resolveJsonModule` types it, Node 24 loads it natively, Vite inlines it. Fixtures and behaviour identical. |
+| `hub/persist.ts` | The storage-agnostic half — `SnapshotStore`, `InvitationStore`, and the state logic, now `createHubState` — moved to the new `hub/hub-state.ts`, which has no `node:` imports. `persist.ts` keeps the file store and `createPersistentHub` (with its `filePath`/`store` union) and re-exports everything, so `hub/main.ts` and all six test files that use it are untouched. |
+
+A third, smaller instance: `static-server/main.ts` evaluates `process.argv` in its
+run-as-a-process guard, at top level, so importing it from a page for one port constant
+is a `ReferenceError` in a tab. The three page ports moved to `src/ports.ts` — a file of
+three numbers — and `static-server/main.ts` re-exports them.
+
+## A sibling runtime, not a flag on `startBrowserPeer`
+
+`browser/hub-runtime.ts`'s `startBrowserHub` shares three of `startBrowserPeer`'s six
+steps verbatim and differs on the other three: it reads `httpeers.json` for `relayAddrs`
+only (it *is* the `hubPeerId`); its `createPeer` call differs in four ways at once
+(`mounts` as a factory, a required `privateKey`, a real `usesTransportIdentity`, and the
+live `RevocationRegistry` rather than a pulled `RevocationCache`); and there is no
+pre-dial, no redemption, no heartbeat and no keepalive — a hub does not join itself.
+Parameterising would have put five conditionals through a function whose whole narrative
+is "how a page joins a mesh". Everything genuinely shared is shared by import; what is
+duplicated is ~40 lines of orchestration and the unwind stack, which is deliberately
+alike in all three runtimes.
+
+## The join blob: why `httpeers.json` could not carry this
+
+Every other page learns the mesh from `httpeers.json`, which `pnpm bootstrap` writes
+from a key file — so the Node hub's peerId is knowable before anything runs. The hub
+page's is not: it is generated in IndexedDB, in a tab, after bootstrap. Nothing on disk
+can name it. `browser/join-blob.ts` is the hand-off: `{ relayAddrs, hubPeerId,
+invitationId }`, base64url-of-JSON, carried as `?join=`. One invitation per page, never
+one per mesh — they are single-use by construction, so a shared link admits exactly one
+page and fails the rest with `already-redeemed`.
+
+`peer-runtime.ts` gained one optional field (`config`) and both pages gained ~10 lines to
+read the blob. A bare `?invite=` still means "the mesh `httpeers.json` names"; both forms
+are supported deliberately, because the Node hub is not going anywhere.
+
+## Identity, and why reset is not optional
+
+`browser/node-profile.ts` already persisted a per-origin Ed25519 key in IndexedDB, in
+`@libp2p/crypto`'s protobuf encoding. It was extracted to `browser/identity.ts` because
+`createLibp2p` never hands a generated key back out and the hub needs the *same* key for
+`createPeer`'s `mintToken` closure. `tests/browser-identity.test.ts` pins the format
+claim rather than repeating it: the browser encoder's bytes are **byte-identical** to
+what `setup/keys.ts` writes to `.httpeers/hub.key`, and both paths derive the same
+peerId.
+
+`claims.mesh === claims.iss`, so the mesh IS this peerId: a fresh key per reload would
+silently invalidate every token ever issued. Equally, a stuck key with no way out is
+worse than no persistence — hence the reset control, which clears the identity **and**
+the snapshot (members carried into a newly-founded mesh would be peers that never joined
+it) behind a confirmation that says exactly that.
+
+## Design notes
+
+- **`HubEndpoints.presence()`** is new: a read-only accessor over the same expression
+  `GET /.well-known/presence` serves. A page inside the hub would otherwise have to mint
+  itself a token and dispatch a request to itself to read a `Map` it is holding. It adds
+  no route, no capability, and no way in from the network; one expression feeds both, so
+  an in-process UI cannot show a different "who is online" from the one remote peers read.
+- **The hub mints itself a token** for its own ServiceWorker edge. It is the only peer
+  entitled to: an ordinary page gets its edge token by joining, and this one cannot join
+  itself. The token is ordinary in every other respect (`admin` roles from `policy.ts`,
+  `mesh` = this hub, same `.access` tree, same revocation registry) and is renewed on a
+  timer because `EdgeDispatchInit.token` is synchronous by contract.
+- **The browser `SnapshotStore`** keeps the in-memory copy authoritative and flushes
+  behind it, because `write` must stay synchronous. Flushes are serialised *and*
+  coalesced on one promise chain — serialised so a slow earlier put cannot land on top of
+  a later one and resurrect a spent invitation id (a membership bypass, not an ordering
+  wobble); coalesced so a burst of joins costs one put. The value is stored as a JSON
+  string, so the round trip is semantically identical to the Node file store's.

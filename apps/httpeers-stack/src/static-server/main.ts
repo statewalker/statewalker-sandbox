@@ -6,14 +6,24 @@
  * relay (`../relay/main.ts`) is the one process in this app allowed to
  * touch libp2p, for the reasons documented there.
  *
- * TWO PORTS IS A CORRECTNESS REQUIREMENT, NOT A CONVENIENCE. The main app
- * (5175) and the image peer (5176) each get their own origin, which means
- * each gets its own ServiceWorker scope and its own adapter key. Two pages
- * sharing one origin would be two SW *clients* of one *registration* -- an
- * unmeasured case where whichever page's `loadChannelInfo` iteration runs
- * last wins the adapter key, and the other page's peer becomes unreachable
- * through the edge while still holding a live libp2p connection. Do not
- * consolidate the two `createOriginServer` calls below onto one port.
+ * ONE PORT PER PAGE IS A CORRECTNESS REQUIREMENT, NOT A CONVENIENCE. The
+ * main app (5175), the image peer (5176) and the hub page (5177) each get
+ * their own origin, which means each gets its own ServiceWorker scope and
+ * its own adapter key. Two pages sharing one origin would be two SW
+ * *clients* of one *registration* -- an unmeasured case where whichever
+ * page's `loadChannelInfo` iteration runs last wins the adapter key, and
+ * the other page's peer becomes unreachable through the edge while still
+ * holding a live libp2p connection. Do not consolidate the
+ * `createOriginServer` calls below onto one port.
+ *
+ * THE HUB PAGE (Task 24) IS A THIRD ORIGIN FOR A SECOND REASON ON TOP OF
+ * THAT ONE. Each origin is also its own IndexedDB, and that is where a page
+ * keeps its identity (`../browser/identity.ts`). The hub page's identity is
+ * the MESH -- `claims.mesh === claims.iss` -- so it must not be the same
+ * stored key as any joining page's, or the hub and one of its own members
+ * would be the same peer. Sharing an origin here would not merely confuse
+ * the ServiceWorker; it would collapse the mesh's issuer into one of its
+ * subjects.
  *
  * DIST DIRECTORY LAYOUT IS AN ASSUMPTION THIS TASK MAKES. Tasks 12/13 (the
  * image-peer and main-app pages, `vite.image-peer.config.ts` /
@@ -45,15 +55,21 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import { extname, resolve, sep } from "node:path";
 
-/** The main app's port. Fixed by the brief -- not an env-configurable knob. */
-export const APP_PORT = 5175;
-/** The image peer's port. Fixed by the brief -- not an env-configurable knob. */
-export const IMAGE_PEER_PORT = 5176;
+// The three page ports live in `../ports.ts` -- a file with nothing in it
+// but these numbers, because the hub page needs them to compose the join
+// links it hands out and cannot import THIS module to get them (its
+// run-as-a-process guard evaluates `process.argv` at top level, which
+// throws in a tab). Re-exported here so every existing importer, this
+// module included, still reads them from where they are used.
+export { APP_PORT, HUB_PAGE_PORT, IMAGE_PEER_PORT } from "../ports.js";
+import { APP_PORT, HUB_PAGE_PORT, IMAGE_PEER_PORT } from "../ports.js";
 
 /** See the module comment's "DIST DIRECTORY LAYOUT" note. */
 export const DEFAULT_APP_DIST_DIR = "dist/app";
 /** See the module comment's "DIST DIRECTORY LAYOUT" note. */
 export const DEFAULT_IMAGE_PEER_DIST_DIR = "dist/image-peer";
+/** See the module comment's "DIST DIRECTORY LAYOUT" note. `vite.hub.config.ts` builds here. */
+export const DEFAULT_HUB_PAGE_DIST_DIR = "dist/hub";
 
 /** Where `pnpm bootstrap` (Task 10) writes the invitation payload, and where both origins read it back from. */
 export const DEFAULT_HTTPEERS_CONFIG_PATH = "./httpeers.json";
@@ -281,12 +297,15 @@ export function createOriginServer(init: OriginServerInit): OriginServer {
 export interface StartStaticServerInit {
   appDistDir?: string;
   imagePeerDistDir?: string;
+  hubPageDistDir?: string;
   httpeersConfigPath?: string;
   tls?: OriginTlsInit;
   /** Defaults to `APP_PORT` (5175). Overridable (e.g. `0` for an ephemeral port) so tests never need the fixed production ports free. */
   appPort?: number;
   /** Defaults to `IMAGE_PEER_PORT` (5176). Same override rationale as `appPort`. */
   imagePeerPort?: number;
+  /** Defaults to `HUB_PAGE_PORT` (5177). Same override rationale as `appPort`. */
+  hubPagePort?: number;
 }
 
 export interface StaticServers {
@@ -294,6 +313,8 @@ export interface StaticServers {
   appPort: number;
   /** The image peer origin's actual bound port. */
   imagePeerPort: number;
+  /** The hub page origin's actual bound port. */
+  hubPagePort: number;
   stop(): Promise<void>;
 }
 
@@ -310,14 +331,30 @@ export async function startStaticServer(init: StartStaticServerInit = {}): Promi
     httpeersConfigPath: init.httpeersConfigPath,
     tls: init.tls,
   });
+  // The third origin -- see the module comment's "ONE PORT PER PAGE" note
+  // and the paragraph after it for why the hub page in particular cannot
+  // share one. It serves the same `httpeers.json` as the other two, and for
+  // the same reason: the hub page reads `relayAddrs` out of it (its own
+  // peerId is not in there and could not be -- it is generated in the tab).
+  const hubPage = createOriginServer({
+    port: init.hubPagePort ?? HUB_PAGE_PORT,
+    distDir: init.hubPageDistDir ?? DEFAULT_HUB_PAGE_DIST_DIR,
+    httpeersConfigPath: init.httpeersConfigPath,
+    tls: init.tls,
+  });
 
-  const [appPort, imagePeerPort] = await Promise.all([app.listen(), imagePeer.listen()]);
+  const [appPort, imagePeerPort, hubPagePort] = await Promise.all([
+    app.listen(),
+    imagePeer.listen(),
+    hubPage.listen(),
+  ]);
 
   return {
     appPort,
     imagePeerPort,
+    hubPagePort,
     async stop() {
-      await Promise.all([app.close(), imagePeer.close()]);
+      await Promise.all([app.close(), imagePeer.close(), hubPage.close()]);
     },
   };
 }
@@ -335,12 +372,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const servers = await startStaticServer({
     appDistDir: process.env.APP_DIST_DIR,
     imagePeerDistDir: process.env.IMAGE_PEER_DIST_DIR,
+    hubPageDistDir: process.env.HUB_PAGE_DIST_DIR,
     tls,
   });
 
   const scheme = tls != null ? "https" : "http";
   console.log(`static-server: app listening at ${scheme}://0.0.0.0:${APP_PORT}`);
   console.log(`static-server: image peer listening at ${scheme}://0.0.0.0:${IMAGE_PEER_PORT}`);
+  console.log(`static-server: hub page listening at ${scheme}://0.0.0.0:${HUB_PAGE_PORT}`);
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`\nstatic-server: received ${signal}, stopping...`);

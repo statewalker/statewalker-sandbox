@@ -44,7 +44,12 @@ import { createSearchEndpoint, fixtureUpstream, SEARCH_ADVERTISEMENT } from "../
 import { createAdminEndpoints } from "./admin.js";
 import type { AdvertisementPayload } from "./mesh-view.js";
 import { buildMeshView } from "./mesh-view.js";
-import type { InvitationStore } from "./persist.js";
+// `./hub-state.js`, not `./persist.js`: the latter is the NODE facade (it
+// imports `node:fs`), and this module is bundled into the browser hub page
+// (`../pages/hub/`) as well as into the Node hub. The import is type-only
+// and therefore erased either way, but pointing it at the portable half is
+// what stops a future value import here from quietly breaking that page.
+import type { InvitationStore } from "./hub-state.js";
 
 /** The capability that grants admin visibility — sees `hidden` members and gates `/admin/*` (Task 8's `DELETE /admin/members/{peerId}` included). */
 export const ADMIN_CAPABILITY = "std:mesh.admin";
@@ -111,10 +116,33 @@ export interface HubEndpointsInit {
   searchUpstream?: SearchUpstream;
 }
 
+/** One peer's presence as the hub currently sees it, plus the addresses it reported on that same heartbeat. */
+export interface LivePresence {
+  peerId: PeerIdStr;
+  seq: number;
+  expiresAt: number;
+  addrs: string[];
+}
+
 export interface HubEndpoints {
   mounts: Mounts;
   /** Expire stale presence and the advertisements that rode along with it; bumps the mesh version only if something actually left. Call on a timer (production) or directly with a controlled clock (tests). */
   sweep: () => void;
+  /**
+   * The same rows `GET /.well-known/presence` serves, read in-process.
+   *
+   * FOR A UI THAT IS ALREADY INSIDE THE HUB, and for nothing else. The
+   * browser hub page (`../pages/hub/`) renders "who is online" beside its
+   * member list; going through the HTTP endpoint for that would mean the
+   * hub minting itself a token and dispatching a request to itself, purely
+   * so it could read a `Map` it is holding two references away. The HTTP
+   * endpoint remains the ONLY way any other peer sees this — this accessor
+   * adds no route, no capability, and no way in from the network.
+   *
+   * Live, not a snapshot: swept entries are gone from the next call, which
+   * is exactly what a polling UI wants.
+   */
+  presence: () => LivePresence[];
 }
 
 interface PresenceBody {
@@ -288,11 +316,14 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
 
   app.get("/.well-known/members", (_c) => json({ members: init.memberStore.list() }));
 
-  app.get("/.well-known/presence", (_c) =>
-    json({
-      presence: presenceStore.list().map((p) => ({ ...p, addrs: addrsByPeer.get(p.peerId) ?? [] })),
-    }),
-  );
+  // ONE expression, two readers: this endpoint and `HubEndpoints.presence`
+  // below. They must not drift -- an in-process UI showing a different
+  // "who is online" from the one every remote peer reads would be a
+  // debugging trap rather than a diagnostic.
+  const livePresence = (): LivePresence[] =>
+    presenceStore.list().map((p) => ({ ...p, addrs: addrsByPeer.get(p.peerId) ?? [] }));
+
+  app.get("/.well-known/presence", (_c) => json({ presence: livePresence() }));
 
   app.get("/.well-known/advertisements", (_c) =>
     json({
@@ -394,6 +425,7 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
 
   return {
     mounts,
+    presence: livePresence,
     sweep() {
       const expired = presenceStore.sweep();
       if (expired.length === 0) return;
