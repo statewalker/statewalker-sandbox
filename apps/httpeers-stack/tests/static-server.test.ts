@@ -109,6 +109,11 @@ describe("static-server: both origins", () => {
       httpeersConfigPath: configPath,
       appPort: 0,
       imagePeerPort: 0,
+      // Ephemeral like its two siblings. Without this the third origin falls back
+      // to HUB_PAGE_PORT and this suite starts depending on 5177 being free --
+      // breaking the invariant stated at the top of static-server.test.ts, and
+      // failing with EADDRINUSE whenever a `pnpm start` happens to be running.
+      hubPagePort: 0,
     });
   });
 

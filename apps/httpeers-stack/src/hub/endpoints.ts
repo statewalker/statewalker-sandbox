@@ -42,7 +42,7 @@ import { Hono } from "hono";
 import type { SearchUpstream } from "../services/search.js";
 import { createSearchEndpoint, fixtureUpstream, SEARCH_ADVERTISEMENT } from "../services/search.js";
 import { createAdminEndpoints } from "./admin.js";
-import type { AdvertisementPayload } from "./mesh-view.js";
+import type { AdvertisementPayload, MeshView } from "./mesh-view.js";
 import { buildMeshView } from "./mesh-view.js";
 // `./hub-state.js`, not `./persist.js`: the latter is the NODE facade (it
 // imports `node:fs`), and this module is bundled into the browser hub page
@@ -116,33 +116,39 @@ export interface HubEndpointsInit {
   searchUpstream?: SearchUpstream;
 }
 
-/** One peer's presence as the hub currently sees it, plus the addresses it reported on that same heartbeat. */
-export interface LivePresence {
-  peerId: PeerIdStr;
-  seq: number;
-  expiresAt: number;
-  addrs: string[];
-}
-
 export interface HubEndpoints {
   mounts: Mounts;
   /** Expire stale presence and the advertisements that rode along with it; bumps the mesh version only if something actually left. Call on a timer (production) or directly with a controlled clock (tests). */
   sweep: () => void;
   /**
-   * The same rows `GET /.well-known/presence` serves, read in-process.
+   * The very view `GET /.well-known/mesh` serves, read in-process.
    *
    * FOR A UI THAT IS ALREADY INSIDE THE HUB, and for nothing else. The
-   * browser hub page (`../pages/hub/`) renders "who is online" beside its
-   * member list; going through the HTTP endpoint for that would mean the
-   * hub minting itself a token and dispatching a request to itself, purely
-   * so it could read a `Map` it is holding two references away. The HTTP
+   * browser hub page (`../pages/hub/`) renders the member list from this;
+   * going through the HTTP endpoint for it would mean the hub minting
+   * itself a token and dispatching a request to itself, purely so it could
+   * read three registries it is holding two references away. The HTTP
    * endpoint remains the ONLY way any other peer sees this — this accessor
    * adds no route, no capability, and no way in from the network.
    *
-   * Live, not a snapshot: swept entries are gone from the next call, which
-   * is exactly what a polling UI wants.
+   * IT IS `buildMeshView`, NOT A SECOND OPINION. "Saved" (a member record,
+   * from the persisted snapshot) and "active" (`online`, from the TTL'd
+   * presence store) are two different facts, and `mesh-view.ts` already
+   * computes the second per member. A UI that re-derived `online` by
+   * joining a member list against a presence list would be inventing a
+   * parallel notion that could disagree with the one every remote peer
+   * reads — the exact kind of divergence that turns into a debugging trap.
+   *
+   * THE HUB'S OWN VIEW SEES EVERYTHING: every capability in the vocabulary
+   * is passed as the caller's, so `hidden` members and every gated
+   * advertisement are included. There is nobody to hide from — this is the
+   * machine that holds the list, and an operator shown a filtered version
+   * of their own mesh would be misled about what they are administering.
+   *
+   * Live, not a snapshot: a swept peer is `online: false` on the next call,
+   * and a removed member is gone from it, which is what a polling UI wants.
    */
-  presence: () => LivePresence[];
+  meshView: () => MeshView;
 }
 
 interface PresenceBody {
@@ -316,14 +322,11 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
 
   app.get("/.well-known/members", (_c) => json({ members: init.memberStore.list() }));
 
-  // ONE expression, two readers: this endpoint and `HubEndpoints.presence`
-  // below. They must not drift -- an in-process UI showing a different
-  // "who is online" from the one every remote peer reads would be a
-  // debugging trap rather than a diagnostic.
-  const livePresence = (): LivePresence[] =>
-    presenceStore.list().map((p) => ({ ...p, addrs: addrsByPeer.get(p.peerId) ?? [] }));
-
-  app.get("/.well-known/presence", (_c) => json({ presence: livePresence() }));
+  app.get("/.well-known/presence", (_c) =>
+    json({
+      presence: presenceStore.list().map((p) => ({ ...p, addrs: addrsByPeer.get(p.peerId) ?? [] })),
+    }),
+  );
 
   app.get("/.well-known/advertisements", (_c) =>
     json({
@@ -334,6 +337,23 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
     }),
   );
 
+  // ONE expression, two readers: this endpoint and `HubEndpoints.meshView`
+  // below. They must not drift -- an in-process UI showing a different
+  // membership or a different `online` from the one every remote peer reads
+  // would be a debugging trap rather than a diagnostic.
+  const viewFor = (self: PeerIdStr, callerCapabilities: ReadonlySet<string>): MeshView =>
+    buildMeshView({
+      version: meshVersion,
+      self,
+      members: init.memberStore.list(),
+      presence: presenceStore.list(),
+      addrsByPeer,
+      advertisements: advertisementStore.list(),
+      callerCapabilities,
+      advertisementAccess,
+      adminCapability: ADMIN_CAPABILITY,
+    });
+
   app.get("/.well-known/mesh", (c) => {
     const claims = claimsOf(c.req.raw);
     if (claims == null) return json({ error: "unauthenticated" }, 401);
@@ -343,18 +363,7 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
       return new Response(null, { status: 304, headers: { etag } });
     }
 
-    const callerCapabilities = expandRoles(init.vocabulary, claims.roles);
-    const view = buildMeshView({
-      version: meshVersion,
-      self: claims.sub,
-      members: init.memberStore.list(),
-      presence: presenceStore.list(),
-      addrsByPeer,
-      advertisements: advertisementStore.list(),
-      callerCapabilities,
-      advertisementAccess,
-      adminCapability: ADMIN_CAPABILITY,
-    });
+    const view = viewFor(claims.sub, expandRoles(init.vocabulary, claims.roles));
 
     return new Response(JSON.stringify(view), {
       headers: { "content-type": "application/json", etag },
@@ -425,7 +434,10 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
 
   return {
     mounts,
-    presence: livePresence,
+    // Every capability in the vocabulary, so the hub's own view is
+    // unfiltered -- see this field's doc comment on `HubEndpoints`.
+    meshView: () =>
+      viewFor(init.selfPeerId, new Set(Object.keys(init.vocabulary.capabilities))),
     sweep() {
       const expired = presenceStore.sweep();
       if (expired.length === 0) return;
