@@ -9,7 +9,7 @@ real Noise handshake. There are no mocks and no in-process fakes: if a demo
 prints a result, bytes crossed a yamux stream to get there.
 
 ```bash
-pnpm demo:all           # all nine, in order
+pnpm demo:all           # all ten, in order
 pnpm demo:06-open-relay # …or any one of them
 ```
 
@@ -17,7 +17,16 @@ Each exits non-zero if its claim fails, so `pnpm demo:all` is also a smoke test.
 
 Prototypes 01, 02, 03, 04 and 06 start **real libp2p nodes**. 05, 07, 08 and 09
 exercise pure logic — routing, policy resolution, revocation and vocabulary —
-which needs no network and is clearer without one.
+which needs no network and is clearer without one. 10 uses **real Ed25519 keys
+and real signatures** with no transport at all, deliberately: that block A can be
+verified without a network stack is one of the things it establishes.
+
+**These folders are a record of how the design evolved, not a snapshot of the
+current one.** 07 and 09 describe the `.access` tree and the standalone
+vocabulary, which ADR-0019 has since replaced with Datalog; the properties they
+proved remain requirements, and the mechanisms they used do not ship. 10 is the
+first prototype written against the specified API rather than reconstructing an
+earlier one. Read them in order and the divergences are the point.
 
 Every prototype folder carries its own `README.md` enumerating **exactly what
 it verifies** — each claim, how it is established, what would make it fail, and
@@ -36,6 +45,7 @@ what it deliberately does not cover.
 | **07-access-tree** | `.access` walked root→leaf, deny by default, with a traceable reason for every refusal | Grants name a **role in a mesh**, not a peer, so a provider needs no per-peer table. A malformed tree refuses to start rather than denying everyone silently |
 | **08-revocation** | A removed member's live, unexpired token stops working within one heartbeat — and re-admission still works | Exposure becomes one heartbeat instead of the full TTL, and the hub stays off the request path. `iat` is what makes re-admission possible at all |
 | **09-role-vocabulary** | Capabilities are the additive union of a token's roles; an unknown role grants **nothing** | The hub assigns roles and stays ignorant of capabilities. Namespacing (`std:` / `<mesh>/`) makes the mapping mesh-independent and self-certifying |
+| **10-token-chain** | mint → attenuate → verify over real Ed25519 keys: binding, audience, expiry, revocation by device, and delegation | The token half every prototype above stubbed — **nothing in this project had ever minted or verified one.** It found that plain attenuation is forgeable, so delegation needs a third-party block scoped with `trusting`; and that biscuit-wasm's time limit fires spuriously on the first call in a process, at any value |
 
 ## Layering
 
