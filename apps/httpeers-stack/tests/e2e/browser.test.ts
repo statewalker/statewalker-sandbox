@@ -295,7 +295,9 @@ interface Session {
 let pagesBuilt = false;
 function buildPages(): void {
   if (pagesBuilt) return;
-  for (const config of ["vite.app.config.ts", "vite.image-peer.config.ts"]) {
+  // All THREE pages. The hub page was missing from this list, so nothing in
+  // the suite ever built it and a broken `dist/hub` was invisible here.
+  for (const config of ["vite.app.config.ts", "vite.image-peer.config.ts", "vite.hub.config.ts"]) {
     execFileSync("pnpm", ["exec", "vite", "build", "--config", config], {
       cwd: appRoot,
       stdio: "pipe",

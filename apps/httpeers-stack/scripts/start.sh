@@ -59,6 +59,27 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# BUILD THE PAGES FIRST. The static server serves `dist/{app,image-peer,hub}`
+# and does not build them, so without this the script happily starts and then
+# serves whatever those directories last happened to contain -- a stale bundle,
+# a partial one, or nothing at all on a fresh clone (three 404s).
+#
+# This is not hypothetical. A `dist/hub` was found missing only its `sw.js`:
+# the page loaded, its ServiceWorker registration failed, `mountEdge` never
+# resolved, the page never reached "ready", and every mint button stayed
+# disabled -- which reads as "the hub has no way to generate invitations"
+# rather than as a build problem. Building here makes that state unreachable.
+#
+# The e2e suite builds its own pages (`buildPages()`); this is for the
+# operator's path, which nothing else covered.
+echo "[httpeers-stack] building the three pages..."
+for target in build:app build:image-peer build:hub-page; do
+  if ! (cd "$ROOT" && pnpm run --silent "$target" >/dev/null); then
+    echo "[httpeers-stack] \"pnpm run $target\" failed -- refusing to serve a stale build." >&2
+    exit 1
+  fi
+done
+
 echo "[httpeers-stack] starting relay on port $RELAY_PORT..."
 (cd "$ROOT" && exec pnpm run start:relay) &
 relay_pid=$!
