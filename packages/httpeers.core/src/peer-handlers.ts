@@ -12,7 +12,7 @@
  * Every seam is injected, so this file has no crypto, no transport and no
  * libp2p import — testable with one-line stubs. It also does no policy:
  * whether a *particular path* is permitted for a given role is
- * `access-tree.ts`'s job, not this one. This middleware only answers "is
+ * `rules.ts`'s job, not this one. This middleware only answers "is
  * the caller who they say they are, and is their token still good" — the
  * same class of question as the signature and expiry checks inside
  * `verifyToken`, which is why `isRevoked` lives here rather than with

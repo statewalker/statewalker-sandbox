@@ -29,14 +29,13 @@ import { fetchOverDuplex } from "@statewalker/webrun-http-streams";
 import { connect } from "@statewalker/webrun-streams-libp2p";
 import { createLibp2p } from "libp2p";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_ACCESS_TREE } from "../src/access-tree.js";
 import { createPeer, type Peer } from "../src/peer.js";
 import { lookupPeer } from "../src/peer-context.js";
 import { createMounts } from "../src/router.js";
+import { DEFAULT_RULES } from "../src/rules.js";
 import { mintToken, verifyToken } from "../src/tokens.js";
 import { DEFAULT_MAX_STREAMS, PROTOCOL } from "../src/transport-duplex.js";
 import { ANONYMOUS, json } from "../src/types.js";
-import { DEFAULT_VOCABULARY } from "../src/vocabulary.js";
 
 async function node(listen: boolean): Promise<Libp2p> {
   return createLibp2p({
@@ -98,8 +97,7 @@ describe("createPeer: identity by closure over the shipped transport", () => {
       node: server,
       selfPeerId: server.peerId.toString(),
       mounts,
-      accessTree: DEFAULT_ACCESS_TREE,
-      vocabulary: DEFAULT_VOCABULARY,
+      rules: DEFAULT_RULES,
       hubPeerId,
     });
     const addr = server.getMultiaddrs()[0];
@@ -240,26 +238,24 @@ describe("createPeer: identity by closure over the shipped transport", () => {
     }
   }, 20_000);
 
-  // --- accessTree/vocabulary: default together, or not at all ---------------
+  // --- rules: one value, so there is no pair to mismatch --------------------
 
-  it("throws when accessTree is supplied without vocabulary", async () => {
-    await expect(createPeer({ node: clientA, accessTree: DEFAULT_ACCESS_TREE })).rejects.toThrow(
-      /accessTree and vocabulary must be supplied together/,
+  it("refuses a `rules` value that ruleSet() never built -- an unvalidated policy is the silent permanent denial", async () => {
+    // The brand on `RuleSet` is not decoration: an object literal skips every
+    // check `ruleSet()` makes, and a rule set that was never validated is
+    // indistinguishable at runtime from one that works.
+    const forged = { version: 1, rules: [], policies: [] } as unknown as typeof DEFAULT_RULES;
+    await expect(createPeer({ node: clientA, rules: forged })).rejects.toThrow(
+      /must be built by ruleSet\(\)/,
     );
   });
 
-  it("throws when vocabulary is supplied without accessTree", async () => {
-    await expect(createPeer({ node: clientA, vocabulary: DEFAULT_VOCABULARY })).rejects.toThrow(
-      /accessTree and vocabulary must be supplied together/,
-    );
-  });
-
-  it("defaults mounts/accessTree/vocabulary together when none are supplied, and the default /test/whoami mount answers", async () => {
+  it("defaults mounts and rules when neither is supplied, and the default /test/whoami mount answers", async () => {
     const freshServer = await node(true);
     let defaultsPeer: Peer | undefined;
     try {
-      // No mounts/accessTree/vocabulary at all -- exercises defaultMounts()
-      // and the DEFAULT_ACCESS_TREE/DEFAULT_VOCABULARY pair together.
+      // No mounts and no rules at all -- exercises defaultMounts() against
+      // DEFAULT_RULES.
       defaultsPeer = await createPeer({ node: freshServer, hubPeerId });
       const addr = freshServer.getMultiaddrs()[0];
       if (addr == null) throw new Error("fresh server has no listen address");

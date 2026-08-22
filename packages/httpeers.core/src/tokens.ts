@@ -40,7 +40,11 @@
  * detail: the token states what it was granted, the node states what is true
  * right now, and Datalog decides. `allow if true` means "this verifier adds no
  * policy of its own; the token's own checks are the whole decision" — exactly
- * the JWS-era semantics. Task 30 replaces it with the access tree's policy.
+ * the JWS-era semantics, and it stays that way. The NODE's policy is a second,
+ * separate authorization in `rules.ts`, run by the policy middleware over the
+ * claims this one produced: splitting them is what keeps a tokenless request
+ * decidable and keeps "no usable token" a 401 while "not permitted" is a 403.
+ * See `rules.ts`'s `authorize` for the full argument.
  *
  * THE BINDING IS DATALOG NOW (ADR-0009). `check if bound($k),
  * connection_peer($k)` is the rule `peer-handlers.ts` states in prose
@@ -438,7 +442,7 @@ function readClaims(
   // Datalog facts are a SET: `role("a"); role("a")` is one fact and the order
   // they were minted in is not recoverable. Sorted so the claim is at least
   // deterministic. Nothing in this package treats roles as ordered —
-  // `access-tree.ts` expands them into a capability set.
+  // `rules.ts` derives a capability set from them.
   const roles = queryTerms(authorizer, "role")
     .filter((term): term is string => typeof term === "string")
     .sort();

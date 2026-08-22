@@ -15,15 +15,17 @@ import type {
   PresenceStore,
   PresenceWriteResult,
 } from "./types.js";
-import { assertValid, validateRoles } from "./vocabulary.js";
-import type { Vocabulary } from "./vocabulary.js";
+import type { RuleSet } from "./rules.js";
+import { assertValid, validateRoles } from "./rules.js";
 
 /**
  * Durable membership: who belongs to the mesh, and with what roles.
  *
- * `setRoles` validates its `roles` against `vocabulary` before writing —
- * "catch a typo where it is made, not three hops later as a silent denial"
- * (the v0.9.0 delta's own rationale). This is deliberately at the STORE,
+ * `setRoles` validates its `roles` against `rules` before writing — "catch a
+ * typo where it is made, not three hops later as a silent denial" (the v0.9.0
+ * delta's own rationale). Since ADR-0019 there is no separate role registry to
+ * validate against: a role exists for this node exactly when some rule fires
+ * on it, which is what `validateRoles` reads. This is deliberately at the STORE,
  * not at whichever call site happens to reach `setRoles` today: a guard
  * placed at a call site is only as durable as that call site, and a later
  * one added without knowing the guard belongs here would ship an
@@ -34,7 +36,7 @@ import type { Vocabulary } from "./vocabulary.js";
  * archived delta's own choice to guard `createInvitation` and `setRoles`,
  * never `addMember`.
  */
-export function createMemberStore(vocabulary: Vocabulary, clock: () => number = Date.now): MemberStore {
+export function createMemberStore(rules: RuleSet, clock: () => number = Date.now): MemberStore {
   const members = new Map<string, MemberRecord>();
 
   return {
@@ -44,7 +46,7 @@ export function createMemberStore(vocabulary: Vocabulary, clock: () => number = 
       return record;
     },
     setRoles(peerId, roles) {
-      assertValid(validateRoles(vocabulary, roles, `setRoles(${peerId})`));
+      assertValid(validateRoles(rules, roles, `setRoles(${peerId})`));
       const record: MemberRecord = { peerId, roles: [...roles], updatedAt: clock() };
       members.set(peerId, record);
       return record;

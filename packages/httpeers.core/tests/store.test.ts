@@ -1,17 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { createAdvertisementStore, createMemberStore, createPresenceStore } from "../src/store.js";
-import type { Vocabulary } from "../src/vocabulary.js";
+import { ruleSet } from "../src/rules.js";
 
-/** A minimal vocabulary declaring exactly the role names these tests use — the tests are about `MemberStore`'s own behaviour, not about vocabulary content. */
-const TEST_VOCABULARY: Vocabulary = {
-  version: 1,
-  capabilities: {},
-  roles: { read: {}, write: {} },
-};
+/**
+ * A minimal rule set mentioning exactly the role names these tests use — the
+ * tests are about `MemberStore`'s own behaviour, not about policy content.
+ * Since ADR-0019 a role "exists" for a node exactly when some rule fires on
+ * it, so declaring the two roles means writing the two rules that read them.
+ */
+const TEST_RULES = ruleSet({
+  rules: ['capability("x:read") <- role("read");', 'capability("x:write") <- role("write");'],
+});
 
 describe("createMemberStore", () => {
   it("adds, reads, and lists members", () => {
-    const store = createMemberStore(TEST_VOCABULARY, () => 100);
+    const store = createMemberStore(TEST_RULES, () => 100);
 
     const added = store.add("peer-a", ["read"]);
 
@@ -22,7 +25,7 @@ describe("createMemberStore", () => {
 
   it("replaces roles on setRoles, stamped with the current clock", () => {
     let time = 100;
-    const store = createMemberStore(TEST_VOCABULARY, () => time);
+    const store = createMemberStore(TEST_RULES, () => time);
     store.add("peer-a", ["read"]);
 
     time = 200;
@@ -32,8 +35,8 @@ describe("createMemberStore", () => {
     expect(store.get("peer-a")).toEqual(updated);
   });
 
-  it("setRoles rejects a role that is not in the vocabulary", () => {
-    const store = createMemberStore(TEST_VOCABULARY, () => 100);
+  it("setRoles rejects a role no rule knows", () => {
+    const store = createMemberStore(TEST_RULES, () => 100);
     store.add("peer-a", ["read"]);
 
     expect(() => store.setRoles("peer-a", ["superadmin"])).toThrow(/unknown role 'superadmin'/);
@@ -42,7 +45,7 @@ describe("createMemberStore", () => {
   });
 
   it("removes a member", () => {
-    const store = createMemberStore(TEST_VOCABULARY);
+    const store = createMemberStore(TEST_RULES);
     store.add("peer-a", ["read"]);
 
     store.remove("peer-a");
@@ -53,7 +56,7 @@ describe("createMemberStore", () => {
 
   it("is durable: membership does not expire on its own", () => {
     let time = 0;
-    const store = createMemberStore(TEST_VOCABULARY, () => time);
+    const store = createMemberStore(TEST_RULES, () => time);
     store.add("peer-a", ["read"]);
 
     time = 1_000_000_000;

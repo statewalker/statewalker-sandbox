@@ -7,14 +7,14 @@
  *
  *   access: (local) => newPeerHandlers({
  *     getPeerId, usesTransportIdentity, getClaims, isRevoked,
- *     handleEndpoints: withAccessTree({ tree, vocabulary, usesTransportIdentity })(local),
+ *     handleEndpoints: withPolicy({ rules, usesTransportIdentity, selfPeer: selfPeerId })(local),
  *   })
  *
- * BINDING OUTSIDE, POLICY INSIDE. `withAccessTree`'s `lookupClaims` read only
+ * BINDING OUTSIDE, POLICY INSIDE. `withPolicy`'s `lookupClaims` read only
  * works because the binding middleware calls `getClaims` first — which
  * caches via `cacheClaims` — before policy ever runs. Reverse the nesting
- * and policy reads an empty cache: every request would look tokenless to
- * `.access`, no matter what it actually carried.
+ * and policy reads an empty cache: every request would look tokenless to the
+ * authorizer, no matter what it actually carried.
  *
  * The router's *remote* branch constructs a brand-new `Request` before
  * forwarding, which is fine specifically because outbound is
@@ -34,12 +34,12 @@
  * it needs against that one capability; `createPeer` stays hub-agnostic.
  */
 
-import type { AccessTree } from "./access-tree.js";
-import { DEFAULT_ACCESS_TREE, withAccessTree } from "./access-tree.js";
 import { cacheClaims, lookupClaims, lookupPeer } from "./peer-context.js";
 import { newPeerHandlers } from "./peer-handlers.js";
 import type { RevocationChecker } from "./revocation.js";
 import { createMounts, createPeerRouter } from "./router.js";
+import type { RuleSet } from "./rules.js";
+import { DEFAULT_RULES, withPolicy } from "./rules.js";
 import { generateMeshKey, mintToken, verifyToken } from "./tokens.js";
 import type { Ed25519PrivateKey, Libp2p } from "./transport-duplex.js";
 import { createNode, createRemote, PROTOCOL, serveTransport } from "./transport-duplex.js";
@@ -55,8 +55,6 @@ import type {
   UsesTransportIdentity,
 } from "./types.js";
 import { ANONYMOUS, json } from "./types.js";
-import type { Vocabulary } from "./vocabulary.js";
-import { DEFAULT_VOCABULARY } from "./vocabulary.js";
 
 /**
  * Default token lifetime for `MountsFactoryContext.mintToken` when a caller
@@ -87,8 +85,8 @@ export interface MountsFactoryContext {
  * The default mount when the caller supplies no `mounts` table of its own:
  * a diagnostic `/test/whoami` that echoes back what the transport and
  * binding proved for the request (the connected peer, and the token's
- * `sub` once verified). `DEFAULT_ACCESS_TREE`'s `/test/` entry (requires
- * `std:test`, which the `member` role in `DEFAULT_VOCABULARY` grants) is
+ * `sub` once verified). `DEFAULT_RULES`'s `/test` policy (requires
+ * `std:test`, which the same rule set derives from `role("member")`) is
  * what gates it — this is not a bypass of policy, it exercises it.
  */
 function defaultMounts(): Mounts {
@@ -148,22 +146,18 @@ export interface CreatePeerInit {
    */
   mounts?: Mounts | ((ctx: MountsFactoryContext) => Mounts);
   /**
-   * Defaults to `DEFAULT_ACCESS_TREE`, but only paired with `vocabulary`
-   * defaulting too — see `vocabulary` below.
+   * This peer's Datalog rules and policies (ADR-0019). Defaults to
+   * `DEFAULT_RULES`.
+   *
+   * ONE VALUE, NOT A PAIR. Its predecessor was two — `accessTree` and
+   * `vocabulary` — and `createPeer` had to refuse a caller who supplied one
+   * and inherited the other, because a tree evaluated against a
+   * role→capability mapping it was never validated against is a fail-open.
+   * A `RuleSet` carries the derivation and the policies that consume it in
+   * one validated value, so that whole class of mismatch has nowhere left to
+   * live (X-02).
    */
-  accessTree?: AccessTree;
-  /**
-   * Defaults to `DEFAULT_VOCABULARY`, but ONLY when `accessTree` is also
-   * omitted (and vice versa): `createPeer` throws at construction if
-   * exactly one of `accessTree`/`vocabulary` is supplied. A custom
-   * `accessTree` evaluated against the wrong vocabulary (or vice versa) is
-   * the exact fail-open `withAccessTree`'s required `vocabulary` field was
-   * introduced to rule out — a tree that validates fine, then evaluates
-   * every request against a role→capability mapping the caller never
-   * intended. Defaulting both together, as a matched pair, does not
-   * reintroduce that; inheriting one while defaulting the other would.
-   */
-  vocabulary?: Vocabulary;
+  rules?: RuleSet;
   /**
    * The mesh (hub) peerId membership tokens must self-certify against —
    * `verifyToken`'s `issuer` option. Defaults to `selfPeerId`: a peer that
@@ -288,19 +282,7 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
     now,
   } = init;
 
-  // Defaulted together, as a matched pair, or not at all — see the doc
-  // comment on `vocabulary` above for why inheriting one while defaulting
-  // the other is exactly the fail-open `withAccessTree`'s required
-  // `vocabulary` field was introduced to rule out.
-  if ((init.accessTree == null) !== (init.vocabulary == null)) {
-    throw new Error(
-      "createPeer: accessTree and vocabulary must be supplied together or not at all -- " +
-        "defaulting one while inheriting the other risks evaluating a custom access tree " +
-        "against a vocabulary it was never validated against (or vice versa).",
-    );
-  }
-  const accessTree = init.accessTree ?? DEFAULT_ACCESS_TREE;
-  const vocabulary = init.vocabulary ?? DEFAULT_VOCABULARY;
+  const rules = init.rules ?? DEFAULT_RULES;
 
   // A caller-supplied node is used as-is and never stopped by us — it was
   // never ours to build, so it is never ours to tear down either. A
@@ -438,9 +420,7 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
         usesTransportIdentity,
         getClaims,
         isRevoked,
-        handleEndpoints: withAccessTree({ tree: accessTree, vocabulary, usesTransportIdentity })(
-          local,
-        ),
+        handleEndpoints: withPolicy({ rules, usesTransportIdentity, selfPeer: selfPeerId, now })(local),
       }),
     allowForward: async (req) => {
       // `undefined` (no binding at all) means this request never passed
