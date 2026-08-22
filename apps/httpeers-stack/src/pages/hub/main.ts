@@ -302,8 +302,38 @@ function renderMembers(hub: BrowserHubHandle): void {
       peer.className = "peer";
       peer.textContent = member.peerId;
 
+      // ROLES ARE EDITABLE AFTER JOINING, not only at invitation time. The
+      // hub owns the member record, so changing them here is the same act
+      // the invitation performs -- and `setMemberRoles` also records the
+      // change in the revocation registry, without which the peer would keep
+      // its OLD roles until its current token expired.
       const roles = document.createElement("td");
-      roles.textContent = member.roles.join(", ");
+      const rolePicker = document.createElement("select");
+      rolePicker.className = "role-picker";
+      for (const name of hub.roleNames()) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        opt.selected = member.roles.includes(name);
+        rolePicker.append(opt);
+      }
+      rolePicker.addEventListener("change", () => {
+        const next = [rolePicker.value];
+        try {
+          const { policyVersion } = hub.setMemberRoles(member.peerId, next);
+          adminStatusEl.dataset.tone = "done";
+          adminStatusEl.textContent =
+            `${member.peerId} is now ${next.join(", ")} — policy version is now ` +
+            `${policyVersion}. Its current token stated the old roles and no longer verifies; ` +
+            "it picks the change up on its next heartbeat.";
+          renderMembers(hub);
+        } catch (err) {
+          adminStatusEl.dataset.tone = "error";
+          adminStatusEl.textContent = `Could not change roles for ${member.peerId}: ${String(err)}`;
+          rolePicker.value = member.roles[0] ?? "";
+        }
+      });
+      roles.append(rolePicker);
 
       const state = document.createElement("td");
       state.dataset.online = String(member.online);
@@ -377,7 +407,13 @@ async function revokeMember(
 // --- startup --------------------------------------------------------------
 
 /** `admin` implies `member` (`../../policy.ts`), so an admin code grants both. */
-const MINT_ROLE_CHOICES = ["member", "admin"] as const;
+/**
+ * Fallback only. The real list comes from `hub.roleNames()` at startup --
+ * this exists so a press before the hub is ready cannot mint an unvalidated
+ * role, and so the guard below has something to check against if the select
+ * is ever tampered with. `assertValid` in the store is the real gate.
+ */
+const MINT_ROLE_FALLBACK = "member";
 
 async function main(): Promise<void> {
   // Loaded BEFORE the hub starts, and shown immediately: this is the mesh's
@@ -413,15 +449,27 @@ async function main(): Promise<void> {
   circuitEl.textContent = hub.circuitAddr;
   baseUrlEl.textContent = hub.baseUrl;
 
+  // The invitation role options come from the mesh's vocabulary, not a
+  // literal: a role added to `../../policy.ts` shows up here with no second
+  // list to remember. The markup ships `member`/`admin` so the control is not
+  // empty before the hub is up; this replaces them with the real set.
+  mintRolesEl.replaceChildren(
+    ...hub.roleNames().map((name) => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      opt.selected = name === "member";
+      return opt;
+    }),
+  );
+
   mintButtons.mint.disabled = false;
   mintButtons.mint.addEventListener("click", () => {
     // A NEW id on every press. Invitations are single-use, so an operator
     // pressing this twice must get two distinct codes -- reusing one would
     // hand out a code that is already dead.
     const selected = mintRolesEl.value;
-    const roles = (MINT_ROLE_CHOICES as readonly string[]).includes(selected)
-      ? [selected]
-      : ["member"];
+    const roles = [hub.roleNames().includes(selected) ? selected : MINT_ROLE_FALLBACK];
     const id = newInvitationId();
     const record = hub.invitations.create(id, roles, INVITATION_TTL_MS);
     renderInvitation(

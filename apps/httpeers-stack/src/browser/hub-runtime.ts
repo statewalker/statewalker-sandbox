@@ -139,6 +139,24 @@ export interface BrowserHubHandle {
   meshView: () => MeshView;
   /** Remove a member and revoke its tokens -- see `removeMember` below for the call path and why it is not the edge. */
   removeMember: (peerId: PeerIdStr) => Promise<RemoveMemberResult>;
+  /**
+   * Every role this mesh defines, read from the vocabulary rather than
+   * hard-coded, so a role added to `../policy.ts` appears in the UI without
+   * anyone remembering to update a second list.
+   */
+  roleNames: () => string[];
+  /**
+   * Change an existing member's roles.
+   *
+   * BOTH HALVES, or the change is a lie. `MemberStore.setRoles` rewrites the
+   * record, but a peer is carrying a token that already states its OLD roles
+   * and stays valid until it expires -- so a demoted admin would keep admin
+   * for the life of that token. `RevocationRegistry.changeRoles` records the
+   * change so tokens minted before it stop verifying, which is what makes the
+   * new roles take effect on the peer's next heartbeat. The store does not do
+   * this for us: `createPersistentHub`'s `setRoles` persists and nothing more.
+   */
+  setMemberRoles: (peerId: PeerIdStr, roles: string[]) => { policyVersion: number };
   stop(): Promise<void>;
 }
 
@@ -412,6 +430,14 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
     return (await res.json()) as RemoveMemberResult;
   };
 
+  const setMemberRoles = (peerId: PeerIdStr, roles: string[]): { policyVersion: number } => {
+    // Throws (via `assertValid`) if a role is not in the vocabulary -- caught
+    // here, at the call, rather than as a silent denial three hops later.
+    state.memberStore.setRoles(peerId, roles);
+    revocations.changeRoles(peerId, roles);
+    return { policyVersion: revocations.policyVersion() };
+  };
+
   return {
     peerId: peer.peerId,
     relayAddr,
@@ -422,6 +448,8 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
     meshView: () =>
       meshView?.() ?? { version: 0, self: peer.peerId, members: [], advertisements: [] },
     removeMember,
+    roleNames: () => Object.keys(VOCABULARY.roles),
+    setMemberRoles,
     async stop() {
       clearInterval(sweepTimer);
       clearInterval(renewTimer);
