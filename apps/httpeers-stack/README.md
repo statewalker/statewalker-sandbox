@@ -240,25 +240,86 @@ plus its own policy under a bounded authorizer. A refusal says which condition
 failed and whether retrying could help: `401` means a refresh might work, `403`
 means it will not.
 
-## What stands between this and a usable system
+## Attention points
 
-Known and recorded, ordered by what would stop a deployment first. None is
+Three properties below are **deliberate design choices**, not defects — recorded
+here with the reasoning, and with the residual risk each one leaves, so a later
+reader can re-open the decision on evidence rather than rediscover it as a
+surprise. The section after this one lists actual gaps.
+
+### The relay is open and unauthenticated
+
+**The choice.** Anyone who can reach the relay can reserve through it, and that
+is the point: an open relay lets anyone stand up a mesh without asking
+permission, which is what makes anonymous meshes possible. **The security layer
+lives on the hub**, not on the relay — a relayed connection still has to redeem
+an invitation, present a Biscuit bound to the key it proves, and satisfy the
+destination's policy. Relaying someone's bytes grants nothing.
+
+**Residual risk, accepted.** Resource exhaustion: reservations, connections and
+bandwidth are finite, and nothing rate-limits a stranger. With no real users this
+is not a pressing problem, and circuit-relay v2's own reservation and data limits
+(128 KB / 2 min per circuit by default) blunt the worst of it.
+
+**Two risks that are not overload**, worth knowing before a public deployment:
+
+- **The relay operator sees the topology.** Stream contents are encrypted end to
+  end by Noise, so the relay learns nothing of what is said — but it necessarily
+  learns *who talks to whom, when, and how much*. For a mesh whose selling point
+  is anonymity, the relay is a global observer of the peer graph. Running your
+  own relay does not fix this for your users; it relocates it to you.
+- **Third parties can use your infrastructure.** An open relay will carry traffic
+  for meshes that have nothing to do with yours, including traffic you would not
+  want associated with your host. That is a reputational and operational exposure
+  rather than a mesh-security one, and it is the usual reason open relays end up
+  gated eventually.
+
+### The hub is a single point of failure
+
+**The choice.** Simplicity, deliberately, at this stage. One hub mints every
+token and owns membership, presence and roles. The alternative — a mesh
+identified by a shared key, with several interchangeable managers — is more
+flexible and considerably more complex: it requires those managers to agree on
+membership, presence and roles, which is a replication and convergence problem,
+not a signature change.
+
+**What already softens it.** Verification is offline: a peer checks a token
+against the mesh's public key and its own rules, never calling the hub. So while
+the hub is down, **existing peers keep working until their tokens expire** —
+only joining, resuming and revocation need it. The mesh does not stop; it stops
+*changing*.
+
+**What it costs.** No key rotation story, and revocation is the hard part of any
+future multi-hub design: adding a member can converge lazily, but *removing* one
+must not.
+
+**A note on the distance to the alternative.** It is smaller than it looks in one
+respect: the mesh id is *already* a public key — `claims.mesh === claims.iss`,
+the hub's own peer id — so the addressing model does not change. What is missing
+is multiple signers and agreement between them. Biscuit's offline attenuation
+and third-party blocks are relevant here: they let a holder narrow a token, and
+let a second key vouch for something, without either party talking to the other.
+
+### The pages need HTTPS off localhost
+
+**Not a gap — the intended deployment model.** Every publicly reachable member
+(relay, hub, and the page origins) is expected to be served over TLS. The design
+already provides for it: Node terminates TLS itself via `TLS_CERT`/`TLS_KEY`,
+with no reverse proxy, and the relay's server address is
+`/dns4/host/tcp/443/wss`.
+
+**The constraint to plan around** is that this is all-or-nothing, because it is
+enforced by the browser rather than by us: ServiceWorkers require a secure
+context, so the pages simply do not start off `localhost` over plain HTTP; and
+mixed-content rules mean an `https://` page cannot dial a `ws://` relay. So the
+page origin, the relay and the hub all have to be TLS together. What remains
+unbuilt is the certificate story — issuance and renewal — not the architecture.
+
+## Remaining gaps
+
+Unbuilt or unresolved, as distinct from the deliberate choices above. None is
 hidden by a passing test — several are *pinned* by tests asserting the current,
 limited behaviour so it cannot drift silently.
-
-**Blockers**
-
-- **The relay is open and unauthenticated.** Anyone who can reach it can reserve
-  through it. A public deployment needs the relay to admit only mesh members,
-  which means an admission decision at a layer that currently has no identity.
-- **The hub is a single point of failure.** It mints every token and owns
-  membership; if it is down, nobody joins and nobody resumes. Existing peers keep
-  working until their tokens expire — offline verification is what buys that
-  grace — but there is no second hub and no key-rotation story.
-- **Pages need HTTPS off localhost.** ServiceWorkers require a secure context, so
-  the pages cannot work from another device over plain HTTP at all. The design
-  anticipates this (`TLS_CERT`/`TLS_KEY`, Node terminating TLS itself), but the
-  certificate story is unbuilt.
 
 **Hardening**
 
@@ -281,12 +342,21 @@ limited behaviour so it cannot drift silently.
   three origins, and Node's wasm-module import is still flagged experimental —
   the relay, hub and setup processes all rely on it.
 - **Known open defects.** A generator-cancellation leak in `webrun-http-streams`
-  costs one mux stream slot per call and needs an API change to fix properly; a
-  concurrency test fails roughly one run in five with a yamux stream reset; and a
-  browser streaming assertion is sensitive to CPU contention.
+  costs one mux stream slot per call and needs an API change to fix properly.
+- **Two load-sensitive tests, neither a correctness problem.** `peer.test.ts`'s
+  D8 fires 20 concurrent requests over one connection and asserts none of them
+  cross-wires identity. Under heavy CPU contention it has thrown
+  `StreamResetError` from yamux's window handling — a transport-level reset that
+  aborts the run *before* the assertion, so **no run has ever shown a crossed
+  identity**. Measured 1–2 failures in 8 while several browser suites were
+  running concurrently; **10 of 10 passes on an idle machine**. The browser
+  streaming assertion degrades the same way — proven ~55× slower under 3×
+  oversubscription. Both are worth a bound or a retry policy if this ever runs on
+  shared CI; neither indicates a defect in the mesh.
 
-If you take one thing from this list: the architecture is further along than the
-operations. The library boundary is clean, the policy layer is data, and the
-browser and Node hubs are genuinely interchangeable — but admission control, key
-rotation and TLS are the three unbuilt things that decide whether this can leave
-a laptop.
+If you take one thing from these two sections: the architecture is further along
+than the operations. The library boundary is clean, the policy layer is data, and
+the browser and Node hubs are genuinely interchangeable. The three attention
+points above are settled choices with known costs, not open questions — what is
+genuinely unbuilt is smaller: certificate issuance, a body-size bound, and
+narrowing the tokens the join protocol mints.
