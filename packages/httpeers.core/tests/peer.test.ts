@@ -29,7 +29,7 @@ import { fetchOverDuplex } from "@statewalker/webrun-http-streams";
 import { connect } from "@statewalker/webrun-streams-libp2p";
 import { createLibp2p } from "libp2p";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createPeer, type Peer } from "../src/peer.js";
+import { createPeer, type MountsFactoryContext, type Peer } from "../src/peer.js";
 import { lookupPeer } from "../src/peer-context.js";
 import { createMounts } from "../src/router.js";
 import { DEFAULT_RULES } from "../src/rules.js";
@@ -111,8 +111,18 @@ describe("createPeer: identity by closure over the shipped transport", () => {
     await Promise.allSettled([serverPeer?.stop(), server?.stop(), clientA?.stop()]);
   });
 
-  async function tokenFor(sub: string, roles = ["member"]): Promise<string> {
-    return mintToken({ privateKey: hubKey, sub, roles, ttlMs: 60_000 });
+  async function tokenFor(
+    sub: string,
+    roles = ["member"],
+    audience?: readonly string[],
+  ): Promise<string> {
+    return mintToken({
+      privateKey: hubKey,
+      sub,
+      roles,
+      ttlMs: 60_000,
+      ...(audience && { audience }),
+    });
   }
 
   // --- composition: valid token in, mismatched sub out ----------------------
@@ -148,6 +158,84 @@ describe("createPeer: identity by closure over the shipped transport", () => {
     // a token that does not verify is not a token this peer has.
     expect(res.status).toBe(401);
   }, 20_000);
+
+  // --- A-24 / ADR-0020: the DESTINATION enforces the audience ---------------
+
+  it("A-24: an audience-scoped token works at the peer it names", async () => {
+    const clientId = clientA.peerId.toString();
+    const token = await tokenFor(clientId, ["member"], [serverPeer.peerId]);
+    const res = await call(
+      clientA,
+      serverAddr,
+      new Request("http://peer/test/whoami", { headers: { authorization: `Bearer ${token}` } }),
+    );
+    expect(res.status).toBe(200);
+  }, 20_000);
+
+  it("A-24: ... and the SAME peer refuses one scoped to somebody else", async () => {
+    // Dialled STRAIGHT AT this server over a real Noise-authenticated
+    // connection -- nothing forwarded, nothing relayed, no router in the way.
+    // The refusal is therefore not a routing artefact: it is this peer
+    // evaluating the token's audience against its own `self_peer` fact.
+    const clientId = clientA.peerId.toString();
+    const token = await tokenFor(clientId, ["member"], [
+      "12D3KooWSomeOtherProviderXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    ]);
+    const res = await call(
+      clientA,
+      serverAddr,
+      new Request("http://peer/test/whoami", { headers: { authorization: `Bearer ${token}` } }),
+    );
+    // 401 rather than 403, for the same reason a wrong-subject token is 401
+    // (see the binding test above): the token does not VERIFY here at all, so
+    // `getClaims` reports no claims and the binding middleware answers before
+    // any policy runs. The reason -- `audience`, with the failing rule text --
+    // is carried on the `TokenVerificationError` that `getClaims` swallows;
+    // `tokens.test.ts` asserts it there, which is where it is observable.
+    expect(res.status).toBe(401);
+  }, 20_000);
+
+  it("A-24: a hub mints least privilege -- one token, usable at one named peer", async () => {
+    // The seam an APPLICATION has: a mounts factory's `mintToken`, never the
+    // signing key. Without `audience` here a hub could only mint tokens valid
+    // at every peer in the mesh, whatever `tokens.ts` supported underneath.
+    const clientId = clientA.peerId.toString();
+    let mint: MountsFactoryContext["mintToken"] | undefined;
+    const hubPeer = await createPeer({
+      privateKey: hubKey,
+      mounts: (ctx) => {
+        mint = ctx.mintToken;
+        return createMounts();
+      },
+    });
+    try {
+      expect(hubPeer.peerId).toBe(hubPeerId);
+      if (mint == null) throw new Error("the mounts factory was never called");
+
+      const here = await mint(clientId, ["member"], { audience: [serverPeer.peerId] });
+      const elsewhere = await mint(clientId, ["member"], {
+        audience: ["12D3KooWSomeOtherProviderXXXXXXXXXXXXXXXXXXXXXXXXXXX"],
+      });
+
+      const ok = await call(
+        clientA,
+        serverAddr,
+        new Request("http://peer/test/whoami", { headers: { authorization: `Bearer ${here}` } }),
+      );
+      const refused = await call(
+        clientA,
+        serverAddr,
+        new Request("http://peer/test/whoami", {
+          headers: { authorization: `Bearer ${elsewhere}` },
+        }),
+      );
+
+      expect(ok.status).toBe(200);
+      expect(refused.status).toBe(401);
+    } finally {
+      await hubPeer.stop();
+    }
+  }, 30_000);
 
   // --- D6: two distinct clients, no cross-talk -------------------------------
 

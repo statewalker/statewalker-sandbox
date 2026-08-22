@@ -53,6 +53,11 @@ const claims = (...roles: string[]): MeshClaims => ({
   roles,
   iat: 1_000,
   exp: 1_000_000,
+  // Node POLICY never reads the audience: it is enforced by the token's own
+  // check at verification time, against the destination's `self_peer`
+  // (ADR-0020), so by the time `authorize` sees claims the question is
+  // settled. Stated, not defaulted -- `MeshClaims` has three explicit states.
+  audience: "unrestricted",
 });
 const member = claims("member");
 const admin = claims("admin");

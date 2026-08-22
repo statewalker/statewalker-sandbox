@@ -29,7 +29,7 @@
  * need that capability, but this package must never learn what a "hub" is —
  * that would make the library import the application. So `mounts` may be a
  * function `(ctx) => Mounts`, called once construction has a `privateKey`
- * and a `selfPeerId`, receiving only a scoped `mintToken(sub, roles, ttlMs?)`
+ * and a `selfPeerId`, receiving only a scoped `mintToken(sub, roles, options?)`
  * closure — never the key itself. An application builds whatever endpoints
  * it needs against that one capability; `createPeer` stays hub-agnostic.
  */
@@ -68,6 +68,23 @@ import { ANONYMOUS, json } from "./types.js";
  */
 export const DEFAULT_MINT_TTL_MS = 60_000;
 
+/** What a mounts factory may say about a token besides who it is for. */
+export interface MintForMountsOptions {
+  /** Defaults to `DEFAULT_MINT_TTL_MS` when omitted. */
+  ttlMs?: number;
+  /**
+   * The peers this token may be presented to (ADR-0020). Omit for an
+   * unrestricted token — which is minted as the explicit unrestricted state,
+   * never as silence; see `tokens.ts`'s `MintTokenOptions.audience`.
+   *
+   * This is the whole reason least privilege is EXPRESSIBLE from an
+   * application: without it, a hub built on this seam could only ever mint
+   * tokens valid at every peer in the mesh, whatever the token layer beneath
+   * it supported.
+   */
+  audience?: readonly PeerIdStr[];
+}
+
 /**
  * What a `mounts` factory receives: this peer's own `peerId`, and a
  * capability to mint membership tokens that self-certify against it — never
@@ -77,8 +94,17 @@ export const DEFAULT_MINT_TTL_MS = 60_000;
  */
 export interface MountsFactoryContext {
   peerId: PeerIdStr;
-  /** Defaults `ttlMs` to `DEFAULT_MINT_TTL_MS` when omitted. */
-  mintToken: (sub: string, roles: string[], ttlMs?: number) => Promise<string>;
+  /**
+   * Mint a membership token that self-certifies against this peer.
+   *
+   * The third parameter is an OPTIONS OBJECT, not the bare `ttlMs` number it
+   * was before ADR-0020: `audience` is the second thing a caller may want to
+   * say about a token, and a second positional argument next to a number is
+   * how a call site ends up passing them in the wrong order. Exactly one call
+   * site in this repository passed `ttlMs` (the browser hub's self-token
+   * renewal), so the churn was one line.
+   */
+  mintToken: (sub: string, roles: string[], options?: MintForMountsOptions) => Promise<string>;
 }
 
 /**
@@ -325,7 +351,7 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
   const mintTokenForMounts = async (
     sub: string,
     roles: string[],
-    ttlMs = DEFAULT_MINT_TTL_MS,
+    options: MintForMountsOptions = {},
   ): Promise<string> => {
     if (privateKey == null) {
       throw new Error(
@@ -333,7 +359,18 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
           "supply `privateKey`, or omit `node` so createPeer generates and retains one itself.",
       );
     }
-    return mintToken({ privateKey, sub, roles, ttlMs, now });
+    // `audience` is spread rather than passed as `audience: options.audience`:
+    // `mintToken` distinguishes an absent audience (unrestricted) from an
+    // empty one (refused), and an explicit `undefined` property would be the
+    // former, which is right, but spreading says so without relying on it.
+    return mintToken({
+      privateKey,
+      sub,
+      roles,
+      ttlMs: options.ttlMs ?? DEFAULT_MINT_TTL_MS,
+      ...(options.audience !== undefined ? { audience: options.audience } : {}),
+      now,
+    });
   };
   const mounts =
     mountsInit == null
@@ -383,6 +420,13 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
         claims = await verifyToken(token, {
           issuer,
           connectionPeer: lookupPeer(req) ?? ANONYMOUS,
+          // ADR-0020: THIS peer's own identity, so an audience-scoped token
+          // is checked against the destination that actually received the
+          // request — not against whatever the route claimed on the way. A
+          // peer that is not an intended audience refuses here, before any
+          // policy runs, and refuses identically whether the request was
+          // dialled straight at it or forwarded to it.
+          selfPeer: selfPeerId,
           now,
         });
       } catch {

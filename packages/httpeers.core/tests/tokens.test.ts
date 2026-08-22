@@ -289,6 +289,263 @@ describe("tokens", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Audience — A-24, ADR-0020. The DESTINATION enforces.
+  // -------------------------------------------------------------------------
+
+  describe("audience", () => {
+    const now = () => 1_000_000;
+    /** Two destinations. The token below names only the first. */
+    const SERVER = "12D3KooWServerPeerIdForTests";
+    const OTHER = "12D3KooWOtherServerPeerIdForTests";
+
+    /**
+     * A token minted the way this file did BEFORE ADR-0020: no audience fact
+     * and no audience check at all. Hand-built rather than mocked, because the
+     * migration question is exactly "what does a verifier do with bytes an
+     * older hub signed", and only real bytes answer it.
+     */
+    function mintPreAudienceToken(sub: string): string {
+      const builder = new BiscuitBuilder();
+      builder.addCode(
+        `mesh("${hubPeerId}"); subject("${sub}"); bound("${sub}"); ` +
+          `issued_at(${now()}); expires_at(${now() + 60_000});`,
+      );
+      builder.addCode("check if bound($k), connection_peer($k);");
+      builder.addCode("check if mesh($m), root_mesh($m);");
+      builder.addCode(`check if time_ms($t), $t < ${now() + 60_000};`);
+      return builder.build(biscuitKeyOf(hubKey)).toBase64();
+    }
+
+    const scoped = (audience: string[]) =>
+      mintToken({ privateKey: hubKey, sub: MEMBER, roles: ["read"], ttlMs: 60_000, audience, now });
+
+    const unscoped = () =>
+      mintToken({ privateKey: hubKey, sub: MEMBER, roles: ["read"], ttlMs: 60_000, now });
+
+    it("accepts an audience-scoped token at the peer it names (A-24)", async () => {
+      const token = await scoped([SERVER]);
+      const claims = await verifyToken(token, {
+        issuer: hubPeerId,
+        connectionPeer: MEMBER,
+        selfPeer: SERVER,
+        now,
+      });
+      expect(claims.sub).toBe(MEMBER);
+      expect(claims.audience).toEqual([SERVER]);
+    });
+
+    it("REFUSES THE SAME TOKEN at a different peer, and it is that peer refusing", async () => {
+      // The whole point of ADR-0020: nothing about the route is involved. The
+      // only difference from the test above is `selfPeer` -- what THIS
+      // verifier says about its own identity. A peer that is not an intended
+      // audience refuses however the request reached it.
+      const token = await scoped([SERVER]);
+      const rejected = (await verifyToken(token, {
+        issuer: hubPeerId,
+        connectionPeer: MEMBER,
+        selfPeer: OTHER,
+        now,
+      }).catch((error: unknown) => error)) as TokenVerificationError;
+
+      expect(rejected).toBeInstanceOf(TokenVerificationError);
+      expect(rejected.reason).toBe("audience");
+      // Explainable, at finer grain than "denied": the rule that failed, with
+      // its block and check index. Body material, never a header.
+      expect(rejected.failedChecks).toEqual([
+        "block 0 check 2: check if audience($k), self_peer($k)",
+      ]);
+      expect(rejected.message).toMatch(/not an intended audience/);
+    });
+
+    it("... and the control: an UNRESTRICTED token from the same hub works at that peer", async () => {
+      // Without this the test above proves nothing -- a refusal at `OTHER`
+      // could just as well mean `OTHER` refuses every token from this hub.
+      // Same hub, same subject, same connection, same destination; the only
+      // difference is what the TOKEN says about its audience.
+      const claims = await verifyToken(await unscoped(), {
+        issuer: hubPeerId,
+        connectionPeer: MEMBER,
+        selfPeer: OTHER,
+        now,
+      });
+      expect(claims.audience).toBe("unrestricted");
+    });
+
+    it("a token may name several peers, and each of them accepts it", async () => {
+      const token = await scoped([OTHER, SERVER]);
+      for (const destination of [SERVER, OTHER]) {
+        const claims = await verifyToken(token, {
+          issuer: hubPeerId,
+          connectionPeer: MEMBER,
+          selfPeer: destination,
+          now,
+        });
+        // Datalog facts are a SET; `readClaims` sorts, as it does for roles.
+        expect(claims.audience).toEqual([OTHER, SERVER].sort());
+      }
+    });
+
+    it("a verifier that does not say who it is refuses every scoped token", async () => {
+      // Omitting `selfPeer` asserts no `self_peer` fact, so `audience($k),
+      // self_peer($k)` has nothing to match. Deny by default, in the format.
+      await expect(
+        verifyToken(await scoped([SERVER]), { issuer: hubPeerId, connectionPeer: MEMBER, now }),
+      ).rejects.toMatchObject({ reason: "audience" });
+    });
+
+    it("... but still accepts an unrestricted one, so an un-updated verifier keeps working", async () => {
+      const claims = await verifyToken(await unscoped(), {
+        issuer: hubPeerId,
+        connectionPeer: MEMBER,
+        now,
+      });
+      expect(claims.audience).toBe("unrestricted");
+    });
+
+    // -----------------------------------------------------------------------
+    // Unrestricted is a STATE, not a silence
+    // -----------------------------------------------------------------------
+
+    it("distinguishes an explicitly unrestricted token from one that says nothing", async () => {
+      const explicit = await verifyToken(await unscoped(), {
+        issuer: hubPeerId,
+        connectionPeer: MEMBER,
+        selfPeer: SERVER,
+        now,
+      });
+      const silent = await verifyToken(mintPreAudienceToken(MEMBER), {
+        issuer: hubPeerId,
+        connectionPeer: MEMBER,
+        selfPeer: SERVER,
+        now,
+      });
+
+      expect(explicit.audience).toBe("unrestricted");
+      expect(silent.audience).toBe("unstated");
+      // Both verify. That is the migration decision, stated as a test: a
+      // token an older hub signed keeps working and is READ AS unrestricted,
+      // because refusing it would break every token in flight -- and it is
+      // safe because the facts and checks live in the SIGNED authority block,
+      // so nobody can strip a scoped token back down to this state.
+      expect(silent.sub).toBe(MEMBER);
+    });
+
+    it("refuses to mint an empty audience rather than reading it as unrestricted", async () => {
+      // Prototype 10 read `[]` as unrestricted. That is a silent widening at
+      // the exact moment an author meant to narrow, so this refuses instead.
+      await expect(
+        mintToken({ privateKey: hubKey, sub: MEMBER, roles: [], ttlMs: 60_000, audience: [], now }),
+      ).rejects.toThrow(/at least one peer/);
+    });
+
+    it("refuses a token that states both an audience and unrestricted", async () => {
+      const builder = new BiscuitBuilder();
+      builder.addCode(
+        `mesh("${hubPeerId}"); subject("${MEMBER}"); bound("${MEMBER}"); ` +
+          `issued_at(${now()}); expires_at(${now() + 60_000}); ` +
+          `audience("${SERVER}"); audience_unrestricted(true);`,
+      );
+      builder.addCode("check if bound($k), connection_peer($k);");
+      builder.addCode("check if mesh($m), root_mesh($m);");
+      const token = builder.build(biscuitKeyOf(hubKey)).toBase64();
+
+      // Both states carry different checks, so which one describes this token
+      // is not answerable -- reporting either would be a guess.
+      await expect(
+        verifyToken(token, {
+          issuer: hubPeerId,
+          connectionPeer: MEMBER,
+          selfPeer: SERVER,
+          now,
+        }),
+      ).rejects.toMatchObject({ reason: "malformed-claims" });
+    });
+
+    // -----------------------------------------------------------------------
+    // A stolen scoped token cannot be widened
+    // -----------------------------------------------------------------------
+
+    it("an appended block cannot add a peer to a scoped token's audience", async () => {
+      const token = await scoped([SERVER]);
+      const widened = appendBlock(token, hubKey, `audience("${OTHER}");`);
+      await expect(
+        verifyToken(widened, {
+          issuer: hubPeerId,
+          connectionPeer: MEMBER,
+          selfPeer: OTHER,
+          now,
+        }),
+      ).rejects.toMatchObject({ reason: "audience" });
+    });
+
+    it("an appended block cannot declare a scoped token unrestricted", async () => {
+      const token = await scoped([SERVER]);
+      const widened = appendBlock(token, hubKey, "audience_unrestricted(true);");
+      await expect(
+        verifyToken(widened, {
+          issuer: hubPeerId,
+          connectionPeer: MEMBER,
+          selfPeer: OTHER,
+          now,
+        }),
+      ).rejects.toMatchObject({ reason: "audience" });
+      // ... and it does not even show up in the claims read at the intended
+      // destination, because `readClaims` reads through the same
+      // authority-scoped authorizer the check does.
+      const claims = await verifyToken(widened, {
+        issuer: hubPeerId,
+        connectionPeer: MEMBER,
+        selfPeer: SERVER,
+        now,
+      });
+      expect(claims.audience).toEqual([SERVER]);
+    });
+
+    it("an audience entry containing Datalog syntax is inert", async () => {
+      // Same parameterisation guarantee `sub` and `role` have: a peerId is
+      // whatever the hub was asked to scope to, and is never this file's to
+      // trust as source text.
+      const hostile = `${SERVER}"); audience("${OTHER}`;
+      const token = await scoped([hostile]);
+
+      const claims = await verifyToken(token, {
+        issuer: hubPeerId,
+        connectionPeer: MEMBER,
+        selfPeer: hostile,
+        now,
+      });
+      expect(claims.audience).toEqual([hostile]);
+
+      await expect(
+        verifyToken(token, { issuer: hubPeerId, connectionPeer: MEMBER, selfPeer: OTHER, now }),
+      ).rejects.toMatchObject({ reason: "audience" });
+    });
+
+    it("a token restricted by CLASS is refused: this verifier supplies no self_fact (A-20)", async () => {
+      // ADR-0020 also permits restriction by class. This package does not
+      // implement it -- nothing here produces a `self_fact` -- and the point
+      // of this test is that not implementing it DENIES rather than ignores.
+      const builder = new BiscuitBuilder();
+      builder.addCode(
+        `mesh("${hubPeerId}"); subject("${MEMBER}"); bound("${MEMBER}"); ` +
+          `issued_at(${now()}); expires_at(${now() + 60_000}); audience_class("group", "backend");`,
+      );
+      builder.addCode("check if bound($k), connection_peer($k);");
+      builder.addCode("check if audience_class($t, $v), self_fact($t, $v);");
+      const token = builder.build(biscuitKeyOf(hubKey)).toBase64();
+
+      await expect(
+        verifyToken(token, {
+          issuer: hubPeerId,
+          connectionPeer: MEMBER,
+          selfPeer: SERVER,
+          now,
+        }),
+      ).rejects.toMatchObject({ reason: "audience" });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Attenuation cannot widen (A-23)
   // -------------------------------------------------------------------------
 

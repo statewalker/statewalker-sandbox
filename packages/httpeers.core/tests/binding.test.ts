@@ -21,7 +21,20 @@ const ALICE = "12D3KooWAlice";
 const MALLORY = "12D3KooWMallory";
 
 function claimsFor(sub: string): MeshClaims {
-  return { sub, iss: "hub", mesh: "hub", roles: ["member"], iat: Date.now(), exp: Date.now() + 60_000 };
+  // `audience: "unrestricted"` because this middleware does not look at the
+  // audience at all -- the destination enforces that inside `verifyToken`,
+  // before these claims exist (ADR-0020). The fixture states the field rather
+  // than defaulting it because `MeshClaims` has no default: three states,
+  // each explicit.
+  return {
+    sub,
+    iss: "hub",
+    mesh: "hub",
+    roles: ["member"],
+    iat: Date.now(),
+    exp: Date.now() + 60_000,
+    audience: "unrestricted",
+  };
 }
 
 interface SubjectOpts {

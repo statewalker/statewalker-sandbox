@@ -79,6 +79,29 @@ export interface MeshClaims {
   iat: number;
   /** Expiry, in hub time. */
   exp: number;
+  /**
+   * The peers this token may be presented to (ADR-0020), in one of three
+   * states — and they are three, not two, because the ADR insists an
+   * unrestricted token be a DISTINCT, EXPLICIT state rather than the absence
+   * of a field:
+   *
+   *   - `PeerIdStr[]`  — restricted: only these peers, never empty, sorted.
+   *   - `"unrestricted"` — the token SAYS it is valid at every peer.
+   *   - `"unstated"`   — the token says nothing at all about audience.
+   *
+   * `"unstated"` exists for tokens minted before this field did. `mintToken`
+   * cannot produce one: it always writes one of the other two into the
+   * authority block. A verifier treats `"unstated"` as unrestricted, which is
+   * safe only because the audience facts and their check live in the SIGNED
+   * authority block — an attacker holding a restricted token cannot strip
+   * them down to silence without the hub's key. Silence is therefore always
+   * an old issuer, never a downgrade. See `tokens.ts`'s "THE AUDIENCE".
+   *
+   * Enforcement is NOT here. The destination enforces, inside the token's own
+   * Datalog, against a `self_peer` fact the destination asserts about itself
+   * — this field only reports what the token turned out to say.
+   */
+  audience: PeerIdStr[] | "unrestricted" | "unstated";
 }
 
 /** A durable membership record kept by the hub. */

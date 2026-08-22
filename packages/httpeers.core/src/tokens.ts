@@ -24,14 +24,17 @@
  *
  *     mesh("<hubPeerId>"); subject("<sub>"); bound("<sub>");
  *     role("<r>"); ...  issued_at(<iatMs>); expires_at(<expMs>);
+ *     audience("<peer>"); ...            // OR audience_unrestricted(true)
  *     check if bound($k), connection_peer($k);
  *     check if mesh($m), root_mesh($m);
+ *     check if audience($k), self_peer($k);   // OR: audience_unrestricted(true)
  *     check if time_ms($t), $t < <expMs>;
  *
  * WHAT THE VERIFIER SAYS. `verifyToken` asserts, and only ever asserts, facts
  * the NODE knows — never anything read out of the token:
  *
  *     connection_peer("<what the transport handshake proved>");
+ *     self_peer("<this verifier's own peerId>");
  *     root_mesh("<the mesh this verifier expects>");
  *     time_ms(<this verifier's clock>);
  *     allow if true;
@@ -54,12 +57,69 @@
  * `peer-handlers.ts` keeps its own check: it is fed by an INJECTED `getClaims`
  * seam, so it must still refuse a mismatch its supplier let through.
  *
+ * THE AUDIENCE, AND WHO CHECKS IT (ADR-0020). A token may name the peers it
+ * may be presented to. The load-bearing detail is not the field, it is WHO
+ * EVALUATES IT: `audience` is a fact of the TOKEN, `self_peer` is a fact the
+ * DESTINATION asserts about itself, and the check that joins them lives in the
+ * token's authority block, so it is evaluated by the receiving peer against
+ * its own identity. A peer that is not an intended audience refuses however
+ * the request reached it — it does not trust whoever routed it to have
+ * respected the restriction. That is defence in depth behind ADR-0011's
+ * forwarding decision: a bug in either is caught by the other.
+ *
+ * This does NOT close a replay hole — ADR-0009's binding already did that.
+ * What it adds is least privilege: a token obtained to talk to one peer is
+ * now mintable so that it cannot be used against another, so the blast radius
+ * of a compromise stops being the whole mesh.
+ *
+ * The audience check needs `self_peer`, which is why `verifyToken` grew a
+ * `selfPeer` option. It is OPTIONAL, and omitting it fails CLOSED: a verifier
+ * that does not say who it is satisfies no `audience` fact and refuses every
+ * audience-scoped token. Unrestricted tokens are unaffected, which is what
+ * lets a caller that has not been updated keep working without being handed a
+ * permissive default.
+ *
+ * UNRESTRICTED IS A STATE, NOT A SILENCE. `mintToken` always writes one of
+ * two things: `audience(...)` facts plus the check above, or the explicit
+ * marker `audience_unrestricted(true)` plus `check if
+ * audience_unrestricted(true)` — a check that is trivially satisfied by its
+ * own fact and is there so the two states are structurally parallel (a fact
+ * and a check about it) rather than "present" versus "missing". A token with
+ * NEITHER is possible only from an issuer older than this field; `readClaims`
+ * reports that third state as `"unstated"` and it verifies as unrestricted.
+ *
+ * That last choice is the one migration decision here, and it is deliberate:
+ * every token in flight when this shipped carries no audience, so reading
+ * absence as "refuse everywhere" would break the running mesh, while reading
+ * it as "valid everywhere" is exactly the permissive default ADR-0020 argues
+ * against. It is safe here for a reason particular to Biscuit: the audience
+ * facts and their check are in the SIGNED authority block, so an attacker
+ * holding a restricted token cannot strip it back to silence — that would
+ * need the hub's key. Silence is always an old issuer, never a downgrade. The
+ * cost is that a mesh cannot yet REQUIRE its tokens to state an audience;
+ * doing so is a verifier-side policy for whoever decides the old tokens are
+ * gone, and `MeshClaims.audience` distinguishing `"unstated"` from
+ * `"unrestricted"` is what makes it decidable when they do.
+ *
+ * NO AUDIENCE CLASSES YET. ADR-0020 also permits restriction by CLASS —
+ * `audience_class($t,$v)` against a `self_fact($t,$v)` the destination
+ * asserts. Not implemented: nothing in this package or the stack above it
+ * produces a `self_fact`, and the ADR is explicit that such facts are
+ * security-relevant and must be as trustworthy as the node's own policy. An
+ * option nothing can populate would be a security surface with no source, so
+ * classes wait for a node-identity configuration to attach them to. A token
+ * carrying `audience_class` today is refused by A-20's rule: an unsatisfied
+ * check this verifier does not know how to satisfy denies.
+ *
  * AN APPENDED BLOCK CANNOT FORGE ANY OF THIS. Biscuit scopes facts: a check in
  * the authority block sees authority and authorizer facts only, never a later
  * block's. So a thief who appends `bound("mallory"); role("admin")` to a stolen
  * token changes nothing — the authority check cannot see it, and neither can
  * `readClaims`, which reads through the authorizer and therefore also sees only
  * the authority block. Attenuation can narrow a token; it can never widen one.
+ * That covers the audience too: appending `audience("elsewhere")` or
+ * `audience_unrestricted(true)` to a scoped token is invisible to the
+ * authority check that consumes them, so it neither travels nor reports.
  *
  * MILLISECONDS, NOT DATES — the one deliberate divergence from prototype 10,
  * which asserts a date-valued `time($t)`. This package's clock is
@@ -141,6 +201,8 @@ export type TokenRejectionReason =
   | "signature"
   | "mesh-mismatch"
   | "peer-binding"
+  /** ADR-0020: this verifier is not among the peers the token names. */
+  | "audience"
   | "expired"
   | "unsatisfied-constraint"
   | "evaluation-budget"
@@ -268,6 +330,19 @@ export interface MintTokenOptions {
   roles: string[];
   /** Time-to-live from mint time, in milliseconds. */
   ttlMs: number;
+  /**
+   * The peers this token may be presented to (ADR-0020). Omit for a token
+   * usable at every peer in the mesh — which is minted as the EXPLICIT marker
+   * `audience_unrestricted(true)`, never as silence, so the two states are
+   * distinguishable on the wire. See the module comment's "THE AUDIENCE".
+   *
+   * An EMPTY array is refused rather than quietly meaning "unrestricted", the
+   * way prototype 10 read it. `audience: peers.filter(...)` collapsing to `[]`
+   * would otherwise widen a token to the whole mesh at exactly the moment its
+   * author meant to narrow it — a silent failure in the permissive direction,
+   * which is the one this file will not make.
+   */
+  audience?: readonly PeerIdStr[];
   /** Injected clock, for deterministic tests. Defaults to `Date.now`. */
   now?: () => number;
 }
@@ -307,6 +382,19 @@ export async function mintToken(options: MintTokenOptions): Promise<string> {
   if (options.roles.some((role) => typeof role !== "string")) {
     throw new TypeError("mintToken: every role must be a string");
   }
+  if (options.audience !== undefined) {
+    if (!Array.isArray(options.audience)) {
+      throw new TypeError("mintToken: audience must be an array of peerId strings");
+    }
+    if (options.audience.length === 0) {
+      throw new Error(
+        "mintToken: audience must name at least one peer -- omit it for an unrestricted token",
+      );
+    }
+    if (options.audience.some((peer) => typeof peer !== "string")) {
+      throw new TypeError("mintToken: every audience entry must be a peerId string");
+    }
+  }
   const mesh = peerIdFromPrivateKey(options.privateKey).toString();
 
   const builder = new BiscuitBuilder();
@@ -326,6 +414,22 @@ export async function mintToken(options: MintTokenOptions): Promise<string> {
   // just verified it. The signature already proves the signer holds that key;
   // this catches a hub that signed a token naming somebody else's mesh.
   builder.addCode("check if mesh($m), root_mesh($m);");
+  // ADR-0020: the audience, and it is ALWAYS stated — see "THE AUDIENCE" and
+  // "UNRESTRICTED IS A STATE, NOT A SILENCE" in the module comment. Both
+  // branches are a fact plus a check in the AUTHORITY block, so a later block
+  // can neither see them nor widen them, and `self_peer` is asserted by the
+  // DESTINATION, which is what makes the destination the one that enforces.
+  if (options.audience !== undefined) {
+    for (const peer of options.audience) {
+      builder.addCodeWithParameters("audience({peer});", { peer }, {});
+    }
+    builder.addCode("check if audience($k), self_peer($k);");
+  } else {
+    // Biscuit predicates take at least one term, so the marker carries one:
+    // `audience_unrestricted()` is a parse error (prototype 10, finding F5).
+    builder.addCode("audience_unrestricted(true);");
+    builder.addCode("check if audience_unrestricted(true);");
+  }
   // Expiry, against the verifier's clock. The bound is INLINED rather than
   // read from `expires_at($e)`: a check is existential, so a rule that read the
   // fact would be satisfiable by any later `expires_at` a block cared to add.
@@ -352,6 +456,21 @@ export interface VerifyTokenOptions {
    * therefore fails the binding — deny by default, expressed in the type.
    */
   connectionPeer: PeerIdStr | Anonymous;
+  /**
+   * THIS verifier's own peerId, asserted as `self_peer` — the destination's
+   * statement about its own identity, which an audience-scoped token's check
+   * is evaluated against (ADR-0020). It is asserted by the node and never read
+   * from the token, exactly like `connectionPeer`.
+   *
+   * Optional, unlike `connectionPeer`, and omitting it fails CLOSED rather
+   * than open: a verifier that does not say who it is satisfies no `audience`
+   * fact, so it refuses every audience-scoped token and accepts unrestricted
+   * ones unchanged. That is the safe direction, and it is what lets a caller
+   * written before this option existed keep working — at the cost that a peer
+   * which simply FORGOT to pass it refuses legitimate scoped tokens. That is a
+   * loud, uniform failure rather than a quiet permissive one.
+   */
+  selfPeer?: PeerIdStr;
   /** Injected clock, for deterministic tests. Defaults to `Date.now`. */
   now?: () => number;
 }
@@ -373,6 +492,9 @@ export async function verifyToken(token: string, options: VerifyTokenOptions): P
       "verifyToken: connectionPeer must be the transport-proven peerId, or ANONYMOUS for none",
     );
   }
+  if (options.selfPeer !== undefined && typeof options.selfPeer !== "string") {
+    throw new TypeError("verifyToken: selfPeer must be this peer's own peerId string");
+  }
   const root = rootKeyFor(options.issuer);
 
   let parsed: Biscuit;
@@ -391,6 +513,11 @@ export async function verifyToken(token: string, options: VerifyTokenOptions): P
   );
   if (options.connectionPeer !== ANONYMOUS) {
     builder.addCodeWithParameters("connection_peer({peer});", { peer: options.connectionPeer }, {});
+  }
+  // The destination's statement about itself, which the token's audience check
+  // consumes (ADR-0020). Omitted, nothing satisfies `audience($k), self_peer($k)`.
+  if (options.selfPeer !== undefined) {
+    builder.addCodeWithParameters("self_peer({peer});", { peer: options.selfPeer }, {});
   }
   // This verifier contributes no policy of its own — the token's checks are the
   // whole decision. Task 30 replaces this with the access tree as Datalog.
@@ -447,7 +574,33 @@ function readClaims(
     .filter((term): term is string => typeof term === "string")
     .sort();
 
-  return { sub, iss: issuer, mesh, roles, iat, exp };
+  return { sub, iss: issuer, mesh, roles, iat, exp, audience: readAudience(authorizer) };
+}
+
+/**
+ * Which of the three audience states (ADR-0020) the authority block is in.
+ *
+ * Read through the same authorizer as everything else, so an appended block's
+ * `audience` fact is invisible here exactly as it is to the check that
+ * enforces it. Carrying BOTH families is a hub bug and is refused rather than
+ * resolved: the two carry different checks, so guessing which one describes
+ * the token would be reporting an audience this function cannot know.
+ */
+function readAudience(
+  authorizer: ReturnType<AuthorizerBuilder["buildAuthenticated"]>,
+): MeshClaims["audience"] {
+  const named = queryTerms(authorizer, "audience")
+    .filter((term): term is string => typeof term === "string")
+    .sort();
+  const unrestricted = queryTerms(authorizer, "audience_unrestricted").length > 0;
+  if (named.length > 0 && unrestricted) {
+    throw new TokenVerificationError(
+      "malformed-claims",
+      "the authority block states both an audience and audience_unrestricted",
+    );
+  }
+  if (named.length > 0) return named;
+  return unrestricted ? "unrestricted" : "unstated";
 }
 
 /** Every first term of `<predicate>($x)`, as JS values. */
@@ -485,7 +638,7 @@ function parseFailure(error: unknown): TokenVerificationError {
 
 /**
  * `authorizeWithLimits` failed. Map the failing check back to a reason by the
- * predicate it names — the three checks `mintToken` writes are the three
+ * predicate it names — the four checks `mintToken` writes are the four
  * outcomes a well-formed token can fail on, and anything else is a constraint
  * this verifier does not know how to satisfy, which denies (A-20).
  */
@@ -502,6 +655,20 @@ function denial(error: unknown): TokenVerificationError {
     return new TokenVerificationError(
       "peer-binding",
       "token subject does not match connected peer",
+      checks,
+    );
+  }
+  // ADR-0020. Matched on `audience`, which appears in the rule text of BOTH
+  // branches (`audience($k), self_peer($k)` and `audience_unrestricted(true)`),
+  // so a hand-built token carrying the marker check without its fact reports
+  // the same reason rather than falling through to the generic one. Ordered
+  // after `connection_peer`: a token failing binding AND audience at once is
+  // reported as a binding failure, because that is the one the caller can act
+  // on first (present it over the right connection, then find the right peer).
+  if (joined.includes("audience")) {
+    return new TokenVerificationError(
+      "audience",
+      "this peer is not an intended audience for this token",
       checks,
     );
   }
