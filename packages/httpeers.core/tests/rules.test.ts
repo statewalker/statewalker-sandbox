@@ -1,7 +1,7 @@
 /**
  * The node's rules and policies, in Datalog (ADR-0019, spec §6.4-6.5).
  *
- * Replaces `access-tree.test.ts` (33 cases) and `vocabulary.test.ts` (18).
+ * Replaces `access-tree.test.ts` (33 cases) and `vocabulary.test.ts` (17).
  * ADR-0019 is explicit that those two mechanisms stop shipping while their
  * PROPERTIES remain requirements, so this file is organised by property
  * rather than by function: deny by default, no privilege creep, an unknown
