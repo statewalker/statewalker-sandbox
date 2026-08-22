@@ -94,7 +94,10 @@ describe("A-2 end to end", () => {
   }, 20_000);
 
   it("E2: tokens carry iat, and it comes from the hub", async () => {
-    const claims = await verifyToken(aliceToken, { issuer: hub.peer.peerId });
+    const claims = await verifyToken(aliceToken, {
+      issuer: hub.peer.peerId,
+      connectionPeer: alice.peerId,
+    });
     expect(claims?.iat).toBeGreaterThan(0);
     expect(claims!.iat).toBeLessThanOrEqual(claims!.exp);
   });

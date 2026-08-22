@@ -82,8 +82,14 @@ describe("R-2: chaining", () => {
     const res = await alice.call(relay.peerId, `/${hub.peer.peerId}/test/whoami`, {
       token: aliceToken,
     });
-    // Reached the hub (403 from the binding) rather than 404ing at the relay.
-    expect(res.status).toBe(403);
+    // Reached the hub and was refused by the binding, rather than 404ing at
+    // the relay -- which is the whole point of this test. 401 rather than the
+    // 403 this asserted before ADR-0019: the binding is now a check inside the
+    // token (`check if bound($k), connection_peer($k)`), so the hub, which
+    // proved the RELAY on this connection, cannot verify Alice's token at all
+    // and reports no claims. Either code distinguishes "the hub answered" from
+    // "the relay never forwarded", which is what C2 establishes.
+    expect(res.status).toBe(401);
     await relay.stop();
   }, 30_000);
 
@@ -101,8 +107,12 @@ describe("R-2: chaining", () => {
     const res = await alice.call(relay.peerId, `/${hub.peer.peerId}/test/whoami`, {
       token: aliceToken,
     });
-    expect(res.status).toBe(403);
-    expect(((await res.json()) as any).error).toMatch(/does not match connected peer/);
+    // See C2 for why this is 401 and no longer 403. The refusal moved from
+    // `peer-handlers.ts`'s prose check to the token's own Datalog binding, so
+    // the far end refuses one step earlier -- still fails closed, still for
+    // exactly the reason this test names.
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as any).error).toMatch(/membership token required/);
     await relay.stop();
   }, 30_000);
 

@@ -229,7 +229,10 @@ describe("Task 14: a Node consumer over the real relay + hub", () => {
   });
 
   it("a fresh peer redeems an invitation, receives a usable token, and appears in the mesh view", async () => {
-    const claims = await verifyToken(consumer.token, { issuer: stack.hubPeerId });
+    const claims = await verifyToken(consumer.token, {
+      issuer: stack.hubPeerId,
+      connectionPeer: consumer.peerId,
+    });
     expect(claims?.sub).toBe(consumer.peerId); // bound to the CONNECTED peer, not to anything the peer claimed
     expect(claims?.mesh).toBe(stack.hubPeerId);
     expect(claims?.roles).toEqual(["member"]);
@@ -383,7 +386,10 @@ describe("Task 14: a Node consumer over the real relay + hub", () => {
     // `stack.join` already redeemed an invitation over this connection; a
     // token that verifies against the hub is proof the protocol stream
     // opened, was served, and came back.
-    const claims = await verifyToken(browserShaped.token, { issuer: stack.hubPeerId });
+    const claims = await verifyToken(browserShaped.token, {
+      issuer: stack.hubPeerId,
+      connectionPeer: browserShaped.peerId,
+    });
     expect(claims?.sub).toBe(browserShaped.peerId);
 
     // AND the connection it rode really is the relayed, WebRTC-upgraded one

@@ -86,7 +86,10 @@ describe("pairing", () => {
     expect(body.mesh).toBe(hub.peer.peerId);
     expect(body.roles).toEqual(["member"]);
 
-    const claims = await verifyToken(aliceToken, { issuer: hub.peer.peerId });
+    const claims = await verifyToken(aliceToken, {
+      issuer: hub.peer.peerId,
+      connectionPeer: alice.peerId,
+    });
     expect(claims?.sub).toBe(alice.peerId); // hub bound the token to the CONNECTED peer
   });
 
@@ -130,8 +133,18 @@ describe("binding", () => {
     // Mallory presents Alice's genuine, unexpired, correctly-signed token
     // over Mallory's own connection.
     const res = await mallory.call(hub.peer.peerId, "/test/whoami", { token: aliceToken });
-    expect(res.status).toBe(403);
-    expect(((await res.json()) as any).error).toMatch(/does not match connected peer/);
+    // The replay is refused -- that is the property, and it is unchanged.
+    //
+    // 401 rather than the 403 this asserted while the binding was
+    // `peer-handlers.ts`'s `claims.sub !== peer`. Since ADR-0019 the rule is
+    // `check if bound($k), connection_peer($k)` INSIDE the token, so Alice's
+    // token does not verify at all over Mallory's connection: `getClaims`
+    // reports no claims and the binding middleware answers "membership token
+    // required" before reaching its own check. The confused deputy is defeated
+    // one step earlier and by the token itself rather than by a verifier
+    // remembering to compare -- which is the point of moving it.
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as any).error).toMatch(/membership token required/);
   });
 
   it("rejects a token minted by a different mesh", async () => {
