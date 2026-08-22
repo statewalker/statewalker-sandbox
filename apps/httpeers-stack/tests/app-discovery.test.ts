@@ -43,7 +43,7 @@ import {
   IMAGES_KIND,
   SEARCH_KIND,
 } from "../src/pages/app/discovery.js";
-import { HUB_ACCESS, VOCABULARY } from "../src/policy.js";
+import { HUB_RULES } from "../src/policy.js";
 import { SEARCH_ADVERTISEMENT } from "../src/services/search.js";
 
 // --- half one: the resolver's own states ----------------------------------
@@ -136,15 +136,14 @@ async function buildHub(stateFilePath: string, clock: { now: number }): Promise<
   const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS, now });
   const persistent = createPersistentHub({
     filePath: stateFilePath,
-    vocabulary: VOCABULARY,
+    rules: HUB_RULES,
     now,
     createMemberStore,
   });
 
   let sweep: (() => void) | undefined;
   const peer = await createPeer({
-    accessTree: HUB_ACCESS,
-    vocabulary: VOCABULARY,
+    rules: HUB_RULES,
     usesTransportIdentity: usesTransportIdentity(),
     now,
     revocationCache: revocations,
@@ -154,7 +153,7 @@ async function buildHub(stateFilePath: string, clock: { now: number }): Promise<
         mintToken: ctx.mintToken,
         memberStore: persistent.memberStore,
         invitations: persistent.invitations,
-        vocabulary: VOCABULARY,
+        rules: HUB_RULES,
         revocations,
         now,
         presenceTtlMs: PRESENCE_TTL_MS,

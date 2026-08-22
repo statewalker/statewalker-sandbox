@@ -1,7 +1,7 @@
 /**
  * `GET /search?q=…` — the mesh's first real service, and the shape every
  * later service (image search, a real search backend) follows: a handler
- * plus its `.access` entry (`policy.ts`'s `"/search"`) plus, on a provider,
+ * plus its policy (`policy.ts`'s `/search` allow) plus, on a provider,
  * an advertisement — see the design record §5.2, "Search is a mount, not a
  * process."
  *
@@ -11,7 +11,7 @@
  * safe to run in a test with no external dependency — but the handler
  * itself (`createSearchEndpoint`) never learns that: swapping in a real
  * backend later is a change to what gets passed as `upstream`, not to
- * `createSearchEndpoint` or to `policy.ts`'s `.access` entry.
+ * `createSearchEndpoint` or to `policy.ts`'s `/search` allow.
  *
  * RESULTS GO IN THE BODY, NEVER IN A HEADER. HTTP header values are latin1
  * by specification (RFC 7230 §3.2, and enforced in practice by the Fetch
@@ -79,7 +79,7 @@ export const fixtureUpstream: SearchUpstream = async (query) => {
 /**
  * The hub's own advertisement for this service — the THIRD of the three
  * pieces the design record §5.2 says search is made of ("a handler plus its
- * `.access` entry plus its advertisement, so relocating it to a standalone
+ * policy plus its advertisement, so relocating it to a standalone
  * peer later is a change of wiring, not of code"). Task 8 built the first
  * two and left this one unwritten, which made search undiscoverable: nothing
  * in this app ever posted it, the hub does not heartbeat itself, and
@@ -90,7 +90,7 @@ export const fixtureUpstream: SearchUpstream = async (query) => {
  *
  * `kind` IS THE DISCOVERY KEY, and it is what a consumer filters on — never
  * a peer id. Keeping the literal here, next to the handler and beside
- * `policy.ts`'s `"/search"` `.access` entry, is what makes "relocate search
+ * `policy.ts`'s `/search` allow, is what makes "relocate search
  * to its own peer" a wiring change: the new peer posts this same
  * advertisement on its own heartbeat and every consumer keeps working
  * unchanged.

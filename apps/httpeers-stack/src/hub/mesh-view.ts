@@ -7,17 +7,17 @@
  * THE HUB IS A BULLETIN BOARD, NEVER AN AUTHORITY. An advertisement says
  * "worth asking"; the provider it names still decides for itself whether to
  * answer. Nothing downstream may treat inclusion in this view as a grant —
- * that is what the membership token and each provider's own `.access` tree
+ * that is what the membership token and each provider's own policy
  * are for.
  *
  * Two things vary by caller, both because different callers legitimately
  * see different views:
  *  - a member with role `hidden` is omitted from the view of anyone who does
  *    not themselves hold `std:mesh.admin` — this is the one consumer of the
- *    `hidden` role `DEFAULT_VOCABULARY` already declares;
+ *    `hidden` role `DEFAULT_RULES` already knows;
  *  - an advertisement is omitted unless the caller holds the capability that
  *    gates its `kind` (`advertisementAccess`, hub-owned config — analogous
- *    to an `.access` entry, but for the bulletin board rather than a path).
+ *    to an allow policy, but for the bulletin board rather than a path).
  */
 import type { Advertisement, MemberRecord, PresenceRecord } from "@statewalker/httpeers.core";
 
@@ -57,7 +57,7 @@ export interface BuildMeshViewInit {
   presence: PresenceRecord[];
   addrsByPeer: ReadonlyMap<string, string[]>;
   advertisements: Advertisement[];
-  /** Capabilities the caller holds (already expanded from their roles via the vocabulary). */
+  /** Capabilities the caller holds (already derived from their roles by the node's rules). */
   callerCapabilities: ReadonlySet<string>;
   /** `kind` -> capability required to see advertisements of that kind. A kind absent here is visible to any authenticated caller. */
   advertisementAccess: Readonly<Record<string, string>>;

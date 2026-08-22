@@ -29,7 +29,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { peerIdFromString } from "@libp2p/peer-id";
-import type { AccessTree } from "@statewalker/httpeers.core";
 import { createMounts, PeerCallError, verifyToken } from "@statewalker/httpeers.core";
 import type { FilesApi, ListOptions, ReadOptions } from "@statewalker/webrun-files";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
@@ -37,7 +36,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HEARTBEAT_INTERVAL_MS } from "../../src/browser/join.js";
 import { SWEEP_INTERVAL_MS } from "../../src/hub/main.js";
 import { loadFixtureImages } from "../../src/services/image-fixtures.node.js";
-import { createImagesEndpoint, IMAGES_ACCESS_TREE } from "../../src/services/images.js";
+import { createImagesEndpoint, IMAGES_POLICIES } from "../../src/services/images.js";
 import type { SearchResult } from "../../src/services/search.js";
 import { SEARCH_ADVERTISEMENT } from "../../src/services/search.js";
 import { loadOrGenerateKey, peerIdOf } from "../../src/setup/keys.js";
@@ -64,8 +63,8 @@ const PROVIDER_CHUNK_SIZE = 64;
 /** How long the provider stalls before yielding each chunk — the send window the streaming assertion measures against. */
 const PROVIDER_CHUNK_DELAY_MS = 40;
 
-/** A peer that serves nothing: deny by default and no exception. The consumer, the admin and the outsider all run this. */
-const SERVES_NOTHING: AccessTree = { "/": { anyOf: [] } };
+/** A peer that serves nothing: no policy at all, so deny by default answers everything. The consumer, the admin and the outsider all run this. */
+const SERVES_NOTHING: readonly string[] = [];
 
 /**
  * Wraps a `FilesApi` so every chunk it yields is stalled by `delayMs` and its
@@ -182,10 +181,10 @@ beforeAll(async () => {
     createImagesEndpoint({ files, images, chunkSize: PROVIDER_CHUNK_SIZE }),
   );
 
-  provider = await stack.join({ roles: ["member"], accessTree: IMAGES_ACCESS_TREE, mounts });
-  consumer = await stack.join({ roles: ["member"], accessTree: SERVES_NOTHING });
-  admin = await stack.join({ roles: ["admin"], accessTree: SERVES_NOTHING });
-  outsider = await stack.join({ roles: [], accessTree: SERVES_NOTHING });
+  provider = await stack.join({ roles: ["member"], policies: IMAGES_POLICIES, mounts });
+  consumer = await stack.join({ roles: ["member"], policies: SERVES_NOTHING });
+  admin = await stack.join({ roles: ["admin"], policies: SERVES_NOTHING });
+  outsider = await stack.join({ roles: [], policies: SERVES_NOTHING });
 
   // One explicit beat each before any timer starts, so the mesh view is
   // populated deterministically by the time the first test reads it rather
@@ -316,9 +315,11 @@ describe("Task 14: a Node consumer over the real relay + hub", () => {
     });
     expect(res.status).toBe(403);
 
-    // Verbatim from `withAccessTree`'s own decision -- `access-tree.ts`
-    // composes `requires one of: <capabilities>` and `hub/endpoints.ts`-style
-    // handlers put it in `{ error }`. Asserted exactly, not by regex on a
+    // Verbatim from `withPolicy`'s own decision. Under ADR-0019 Biscuit
+    // reports NOTHING for a no-matching-policy denial, so `rules.ts` composes
+    // `requires one of: <capabilities>` from its SUFFICIENCY PROBE -- it
+    // re-runs the same decision once per derivable capability and names the
+    // ones that would have flipped it. Asserted exactly, not by regex on a
     // fragment: a denial that stopped naming the capability it wants would
     // still pass a looser check.
     const body = (await res.json()) as { error: string };
@@ -379,7 +380,7 @@ describe("Task 14: a Node consumer over the real relay + hub", () => {
     // `/httpeers/1.0.0` request and nothing weaker.
     const browserShaped = await stack.join({
       roles: ["member"],
-      accessTree: SERVES_NOTHING,
+      policies: SERVES_NOTHING,
       hubDial: "webrtc",
     });
 
@@ -427,7 +428,7 @@ describe("Task 14: a Node consumer over the real relay + hub", () => {
     // `/p2p-circuit/p2p/<peer>`. A relayed connection is a LIMITED connection,
     // and libp2p refuses to open a protocol stream on one. Task 15's browsers
     // complete the upgrade; Node here cannot (see `harness.ts`).
-    const circuitOnly = await stack.join({ roles: ["member"], accessTree: SERVES_NOTHING });
+    const circuitOnly = await stack.join({ roles: ["member"], policies: SERVES_NOTHING });
     await dialAddr(circuitOnly, `${stack.relayAddr}/p2p-circuit/p2p/${provider.peerId}`);
 
     await expect(

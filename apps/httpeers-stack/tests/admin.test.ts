@@ -20,8 +20,8 @@
  *
  * `buildHub` below is deliberately NOT `tests/support/mesh.ts`'s
  * `buildTestHub` — that helper (and `hub.test.ts`'s own local `buildHub`,
- * which this one is modeled on) wires `DEFAULT_ACCESS_TREE`/
- * `DEFAULT_VOCABULARY`, the library's generic defaults, unchanged by this
+ * which this one is modeled on) wires `DEFAULT_RULES`,
+ * the library's generic default, unchanged by this
  * task on purpose (see `policy.ts`'s module comment). This suite wires
  * `HUB_ACCESS`/`VOCABULARY` instead — this app's own policy, the one
  * `hub/main.ts`'s production peer actually runs.
@@ -41,7 +41,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHubEndpoints, usesTransportIdentity } from "../src/hub/endpoints.js";
 import { createPersistentHub, type InvitationStore } from "../src/hub/persist.js";
-import { HUB_ACCESS, VOCABULARY } from "../src/policy.js";
+import { HUB_RULES } from "../src/policy.js";
 
 const PRESENCE_TTL_MS = 15_000;
 const MAX_TOKEN_TTL_MS = 5 * 60_000;
@@ -63,13 +63,12 @@ async function buildHub(stateFilePath: string): Promise<TestHub> {
   const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS, now: clock });
   const persistent = createPersistentHub({
     filePath: stateFilePath,
-    vocabulary: VOCABULARY,
+    rules: HUB_RULES,
     createMemberStore,
   });
 
   const peer = await createPeer({
-    accessTree: HUB_ACCESS,
-    vocabulary: VOCABULARY,
+    rules: HUB_RULES,
     usesTransportIdentity: usesTransportIdentity(),
     now: clock,
     // Same instance `createHubEndpoints` below bumps on DELETE
@@ -82,7 +81,7 @@ async function buildHub(stateFilePath: string): Promise<TestHub> {
         mintToken: ctx.mintToken,
         memberStore: persistent.memberStore,
         invitations: persistent.invitations,
-        vocabulary: VOCABULARY,
+        rules: HUB_RULES,
         revocations,
         presenceTtlMs: PRESENCE_TTL_MS,
       }).mounts,
@@ -252,17 +251,17 @@ describe("Task 8: admin revocation and the search mount", () => {
     expect(((await res.json()) as { error: string }).error).toMatch(/app:search\.query/);
   });
 
-  it("the vocabulary and revocation endpoints still answer 304 on an unchanged version", async () => {
+  it("the rules and revocation endpoints still answer 304 on an unchanged version", async () => {
     const bobToken = await invite(hub, "bob", "BOB-CODE", ["member"]);
 
     const vocabFirst = await hub.peer.dispatch(
-      requestAs("bob", "/.well-known/vocabulary", { headers: bearer(bobToken) }),
+      requestAs("bob", "/.well-known/rules", { headers: bearer(bobToken) }),
     );
     expect(vocabFirst.status).toBe(200);
     const vocabEtag = vocabFirst.headers.get("etag");
     expect(vocabEtag).toBeTruthy();
     const vocabSecond = await hub.peer.dispatch(
-      requestAs("bob", "/.well-known/vocabulary", {
+      requestAs("bob", "/.well-known/rules", {
         headers: { ...bearer(bobToken), "if-none-match": vocabEtag! },
       }),
     );

@@ -56,6 +56,7 @@ import {
   createMonotonicClock,
   createPeer,
   RevocationRegistry,
+  roleNames,
 } from "@statewalker/httpeers.core";
 import {
   createHubEndpoints,
@@ -65,7 +66,7 @@ import {
 import type { InvitationStore, SnapshotStore } from "../hub/hub-state.js";
 import { createHubState } from "../hub/hub-state.js";
 import type { MeshView } from "../hub/mesh-view.js";
-import { HUB_ACCESS, VOCABULARY } from "../policy.js";
+import { HUB_RULES } from "../policy.js";
 import { dialRelay, waitForCircuitReservation } from "../reservation.js";
 import { mountEdge } from "./edge.js";
 import { createEdgeDispatch } from "./edge-dispatch.js";
@@ -140,9 +141,11 @@ export interface BrowserHubHandle {
   /** Remove a member and revoke its tokens -- see `removeMember` below for the call path and why it is not the edge. */
   removeMember: (peerId: PeerIdStr) => Promise<RemoveMemberResult>;
   /**
-   * Every role this mesh defines, read from the vocabulary rather than
+   * Every role this mesh defines, read off the rules themselves rather than
    * hard-coded, so a role added to `../policy.ts` appears in the UI without
-   * anyone remembering to update a second list.
+   * anyone remembering to update a second list. Since ADR-0019 there is no
+   * separate role registry: a role exists here exactly when some rule fires
+   * on it.
    */
   roleNames: () => string[];
   /**
@@ -261,7 +264,7 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
   const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS, now: clock });
   const state = createHubState({
     store: init.snapshotStore,
-    vocabulary: VOCABULARY,
+    rules: HUB_RULES,
     createMemberStore,
   });
 
@@ -283,8 +286,7 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
       // the first redemption. (Already reported as a doc defect in
       // `httpeers.core`; see `../hub/main.ts`, which carries the same note.)
       privateKey: init.privateKey,
-      accessTree: HUB_ACCESS,
-      vocabulary: VOCABULARY,
+      rules: HUB_RULES,
       usesTransportIdentity: usesTransportIdentity(),
       now: clock,
       // The live registry, not a pulled cache: this peer OWNS the source of
@@ -298,7 +300,7 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
           mintToken: ctx.mintToken,
           memberStore: state.memberStore,
           invitations: state.invitations,
-          vocabulary: VOCABULARY,
+          rules: HUB_RULES,
           revocations,
           presenceTtlMs: init.presenceTtlMs ?? DEFAULT_PRESENCE_TTL_MS,
           advertisementAccess: init.advertisementAccess,
@@ -325,8 +327,8 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
   // `fetch()` client with no credential of its own. An ordinary page gets
   // that token by joining; this page cannot join itself, so it signs one,
   // which is exactly what being the issuer means. It is an ordinary token
-  // in every respect: `admin` roles out of `../policy.ts`'s vocabulary,
-  // `mesh` = this hub, checked by the same `.access` tree and the same
+  // in every respect: `admin` roles out of `../policy.ts`'s rules,
+  // `mesh` = this hub, checked by the same policies and the same
   // revocation registry as anybody else's. It expires like anybody else's
   // too, hence the renewal timer -- `token()` is synchronous by contract,
   // so it can only ever return the last one minted.
@@ -402,7 +404,7 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
    * answer. Going through the mount table is not a workaround for that --
    * it is the layer that was actually being asked for.
    *
-   * WHAT THIS BYPASSES, SAID PLAINLY: the `.access` gate on `/admin/`
+   * WHAT THIS BYPASSES, SAID PLAINLY: the policy gate on `/admin/`
    * (`std:mesh.admin`). That gate authorises REMOTE callers, and this
    * caller is the hub itself -- the process holding the signing key that
    * would have minted any token it could present, and holding the
@@ -431,8 +433,8 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
   };
 
   const setMemberRoles = (peerId: PeerIdStr, roles: string[]): { policyVersion: number } => {
-    // Throws (via `assertValid`) if a role is not in the vocabulary -- caught
-    // here, at the call, rather than as a silent denial three hops later.
+    // Throws (via `assertValid`) if no rule knows the role -- caught here, at
+    // the call, rather than as a silent denial three hops later.
     state.memberStore.setRoles(peerId, roles);
     revocations.changeRoles(peerId, roles);
     return { policyVersion: revocations.policyVersion() };
@@ -448,7 +450,7 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
     meshView: () =>
       meshView?.() ?? { version: 0, self: peer.peerId, members: [], advertisements: [] },
     removeMember,
-    roleNames: () => Object.keys(VOCABULARY.roles),
+    roleNames: () => roleNames(HUB_RULES),
     setMemberRoles,
     async stop() {
       clearInterval(sweepTimer);

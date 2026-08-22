@@ -25,15 +25,16 @@ import type {
   PeerIdStr,
   PresenceStore,
   RevocationRegistry,
+  RuleSet,
   UsesTransportIdentity,
-  Vocabulary,
 } from "@statewalker/httpeers.core";
 import {
   ANONYMOUS,
   createAdvertisementStore,
   createMounts,
   createPresenceStore,
-  expandRoles,
+  capabilityNames,
+  deriveCapabilities,
   json,
   lookupClaims,
   lookupPeer,
@@ -106,7 +107,8 @@ export interface HubEndpointsInit {
   mintToken: (sub: string, roles: string[], ttlMs?: number) => Promise<string>;
   memberStore: MemberStore;
   invitations: InvitationStore;
-  vocabulary: Vocabulary;
+  /** This mesh's Datalog rules and policies (ADR-0019) — published read-only, and the source of the caller's capabilities in the mesh view. */
+  rules: RuleSet;
   revocations: RevocationRegistry;
   /** `kind` -> capability required to see advertisements of that kind. Defaults to `{}` (no kind gated). */
   advertisementAccess?: Record<string, string>;
@@ -139,8 +141,8 @@ export interface HubEndpoints {
    * parallel notion that could disagree with the one every remote peer
    * reads — the exact kind of divergence that turns into a debugging trap.
    *
-   * THE HUB'S OWN VIEW SEES EVERYTHING: every capability in the vocabulary
-   * is passed as the caller's, so `hidden` members and every gated
+   * THE HUB'S OWN VIEW SEES EVERYTHING: every capability the rules can
+   * derive is passed as the caller's, so `hidden` members and every gated
    * advertisement are included. There is nobody to hide from — this is the
    * machine that holds the list, and an operator shown a filtered version
    * of their own mesh would be misled about what they are administering.
@@ -306,7 +308,7 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
       versions: {
         mesh: meshVersion,
         policy: init.revocations.policyVersion(),
-        vocabulary: init.vocabulary.version,
+        rules: init.rules.version,
       },
       // `ttl` is unchanged context from the archive (`CHANGES-v0.8.0.txt`'s
       // heartbeat shape `{ token, versions, meshVersion, ttl }`), not part
@@ -363,19 +365,23 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
       return new Response(null, { status: 304, headers: { etag } });
     }
 
-    const view = viewFor(claims.sub, expandRoles(init.vocabulary, claims.roles));
+    const view = viewFor(claims.sub, deriveCapabilities(init.rules, claims.roles));
 
     return new Response(JSON.stringify(view), {
       headers: { "content-type": "application/json", etag },
     });
   });
 
-  app.get("/.well-known/vocabulary", (c) => {
-    const etag = `"vocab${init.vocabulary.version}"`;
+  // ADR-0016's amendment: the rules are published, still read-only in the
+  // strict sense -- what this returns influences no decision, here or on any
+  // other peer, which is why no signing scheme is needed for it. It is served
+  // for discovery, debugging and the explainability of a denial.
+  app.get("/.well-known/rules", (c) => {
+    const etag = `"rules${init.rules.version}"`;
     if (c.req.header("if-none-match") === etag) {
       return new Response(null, { status: 304, headers: { etag } });
     }
-    return new Response(JSON.stringify(init.vocabulary), {
+    return new Response(JSON.stringify(init.rules), {
       headers: { "content-type": "application/json", etag },
     });
   });
@@ -414,7 +420,7 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
     createAdminEndpoints({ memberStore: init.memberStore, revocations: init.revocations }),
   );
   // Revocation for `/search` (and every other route on this hub) is NOT
-  // handled here. `.access` (`policy.ts`) only ever checks the CAPABILITY a
+  // handled here. Policy (`policy.ts`) only ever checks the CAPABILITY a
   // token's roles expand to, which cannot see a membership change made
   // after the token was minted -- but the fix for that is a single seam on
   // this peer's own `createPeer` (`hub/main.ts`'s `revocationCache:
@@ -434,9 +440,9 @@ export function createHubEndpoints(init: HubEndpointsInit): HubEndpoints {
 
   return {
     mounts,
-    // Every capability in the vocabulary, so the hub's own view is
+    // Every capability the rules can derive, so the hub's own view is
     // unfiltered -- see this field's doc comment on `HubEndpoints`.
-    meshView: () => viewFor(init.selfPeerId, new Set(Object.keys(init.vocabulary.capabilities))),
+    meshView: () => viewFor(init.selfPeerId, new Set(capabilityNames(init.rules))),
     sweep() {
       const expired = presenceStore.sweep();
       if (expired.length === 0) return;

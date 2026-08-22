@@ -15,8 +15,8 @@
  * each of which is a thing under test rather than a preference:
  *
  *   1. `startRelay`/`startHub` are called, not re-implemented — so the key
- *      loaders, the `.access` tree from `../../src/policy.ts` (NOT
- *      `httpeers.core`'s `DEFAULT_ACCESS_TREE`, which has no `app:`
+ *      loaders, the derivation rules from `../../src/policy.ts` (NOT
+ *      `httpeers.core`'s `DEFAULT_RULES`, which derives no `app:`
  *      capability at all), the persistent hub state file and the search mount
  *      are all the production ones.
  *   2. Identities come from `RELAY_SEED`/`HUB_SEED` through
@@ -74,12 +74,12 @@ import { tcp } from "@libp2p/tcp";
 import { webRTC } from "@libp2p/webrtc";
 import { webSockets } from "@libp2p/websockets";
 import { multiaddr } from "@multiformats/multiaddr";
-import type { AccessTree, Libp2p, Mounts, PeerIdStr } from "@statewalker/httpeers.core";
+import type { Libp2p, Mounts, PeerIdStr } from "@statewalker/httpeers.core";
 import { createLibp2p } from "libp2p";
 import { preDialPeer, redeemInvitation } from "../../src/browser/join.js";
 import { startHub } from "../../src/hub/main.js";
 import type { MeshView } from "../../src/hub/mesh-view.js";
-import { VOCABULARY } from "../../src/policy.js";
+import { appRules } from "../../src/policy.js";
 import { startRelay } from "../../src/relay/main.js";
 import { dialRelay, waitForCircuitReservation } from "../../src/reservation.js";
 import { loadOrGenerateKey, peerIdOf } from "../../src/setup/keys.js";
@@ -161,8 +161,8 @@ export interface StackPeer extends TestPeer {
 export interface JoinInit {
   /** Roles the invitation this peer redeems carries. `[]` is legal and means "a member with no capabilities at all". */
   roles: string[];
-  /** This peer's own `.access` tree, evaluated against `../../src/policy.ts`'s `VOCABULARY`. */
-  accessTree: AccessTree;
+  /** This peer's own Datalog policies, evaluated over `../../src/policy.ts`'s `APP_RULES`. */
+  policies: readonly string[];
   /** This peer's own mount table. Omit for a pure consumer that serves nothing. */
   mounts?: Mounts;
   /**
@@ -315,8 +315,7 @@ export async function startStack(init: StartStackInit = {}): Promise<Stack> {
       const peer = await buildTestPeer({
         node,
         mounts: init.mounts,
-        accessTree: init.accessTree,
-        vocabulary: VOCABULARY,
+        rules: appRules(init.policies),
         hubPeerId,
       });
       // Establish the connection to the hub explicitly before any protocol

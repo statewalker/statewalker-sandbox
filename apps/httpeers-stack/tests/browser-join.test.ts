@@ -16,7 +16,7 @@
  * EACH version counter gates ONLY its own section. Proven below by
  * bumping the hub's mesh version alone (a second invitation redeemed,
  * which adds a member with no policy or vocabulary change) and asserting
- * the vocabulary/revocations endpoints are NOT called again on the
+ * the rules/revocations endpoints are NOT called again on the
  * heartbeat that picks it up.
  */
 import { multiaddr } from "@multiformats/multiaddr";
@@ -74,7 +74,7 @@ describe("join.ts against a real hub and a real TCP peer", () => {
     expect(typeof redemption.token).toBe("string");
   }, 20_000);
 
-  it("startJoin's heartbeat gates each section on its own version counter -- a mesh-only change does not refetch vocabulary or revocations", async () => {
+  it("startJoin's heartbeat gates each section on its own version counter -- a mesh-only change does not refetch the rules or the revocations", async () => {
     hub = await buildTestHub();
     clientPeer = await buildTestPeer({ hubPeerId: hub.peer.peerId });
     await clientPeer.libp2p.dial(multiaddr(hub.peer.addrs()[0]!));
@@ -116,17 +116,17 @@ describe("join.ts against a real hub and a real TCP peer", () => {
       expect.arrayContaining([
         "/.well-known/presence",
         "/.well-known/mesh",
-        "/.well-known/vocabulary",
+        "/.well-known/rules",
         "/.well-known/revocations",
       ]),
     );
     expect(join.meshView()).not.toBeNull();
-    expect(join.vocabulary()).not.toBeNull();
+    expect(join.rules()).not.toBeNull();
     calls.length = 0; // reset the log -- everything from here on is attributable to the second heartbeat alone.
 
     // Bump ONLY the hub's mesh version: a second member redeeming an
     // invitation adds to the member list (bumpMesh()) without touching
-    // policyVersion or vocabulary.version at all (hub/endpoints.ts's
+    // policyVersion or the rule set's version at all (hub/endpoints.ts's
     // `/.well-known/invite` handler calls memberStore.add + bumpMesh
     // only).
     const otherPeer = await buildTestPeer({ hubPeerId: (hub as TestHub).peer.peerId });
@@ -142,7 +142,7 @@ describe("join.ts against a real hub and a real TCP peer", () => {
       // `heartbeatOnce`). Waiting on `calls` alone therefore let the
       // assertions below race an in-flight request, and both of them read
       // state that request had not written yet: `meshView()` was still the
-      // pre-redemption view, and a `/.well-known/vocabulary` fetch that WOULD
+      // pre-redemption view, and a `/.well-known/rules` fetch that WOULD
       // have followed had not been issued, so the negative assertions could
       // pass vacuously. It held on an idle machine and failed roughly one run
       // in four once Task 14's e2e suite (six libp2p nodes, a relay and a hub
@@ -164,7 +164,7 @@ describe("join.ts against a real hub and a real TCP peer", () => {
       expect(calls).toContain("/.well-known/presence");
       expect(calls).toContain("/.well-known/mesh");
       // THE ASSERTION THAT MATTERS: neither counter that did NOT move was refetched.
-      expect(calls).not.toContain("/.well-known/vocabulary");
+      expect(calls).not.toContain("/.well-known/rules");
       expect(calls).not.toContain("/.well-known/revocations");
 
       expect(join.meshView()?.members.some((m) => m.peerId === otherPeer.peerId)).toBe(true);

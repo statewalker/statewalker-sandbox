@@ -15,7 +15,7 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { MemberStore, Vocabulary } from "@statewalker/httpeers.core";
+import type { MemberStore, RuleSet } from "@statewalker/httpeers.core";
 import type { HubSnapshot, PersistentHub, SnapshotStore } from "./hub-state.js";
 import { createHubState, EMPTY_SNAPSHOT } from "./hub-state.js";
 
@@ -63,9 +63,9 @@ export interface CreatePersistentHubInit {
   filePath?: string;
   /** Any other backing store -- a browser page passes one of these instead of a path. */
   store?: SnapshotStore;
-  vocabulary: Vocabulary;
+  rules: RuleSet;
   now?: () => number;
-  createMemberStore: (vocabulary: Vocabulary, clock?: () => number) => MemberStore;
+  createMemberStore: (rules: RuleSet, clock?: () => number) => MemberStore;
 }
 
 /**
@@ -91,7 +91,7 @@ export function createPersistentHub(init: CreatePersistentHubInit): PersistentHu
 
   return createHubState({
     store,
-    vocabulary: init.vocabulary,
+    rules: init.rules,
     now: init.now,
     createMemberStore: init.createMemberStore,
   });

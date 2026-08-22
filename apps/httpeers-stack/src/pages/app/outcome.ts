@@ -13,10 +13,10 @@
  *  - `ok`: the provider answered.
  *  - `denied`: the provider answered, and refused. 403 (a capability the
  *    caller lacks, or a revoked membership) or 401 (no usable token at
- *    all). The `.access` tree's own `reason` travels in the JSON body's
- *    `error` field (`httpeers.core`'s `access-tree.ts`, which answers
- *    `json({ error: decision.reason }, status)`), and A-1's
- *    `{allowed, source, reason}` exists precisely so that reason is
+ *    all). The authorizer's own `reason` travels in the JSON body's
+ *    `error` field (`httpeers.core`'s `rules.ts`, which answers
+ *    `json({ error: decision.reason }, status)`), and A-06's
+ *    `{allowed, matched, failed, reason}` exists precisely so that reason is
  *    debuggable by someone who did not write the policy. It is rendered
  *    unaltered -- summarising it would throw away the only thing that makes
  *    a denial explicable.

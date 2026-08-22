@@ -182,7 +182,10 @@ describe("access policy", () => {
     // That delta's other three access-tree tests were already applied by an
     // earlier task; this integration assertion lived in a suite that did not
     // exist yet, so it is applied here, on the archive's own authority, not
-    // edited to make a failure disappear.
+    // edited to make a failure disappear. ADR-0019 replaced the tree with
+    // Datalog and this wording SURVIVED: `rules.ts` reconstructs it by
+    // evaluation (the sufficiency probe) rather than by reading an `anyOf`
+    // list off a governing entry.
     expect(((await res.json()) as any).error).toMatch(/requires one of: std:mesh\.admin/);
   });
 

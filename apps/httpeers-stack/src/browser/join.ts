@@ -24,7 +24,7 @@ import type {
   Peer,
   PeerIdStr,
   RevocationCache,
-  Vocabulary,
+  RuleSet,
 } from "@statewalker/httpeers.core";
 import type { MeshView } from "../hub/mesh-view.js";
 
@@ -306,7 +306,7 @@ export async function resumeMembership(init: ResumeMembershipInit): Promise<Resu
 export interface HeartbeatVersions {
   mesh: number;
   policy: number;
-  vocabulary: number;
+  rules: number;
 }
 
 interface PresenceHeartbeatResponse {
@@ -390,8 +390,8 @@ export interface JoinInit {
 export interface JoinHandle {
   /** The mesh view as of the last time `versions.mesh` moved -- `null` until the first heartbeat lands. Never fetched more often than that: re-fetching every heartbeat regardless of whether anything changed is exactly the design the version vector replaces. */
   meshView(): MeshView | null;
-  /** The vocabulary as of the last time `versions.vocabulary` moved -- `null` until the first heartbeat lands. */
-  vocabulary(): Vocabulary | null;
+  /** The mesh's published rule set as of the last time `versions.rules` moved -- `null` until the first heartbeat lands. READ-ONLY in the strict sense (ADR-0016): what it returns influences no decision here or anywhere else; this page's own policy is its own value. */
+  rules(): RuleSet | null;
   /**
    * This peer's CURRENT membership token, read at call time.
    *
@@ -437,8 +437,8 @@ export function startJoin(init: JoinInit): JoinHandle {
 
   let meshViewCache: MeshView | null = null;
   let meshVersion = 0;
-  let vocabularyCache: Vocabulary | null = null;
-  let vocabularyVersion = 0;
+  let rulesCache: RuleSet | null = null;
+  let rulesVersion = 0;
   let revocationEntriesCache: ChangeEntry[] = [];
 
   async function heartbeatOnce(): Promise<void> {
@@ -499,14 +499,14 @@ export function startJoin(init: JoinInit): JoinHandle {
         }
       }
 
-      if (body.versions.vocabulary !== vocabularyVersion) {
-        const vocabRes = await peer.call(hubPeerId, "/.well-known/vocabulary", {
+      if (body.versions.rules !== rulesVersion) {
+        const rulesRes = await peer.call(hubPeerId, "/.well-known/rules", {
           method: "GET",
           token,
         });
-        if (vocabRes.ok) {
-          vocabularyCache = (await vocabRes.json()) as Vocabulary;
-          vocabularyVersion = body.versions.vocabulary;
+        if (rulesRes.ok) {
+          rulesCache = (await rulesRes.json()) as RuleSet;
+          rulesVersion = body.versions.rules;
         }
       }
 
@@ -562,7 +562,7 @@ export function startJoin(init: JoinInit): JoinHandle {
 
   return {
     meshView: () => meshViewCache,
-    vocabulary: () => vocabularyCache,
+    rules: () => rulesCache,
     token: () => token, // read at call time, never snapshotted -- see `JoinHandle.token`.
     stop() {
       clearInterval(heartbeatTimer);

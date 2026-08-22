@@ -469,15 +469,13 @@ function renderSession(state: SessionState): void {
 
 // --- the session ----------------------------------------------------------
 
-// A CONSUMER SERVES NOTHING, AND SAYS SO. No mounts, and an `.access` tree
-// that denies everything: this peer answers no path for any caller. Stating
-// that explicitly is not ceremony -- `createPeer` evaluates this tree
-// against every inbound request, so an empty-but-permissive tree here would
-// silently make a page that offers no service reachable for one anyway.
+// A CONSUMER SERVES NOTHING, AND SAYS SO. No mounts and no policies: this
+// peer answers no path for any caller, because deny by default is what an
+// empty policy set means -- there is no entry to write and none to get wrong.
 const session: PeerSession = createPeerSession({
   key: EDGE_KEY,
   mounts: createMounts(),
-  accessTree: { "/": { anyOf: [] } },
+  policies: [],
   // Local-loopback dev only -- see `../../browser/node-profile.ts`'s
   // `CreateBrowserNodeInit.dev` doc comment.
   dev: location.hostname === "localhost" || location.hostname === "127.0.0.1",

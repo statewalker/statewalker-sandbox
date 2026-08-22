@@ -57,7 +57,6 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AccessTree } from "@statewalker/httpeers.core";
 import type { Browser, BrowserType, Page } from "playwright";
 import { chromium, firefox } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -99,8 +98,8 @@ const PROVIDER_CHUNK_DELAY_MS = 40;
 /** The fixture the streaming test reads. 361 bytes, so 5 full 64-byte chunks and a 41-byte tail. */
 const STREAMED_IMAGE_ID = "relay-node";
 
-/** A peer that serves nothing: deny by default, no exception. What the app page itself runs. */
-const SERVES_NOTHING: AccessTree = { "/": { anyOf: [] } };
+/** A peer that serves nothing: no policy at all, so deny by default answers everything. What the app page itself runs. */
+const SERVES_NOTHING: readonly string[] = [];
 
 /** A query the hub's fixture set answers with at least one result (`src/services/search-fixtures.json`). */
 const SEARCH_QUERY = "relay";
@@ -927,7 +926,7 @@ describe.each(BROWSERS)("Task 15: two browser peers in $name", ({ name, launcher
 
       const denial = await session.appPage.textContent("#admin-status");
       expect(denial).toContain("refused (403)");
-      // `access-tree.ts`'s own wording for a capability the caller lacks —
+      // `rules.ts`'s own wording for a capability the caller lacks —
       // rendered unaltered by `outcome.ts`, which is what makes a denial
       // explicable to someone who did not write the policy.
       expect(denial).toContain("std:mesh.admin");
@@ -974,7 +973,7 @@ describe.each(BROWSERS)("Task 15: two browser peers in $name", ({ name, launcher
       // The revocation is driven by a NODE ADMIN, not by the page — the page
       // holds `member` and the previous test proved it cannot revoke anyone.
       // This is the browser half of what leg 1 proved in process.
-      session.admin = await session.stack.join({ roles: ["admin"], accessTree: SERVES_NOTHING });
+      session.admin = await session.stack.join({ roles: ["admin"], policies: SERVES_NOTHING });
       const appPeerId = await peerIdOfPage(session.appPage);
       const res = await session.admin.call(session.stack.hubPeerId, `/admin/members/${appPeerId}`, {
         method: "DELETE",

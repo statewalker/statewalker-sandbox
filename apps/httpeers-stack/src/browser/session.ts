@@ -39,7 +39,7 @@
  * destroys something -- `resetIdentity` -- says what it costs and is named
  * separately.
  */
-import type { AccessTree, Ed25519PrivateKey, Mounts } from "@statewalker/httpeers.core";
+import type { Ed25519PrivateKey, Mounts } from "@statewalker/httpeers.core";
 import type { IdentityStoreInit } from "./identity.js";
 import { clearIdentity, loadOrCreateIdentity, peerIdOf, readIdentity } from "./identity.js";
 import type { AdvertisementInput, PresenceRefusal } from "./join.js";
@@ -131,7 +131,8 @@ export interface PeerSessionInit {
   /** Everything `startBrowserPeer` needs that is this PAGE's own, and nothing that is the session's. */
   key: string;
   mounts: Mounts;
-  accessTree: AccessTree;
+  /** This page's own Datalog policies -- see `startBrowserPeer`'s `policies`. */
+  policies: readonly string[];
   advertisements?: () => AdvertisementInput[];
   serviceWorkerUrl?: string;
   dev: boolean;
@@ -275,7 +276,7 @@ export function createPeerSession(init: PeerSessionInit): PeerSession {
       const joined = await startPeer({
         key: init.key,
         mounts: init.mounts,
-        accessTree: init.accessTree,
+        policies: init.policies,
         advertisements: init.advertisements,
         serviceWorkerUrl: init.serviceWorkerUrl,
         dev: init.dev,

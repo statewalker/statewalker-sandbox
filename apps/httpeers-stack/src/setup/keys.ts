@@ -14,7 +14,7 @@
  * what lets a provider verify a token offline with no key fetch). A
  * `loadOrGenerateKey` that quietly re-derived a key on a second call would
  * mean every previously issued token silently stops verifying, every
- * `.access` policy naming the issuer goes stale, and `pnpm bootstrap` run a
+ * policy naming the issuer goes stale, and `pnpm bootstrap` run a
  * second time (e.g. after a crash, or by a second operator on the same
  * checkout) would have invisibly re-founded the mesh.
  *

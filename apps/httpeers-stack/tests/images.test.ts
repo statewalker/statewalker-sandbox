@@ -1,6 +1,6 @@
 /**
  * Task 12: `GET /images` / `GET /images/{id}` and the image peer's own
- * `.access` tree.
+ * policy.
  *
  * WHAT THIS FILE PROVES UNDER NODE, AND WHY THAT IS THE RIGHT BOUNDARY.
  * `createImagesEndpoint`/`IMAGES_ACCESS_TREE` (`src/services/images.ts`)
@@ -10,7 +10,7 @@
  * through `peer.dispatch` directly, exactly like `search.test.ts`/
  * `admin.test.ts` already do), this suite exercises the full request path
  * a remote peer's `peer.call` would take -- transport-duplex binding,
- * `withAccessTree`, the router, this service's own handler -- with nothing
+ * `withPolicy`, the router, this service's own handler -- with nothing
  * faked. It also proves the one property the brief calls out specifically:
  * a streamed response arrives in MORE THAN ONE CHUNK, not merely that the
  * bytes are correct (a buffering implementation would pass a bytes-only
@@ -38,12 +38,11 @@ import {
 } from "@statewalker/httpeers.core";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { describe, expect, it } from "vitest";
-import { VOCABULARY } from "../src/policy.js";
 import { loadFixtureImages } from "../src/services/image-fixtures.node.js";
 import {
   createImagesEndpoint,
   DEFAULT_CHUNK_SIZE,
-  IMAGES_ACCESS_TREE,
+  IMAGES_RULES,
   type ImageInfo,
   imagePath,
 } from "../src/services/images.js";
@@ -79,7 +78,7 @@ async function drain(res: Response): Promise<{ bytes: Uint8Array; chunkSizes: nu
   return { bytes, chunkSizes };
 }
 
-/** A peer whose ONLY mount is the images service, running its OWN `.access` tree (never the hub's) -- see `IMAGES_ACCESS_TREE`'s own doc comment for why this is the design's "provider decides who may read" made concrete. `mintToken` is captured off the `mounts` factory context exactly like `hub/main.ts` does for its own endpoints -- this peer trusts tokens it mints itself (`hubPeerId` defaults to its own `peerId`), which is all a self-contained unit test needs; no separate hub process is required to prove the access tree. */
+/** A peer whose ONLY mount is the images service, running its OWN policy (never the hub's) -- see `IMAGES_POLICIES`'s own doc comment for why this is the design's "provider decides who may read" made concrete. `mintToken` is captured off the `mounts` factory context exactly like `hub/main.ts` does for its own endpoints -- this peer trusts tokens it mints itself (`hubPeerId` defaults to its own `peerId`), which is all a self-contained unit test needs; no separate hub process is required to prove the policy. */
 async function buildImagesPeer(
   images: ImageInfo[],
   initialFiles: Record<string, Uint8Array>,
@@ -88,8 +87,7 @@ async function buildImagesPeer(
   let mintToken: MountsFactoryContext["mintToken"] | undefined;
   const files = new MemFilesApi({ initialFiles });
   const peer = await createPeer({
-    accessTree: IMAGES_ACCESS_TREE,
-    vocabulary: VOCABULARY,
+    rules: IMAGES_RULES,
     mounts: (ctx) => {
       mintToken = ctx.mintToken;
       const mounts = createMounts();
@@ -197,13 +195,13 @@ describe("Task 12: GET /images/{id} (streamed bytes)", () => {
     await peer.stop();
   });
 
-  it("an id absent from the catalogue is a 404 at the handler itself, decoupled from the access tree", async () => {
-    // Calls the raw handler directly -- bypasses `createPeer`/`withAccessTree`
+  it("an id absent from the catalogue is a 404 at the handler itself, decoupled from policy", async () => {
+    // Calls the raw handler directly -- bypasses `createPeer`/`withPolicy`
     // entirely, so this proves the HANDLER's own 404 branch in isolation.
     // (Also reachable through the full peer stack now -- see "an id outside
-    // the catalogue" below -- since `IMAGES_ACCESS_TREE` grants the whole
+    // the catalogue" below -- since `IMAGES_POLICIES` grants the whole
     // `/images` subtree, not one leaf per known id; existence-checking is
-    // this handler's job, not the access tree's.)
+    // this handler's job, not policy's.)
     const files = new MemFilesApi({ initialFiles: TINY_FILES });
     const handler = createImagesEndpoint({ files, images: TINY_IMAGES });
     const res = await handler(new Request("http://peer/images/does-not-exist"));
@@ -212,7 +210,7 @@ describe("Task 12: GET /images/{id} (streamed bytes)", () => {
   });
 });
 
-describe("Task 12: the provider's own `.access` tree -- it decides who may read", () => {
+describe("Task 12: the provider's own policy -- it decides who may read", () => {
   it("a member (granted app:images.read) reads both the list and an image", async () => {
     const { peer, mintToken } = await buildImagesPeer(TINY_IMAGES, TINY_FILES);
     const token = await mintToken("alice", ["member"]);
@@ -252,16 +250,15 @@ describe("Task 12: the provider's own `.access` tree -- it decides who may read"
 
   it("an id outside the catalogue is a 404 through the full peer stack -- access is granted at the collection level, existence is the handler's job", async () => {
     // Genuinely revised expectation, not carried over from an earlier draft:
-    // `IMAGES_ACCESS_TREE` grants `/images` and its ENTIRE subtree to any
-    // capability holder (`httpeers.core`'s `resolveAccess` -- a key now
-    // governs its own path and everything beneath it, see that package's
-    // own PROVENANCE.md, "Task 12 (review)"), so a member's request for
-    // `/images/does-not-exist` PASSES the access check and reaches this
-    // handler, which is the one place that actually knows the catalogue.
-    // An earlier version of this app's `.access` tree enumerated one exact
-    // leaf per known id specifically to make this case a 403 at the access
-    // layer; that workaround is gone (see `src/services/images.ts`'s module
-    // comment), and 404 is the more honest answer anyway -- this member IS
+    // `IMAGES_POLICIES` grants `/images` and its ENTIRE subtree to any
+    // capability holder (the `or` variant in `src/services/images.ts`, which
+    // is how Datalog says what the tree's one key said), so a member's
+    // request for `/images/does-not-exist` PASSES the access check and
+    // reaches this handler, which is the one place that actually knows the
+    // catalogue. An earlier version of this app's `.access` tree enumerated
+    // one exact leaf per known id specifically to make this case a 403 at the
+    // access layer; that workaround is gone (see `src/services/images.ts`'s
+    // module comment), and 404 is the more honest answer anyway -- this member IS
     // allowed to ask, the resource just isn't there.
     const { peer, mintToken } = await buildImagesPeer(TINY_IMAGES, TINY_FILES);
     const token = await mintToken("alice", ["member"]);

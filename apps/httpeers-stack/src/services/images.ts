@@ -39,9 +39,10 @@
  * regardless of what the underlying `FilesApi` implementation would have
  * handed back for an unbounded read.
  */
-import type { AccessTree, FetchHandler } from "@statewalker/httpeers.core";
+import type { FetchHandler, RuleSet } from "@statewalker/httpeers.core";
 import type { FilesApi } from "@statewalker/webrun-files";
 import { Hono } from "hono";
+import { appRules } from "../policy.js";
 
 /** One fixture's public metadata — exactly what `GET /images` lists, and what a client needs to then ask for `GET /images/{id}`. No title (or any other free text) belongs outside this JSON shape -- see the module comment. */
 export interface ImageInfo {
@@ -126,31 +127,37 @@ export function createImagesEndpoint(init: ImagesEndpointInit): FetchHandler {
 }
 
 /**
- * This provider's OWN `.access` tree -- design record §5.5's "it runs its
- * own `.access` -- the provider decides who may read, the hub only
- * advertises," made concrete. Gates every route `createImagesEndpoint`
- * serves behind `app:images.read` (declared in `../policy.ts`'s
- * `VOCABULARY`, already granted to `member`); denies everything else
- * (`"/"`: `anyOf: []`) -- exactly the brief's own two-line snippet, no more.
+ * This provider's OWN policy -- design record §5.5's "it runs its own
+ * `.access` -- the provider decides who may read, the hub only advertises,"
+ * made concrete, and unchanged in intent by ADR-0019's move to Datalog. Gates
+ * every route `createImagesEndpoint` serves behind `app:images.read` (derived
+ * from `role("member")` by `../policy.ts`'s `APP_RULES`); everything else is
+ * denied because no policy names it -- deny by default falling out of
+ * evaluation rather than needing an entry to say so.
  *
- * WHY THIS WORKS AS ONE ENTRY, NOT ONE PER IMAGE. An earlier version of this
- * tree (pre-review) declared one exact leaf per fixture id
- * (`/images/relay-node`, `/images/mesh-diagram`, …) alongside `/images`,
- * because `httpeers.core`'s `resolveAccess` used to treat `/images` (no
- * trailing slash) as an EXACT-ONLY match with no way to also govern
- * `/images/{id}`. That was a real gap -- verified directly against the
- * library before writing this file at all, see this app's `PROVENANCE.md`
- * (Task 12) for the reproduction -- but the right fix was in the library,
- * not a per-catalogue workaround here: a workaround that enumerates every
- * id it grants cannot generalize to a provider whose sub-resources are not
- * known ahead of time. Fixed in `httpeers.core`'s `resolveAccess` (a key now
- * governs its own path AND its subtree, so `/images` alone grants both `GET
- * /images` and `GET /images/{id}` at any depth -- see that package's own
- * `PROVENANCE.md`, "Task 12 (review)"). This tree is the simplification that
- * fix makes possible: exactly what the brief specified, verified against
- * the fixed library by `tests/images.test.ts`, not merely trusted.
+ * WHY THIS IS ONE POLICY, NOT ONE PER IMAGE. An earlier version of this
+ * (pre-review, when it was an `AccessTree`) declared one exact leaf per
+ * fixture id (`/images/relay-node`, `/images/mesh-diagram`, ...) alongside
+ * `/images`, because `httpeers.core`'s `resolveAccess` used to treat `/images`
+ * (no trailing slash) as an EXACT-ONLY match with no way to also govern
+ * `/images/{id}`. That was a real gap -- see this app's `PROVENANCE.md` (Task
+ * 12) -- but the right fix was in the library, not a per-catalogue workaround
+ * here: a workaround that enumerates every id it grants cannot generalize to a
+ * provider whose sub-resources are not known ahead of time. Under Datalog the
+ * distinction is written out rather than inferred from a trailing slash: the
+ * `or` variant below grants the collection AND every member at any depth,
+ * while still not granting `/imagesomething`, which a bare
+ * `starts_with("/images")` would.
  */
-export const IMAGES_ACCESS_TREE: AccessTree = {
-  "/": { anyOf: [] },
-  "/images": { anyOf: ["app:images.read"] },
-};
+export const IMAGES_POLICIES: readonly string[] = [
+  'allow if capability("app:images.read"), resource("/images")' +
+    ' or capability("app:images.read"), resource($r), $r.starts_with("/images/");',
+];
+
+/**
+ * `IMAGES_POLICIES` over `../policy.ts`'s `APP_RULES`, for a caller wiring
+ * `createPeer` directly. A browser page goes through `startBrowserPeer`, which
+ * takes the POLICIES and builds this itself -- see that function's `policies`
+ * field for why the derivation is not the caller's to substitute.
+ */
+export const IMAGES_RULES: RuleSet = appRules(IMAGES_POLICIES);

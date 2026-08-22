@@ -28,7 +28,7 @@
  * *before* the invitation is even looked up, so a code whose invitation
  * record did not survive a restart still cannot be redeemed twice.
  */
-import type { MemberRecord, MemberStore, Vocabulary } from "@statewalker/httpeers.core";
+import type { MemberRecord, MemberStore, RuleSet } from "@statewalker/httpeers.core";
 import { assertValid, validateRoles } from "@statewalker/httpeers.core";
 
 export interface HubSnapshot {
@@ -76,7 +76,7 @@ export type InvitationRedemption =
   | { ok: false; reason: "not-found" | "expired" | "already-redeemed" };
 
 export interface InvitationStore {
-  /** Throws (via `assertValid`) if any role is not in the vocabulary — caught where the invitation is made, not three hops later. */
+  /** Throws (via `assertValid`) if any role is one no rule of `rules` knows — caught where the invitation is made, not three hops later. */
   create(id: string, roles: string[], ttlMs: number): InvitationRecord;
   redeem(id: string): InvitationRedemption;
 }
@@ -84,9 +84,10 @@ export interface InvitationStore {
 export interface CreateHubStateInit {
   /** Where the snapshot is loaded from at construction and written back to after every mutation. */
   store: SnapshotStore;
-  vocabulary: Vocabulary;
+  /** This mesh's rules — the role registry `validateRoles` reads (ADR-0019). */
+  rules: RuleSet;
   now?: () => number;
-  createMemberStore: (vocabulary: Vocabulary, clock?: () => number) => MemberStore;
+  createMemberStore: (rules: RuleSet, clock?: () => number) => MemberStore;
 }
 
 /**
@@ -100,7 +101,7 @@ export function createHubState(init: CreateHubStateInit): PersistentHub {
   const now = init.now ?? Date.now;
   const snapshot = init.store.read();
 
-  const innerMembers = init.createMemberStore(init.vocabulary, now);
+  const innerMembers = init.createMemberStore(init.rules, now);
   for (const m of snapshot.members) innerMembers.add(m.peerId, m.roles);
   const spentIds = new Set(snapshot.spentInvitationIds);
 
@@ -134,7 +135,7 @@ export function createHubState(init: CreateHubStateInit): PersistentHub {
 
   const invitations: InvitationStore = {
     create(id, roles, ttlMs) {
-      assertValid(validateRoles(init.vocabulary, roles, `invitation '${id}'`));
+      assertValid(validateRoles(init.rules, roles, `invitation '${id}'`));
       const record: InvitationRecord = { id, roles: [...roles], expiresAt: now() + ttlMs };
       pending.set(id, record);
       return record;

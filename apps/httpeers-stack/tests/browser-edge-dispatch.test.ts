@@ -44,7 +44,7 @@ import {
   stripEdgePrefix,
   targetPeerId,
 } from "../src/browser/edge-dispatch.js";
-import { VOCABULARY } from "../src/policy.js";
+import { appRules } from "../src/policy.js";
 
 const KEY = "app";
 const TOKEN = "TOKEN-CURRENT";
@@ -322,14 +322,12 @@ describe("against a real peer router (createPeer, not a spy)", () => {
   beforeEach(async () => {
     echoed = [];
     peer = await createPeer({
-      // `public: true` throughout: this suite is about what the WRAPPER
-      // does to a request on its way to a handler, not about who may call
-      // it (that is `admin.test.ts`'s and `search.test.ts`'s job). Without
-      // it the library default (`DEFAULT_ACCESS_TREE`) denies `/` and no
-      // handler ever runs, so the assertions below would pass for the wrong
-      // reason.
-      accessTree: { "/": { public: true } },
-      vocabulary: VOCABULARY,
+      // ONE UNCONDITIONAL ALLOW: this suite is about what the WRAPPER does
+      // to a request on its way to a handler, not about who may call it (that
+      // is `admin.test.ts`'s and `search.test.ts`'s job). Without it the
+      // library default (`DEFAULT_RULES`) allows nothing at `/` and no handler
+      // ever runs, so the assertions below would pass for the wrong reason.
+      rules: appRules(["allow if true;"]),
       mounts: (ctx) => {
         mintToken = ctx.mintToken;
         const mounts = createMounts();

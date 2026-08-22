@@ -23,8 +23,8 @@
  * that key, and the request falls through to the origin server. The
  * symptom looks exactly like a routing bug in httpeers; it is not one.
  *
- * Refuse to start instead, the same remedy A-3 applied to a vocabulary
- * typo (`httpeers.core`'s `vocabulary.ts`, `assertValid`) and note 39 §5
+ * Refuse to start instead, the same remedy `ruleSet()` applies to a policy
+ * typo (`httpeers.core`'s `rules.ts`, `assertValid`) and note 39 §5
  * (work item 1) prescribes here: throw before `SwHttpAdapter.register` is
  * ever called, so a mismatch is a loud construction-time error rather than
  * a silent 404 three layers away.

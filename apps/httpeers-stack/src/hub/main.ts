@@ -11,7 +11,7 @@
  * key here would not merely change an address (as it would for the relay,
  * note 07's `../relay/main.ts`) — it would make this process silently a
  * DIFFERENT mesh on every restart, invalidating every previously issued
- * token and every `.access` policy naming the issuer, while `httpeers.json`
+ * token and every policy naming the issuer, while `httpeers.json`
  * (Task 10's setup CLI) kept naming the OLD peerId as the identity every
  * daemon and browser page is told to trust. So, mirroring the relay's own
  * contract exactly: the key MUST come from `.httpeers/hub.key`, written
@@ -64,7 +64,7 @@ import {
   createPeer,
   RevocationRegistry,
 } from "@statewalker/httpeers.core";
-import { HUB_ACCESS, VOCABULARY } from "../policy.js";
+import { HUB_RULES } from "../policy.js";
 import { dialRelay, waitForCircuitReservation } from "../reservation.js";
 import { APP_PORT, IMAGE_PEER_PORT } from "../static-server/main.js";
 import { createHubEndpoints, DEFAULT_PRESENCE_TTL_MS, usesTransportIdentity } from "./endpoints.js";
@@ -251,11 +251,11 @@ export async function startHub(init: StartHubInit = {}) {
   const stateFilePath = init.stateFilePath ?? "./.httpeers/hub-state.json";
   const keyPath = init.keyPath ?? DEFAULT_HUB_KEY_PATH;
   const privateKey = loadHubKey(keyPath);
-  // This application's own vocabulary (`policy.ts`), not `httpeers.core`'s
-  // generic library default -- `DEFAULT_VOCABULARY` has no `app:` capability
-  // at all, so `/search` could never be granted under it. See `policy.ts`'s
-  // module comment.
-  const vocabulary = VOCABULARY;
+  // This application's own rules (`policy.ts`), not `httpeers.core`'s generic
+  // library default -- `DEFAULT_RULES` derives no `app:` capability at all, so
+  // `/search` could never be granted under it. See `policy.ts`'s module
+  // comment.
+  const rules = HUB_RULES;
   // ONE shared clock for this hub's minting AND its revocation registry —
   // see `revocation.ts`'s "ONE HUB-ISSUED CLOCK, NOT TWO". Two independent
   // `Date.now` defaults can tie (mint a token, then revoke that same peer,
@@ -266,7 +266,7 @@ export async function startHub(init: StartHubInit = {}) {
 
   const persistent = createPersistentHub({
     filePath: stateFilePath,
-    vocabulary,
+    rules,
     createMemberStore,
   });
 
@@ -329,8 +329,7 @@ export async function startHub(init: StartHubInit = {}) {
   }
 
   // WRAPPED, because `createPeer` and the `mounts` factory below both run
-  // real code that can throw -- `createHubEndpoints` validates its access
-  // tree against the vocabulary, for one -- and by this point `node` is up
+  // real code that can throw -- and by this point `node` is up
   // and holding a reservation. See `unwind` above for what an unstopped node
   // does to a test run.
   let peer: Awaited<ReturnType<typeof createPeer>>;
@@ -347,8 +346,7 @@ export async function startHub(init: StartHubInit = {}) {
       // not at startup. (Reported as a doc defect in `httpeers.core`, which
       // Task 20 may not modify.)
       privateKey,
-      accessTree: HUB_ACCESS,
-      vocabulary,
+      rules,
       usesTransportIdentity: usesTransportIdentity(),
       now: clock,
       // The hub enforces revocation on ITS OWN endpoints by consulting its own
@@ -365,7 +363,7 @@ export async function startHub(init: StartHubInit = {}) {
           mintToken: ctx.mintToken,
           memberStore: persistent.memberStore,
           invitations: persistent.invitations,
-          vocabulary,
+          rules,
           revocations,
           presenceTtlMs: init.presenceTtlMs ?? DEFAULT_PRESENCE_TTL_MS,
           advertisementAccess: init.advertisementAccess,

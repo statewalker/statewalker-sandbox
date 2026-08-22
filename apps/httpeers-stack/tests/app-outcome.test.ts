@@ -13,10 +13,10 @@
  *    of the product tasks.
  *
  * The 403 bodies below are not invented for this test: they are the exact
- * shape `httpeers.core`'s `access-tree.ts` produces (`json({ error:
+ * shape `httpeers.core`'s `rules.ts` produces (`json({ error:
  * decision.reason }, status)`), with reasons taken verbatim from
- * `resolveAccess`'s own branches. `tests/admin.test.ts` asserts the hub
- * really does answer with them.
+ * `authorize`'s own branches. `tests/admin.test.ts` asserts the hub really
+ * does answer with them.
  */
 import type { PeerErrorKind } from "@statewalker/httpeers.core";
 import { describe, expect, it } from "vitest";
@@ -30,10 +30,10 @@ function jsonResponse(body: unknown, status: number): Response {
   });
 }
 
-describe("Step 3: a denial renders the access tree's reason verbatim", () => {
+describe("Step 3: a denial renders the authorizer's reason verbatim", () => {
   it("a 403 naming the missing capability comes through unaltered", async () => {
-    // `resolveAccess`'s own wording for a caller whose roles expand to none
-    // of the required capabilities.
+    // `authorize`'s own wording for a caller whose roles derive none of the
+    // capabilities any policy would accept.
     const reason = "requires one of: std:mesh.admin";
     const outcome = await readOutcome(jsonResponse({ error: reason }, 403));
 

@@ -25,7 +25,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHubEndpoints, usesTransportIdentity } from "../src/hub/endpoints.js";
 import { createPersistentHub, type InvitationStore } from "../src/hub/persist.js";
-import { HUB_ACCESS, VOCABULARY } from "../src/policy.js";
+import { HUB_RULES } from "../src/policy.js";
 import { fixtureUpstream, type SearchResult } from "../src/services/search.js";
 
 const MAX_TOKEN_TTL_MS = 5 * 60_000;
@@ -42,13 +42,12 @@ async function buildHub(stateFilePath: string): Promise<TestHub> {
   const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS, now: clock });
   const persistent = createPersistentHub({
     filePath: stateFilePath,
-    vocabulary: VOCABULARY,
+    rules: HUB_RULES,
     createMemberStore,
   });
 
   const peer = await createPeer({
-    accessTree: HUB_ACCESS,
-    vocabulary: VOCABULARY,
+    rules: HUB_RULES,
     usesTransportIdentity: usesTransportIdentity(),
     now: clock,
     // Same wiring as `hub/main.ts` and `admin.test.ts`: the hub enforces
@@ -60,7 +59,7 @@ async function buildHub(stateFilePath: string): Promise<TestHub> {
         mintToken: ctx.mintToken,
         memberStore: persistent.memberStore,
         invitations: persistent.invitations,
-        vocabulary: VOCABULARY,
+        rules: HUB_RULES,
         revocations,
       }).mounts,
   });

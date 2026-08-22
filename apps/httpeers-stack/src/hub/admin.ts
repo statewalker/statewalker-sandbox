@@ -4,7 +4,7 @@
  * with no endpoint and no authorisation the whole time, "exactly the kind
  * of thing that must not be reachable by an ordinary member" (design
  * record §5.2). Capability gating (`std:mesh.admin`) is `policy.ts`'s
- * `.access` entry for `/admin/`, not this handler's job — this file only
+ * `/admin` policy in `policy.ts`, not this handler's job — this file only
  * does the removal, same split as every other handler in this app.
  *
  * TWO CALLS, NOT ONE, BECAUSE THIS PACKAGE SPLIT WHAT THE ARCHIVE KEPT AS

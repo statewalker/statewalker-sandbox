@@ -137,7 +137,7 @@ function sessionOf(
     key: "app",
     // `createMounts()` is not needed: nothing under test reads these.
     mounts: { provide: () => {}, match: () => undefined } as never,
-    accessTree: { "/": { anyOf: [] } },
+    policies: [],
     dev: true,
     search: "",
     onChange: (state) => states.push(state),

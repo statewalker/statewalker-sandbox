@@ -19,8 +19,7 @@ import type { MemberStore } from "@statewalker/httpeers.core";
 import {
   createMemberStore,
   createPeer,
-  DEFAULT_ACCESS_TREE,
-  DEFAULT_VOCABULARY,
+  DEFAULT_RULES,
   type Peer,
   RevocationRegistry,
   registerAnonymous,
@@ -52,12 +51,12 @@ async function buildHub(opts: {
   advertisementAccess?: Record<string, string>;
 }): Promise<TestHub> {
   const now = () => opts.clock.now;
-  const vocabulary = DEFAULT_VOCABULARY;
+  const rules = DEFAULT_RULES;
   const revocations = new RevocationRegistry({ maxTokenTtlMs: MAX_TOKEN_TTL_MS, now });
 
   const persistent: PersistentHub = createPersistentHub({
     filePath: opts.stateFilePath,
-    vocabulary,
+    rules,
     now,
     createMemberStore,
   });
@@ -65,8 +64,7 @@ async function buildHub(opts: {
   let sweep: (() => void) | undefined;
 
   const peer = await createPeer({
-    accessTree: DEFAULT_ACCESS_TREE,
-    vocabulary,
+    rules,
     usesTransportIdentity: usesTransportIdentity(),
     now,
     mounts: (ctx) => {
@@ -75,7 +73,7 @@ async function buildHub(opts: {
         mintToken: ctx.mintToken,
         memberStore: persistent.memberStore,
         invitations: persistent.invitations,
-        vocabulary,
+        rules,
         revocations,
         now,
         presenceTtlMs: PRESENCE_TTL_MS,
@@ -261,7 +259,7 @@ describe("hub: invite, presence and the mesh view", () => {
     expect(body.versions).toEqual({
       mesh: expect.any(Number),
       policy: expect.any(Number),
-      vocabulary: expect.any(Number),
+      rules: expect.any(Number),
     });
     expect(body.ttl).toBe(PRESENCE_TTL_MS);
   });

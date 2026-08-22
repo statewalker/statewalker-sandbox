@@ -16,7 +16,7 @@
  * that file's module comment for the full four-way difference.
  *
  * `buildTestHub` assembles the same production wiring `src/hub/main.ts`
- * does (mounts factory, `DEFAULT_ACCESS_TREE`, the TTL sweep is NOT started
+ * does (mounts factory, `DEFAULT_RULES`, the TTL sweep is NOT started
  * here — these suites call `hub.peer` methods over real time, well under
  * one presence TTL, so nothing needs sweeping) but returns the pieces
  * (`memberStore`, `invitations`, `revocations`) directly rather than through
@@ -54,8 +54,7 @@ import {
   createMemberStore,
   createMonotonicClock,
   createPeer,
-  DEFAULT_ACCESS_TREE,
-  DEFAULT_VOCABULARY,
+  DEFAULT_RULES,
   RevocationCache,
   RevocationRegistry,
 } from "@statewalker/httpeers.core";
@@ -76,7 +75,7 @@ export interface TestHub {
 /** A real, listening hub peer over loopback TCP, state in a scratch temp dir. */
 export async function buildTestHub(): Promise<TestHub> {
   const dir = mkdtempSync(join(tmpdir(), "httpeers-e2e-hub-"));
-  const vocabulary = DEFAULT_VOCABULARY;
+  const rules = DEFAULT_RULES;
   // ONE shared clock for this hub's minting AND its revocation registry —
   // see `revocation.ts`'s "ONE HUB-ISSUED CLOCK, NOT TWO". Two independent
   // `Date.now` defaults can tie (mint a token, then revoke that same peer,
@@ -87,14 +86,13 @@ export async function buildTestHub(): Promise<TestHub> {
 
   const persistent = createPersistentHub({
     filePath: join(dir, "hub-state.json"),
-    vocabulary,
+    rules,
     createMemberStore,
   });
 
   const peer = await createPeer({
     listen: ["/ip4/127.0.0.1/tcp/0"],
-    accessTree: DEFAULT_ACCESS_TREE,
-    vocabulary,
+    rules,
     usesTransportIdentity: usesTransportIdentity(),
     now: clock,
     mounts: (ctx) =>
@@ -103,7 +101,7 @@ export async function buildTestHub(): Promise<TestHub> {
         mintToken: ctx.mintToken,
         memberStore: persistent.memberStore,
         invitations: persistent.invitations,
-        vocabulary,
+        rules,
         revocations,
       }).mounts,
   });

@@ -11,15 +11,15 @@
  *      entry in that file at all; see that field.
  *   2. build the browser libp2p node, dial the relay, wait for the
  *      circuit reservation to actually land (`node-profile.ts`).
- *   3. wire `httpeers.core`'s `createPeer` over that node, against THIS
- *      APPLICATION'S OWN vocabulary (`../policy.ts`'s `VOCABULARY`) paired
- *      with the caller's own `accessTree` -- never `httpeers.core`'s
- *      generic `DEFAULT_VOCABULARY`: tokens this peer verifies were minted
- *      by `../hub/main.ts`, which mints against `../policy.ts`'s
- *      vocabulary, and `createPeer` requires the two supplied together
- *      (`peer.ts`'s own construction-time check) for exactly the reason
- *      that a tree evaluated against the wrong role->capability mapping is
- *      a fail-open.
+ *   3. wire `httpeers.core`'s `createPeer` over that node, against a rule
+ *      set built from THIS APPLICATION'S OWN derivation (`../policy.ts`'s
+ *      `APP_RULES`) and the caller's own policies -- never
+ *      `httpeers.core`'s generic `DEFAULT_RULES`: tokens this peer verifies
+ *      were minted by `../hub/main.ts` against these very roles. The caller
+ *      supplies POLICIES, not a whole rule set, which is what keeps the
+ *      derivation from being substitutable -- a policy evaluated against
+ *      the wrong role->capability mapping is a fail-open, and ADR-0019
+ *      leaves that no place to live.
  *   4. pre-dial the hub over `/webrtc` BEFORE any protocol call reaches it
  *      -- `join.ts`'s `preDialPeer`, see its own doc comment for why this
  *      is not optional (applies to the hub exactly as it would to any
@@ -68,10 +68,10 @@
  * assume. Joining as a genuinely new peer is what resetting the identity is
  * for.
  */
-import type { AccessTree, Ed25519PrivateKey, Mounts } from "@statewalker/httpeers.core";
+import type { Ed25519PrivateKey, Mounts } from "@statewalker/httpeers.core";
 import { createPeer, RevocationCache } from "@statewalker/httpeers.core";
 import type { MeshView } from "../hub/mesh-view.js";
-import { VOCABULARY } from "../policy.js";
+import { appRules } from "../policy.js";
 import { mountEdge } from "./edge.js";
 import { createEdgeDispatch } from "./edge-dispatch.js";
 import type { AdvertisementInput, PresenceRefusal } from "./join.js";
@@ -131,8 +131,8 @@ export interface StartBrowserPeerInit {
   key: string;
   /** This peer's own mount table -- served both to other mesh peers (over libp2p) and, mounted unchanged, through the ServiceWorker edge. */
   mounts: Mounts;
-  /** This peer's own `.access` tree, evaluated against `../policy.ts`'s `VOCABULARY` -- see the module comment. */
-  accessTree: AccessTree;
+  /** This peer's own Datalog policies, evaluated over `../policy.ts`'s `APP_RULES` -- see the module comment. Validated by `appRules()`, which throws listing every problem. */
+  policies: readonly string[];
   /**
    * The invitation id this page redeems IF the resume attempt finds it is
    * not a member -- `../hub/hub-state.ts`'s `InvitationStore.redeem`.
@@ -365,8 +365,7 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   const peer = await createPeer({
     node,
     mounts: init.mounts,
-    accessTree: init.accessTree,
-    vocabulary: VOCABULARY,
+    rules: appRules(init.policies),
     hubPeerId: config.hubPeerId,
     revocationCache,
   });

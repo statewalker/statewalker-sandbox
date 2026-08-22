@@ -21,8 +21,7 @@ import {
   createMemberStore,
   createMonotonicClock,
   createPeer,
-  DEFAULT_ACCESS_TREE,
-  DEFAULT_VOCABULARY,
+  DEFAULT_RULES,
   type Peer,
   RevocationRegistry,
 } from "@statewalker/httpeers.core";
@@ -63,7 +62,7 @@ describe("the hub's state over the browser snapshot store", () => {
     const first = await createIdbSnapshotStore({ backend: shared.backend, storageKey: "k" });
     const hub = createHubState({
       store: first,
-      vocabulary: DEFAULT_VOCABULARY,
+      rules: DEFAULT_RULES,
       createMemberStore,
     });
     hub.invitations.create("inv-1", ["member"], 60_000);
@@ -76,7 +75,7 @@ describe("the hub's state over the browser snapshot store", () => {
     const second = await createIdbSnapshotStore({ backend: shared.backend, storageKey: "k" });
     const reloaded = createHubState({
       store: second,
-      vocabulary: DEFAULT_VOCABULARY,
+      rules: DEFAULT_RULES,
       createMemberStore,
     });
 
@@ -94,7 +93,7 @@ describe("the hub's state over the browser snapshot store", () => {
     const shared = memoryBackend();
 
     const store = await createIdbSnapshotStore({ backend: shared.backend, storageKey: "k" });
-    const hub = createHubState({ store, vocabulary: DEFAULT_VOCABULARY, createMemberStore });
+    const hub = createHubState({ store, rules: DEFAULT_RULES, createMemberStore });
     hub.memberStore.add("12D3KooWMember", ["member"]);
     await store.flushed();
 
@@ -103,7 +102,7 @@ describe("the hub's state over the browser snapshot store", () => {
     const after = await createIdbSnapshotStore({ backend: shared.backend, storageKey: "k" });
     const refounded = createHubState({
       store: after,
-      vocabulary: DEFAULT_VOCABULARY,
+      rules: DEFAULT_RULES,
       createMemberStore,
     });
     // Members carried into a new mesh would be peers that never joined it.
@@ -131,15 +130,14 @@ async function buildHubHoldingEndpoints(dir: string): Promise<TestHub> {
   const revocations = new RevocationRegistry({ maxTokenTtlMs: 5 * 60_000, now: clock });
   const state = createHubState({
     store: await createIdbSnapshotStore({ backend: memoryBackend().backend, storageKey: dir }),
-    vocabulary: DEFAULT_VOCABULARY,
+    rules: DEFAULT_RULES,
     createMemberStore,
   });
 
   let endpoints: HubEndpoints | undefined;
   const peer = await createPeer({
     listen: ["/ip4/127.0.0.1/tcp/0"],
-    accessTree: DEFAULT_ACCESS_TREE,
-    vocabulary: DEFAULT_VOCABULARY,
+    rules: DEFAULT_RULES,
     usesTransportIdentity: usesTransportIdentity(),
     now: clock,
     mounts: (ctx) => {
@@ -148,7 +146,7 @@ async function buildHubHoldingEndpoints(dir: string): Promise<TestHub> {
         mintToken: ctx.mintToken,
         memberStore: state.memberStore,
         invitations: state.invitations,
-        vocabulary: DEFAULT_VOCABULARY,
+        rules: DEFAULT_RULES,
         revocations,
         // Short enough that one `sweep()` after a nudged clock expires it.
         presenceTtlMs: 1_000,

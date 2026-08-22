@@ -8,7 +8,7 @@
  * the default way this stack comes up. What this page proves is that the
  * hub's whole HTTP surface (`../../hub/endpoints.ts`) is genuinely
  * transport-neutral: the same `createHubEndpoints`, the same
- * `../../policy.ts` vocabulary and `.access` tree, the same
+ * `../../policy.ts` rules and policies, the same
  * `createHubState` over the same `SnapshotStore` seam, running in a tab.
  * The only things that differ are where the key is kept, where the snapshot
  * is kept, and how a joining page is told the mesh's name.

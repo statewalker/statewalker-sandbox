@@ -1,7 +1,7 @@
 /**
  * The image peer page's entry point -- design record §5.5, "a provider
  * running in a browser." Loads the fixture set, builds this peer's own
- * mounts/`.access` (Task 12's `../../services/images.ts`), joins the mesh
+ * mounts and policies (Task 12's `../../services/images.ts`), joins the mesh
  * via `../../browser/peer-runtime.ts`'s `startBrowserPeer` (Task 11's
  * runtime, reached through `../../browser/session.ts` -- used unchanged,
  * nothing here reimplements it), and renders just enough UI to see it
@@ -69,7 +69,7 @@ import type { AdvertisementInput } from "../../browser/join.js";
 import type { PeerSession, SessionState } from "../../browser/session.js";
 import { createPeerSession } from "../../browser/session.js";
 import type { ImageInfo } from "../../services/images.js";
-import { createImagesEndpoint, IMAGES_ACCESS_TREE, imagePath } from "../../services/images.js";
+import { createImagesEndpoint, IMAGES_POLICIES, imagePath } from "../../services/images.js";
 import { loadFixtureImages } from "./fixtures.js";
 import { pacedFiles, readStreamPacing } from "./pacing.js";
 
@@ -229,7 +229,7 @@ async function main(): Promise<void> {
   const session: PeerSession = createPeerSession({
     key: "images",
     mounts: await buildMounts(),
-    accessTree: IMAGES_ACCESS_TREE,
+    policies: IMAGES_POLICIES,
     advertisements,
     // Local-loopback dev only -- see `../../browser/node-profile.ts`'s
     // `CreateBrowserNodeInit.dev` doc comment. `httpeers.json`'s relay
