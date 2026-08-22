@@ -16,25 +16,26 @@
  * `tests/integration.test.ts`; this file's job is identity, and identity
  * only.
  */
-import { generateKeyPair } from "@libp2p/crypto/keys";
-import type { Ed25519PrivateKey, Libp2p } from "@libp2p/interface";
-import { peerIdFromPrivateKey } from "@libp2p/peer-id";
-import { identify } from "@libp2p/identify";
-import { tcp } from "@libp2p/tcp";
+
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
+import { generateKeyPair } from "@libp2p/crypto/keys";
+import { identify } from "@libp2p/identify";
+import type { Ed25519PrivateKey, Libp2p } from "@libp2p/interface";
+import { peerIdFromPrivateKey } from "@libp2p/peer-id";
+import { tcp } from "@libp2p/tcp";
 import type { Multiaddr } from "@multiformats/multiaddr";
+import { fetchOverDuplex } from "@statewalker/webrun-http-streams";
+import { connect } from "@statewalker/webrun-streams-libp2p";
 import { createLibp2p } from "libp2p";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { connect } from "@statewalker/webrun-streams-libp2p";
-import { fetchOverDuplex } from "@statewalker/webrun-http-streams";
 import { DEFAULT_ACCESS_TREE } from "../src/access-tree.js";
-import { lookupPeer } from "../src/peer-context.js";
 import { createPeer, type Peer } from "../src/peer.js";
+import { lookupPeer } from "../src/peer-context.js";
 import { createMounts } from "../src/router.js";
 import { mintToken, verifyToken } from "../src/tokens.js";
-import { ANONYMOUS, json } from "../src/types.js";
 import { DEFAULT_MAX_STREAMS, PROTOCOL } from "../src/transport-duplex.js";
+import { ANONYMOUS, json } from "../src/types.js";
 import { DEFAULT_VOCABULARY } from "../src/vocabulary.js";
 
 async function node(listen: boolean): Promise<Libp2p> {
@@ -68,7 +69,11 @@ async function call(client: Libp2p, serverAddr: Multiaddr, req: Request): Promis
   return fetchOverDuplex(duplex, req);
 }
 
-async function whoami(client: Libp2p, serverAddr: Multiaddr, headers?: HeadersInit): Promise<string | null> {
+async function whoami(
+  client: Libp2p,
+  serverAddr: Multiaddr,
+  headers?: HeadersInit,
+): Promise<string | null> {
   const res = await call(client, serverAddr, new Request("http://peer/test/whoami", { headers }));
   const body = (await res.json()) as { peer: string | null };
   return body.peer;
@@ -127,14 +132,23 @@ describe("createPeer: identity by closure over the shipped transport", () => {
     expect(body.peer).toBe(clientId);
   }, 20_000);
 
-  it("a token whose sub names a different peer than the connection proved is refused with 403", async () => {
+  it("a token whose sub names a different peer than the connection proved is refused", async () => {
     const token = await tokenFor("12D3KooWNotTheCallerXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
     const res = await call(
       clientA,
       serverAddr,
       new Request("http://peer/test/whoami", { headers: { authorization: `Bearer ${token}` } }),
     );
-    expect(res.status).toBe(403);
+    // 401, not the 403 this asserted while the binding was `peer-handlers.ts`'s
+    // `claims.sub !== peer`. ADR-0009's rule now lives inside the token as
+    // `check if bound($k), connection_peer($k)`, so a mismatch fails
+    // VERIFICATION -- `getClaims` reports no claims and `newPeerHandlers`
+    // answers "membership token required" before its own check is reached.
+    // The property under test is unchanged and is the reason this test exists:
+    // a token minted for somebody else does not work here. Its status code is
+    // not the property, and 401 is if anything the more accurate of the two --
+    // a token that does not verify is not a token this peer has.
+    expect(res.status).toBe(401);
   }, 20_000);
 
   // --- D6: two distinct clients, no cross-talk -------------------------------
@@ -179,7 +193,9 @@ describe("createPeer: identity by closure over the shipped transport", () => {
     const clientId = clientA.peerId.toString();
     const token = await tokenFor(clientId);
     const results = await Promise.all(
-      Array.from({ length: 20 }, () => whoami(clientA, serverAddr, { authorization: `Bearer ${token}` })),
+      Array.from({ length: 20 }, () =>
+        whoami(clientA, serverAddr, { authorization: `Bearer ${token}` }),
+      ),
     );
     expect(new Set(results).size).toBe(1);
     expect(results[0]).toBe(clientId);
@@ -210,7 +226,12 @@ describe("createPeer: identity by closure over the shipped transport", () => {
         roles: ["member"],
         ttlMs: 60_000,
       });
-      const claims = await verifyToken(token, { issuer: hubLikePeer.peerId });
+      const claims = await verifyToken(token, {
+        issuer: hubLikePeer.peerId,
+        // The token binds to its subject, so verifying it means standing in for
+        // the connection that subject would present it over.
+        connectionPeer: "12D3KooWSomeMemberXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      });
       expect(claims.mesh).toBe(hubLikePeer.peerId);
       expect(claims.iss).toBe(hubLikePeer.peerId);
       expect(claims.sub).toBe("12D3KooWSomeMemberXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");

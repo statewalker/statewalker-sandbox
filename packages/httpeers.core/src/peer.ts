@@ -371,6 +371,25 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
   // binding into a legitimate ANONYMOUS caller.
   const getPeerId: GetPeerId = async (req) => lookupPeer(req)! as ProvenPeer;
 
+  // `connectionPeer` is what the transport handshake proved for THIS request —
+  // `lookupPeer`, the same source `getPeerId` above reads, never a header. It
+  // is what `verifyToken` asserts as `connection_peer`, which the token's own
+  // `check if bound($k), connection_peer($k)` consumes: ADR-0009's binding,
+  // enforced by the token rather than only in `peer-handlers.ts`'s prose.
+  //
+  // A consequence worth stating: a REPLAYED token — genuine, unexpired, but
+  // presented over somebody else's connection — now fails VERIFICATION, so
+  // `getClaims` reports "no claims" and `newPeerHandlers` answers 401
+  // "membership token required" where it used to answer 403 "token subject
+  // does not match connected peer". Both refuse the replay; only the wording
+  // and the status moved. `peer-handlers.ts` keeps its own `claims.sub !==
+  // peer` check because its `getClaims` is an INJECTED seam and a supplier
+  // that does not bind must still be refused there.
+  //
+  // `lookupPeer` returning `undefined` means the binding was lost above this
+  // middleware (a bug — see `PeerBindingLostError`). Passing `ANONYMOUS` on
+  // that path asserts no `connection_peer` at all, so the token is refused;
+  // `newPeerHandlers`'s own check is what reports the bug as such.
   const getClaims: GetClaims = async (req) => {
     const cached = lookupClaims(req);
     if (cached !== undefined) return cached;
@@ -379,7 +398,11 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
     let claims: MeshClaims | null = null;
     if (token != null) {
       try {
-        claims = await verifyToken(token, { issuer, now });
+        claims = await verifyToken(token, {
+          issuer,
+          connectionPeer: lookupPeer(req) ?? ANONYMOUS,
+          now,
+        });
       } catch {
         claims = null; // any verification failure is treated as "no claims"
       }
