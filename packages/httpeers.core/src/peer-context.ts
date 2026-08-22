@@ -17,10 +17,16 @@
  * `Request` with the shortened URL) — a new object has no entry of its own,
  * so `copyPeerBinding` carries the binding across that boundary by hand.
  */
-import { ANONYMOUS, type MeshClaims, type PeerIdStr, type ProvenPeer } from "./types.js";
+import {
+  ANONYMOUS,
+  type ClaimsResult,
+  type MeshClaims,
+  type PeerIdStr,
+  type ProvenPeer,
+} from "./types.js";
 
 const peers = new WeakMap<Request, ProvenPeer>();
-const claims = new WeakMap<Request, MeshClaims | null>();
+const claims = new WeakMap<Request, ClaimsResult>();
 
 /** Bind a request to a peerId that was actually proven by the transport. */
 export function registerPeer(req: Request, peerId: PeerIdStr): void {
@@ -41,15 +47,36 @@ export function lookupPeer(req: Request): ProvenPeer | undefined {
 export function copyPeerBinding(from: Request, to: Request): void {
   const peer = peers.get(from);
   if (peer !== undefined) peers.set(to, peer);
-  if (claims.has(from)) claims.set(to, claims.get(from) ?? null);
+  const result = claims.get(from);
+  if (result !== undefined) claims.set(to, result);
 }
 
-/** Cache the verified `MeshClaims` for a request (or `null`: verified absent). */
-export function cacheClaims(req: Request, value: MeshClaims | null): void {
+/**
+ * Cache what `getClaims` found for a request — the full `ClaimsResult`, not
+ * just the claims, so a second read can still say WHY a presented token was
+ * refused rather than reporting it as absent.
+ */
+export function cacheClaims(req: Request, value: ClaimsResult): void {
   claims.set(req, value);
 }
 
-/** `undefined` means claims were never looked up for this request. */
+/**
+ * The USABLE claims for a request: `null` when nothing usable was found
+ * (absent or refused — policy cannot act on either), `undefined` when claims
+ * were never looked up at all.
+ *
+ * Policy's contract is deliberately unchanged by the widening: `rules.ts`
+ * authorizes on facts, and a refused token contributes no facts, so the two
+ * non-verified states are genuinely the same input to it. Anything that needs
+ * to tell them apart — `peer-handlers.ts` — reads `lookupClaimsResult`.
+ */
 export function lookupClaims(req: Request): MeshClaims | null | undefined {
+  const result = claims.get(req);
+  if (result === undefined) return undefined;
+  return result.status === "verified" ? result.claims : null;
+}
+
+/** The full result, including the reason a presented token was refused. */
+export function lookupClaimsResult(req: Request): ClaimsResult | undefined {
   return claims.get(req);
 }

@@ -208,8 +208,79 @@ export type Remote = (peerId: PeerIdStr, req: Request) => Promise<Response>;
  */
 export type GetPeerId = (req: Request) => Promise<ProvenPeer>;
 
-/** Verify and return a request's membership claims, or `null` if none are present or valid. */
-export type GetClaims = (req: Request) => Promise<MeshClaims | null>;
+/**
+ * Why a token was refused. A closed set rather than prose, so a caller can
+ * branch on it and a test can assert it without matching on wording.
+ *
+ * LIVES HERE, NOT IN `tokens.ts`, EVEN THOUGH `tokens.ts` IS WHAT RAISES IT.
+ * `peer-handlers.ts` has to map a refusal onto a status code, and that file
+ * deliberately imports no crypto and no transport (see its module comment);
+ * `tokens.ts` is one of the two files in this package allowed to import
+ * libp2p. A shared vocabulary that both the raiser and the decider can name
+ * therefore belongs in the file that imports nothing. `TokenVerificationError`
+ * itself stays in `tokens.ts`.
+ *
+ * `signature` deliberately collapses two cases the JWS version reported
+ * separately ("invalid signature" and "token was not minted for this mesh").
+ * The JWS version could tell them apart only because it verified against the
+ * mesh the TOKEN declared and compared afterwards; a Biscuit is verified
+ * against the mesh key the VERIFIER expects, which is the correct order and
+ * leaves nothing to distinguish "corrupted" from "signed by someone else."
+ * `mesh-mismatch` survives as its own reason: it is the token's `mesh` fact
+ * disagreeing with the key that just verified it.
+ */
+export type TokenRejectionReason =
+  | "unparseable-issuer"
+  | "issuer-not-ed25519"
+  | "malformed-token"
+  | "signature"
+  | "mesh-mismatch"
+  | "peer-binding"
+  /** ADR-0020: this verifier is not among the peers the token names. */
+  | "audience"
+  | "expired"
+  | "unsatisfied-constraint"
+  | "evaluation-budget"
+  | "malformed-claims";
+
+/**
+ * What `GetClaims` found on a request. THREE STATES, NOT TWO — and the third
+ * is the whole point.
+ *
+ * Its predecessor was `MeshClaims | null`, and `null` meant both "no token
+ * was presented" and "a token was presented and rejected". A caller could not
+ * tell them apart, so `peer-handlers.ts` answered `401 "membership token
+ * required"` to both — including to a client refused because THIS peer is not
+ * an intended audience for its token (ADR-0020). That client refreshes,
+ * presents a token refused for exactly the same reason, and loops forever
+ * with nothing in the response telling it that refreshing cannot help.
+ * Widening this type is what makes that distinction expressible at all; the
+ * status split lives in `peer-handlers.ts`, which is where the decision is.
+ *
+ *   - `absent`   — no `authorization: Bearer` header at all.
+ *   - `verified` — a token that passed every check, claims included.
+ *   - `refused`  — a token was presented and did not verify. `reason` is the
+ *     matchable discriminant; `detail` is the one-line prose a refusal
+ *     surfaces to a human; `failedChecks` is the Datalog rule text of every
+ *     check that failed (spec P8), empty for a cryptographic or structural
+ *     refusal.
+ */
+export type ClaimsResult =
+  | { status: "absent" }
+  | { status: "verified"; claims: MeshClaims }
+  | {
+      status: "refused";
+      reason: TokenRejectionReason;
+      detail: string;
+      failedChecks: readonly string[];
+    };
+
+/**
+ * Verify a request's membership claims and say what was found — present and
+ * good, absent, or presented and refused with a reason. See `ClaimsResult`
+ * for why this is not `MeshClaims | null`.
+ */
+export type GetClaims = (req: Request) => Promise<ClaimsResult>;
 
 /**
  * Does this request bootstrap identity from the transport handshake alone,

@@ -435,7 +435,7 @@ describe("withPolicy as middleware", () => {
   it("admits when the cached claims derive the required capability", async () => {
     const s = subject();
     const req = new Request("http://peer/notes/x");
-    cacheClaims(req, member);
+    cacheClaims(req, { status: "verified", claims: member });
     expect((await s.handler(req)).status).toBe(200);
     expect(s.reached()).toBe(true);
   });
@@ -443,7 +443,7 @@ describe("withPolicy as middleware", () => {
   it("denies with 403 and the sufficiency reason when claims are present but insufficient", async () => {
     const s = subject();
     const req = new Request("http://peer/admin/x");
-    cacheClaims(req, member);
+    cacheClaims(req, { status: "verified", claims: member });
     const res = await s.handler(req);
     expect(res.status).toBe(403);
     expect(s.reached()).toBe(false);

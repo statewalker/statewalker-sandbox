@@ -17,9 +17,74 @@
  * same class of question as the signature and expiry checks inside
  * `verifyToken`, which is why `isRevoked` lives here rather than with
  * policy.
+ *
+ * IT IS ALSO WHERE A REFUSED TOKEN GETS ITS STATUS. `getClaims` reports three
+ * states (`ClaimsResult` in `types.ts`), and this file turns the third one —
+ * "a token was presented and did not verify" — into a status code by asking
+ * one question and no other: could authenticating again help? See
+ * `REFUSAL_STATUS` below. The reason itself is not decided here; it is
+ * `verifyToken`'s, carried through unaltered.
  */
 import { ANONYMOUS, json } from "./types.js";
-import type { FetchHandler, GetClaims, GetPeerId, MeshClaims, ProvenPeer, UsesTransportIdentity } from "./types.js";
+import type {
+  FetchHandler,
+  GetClaims,
+  GetPeerId,
+  MeshClaims,
+  ProvenPeer,
+  TokenRejectionReason,
+  UsesTransportIdentity,
+} from "./types.js";
+
+/**
+ * WHAT SHOULD THE CLIENT DO NEXT — the only question this table answers.
+ *
+ * Not a taxonomy of what went wrong (that is `TokenRejectionReason` itself,
+ * and it travels in the body), but the one thing a status code is actually
+ * good for: whether authenticating again and retrying could possibly work.
+ *
+ *   401 — "authenticate and retry might work." The credential is missing or
+ *         stale; a fresh one from the hub is a sensible next move.
+ *   403 — "a fresh token will not help." The token is refused for something a
+ *         refresh reproduces exactly: it names another mesh, another peer,
+ *         another audience, or it carries a check this verifier cannot
+ *         satisfy. A client that retries here loops forever.
+ *
+ * The audience row is the one this table was written for. Before it, ADR-0020
+ * refusals answered 401, so a client scoped to peer A and calling peer B
+ * refreshed, was refused identically, and refreshed again — with nothing in
+ * the exchange able to say that refreshing was not the remedy.
+ *
+ * `malformed-token` is 401 rather than 403 deliberately: what was presented is
+ * not a token at all (truncated, re-encoded, a leftover from another system),
+ * so the client is in the same position as one holding no credential, and
+ * obtaining a real one is exactly the remedy. `malformed-claims` is the
+ * opposite case and is 403 — those bytes ARE a token this mesh signed, and it
+ * says something contradictory; only the hub can fix that, not the client.
+ *
+ * `unparseable-issuer` / `issuer-not-ed25519` describe THIS peer's own
+ * configured `hubPeerId`, not the presented token: they fire before any token
+ * is examined, and they fire for every request. 403 is right for the reason
+ * the table exists — no refresh helps — but a client cannot act on them at
+ * all; they are an operator's bug reaching a caller. See the task report.
+ *
+ * Exhaustive by type (`Record<TokenRejectionReason, ...>`), not by a `default`
+ * branch: a reason added to the union without a decision here is a compile
+ * error rather than a silent fall-through to whichever status looked safe.
+ */
+const REFUSAL_STATUS: Record<TokenRejectionReason, 401 | 403> = {
+  expired: 401,
+  "malformed-token": 401,
+  signature: 403,
+  "mesh-mismatch": 403,
+  "peer-binding": 403,
+  audience: 403,
+  "unsatisfied-constraint": 403,
+  "evaluation-budget": 403,
+  "malformed-claims": 403,
+  "unparseable-issuer": 403,
+  "issuer-not-ed25519": 403,
+};
 
 /**
  * Thrown, not returned as a 401/403, because a missing binding is a bug —
@@ -78,8 +143,21 @@ export function newPeerHandlers(init: PeerHandlersInit): FetchHandler {
       return handleEndpoints(req);
     }
 
-    const claims = await getClaims(req);
-    if (claims == null) return json({ error: "membership token required" }, 401);
+    const found = await getClaims(req);
+    if (found.status === "absent") return json({ error: "membership token required" }, 401);
+    if (found.status === "refused") {
+      // The reason goes in the BODY, never a header: `detail` is prose meant
+      // for a person (the app page renders it verbatim), and a header is
+      // latin1. `reason` rides alongside it as the stable discriminant, so a
+      // client can branch on the refusal without matching on wording — the
+      // same split `errors.ts` makes between `kind` and a message.
+      //
+      // `failedChecks` is deliberately NOT sent. It is the token's own Datalog
+      // rule text, which the caller already holds, and it says nothing a
+      // client can act on that `reason` does not.
+      return json({ error: found.detail, reason: found.reason }, REFUSAL_STATUS[found.reason]);
+    }
+    const claims = found.claims;
     if (peer === ANONYMOUS) return json({ error: "possession unproven" }, 401);
     if (claims.sub !== peer) return json({ error: "token subject does not match connected peer" }, 403);
 

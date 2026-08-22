@@ -146,7 +146,7 @@ import {
 import { generateKeyPair } from "@libp2p/crypto/keys";
 import type { Ed25519PrivateKey } from "@libp2p/interface";
 import { peerIdFromPrivateKey, peerIdFromString } from "@libp2p/peer-id";
-import type { Anonymous, MeshClaims, PeerIdStr } from "./types.js";
+import type { Anonymous, MeshClaims, PeerIdStr, TokenRejectionReason } from "./types.js";
 import { ANONYMOUS } from "./types.js";
 
 /**
@@ -182,35 +182,22 @@ export async function generateMeshKey(): Promise<Ed25519PrivateKey> {
 // ---------------------------------------------------------------------------
 
 /**
- * Why a token was refused. A closed set rather than prose, so a caller can
- * branch on it and a test can assert it without matching on wording.
- *
- * `signature` deliberately collapses two cases the JWS version reported
- * separately ("invalid signature" and "token was not minted for this mesh").
- * The JWS version could tell them apart only because it verified against the
- * mesh the TOKEN declared and compared afterwards; a Biscuit is verified
- * against the mesh key the VERIFIER expects, which is the correct order and
- * leaves nothing to distinguish "corrupted" from "signed by someone else."
- * `mesh-mismatch` survives as its own reason: it is the token's `mesh` fact
- * disagreeing with the key that just verified it.
+ * `TokenRejectionReason` — the closed set of reasons — now lives in
+ * `types.ts`, the file that imports nothing, because `peer-handlers.ts` has
+ * to map a refusal onto a status code and may not import this one. See its
+ * doc comment there. It is still exported from the package root.
  */
-export type TokenRejectionReason =
-  | "unparseable-issuer"
-  | "issuer-not-ed25519"
-  | "malformed-token"
-  | "signature"
-  | "mesh-mismatch"
-  | "peer-binding"
-  /** ADR-0020: this verifier is not among the peers the token names. */
-  | "audience"
-  | "expired"
-  | "unsatisfied-constraint"
-  | "evaluation-budget"
-  | "malformed-claims";
 
 /** Raised for any reason a token fails to verify. `reason` is stable and matchable. */
 export class TokenVerificationError extends Error {
   readonly reason: TokenRejectionReason;
+  /**
+   * The one-line prose, WITHOUT the `httpeers token rejected: ` prefix
+   * `message` carries. Kept as its own field because it is what a refusal
+   * surfaces to a client (`peer-handlers.ts`), where the prefix would be
+   * noise — a client that got a 403 already knows it was rejected.
+   */
+  readonly detail: string;
   /**
    * Every failing check, as `block <id> check <id>: <rule text>` (spec P8).
    * Empty when the refusal was cryptographic or structural rather than
@@ -224,6 +211,7 @@ export class TokenVerificationError extends Error {
     super(`httpeers token rejected: ${detail}`);
     this.name = "TokenVerificationError";
     this.reason = reason;
+    this.detail = detail;
     this.failedChecks = failedChecks;
   }
 }

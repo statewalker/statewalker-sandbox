@@ -34,16 +34,17 @@
  * it needs against that one capability; `createPeer` stays hub-agnostic.
  */
 
-import { cacheClaims, lookupClaims, lookupPeer } from "./peer-context.js";
+import { cacheClaims, lookupClaims, lookupClaimsResult, lookupPeer } from "./peer-context.js";
 import { newPeerHandlers } from "./peer-handlers.js";
 import type { RevocationChecker } from "./revocation.js";
 import { createMounts, createPeerRouter } from "./router.js";
 import type { RuleSet } from "./rules.js";
 import { DEFAULT_RULES, withPolicy } from "./rules.js";
-import { generateMeshKey, mintToken, verifyToken } from "./tokens.js";
+import { generateMeshKey, mintToken, TokenVerificationError, verifyToken } from "./tokens.js";
 import type { Ed25519PrivateKey, Libp2p } from "./transport-duplex.js";
 import { createNode, createRemote, PROTOCOL, serveTransport } from "./transport-duplex.js";
 import type {
+  ClaimsResult,
   FetchHandler,
   GetClaims,
   GetPeerId,
@@ -397,27 +398,38 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
   // enforced by the token rather than only in `peer-handlers.ts`'s prose.
   //
   // A consequence worth stating: a REPLAYED token — genuine, unexpired, but
-  // presented over somebody else's connection — now fails VERIFICATION, so
-  // `getClaims` reports "no claims" and `newPeerHandlers` answers 401
-  // "membership token required" where it used to answer 403 "token subject
-  // does not match connected peer". Both refuse the replay; only the wording
-  // and the status moved. `peer-handlers.ts` keeps its own `claims.sub !==
-  // peer` check because its `getClaims` is an INJECTED seam and a supplier
-  // that does not bind must still be refused there.
+  // presented over somebody else's connection — fails VERIFICATION rather
+  // than `peer-handlers.ts`'s own `claims.sub !== peer` comparison. It is
+  // still refused as 403 "token subject does not match connected peer" (the
+  // `peer-binding` reason), because this function now REPORTS the refusal
+  // instead of flattening it. `peer-handlers.ts` keeps its own comparison
+  // because its `getClaims` is an INJECTED seam and a supplier that does not
+  // bind must still be refused there.
+  //
+  // WHY THIS RETURNS A RESULT AND NOT `MeshClaims | null`. It used to catch
+  // every `TokenVerificationError` into `claims = null`, which made "no token
+  // was presented" and "a token was presented and rejected" the same value.
+  // `newPeerHandlers` then had to answer 401 "membership token required" to
+  // both — including to a client whose token names a different audience,
+  // which refreshes and is refused identically, forever. The reason was
+  // always here, on the caught error; only the return type could not carry
+  // it. See `ClaimsResult` in `types.ts`.
   //
   // `lookupPeer` returning `undefined` means the binding was lost above this
   // middleware (a bug — see `PeerBindingLostError`). Passing `ANONYMOUS` on
   // that path asserts no `connection_peer` at all, so the token is refused;
   // `newPeerHandlers`'s own check is what reports the bug as such.
   const getClaims: GetClaims = async (req) => {
-    const cached = lookupClaims(req);
+    const cached = lookupClaimsResult(req);
     if (cached !== undefined) return cached;
     const header = req.headers.get("authorization");
     const token = header?.startsWith("Bearer ") === true ? header.slice(7) : null;
-    let claims: MeshClaims | null = null;
-    if (token != null) {
+    let result: ClaimsResult;
+    if (token == null) {
+      result = { status: "absent" };
+    } else {
       try {
-        claims = await verifyToken(token, {
+        const claims = await verifyToken(token, {
           issuer,
           connectionPeer: lookupPeer(req) ?? ANONYMOUS,
           // ADR-0020: THIS peer's own identity, so an audience-scoped token
@@ -429,12 +441,31 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
           selfPeer: selfPeerId,
           now,
         });
-      } catch {
-        claims = null; // any verification failure is treated as "no claims"
+        result = { status: "verified", claims };
+      } catch (error) {
+        // Anything that is not a `TokenVerificationError` came from below the
+        // token layer (a wasm trap, say) and has no reason of its own. It is
+        // reported as `malformed-token` — the honest statement that these
+        // bytes could not be made sense of — rather than as a state the
+        // taxonomy does not have.
+        result =
+          error instanceof TokenVerificationError
+            ? {
+                status: "refused",
+                reason: error.reason,
+                detail: error.detail,
+                failedChecks: error.failedChecks,
+              }
+            : {
+                status: "refused",
+                reason: "malformed-token",
+                detail: "malformed token",
+                failedChecks: [],
+              };
       }
     }
-    cacheClaims(req, claims);
-    return claims;
+    cacheClaims(req, result);
+    return result;
   };
 
   // Wrapped here, not made async at the source: `RevocationChecker.check` is

@@ -515,6 +515,17 @@ export function withPolicy(init: PolicyInit) {
         // A caller with no usable token gets 401 rather than 403 — the same
         // mapping the tree made, and the distinction a client acts on: fetch a
         // token, versus stop asking.
+        //
+        // UNREACHABLE IN A COMPOSED PEER, and deliberately kept anyway. The
+        // binding middleware sits OUTSIDE this (see `peer.ts`) and already
+        // refuses both an absent and a refused token, with the finer status
+        // split Task 34 added; by the time policy runs, claims are either
+        // verified or the request was a bootstrap that returned above. This
+        // branch is the fallback for `withPolicy` used standalone, where
+        // nothing has looked a token up at all — which is why it says only
+        // "required" and does not try to say why: `lookupClaims` reports
+        // usable claims, and a policy has no business distinguishing the two
+        // unusable states.
         if (claims == null) return json({ error: "membership token required" }, 401);
         return json({ error: decision.reason }, 403);
       }

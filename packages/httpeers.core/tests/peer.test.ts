@@ -147,16 +147,24 @@ describe("createPeer: identity by closure over the shipped transport", () => {
       serverAddr,
       new Request("http://peer/test/whoami", { headers: { authorization: `Bearer ${token}` } }),
     );
-    // 401, not the 403 this asserted while the binding was `peer-handlers.ts`'s
-    // `claims.sub !== peer`. ADR-0009's rule now lives inside the token as
-    // `check if bound($k), connection_peer($k)`, so a mismatch fails
-    // VERIFICATION -- `getClaims` reports no claims and `newPeerHandlers`
-    // answers "membership token required" before its own check is reached.
-    // The property under test is unchanged and is the reason this test exists:
-    // a token minted for somebody else does not work here. Its status code is
-    // not the property, and 401 is if anything the more accurate of the two --
-    // a token that does not verify is not a token this peer has.
-    expect(res.status).toBe(401);
+    // 403 AGAIN, and with the original wording restored. Task 29 moved this to
+    // 401 because ADR-0009's rule had moved inside the token (`check if
+    // bound($k), connection_peer($k)`), so a mismatch failed VERIFICATION and
+    // `getClaims` -- which swallowed every failure into `null` -- could only
+    // report "no claims". Task 34 widened that seam, so the refusal keeps its
+    // own identity all the way to the response: `peer-binding`, 403.
+    //
+    // 403 rather than 401 is a decision, not a restoration for its own sake:
+    // this token names another key, and presenting it again after a refresh
+    // reproduces the refusal exactly. It is the confused-deputy replay that
+    // makes the check worth having, and a replayer must be told to stop rather
+    // than to try harder. The property under test is unchanged either way:
+    // a token minted for somebody else does not work here.
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: "token subject does not match connected peer",
+      reason: "peer-binding",
+    });
   }, 20_000);
 
   // --- A-24 / ADR-0020: the DESTINATION enforces the audience ---------------
@@ -186,13 +194,18 @@ describe("createPeer: identity by closure over the shipped transport", () => {
       serverAddr,
       new Request("http://peer/test/whoami", { headers: { authorization: `Bearer ${token}` } }),
     );
-    // 401 rather than 403, for the same reason a wrong-subject token is 401
-    // (see the binding test above): the token does not VERIFY here at all, so
-    // `getClaims` reports no claims and the binding middleware answers before
-    // any policy runs. The reason -- `audience`, with the failing rule text --
-    // is carried on the `TokenVerificationError` that `getClaims` swallows;
-    // `tokens.test.ts` asserts it there, which is where it is observable.
-    expect(res.status).toBe(401);
+    // 403, and the reason arrives with it. Task 31 recorded this as 401 with
+    // the note that the `audience` reason was carried on a
+    // `TokenVerificationError` `getClaims` swallowed, observable only one
+    // layer down in `tokens.test.ts`. Task 34 stopped the swallowing: the
+    // reason reaches the client, and the status tells it not to retry --
+    // which for THIS condition is the whole point, since a refreshed token is
+    // scoped exactly the same way and would be refused identically.
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: "this peer is not an intended audience for this token",
+      reason: "audience",
+    });
   }, 20_000);
 
   it("A-24: a hub mints least privilege -- one token, usable at one named peer", async () => {
@@ -231,7 +244,9 @@ describe("createPeer: identity by closure over the shipped transport", () => {
       );
 
       expect(ok.status).toBe(200);
-      expect(refused.status).toBe(401);
+      // 403, not 401: see the A-24 refusal test above for why the audience
+      // condition sits on the do-not-retry side of the line.
+      expect(refused.status).toBe(403);
     } finally {
       await hubPeer.stop();
     }
