@@ -24,6 +24,7 @@ import {
   createMounts,
   createPeer,
   json,
+  type MountsFactoryContext,
   type Peer,
   PeerCallError,
   type PeerErrorKind,
@@ -297,7 +298,7 @@ describe("against a real peer router (createPeer, not a spy)", () => {
   let echoed: Array<{ path: string; authorization: string | null }>;
 
   /** This peer's own `mintToken`, captured out of the `mounts` factory -- the only way to get a token a real router will accept. */
-  let mintToken: (sub: string, roles: string[], ttlMs?: number) => Promise<string>;
+  let mintToken: MountsFactoryContext["mintToken"];
 
   /**
    * The token the wrapper under test attaches, standing in for what

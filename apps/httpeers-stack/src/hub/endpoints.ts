@@ -104,7 +104,20 @@ export function createTestSurfaceHandler(selfPeerId: PeerIdStr): FetchHandler {
 
 export interface HubEndpointsInit {
   selfPeerId: PeerIdStr;
-  mintToken: (sub: string, roles: string[], ttlMs?: number) => Promise<string>;
+  /**
+   * Mint a membership token that self-certifies as this mesh. Structurally
+   * `MountsFactoryContext["mintToken"]` from `httpeers.core`, restated here
+   * rather than imported so this file stays a plain description of what the
+   * hub needs -- including the audience option ADR-0020 added, which nothing
+   * in this file passes yet: the invitation and presence protocols mint
+   * unrestricted tokens, and narrowing them is a protocol change, not a
+   * signature change.
+   */
+  mintToken: (
+    sub: string,
+    roles: string[],
+    options?: { ttlMs?: number; audience?: readonly PeerIdStr[] },
+  ) => Promise<string>;
   memberStore: MemberStore;
   invitations: InvitationStore;
   /** This mesh's Datalog rules and policies (ADR-0019) — published read-only, and the source of the caller's capabilities in the mesh view. */

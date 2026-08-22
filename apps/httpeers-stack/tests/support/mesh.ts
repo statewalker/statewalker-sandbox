@@ -55,6 +55,7 @@ import {
   createMonotonicClock,
   createPeer,
   DEFAULT_RULES,
+  type MountsFactoryContext,
   RevocationCache,
   RevocationRegistry,
 } from "@statewalker/httpeers.core";
@@ -69,6 +70,17 @@ export interface TestHub {
   memberStore: MemberStore;
   invitations: InvitationStore;
   revocations: RevocationRegistry;
+  /**
+   * The hub's own minting capability, captured out of the `mounts` factory —
+   * the same closure `createHubEndpoints` is handed, and the only way to get
+   * a token this mesh's peers will accept without holding the signing key.
+   *
+   * Exposed for ADR-0020: the invitation and presence endpoints mint
+   * UNRESTRICTED tokens, so a test that needs an audience-scoped one has to
+   * ask the hub for it directly. Everything else about the token is identical
+   * to what those endpoints produce, because it is the same closure.
+   */
+  mintToken: MountsFactoryContext["mintToken"];
   stop: () => Promise<void>;
 }
 
@@ -90,27 +102,34 @@ export async function buildTestHub(): Promise<TestHub> {
     createMemberStore,
   });
 
+  let mintToken: MountsFactoryContext["mintToken"] | undefined;
   const peer = await createPeer({
     listen: ["/ip4/127.0.0.1/tcp/0"],
     rules,
     usesTransportIdentity: usesTransportIdentity(),
     now: clock,
-    mounts: (ctx) =>
-      createHubEndpoints({
+    mounts: (ctx) => {
+      mintToken = ctx.mintToken;
+      return createHubEndpoints({
         selfPeerId: ctx.peerId,
         mintToken: ctx.mintToken,
         memberStore: persistent.memberStore,
         invitations: persistent.invitations,
         rules,
         revocations,
-      }).mounts,
+      }).mounts;
+    },
   });
+  if (mintToken == null) {
+    throw new Error("buildTestHub: createPeer never called the mounts factory");
+  }
 
   return {
     peer,
     memberStore: persistent.memberStore,
     invitations: persistent.invitations,
     revocations,
+    mintToken,
     async stop() {
       await peer.stop();
       rmSync(dir, { recursive: true, force: true });

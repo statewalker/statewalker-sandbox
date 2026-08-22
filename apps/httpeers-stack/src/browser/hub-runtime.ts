@@ -55,6 +55,7 @@ import {
   createMemberStore,
   createMonotonicClock,
   createPeer,
+  type MountsFactoryContext,
   RevocationRegistry,
   roleNames,
 } from "@statewalker/httpeers.core";
@@ -271,7 +272,7 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
   let sweep: (() => void) | undefined;
   let meshView: (() => MeshView) | undefined;
   let hubMounts: Mounts | undefined;
-  let mintToken: ((sub: string, roles: string[], ttlMs?: number) => Promise<string>) | undefined;
+  let mintToken: MountsFactoryContext["mintToken"] | undefined;
 
   let peer: Awaited<ReturnType<typeof createPeer>>;
   try {
@@ -337,9 +338,9 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
     throw new Error("startBrowserHub: createPeer never called the mounts factory -- no mintToken.");
   }
   const mint = mintToken;
-  let selfToken = await mint(peer.peerId, ["admin"], SELF_TOKEN_TTL_MS);
+  let selfToken = await mint(peer.peerId, ["admin"], { ttlMs: SELF_TOKEN_TTL_MS });
   const renewTimer = setInterval(() => {
-    void mint(peer.peerId, ["admin"], SELF_TOKEN_TTL_MS).then(
+    void mint(peer.peerId, ["admin"], { ttlMs: SELF_TOKEN_TTL_MS }).then(
       (token) => {
         selfToken = token;
       },
