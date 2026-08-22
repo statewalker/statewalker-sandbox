@@ -62,13 +62,13 @@ import type { BrowserHubHandle, BrowserHubState } from "../../browser/hub-runtim
 import { startBrowserHub } from "../../browser/hub-runtime.js";
 import { clearIdentity, loadOrCreateIdentity, peerIdOf } from "../../browser/identity.js";
 import type { JoinBlob } from "../../browser/join-blob.js";
-import { encodeJoinBlob, joinUrl } from "../../browser/join-blob.js";
+import { encodeJoinBlob } from "../../browser/join-blob.js";
 import type { BrowserSnapshotStore } from "../../browser/snapshot-store.js";
 import { createIdbSnapshotStore } from "../../browser/snapshot-store.js";
 // `../../ports.js`, NOT `../../static-server/main.js`: that module's
 // run-as-a-process guard evaluates `process.argv` at top level, which is a
 // ReferenceError in a tab before any page code runs. See `ports.ts`.
-import { APP_PORT, HUB_PAGE_PORT, IMAGE_PEER_PORT } from "../../ports.js";
+import { HUB_PAGE_PORT } from "../../ports.js";
 
 /**
  * This peer's ServiceWorker adapter key, and therefore the first segment of
@@ -96,10 +96,9 @@ const invitationsEl = el("invitations");
 const membersEl = el<HTMLTableSectionElement>("members");
 const adminStatusEl = el("admin-status");
 const resetButton = el<HTMLButtonElement>("reset");
+const mintRolesEl = el<HTMLSelectElement>("mint-roles");
 const mintButtons = {
-  app: el<HTMLButtonElement>("mint-app"),
-  appAdmin: el<HTMLButtonElement>("mint-app-admin"),
-  imagePeer: el<HTMLButtonElement>("mint-image-peer"),
+  mint: el<HTMLButtonElement>("mint"),
 };
 
 let handle: BrowserHubHandle | null = null;
@@ -127,25 +126,16 @@ function newInvitationId(): string {
   return crypto.randomUUID();
 }
 
-interface MintTarget {
-  label: string;
-  roles: string[];
-  /** The page this link opens. Composed from this origin's hostname and the sibling port `../../static-server/main.ts` reserves for that page. */
-  port: number;
-}
-
 /**
- * The link's HOSTNAME comes from this page's own location, not a literal.
- * A hub page opened at `127.0.0.1` must hand out `127.0.0.1` links and one
- * opened at `localhost` must hand out `localhost` links: the two are
- * different origins to a browser, so a link that swapped them would send
- * the joining page to a DIFFERENT IndexedDB (a different identity) than the
- * operator was looking at, and -- on the app page -- to a different
- * ServiceWorker registration. The port is the one this deployment reserves
- * for that page; only the port ever changes between these links.
+ * AN INVITATION IS NOT TIED TO A PAGE. Any page can redeem any code: the hub
+ * validates the code and the roles it grants, and never learns which origin
+ * asked. The UI offered one button per page for a while, which invented a
+ * distinction the protocol does not have -- three buttons for one concept,
+ * and an operator reasonably asking why an "image peer" code could not be
+ * pasted into the app. The only real variable is the roles granted.
  */
-function pageUrl(port: number): string {
-  return `${location.protocol}//${location.hostname}:${port}/`;
+interface MintTarget {
+  roles: string[];
 }
 
 /** One minted invitation, and everything the panel needs to keep rendering it. */
@@ -155,7 +145,6 @@ interface MintedInvitation {
   roles: string[];
   expiresAt: number;
   blob: string;
-  link: string;
   /** The row's own `<dd>` for the status, re-read on every refresh. */
   statusEl: HTMLElement;
   box: HTMLElement;
@@ -211,7 +200,6 @@ function appendCopyRow(dl: HTMLElement, label: string, value: string, href?: str
 }
 
 function renderInvitation(target: MintTarget, blob: JoinBlob, expiresAt: number): void {
-  const link = joinUrl(pageUrl(target.port), blob);
   const encoded = encodeJoinBlob(blob);
 
   const box = document.createElement("div");
@@ -219,7 +207,7 @@ function renderInvitation(target: MintTarget, blob: JoinBlob, expiresAt: number)
 
   const header = document.createElement("header");
   const title = document.createElement("h3");
-  title.textContent = target.label;
+  title.textContent = `invitation \u00b7 ${target.roles.join(", ")}`;
   const roles = document.createElement("span");
   roles.className = "roles";
   roles.textContent = `single use · valid ${INVITATION_TTL_MS / 60_000} min`;
@@ -240,12 +228,13 @@ function renderInvitation(target: MintTarget, blob: JoinBlob, expiresAt: number)
   const rolesPad = document.createElement("dd");
   dl.append(rolesDt, rolesDd, rolesPad);
 
+  // THE CODE IS THE ARTEFACT. It is what a page's own join prompt consumes,
+  // and the only thing carrying this mesh's identity; the bare id alone is
+  // not enough, because this hub's peer id is generated at runtime and is
+  // therefore absent from `httpeers.json`. The id is shown beneath it only so
+  // a row can be matched against the hub's own records.
+  appendCopyRow(dl, "code", encoded);
   appendCopyRow(dl, "id", blob.invitationId);
-  // THE BLOB IS THE PRIMARY ARTEFACT, listed above the link: it is what a
-  // page's own join prompt consumes, and it is the only thing that carries
-  // this mesh's identity. The link is that same blob attached to a URL.
-  appendCopyRow(dl, "blob", encoded);
-  appendCopyRow(dl, "link", link, link);
 
   box.append(header, dl);
 
@@ -255,7 +244,6 @@ function renderInvitation(target: MintTarget, blob: JoinBlob, expiresAt: number)
     roles: target.roles,
     expiresAt,
     blob: encoded,
-    link,
     statusEl,
     box,
   });
@@ -388,15 +376,8 @@ async function revokeMember(
 
 // --- startup --------------------------------------------------------------
 
-const MINT_TARGETS: Record<keyof typeof mintButtons, MintTarget> = {
-  app: { label: "App page", roles: ["member"], port: APP_PORT },
-  // `admin` implies `member` (`../../policy.ts`), so this link is the
-  // member one plus `std:mesh.admin` -- the app page's revoke control is
-  // only exercisable by an admin, and opened as a member it renders the 403
-  // instead, which is also worth seeing.
-  appAdmin: { label: "App page (admin)", roles: ["admin"], port: APP_PORT },
-  imagePeer: { label: "Image peer", roles: ["member"], port: IMAGE_PEER_PORT },
-};
+/** `admin` implies `member` (`../../policy.ts`), so an admin code grants both. */
+const MINT_ROLE_CHOICES = ["member", "admin"] as const;
 
 async function main(): Promise<void> {
   // Loaded BEFORE the hub starts, and shown immediately: this is the mesh's
@@ -432,24 +413,25 @@ async function main(): Promise<void> {
   circuitEl.textContent = hub.circuitAddr;
   baseUrlEl.textContent = hub.baseUrl;
 
-  for (const [name, button] of Object.entries(mintButtons)) {
-    const target = MINT_TARGETS[name as keyof typeof mintButtons];
-    button.disabled = false;
-    button.addEventListener("click", () => {
-      // A NEW id on every press. Invitations are single-use, so an operator
-      // pressing this twice must get two distinct codes -- reusing one would
-      // hand out a link that is already dead.
-      const id = newInvitationId();
-      const record = hub.invitations.create(id, target.roles, INVITATION_TTL_MS);
-      renderInvitation(
-        target,
-        { relayAddrs: [hub.relayAddr], hubPeerId: hub.peerId, invitationId: id },
-        record.expiresAt,
-      );
-      // Immediately, for the same reason revoking re-renders immediately.
-      refreshInvitationStatuses(hub);
-    });
-  }
+  mintButtons.mint.disabled = false;
+  mintButtons.mint.addEventListener("click", () => {
+    // A NEW id on every press. Invitations are single-use, so an operator
+    // pressing this twice must get two distinct codes -- reusing one would
+    // hand out a code that is already dead.
+    const selected = mintRolesEl.value;
+    const roles = (MINT_ROLE_CHOICES as readonly string[]).includes(selected)
+      ? [selected]
+      : ["member"];
+    const id = newInvitationId();
+    const record = hub.invitations.create(id, roles, INVITATION_TTL_MS);
+    renderInvitation(
+      { roles },
+      { relayAddrs: [hub.relayAddr], hubPeerId: hub.peerId, invitationId: id },
+      record.expiresAt,
+    );
+    // Immediately, for the same reason revoking re-renders immediately.
+    refreshInvitationStatuses(hub);
+  });
 
   renderMembers(hub);
   setInterval(() => {

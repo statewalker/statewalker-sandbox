@@ -212,15 +212,20 @@
       <code>already-redeemed</code>, so every page needs its own.
     </p>
     <p>
-      The <strong>blob</strong> is what the other pages consume &mdash; it carries the relay
-      addresses, this hub's peer id, and the invitation id together, which is the only way they can
-      find this mesh (the peer id is generated at runtime and is not in <code>httpeers.json</code>).
-      The link is the same blob attached to that page's URL, for opening directly.
+      An invitation is <strong>not tied to a particular page</strong>: any page can redeem any
+      code. Only the roles differ, which is why that is the one choice offered. Paste the
+      <strong>code</strong> into whichever page you are joining &mdash; it carries the relay
+      addresses, this hub's peer id and the invitation id together, which is the only way a page
+      can find this mesh (the peer id is generated at runtime, so it is not in
+      <code>httpeers.json</code>).
     </p>
     <div class="mint">
-      <button id="mint-app" type="button" disabled>App page &mdash; member</button>
-      <button id="mint-app-admin" type="button" disabled>App page &mdash; admin</button>
-      <button id="mint-image-peer" type="button" disabled>Image peer &mdash; member</button>
+      <button id="mint" type="button" disabled>Generate invitation</button>
+      <label for="mint-roles">as</label>
+      <select id="mint-roles">
+        <option value="member" selected>member &mdash; search and images</option>
+        <option value="admin">admin &mdash; may also revoke members</option>
+      </select>
     </div>
     <div id="invitations">
       <p class="empty">none minted yet</p>
