@@ -85,6 +85,26 @@ export async function mountEdge(init: MountEdgeInit): Promise<EdgeHandle> {
   const prefix = init.prefix ?? `${init.key}/`;
   assertKeyMatchesPrefix(init.key, prefix);
 
+  // SAY WHAT IS ACTUALLY WRONG. ServiceWorkers exist only in a secure context:
+  // `https://`, or `http://` on `localhost`/`127.0.0.1`. Served from a LAN
+  // address over plain HTTP -- exactly what someone does when opening these
+  // pages from a phone -- `navigator.serviceWorker` is `undefined`, and the
+  // first symptom is `TypeError: Cannot read properties of undefined (reading
+  // 'register')` thrown from inside the adapter, which names neither the cause
+  // nor the fix. This is a browser rule, not something this stack can work
+  // around; the deployment answer is the TLS the design already provides for
+  // (`TLS_CERT`/`TLS_KEY`).
+  if (typeof navigator === "undefined" || navigator.serviceWorker == null) {
+    const origin = typeof location !== "undefined" ? location.origin : "this origin";
+    throw new Error(
+      `mountEdge: this browser exposes no ServiceWorker at ${origin}, so a peer cannot be ` +
+        "reached through the page's own fetch(). ServiceWorkers require a secure context: " +
+        "serve the page over https, or open it on localhost / 127.0.0.1. " +
+        "(A LAN address over plain http is not a secure context, which is why this fails " +
+        "there but works on localhost.)",
+    );
+  }
+
   // Resolved against the page's own origin: `SwHttpAdapter` passes this to
   // `new URL(...)` with no base, so a bare "/sw.js" would throw `Invalid
   // URL` rather than being treated as origin-relative.

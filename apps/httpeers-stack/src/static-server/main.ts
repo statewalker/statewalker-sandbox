@@ -378,9 +378,27 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   });
 
   const scheme = tls != null ? "https" : "http";
-  console.log(`static-server: app listening at ${scheme}://0.0.0.0:${APP_PORT}`);
-  console.log(`static-server: image peer listening at ${scheme}://0.0.0.0:${IMAGE_PEER_PORT}`);
-  console.log(`static-server: hub page listening at ${scheme}://0.0.0.0:${HUB_PAGE_PORT}`);
+  // PRINT A URL THAT WORKS, NOT THE BIND ADDRESS. These servers bind 0.0.0.0
+  // (every interface), but `http://0.0.0.0:PORT` must never be offered as
+  // something to open: browsers do not treat 0.0.0.0 as a secure context, so
+  // `navigator.serviceWorker` is undefined there and every page in this stack
+  // fails at `mountEdge` -- the peer is only reachable through the page's own
+  // fetch(), which is the ServiceWorker. `127.0.0.1` is the same server,
+  // reached over the same bind, and IS a secure context.
+  //
+  // This was not theoretical: the printed 0.0.0.0 URL was followed, and the
+  // failure surfaced as a relay/gater error naming neither cause nor fix.
+  const shown = scheme === "https" ? process.env.PUBLIC_HOST ?? "127.0.0.1" : "127.0.0.1";
+  console.log(`static-server: app listening at ${scheme}://${shown}:${APP_PORT}`);
+  console.log(`static-server: image peer listening at ${scheme}://${shown}:${IMAGE_PEER_PORT}`);
+  console.log(`static-server: hub page listening at ${scheme}://${shown}:${HUB_PAGE_PORT}`);
+  if (scheme !== "https") {
+    console.log(
+      "static-server: open these on 127.0.0.1 or localhost. Another device on the LAN " +
+        "needs https (TLS_CERT/TLS_KEY) -- a LAN address over plain http is not a secure " +
+        "context, so the pages' ServiceWorker, and with it the mesh, will not start.",
+    );
+  }
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`\nstatic-server: received ${signal}, stopping...`);

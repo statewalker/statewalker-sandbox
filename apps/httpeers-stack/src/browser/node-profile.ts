@@ -54,6 +54,33 @@ export {
   peerIdOf,
 } from "./identity.js";
 
+/**
+ * Does dialing this address need the permissive gater?
+ *
+ * libp2p's browser default refuses to dial loopback and private-range
+ * addresses. `dev` used to be derived from the PAGE's hostname
+ * (`localhost`/`127.0.0.1`), which asks the wrong question: what the gater
+ * objects to is the address being DIALLED, not where the page came from. Open
+ * the same page at `http://192.168.1.5:5177` and the hostname test says
+ * "production" while `httpeers.json` still names a loopback relay -- so every
+ * address in the dial is denied and the failure surfaces as
+ * `DialDeniedError`, whose message blames the relay for being unreachable
+ * when the relay is running perfectly well.
+ *
+ * Asking it of the address fixes both that case and the LAN one (a page on
+ * `192.168.1.5` dialling a relay on `192.168.1.5`, also a private address,
+ * also denied). A public relay address returns false and the gater stays at
+ * its default, which is the behaviour a deployment wants.
+ */
+export function dialNeedsPermissiveGater(addr: string): boolean {
+  const ip = /\/ip4\/([0-9.]+)/.exec(addr)?.[1];
+  if (ip == null) return /\/dns4?\/localhost(\/|$)/.test(addr);
+  if (ip === "127.0.0.1" || ip.startsWith("127.")) return true;
+  if (ip.startsWith("10.") || ip.startsWith("192.168.")) return true;
+  const m = /^172\.(\d+)\./.exec(ip);
+  return m != null && Number(m[1]) >= 16 && Number(m[1]) <= 31;
+}
+
 export interface CreateBrowserNodeInit {
   /**
    * Relaxes the libp2p connection gater to allow insecure (`ws://`) and

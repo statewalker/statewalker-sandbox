@@ -70,7 +70,7 @@ import { dialRelay, waitForCircuitReservation } from "../reservation.js";
 import { mountEdge } from "./edge.js";
 import { createEdgeDispatch } from "./edge-dispatch.js";
 import { createRouteEnsurer } from "./join.js";
-import { createBrowserNode } from "./node-profile.js";
+import { createBrowserNode, dialNeedsPermissiveGater } from "./node-profile.js";
 
 /** How often the hub sweeps stale presence -- `../hub/main.ts`'s `SWEEP_INTERVAL_MS`, and for the same reason (1 s granularity keeps "leaves the view within one TTL" tight). */
 export const SWEEP_INTERVAL_MS = 1_000;
@@ -196,7 +196,12 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
   // `CreateBrowserNodeInit.privateKey`. A node built from one key while
   // `createPeer` minted with another would produce tokens whose `mesh`
   // claim named a peer nobody was talking to.
-  const node = await createBrowserNode({ dev: init.dev, privateKey: init.privateKey });
+  // See `dialNeedsPermissiveGater`: what the gater objects to is the address
+  // being dialled, not where this page was served from.
+  const node = await createBrowserNode({
+    dev: init.dev || dialNeedsPermissiveGater(relayAddr),
+    privateKey: init.privateKey,
+  });
 
   // EVERY RESOURCE THIS FUNCTION ACQUIRES IS UNWOUND IF A LATER STEP THROWS.
   // `node` is running and holding a relay connection and a reservation the

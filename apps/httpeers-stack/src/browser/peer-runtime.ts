@@ -84,7 +84,12 @@ import {
   resumeMembership,
   startJoin,
 } from "./join.js";
-import { createBrowserNode, dialRelay, waitForCircuitReservation } from "./node-profile.js";
+import {
+  createBrowserNode,
+  dialNeedsPermissiveGater,
+  dialRelay,
+  waitForCircuitReservation,
+} from "./node-profile.js";
 
 /**
  * The invitation payload's shape -- mirrors `../setup/main.ts`'s own
@@ -315,7 +320,13 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   }
 
   onState("connecting-relay");
-  const node = await createBrowserNode({ dev: init.dev, privateKey: init.privateKey });
+  // OR'd with the address test: the caller's `dev` stays honoured, but a
+  // loopback or private relay address relaxes the gater on its own. See
+  // `dialNeedsPermissiveGater`.
+  const node = await createBrowserNode({
+    dev: init.dev || dialNeedsPermissiveGater(relayAddr),
+    privateKey: init.privateKey,
+  });
 
   // EVERYTHING FROM HERE ON IS UNWOUND IF IT FAILS. `node` is running the
   // moment `createBrowserNode` returns, and a `startBrowserPeer` that threw
