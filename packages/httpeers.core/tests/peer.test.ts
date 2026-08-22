@@ -147,24 +147,32 @@ describe("createPeer: identity by closure over the shipped transport", () => {
       serverAddr,
       new Request("http://peer/test/whoami", { headers: { authorization: `Bearer ${token}` } }),
     );
-    // 403 AGAIN, and with the original wording restored. Task 29 moved this to
-    // 401 because ADR-0009's rule had moved inside the token (`check if
-    // bound($k), connection_peer($k)`), so a mismatch failed VERIFICATION and
-    // `getClaims` -- which swallowed every failure into `null` -- could only
-    // report "no claims". Task 34 widened that seam, so the refusal keeps its
-    // own identity all the way to the response: `peer-binding`, 403.
+    // STILL 401, and now it says why. Task 29 moved this from 403 to 401
+    // because ADR-0009's rule had moved inside the token (`check if bound($k),
+    // connection_peer($k)`), so a mismatch failed VERIFICATION and `getClaims`
+    // -- which swallowed every failure into `null` -- could only report "no
+    // claims". Task 34 widened that seam: the status is the same, but the
+    // refusal now keeps its own identity all the way to the response, so this
+    // is no longer indistinguishable from presenting no token at all.
     //
-    // 403 rather than 401 is a decision, not a restoration for its own sake:
-    // this token names another key, and presenting it again after a refresh
-    // reproduces the refusal exactly. It is the confused-deputy replay that
-    // makes the check worth having, and a replayer must be told to stop rather
-    // than to try harder. The property under test is unchanged either way:
-    // a token minted for somebody else does not work here.
-    expect(res.status).toBe(403);
+    // 401 is a decision and not inertia. The confused-deputy replay is what
+    // makes this check worth having, but it is not the only thing that reaches
+    // it: a page that resets its identity while holding a token minted for its
+    // old key lands here too, and for that client a refresh is the whole fix.
+    // Telling it to stop would be a real failure; a thief looping on 401
+    // obtains nothing, since retrying cannot produce a token bound to a key it
+    // does not hold. The property under test is unchanged either way: a token
+    // minted for somebody else does not work here.
+    expect(res.status).toBe(401);
     expect(await res.json()).toEqual({
       error: "token subject does not match connected peer",
       reason: "peer-binding",
     });
+    // ... and it is NOT the tokenless answer, which is the whole point of the
+    // widening: same status, different refusal, and the body says which.
+    const tokenless = await call(clientA, serverAddr, new Request("http://peer/test/whoami"));
+    expect(tokenless.status).toBe(401);
+    expect(await tokenless.json()).toEqual({ error: "membership token required" });
   }, 20_000);
 
   // --- A-24 / ADR-0020: the DESTINATION enforces the audience ---------------

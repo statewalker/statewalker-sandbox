@@ -137,19 +137,29 @@ describe("binding", () => {
     const res = await mallory.call(hub.peer.peerId, "/test/whoami", { token: aliceToken });
     // The replay is refused -- that is the property, and it is unchanged.
     //
-    // 403 AGAIN (Task 34), after Task 29 moved it to 401. The binding still
-    // lives INSIDE the token as `check if bound($k), connection_peer($k)`, so
-    // the deputy is still defeated one step earlier and by the token itself;
-    // what changed is that `getClaims` no longer flattens that verification
-    // failure into "no token", so the refusal keeps its own reason and its own
-    // status. 403 is the decision: Mallory holding Alice's token cannot fix
-    // anything by refreshing, and telling a replayer to try again is the one
-    // answer this check must not give.
-    expect(res.status).toBe(403);
+    // STILL 401 (Task 29's status survives Task 34), but it is no longer the
+    // SAME 401 a tokenless caller gets. The binding still lives INSIDE the
+    // token as `check if bound($k), connection_peer($k)`, so the deputy is
+    // still defeated one step earlier and by the token itself; what changed is
+    // that `getClaims` no longer flattens that verification failure into "no
+    // token", so the refusal carries its own reason.
+    //
+    // 401 rather than 403 is the decision. Mallory is not the only caller who
+    // reaches this state: a page that resets its identity while holding a
+    // token minted for its old key presents exactly the same mismatch, and for
+    // that honest client a refresh is the entire fix. Telling it to stop would
+    // be a real failure, while Mallory looping on 401 gains nothing -- no
+    // amount of retrying yields a token bound to Alice's key.
+    expect(res.status).toBe(401);
     expect(await res.json()).toEqual({
       error: "token subject does not match connected peer",
       reason: "peer-binding",
     });
+
+    // The discrimination the reason buys: same status, different refusal.
+    const tokenless = await mallory.call(hub.peer.peerId, "/test/whoami");
+    expect(tokenless.status).toBe(401);
+    expect(await tokenless.json()).toEqual({ error: "membership token required" });
   });
 
   it("rejects a token minted by a different mesh", async () => {

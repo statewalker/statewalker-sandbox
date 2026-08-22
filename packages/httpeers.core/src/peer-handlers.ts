@@ -62,6 +62,23 @@ import type {
  * opposite case and is 403 — those bytes ARE a token this mesh signed, and it
  * says something contradictory; only the hub can fix that, not the client.
  *
+ * `peer-binding` IS 401, AND THE HONEST CLIENT IS WHY. It looks like the
+ * confused-deputy row — a token presented over a connection proving somebody
+ * else — so it looks like the one refusal that should tell a caller to stop.
+ * But an ordinary page produces this state one button-press later: every page
+ * in this stack has a *reset identity* control, and a page that resets while
+ * still holding a token minted for its OLD key presents exactly a token whose
+ * subject does not match the key it is now proving. That is not a thief, and a
+ * refresh fixes it completely — which by this table's own question makes it
+ * 401.
+ *
+ * The asymmetry decides it rather than the taxonomy. Telling an honest client
+ * to give up when a refresh would have recovered it is a real failure; a thief
+ * looping on 401 costs nothing, because no amount of retrying obtains a token
+ * bound to a key it does not hold. A false "stop" is worse than a harmless
+ * retry. The reason still travels in the body, so the distinction stays legible
+ * to anyone reading the refusal.
+ *
  * `unparseable-issuer` / `issuer-not-ed25519` describe THIS peer's own
  * configured `hubPeerId`, not the presented token: they fire before any token
  * is examined, and they fire for every request. 403 is right for the reason
@@ -75,9 +92,9 @@ import type {
 const REFUSAL_STATUS: Record<TokenRejectionReason, 401 | 403> = {
   expired: 401,
   "malformed-token": 401,
+  "peer-binding": 401,
   signature: 403,
   "mesh-mismatch": 403,
-  "peer-binding": 403,
   audience: 403,
   "unsatisfied-constraint": 403,
   "evaluation-budget": 403,
@@ -159,6 +176,15 @@ export function newPeerHandlers(init: PeerHandlersInit): FetchHandler {
     }
     const claims = found.claims;
     if (peer === ANONYMOUS) return json({ error: "possession unproven" }, 401);
+    // 403, WHERE THE `peer-binding` REASON ABOVE IS 401, AND THE DIVERGENCE IS
+    // DELIBERATE. The two look like the same condition and are not. Above, the
+    // token's own `check if bound($k), connection_peer($k)` failed — which an
+    // honest client reaches by resetting its identity while holding an old
+    // token, and which a refresh fixes. Here, an injected `getClaims` handed
+    // back claims it declared VERIFIED whose subject does not match the proven
+    // peer: a supplier that is not enforcing the binding at all. That is a
+    // deployment bug, not a stale credential, and no token this client can
+    // fetch changes it — so "stop" is the honest answer.
     if (claims.sub !== peer) return json({ error: "token subject does not match connected peer" }, 403);
 
     const revoked = await isRevoked(claims);

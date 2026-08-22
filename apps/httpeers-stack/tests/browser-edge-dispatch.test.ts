@@ -306,23 +306,25 @@ describe("against a real peer router (createPeer, not a spy)", () => {
    *
    * A GENUINELY MINTED TOKEN FOR THIS PEER, NOT A LITERAL, AND THE
    * DIFFERENCE IS THE WHOLE POINT OF THE TOKENLESS-INBOUND TEST BELOW. An
-   * unverifiable literal is refused as `malformed-token`, which
-   * `peer-handlers.ts` answers 401 -- exactly the status a request with no
-   * header at all produces. So with a literal here, that test would pass
-   * whether or not the wrapper wrongly attached it: both branches land on 401
-   * and the counterfactual is unreachable. Verified directly (an earlier
-   * version of this suite used the literal and did not discriminate; the
-   * review caught it). With a real self-token, a wrongly-attached header is
+   * unverifiable literal is refused as `malformed-token`, whose body is a
+   * token-refusal body like any other. With a literal here, that test could
+   * not tell "the wrapper attached nothing" from "the wrapper attached
+   * something unusable". With a real self-token, a wrongly-attached header is
    * refused as `peer-binding` -- this peer's own token over a connection
-   * proving another -- which is a 403, so the 401 assertion below genuinely
-   * rules the mutant out.
+   * proving another -- which is a distinct, nameable refusal, so the
+   * assertions below genuinely rule the mutant out. Verified directly (an
+   * earlier version of this suite used the literal and did not discriminate;
+   * the review caught it).
    *
-   * That discrimination was briefly LOST and is now back. Between ADR-0019
-   * and Task 34 every verification failure, `peer-binding` included, was
-   * flattened into "no claims" and answered 401 -- so for that stretch this
-   * test's counterfactual really was unreachable, whatever the token was.
-   * Task 34's discriminated `ClaimsResult` restored it; the assertion below
-   * now discriminates for the reason its own comment claims.
+   * THE DISCRIMINATION IS IN THE BODY, NOT THE STATUS, and that is not a
+   * weakening. Both `peer-binding` and a missing token answer 401 -- the
+   * latter because there is no credential, the former because a page that
+   * reset its identity while holding an old token is an honest client a
+   * refresh recovers (see `REFUSAL_STATUS` in `httpeers.core`'s
+   * `peer-handlers.ts`). Between ADR-0019 and Task 34 the two really were
+   * indistinguishable, body included, and this test's counterfactual was
+   * unreachable whatever the token was. Task 34's discriminated
+   * `ClaimsResult` is what separates them again.
    */
   let selfToken: string;
 
@@ -393,24 +395,31 @@ describe("against a real peer router (createPeer, not a spy)", () => {
 
     // The real router discriminates the two failure modes, which is what
     // makes this test add something to the spy-level assertions above rather
-    // than restate them. Had the wrapper attached OUR token to this inbound
-    // request, the token's own binding check would have failed against a
-    // connection naming a different peer, and the response would be a 403
-    // "token subject does not match connected peer". A 401 "membership token
-    // required" is only reachable if no authorization header was added at
-    // all. This holds ONLY because `selfToken` is genuinely minted -- see its
-    // declaration above for what breaks if it is a literal.
+    // than restate them. `membership token required` is reachable ONLY if no
+    // authorization header was added at all: had the wrapper attached OUR
+    // token, the token's own binding check would have failed against a
+    // connection naming a different peer and the body would name
+    // `peer-binding` instead. This holds ONLY because `selfToken` is genuinely
+    // minted -- see its declaration above for what breaks if it is a literal.
     expect(res.status).toBe(401);
-    expect(((await res.json()) as { error: string }).error).toMatch(/membership token required/);
+    expect(await res.json()).toEqual({ error: "membership token required" });
     expect(echoed).toEqual([]);
 
-    // The counterfactual, run rather than asserted in prose: the mutant this
-    // test rules out really does produce a different status.
+    // The counterfactual, RUN rather than asserted in prose: the mutant this
+    // test rules out really does produce a different refusal. Same status --
+    // both are "authenticate and retry might work" -- and a different body,
+    // which is exactly the distinction the widened `ClaimsResult` restored.
     const mutant = new Request(`http://peer/${peer.peerId}/test/whoami`, {
       headers: { authorization: `Bearer ${selfToken}` },
     });
     registerPeer(mutant, "12D3KooSomeOtherPeer");
-    expect((await dispatch(mutant)).status).toBe(403);
+    const mutantRes = await dispatch(mutant);
+    expect(mutantRes.status).toBe(401);
+    expect(await mutantRes.json()).toEqual({
+      error: "token subject does not match connected peer",
+      reason: "peer-binding",
+    });
+    expect(echoed).toEqual([]);
   });
 
   it("Ruling 60 through the real router: an unreachable target really does throw, and really is mapped", async () => {

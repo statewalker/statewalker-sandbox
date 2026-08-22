@@ -220,12 +220,37 @@ describe("a refused token says WHY, and the status says whether retrying can hel
     expect(absent.status).toBe(401);
   });
 
-  it("peer-binding -> 403: this token belongs to another key", async () => {
+  it("peer-binding -> 401: the honest client here is a page that reset its identity", async () => {
+    // The row that looks most like "stop" and is not. Every page in this stack
+    // has a reset-identity control, and a page that resets while still holding
+    // a token minted for its OLD key presents exactly this -- a token whose
+    // subject does not match the key it is now proving. A refresh fixes it, so
+    // by the table's own question it is 401. A thief looping here obtains
+    // nothing; an honest client told to stop is a real failure.
     const s = subject({
       peer: MALLORY,
       found: refused("peer-binding", "token subject does not match connected peer"),
     });
-    expect((await s.handler(req())).status).toBe(403);
+    const res = await s.handler(req());
+    expect(res.status).toBe(401);
+    // The status says "retry may help"; the BODY is what still distinguishes
+    // this from having presented no token at all.
+    expect(await res.json()).toEqual({
+      error: "token subject does not match connected peer",
+      reason: "peer-binding",
+    });
+    expect(s.reached()).toBe(false);
+  });
+
+  it("... and the middleware's OWN sub comparison stays 403, deliberately", async () => {
+    // Not the same condition despite the same words. This fires when an
+    // injected `getClaims` declares claims VERIFIED whose subject does not
+    // match the proven peer -- a supplier not enforcing the binding at all,
+    // which is a deployment bug no token the client can fetch will fix.
+    const s = subject({ peer: MALLORY, found: verified(claimsFor(ALICE)) });
+    const res = await s.handler(req());
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "token subject does not match connected peer" });
   });
 
   it("mesh-mismatch -> 403, signature -> 403: another hub minted it", async () => {

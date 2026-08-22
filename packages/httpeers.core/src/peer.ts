@@ -400,11 +400,15 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
   // A consequence worth stating: a REPLAYED token — genuine, unexpired, but
   // presented over somebody else's connection — fails VERIFICATION rather
   // than `peer-handlers.ts`'s own `claims.sub !== peer` comparison. It is
-  // still refused as 403 "token subject does not match connected peer" (the
-  // `peer-binding` reason), because this function now REPORTS the refusal
-  // instead of flattening it. `peer-handlers.ts` keeps its own comparison
-  // because its `getClaims` is an INJECTED seam and a supplier that does not
-  // bind must still be refused there.
+  // refused as 401 "token subject does not match connected peer" (the
+  // `peer-binding` reason), keeping its own reason because this function now
+  // REPORTS the refusal instead of flattening it into "no token". 401 rather
+  // than 403 because the same state is what an honest page produces by
+  // resetting its identity while holding a token minted for its old key, and
+  // a refresh fixes that — see `REFUSAL_STATUS` in `peer-handlers.ts`.
+  // `peer-handlers.ts` keeps its own comparison because its `getClaims` is an
+  // INJECTED seam and a supplier that does not bind must still be refused
+  // there — at 403, deliberately, for the reason given at that line.
   //
   // WHY THIS RETURNS A RESULT AND NOT `MeshClaims | null`. It used to catch
   // every `TokenVerificationError` into `claims = null`, which made "no token
