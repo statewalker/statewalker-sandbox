@@ -37,11 +37,13 @@
  *  - the expired-token test read `(hub as any).__key`, a field of the
  *    archive's own monolithic `Peer` this package's `Peer` never exposes
  *    (`createPeer`'s doc comment: the signing key is retained, never
- *    published). Adapted to always mint with a fresh, unrelated key --
- *    `verifyToken`'s check order runs expiry BEFORE the mesh/issuer match,
- *    so an expired token is still rejected (as "token expired", surfaced as
- *    401) regardless of whose key signed it; the assertion (401) is
- *    unaffected.
+ *    published). Adapted at Task 7b to mint with a fresh, unrelated key, on
+ *    the grounds that `verifyToken` ran expiry BEFORE the mesh/issuer match.
+ *    CORRECTED AT TASK 34: that ceased to hold at ADR-0019 -- a Biscuit's
+ *    signature is verified at parse, before any check runs -- so the
+ *    substitution quietly turned the test into a duplicate of the
+ *    different-mesh one. It now mints through `TestHub.mintToken` with a
+ *    negative `ttlMs`, which is genuinely expired and genuinely this mesh's.
  */
 import { multiaddr } from "@multiformats/multiaddr";
 import { generateMeshKey, mintToken, verifyToken } from "@statewalker/httpeers.core";
@@ -135,16 +137,19 @@ describe("binding", () => {
     const res = await mallory.call(hub.peer.peerId, "/test/whoami", { token: aliceToken });
     // The replay is refused -- that is the property, and it is unchanged.
     //
-    // 401 rather than the 403 this asserted while the binding was
-    // `peer-handlers.ts`'s `claims.sub !== peer`. Since ADR-0019 the rule is
-    // `check if bound($k), connection_peer($k)` INSIDE the token, so Alice's
-    // token does not verify at all over Mallory's connection: `getClaims`
-    // reports no claims and the binding middleware answers "membership token
-    // required" before reaching its own check. The confused deputy is defeated
-    // one step earlier and by the token itself rather than by a verifier
-    // remembering to compare -- which is the point of moving it.
-    expect(res.status).toBe(401);
-    expect(((await res.json()) as any).error).toMatch(/membership token required/);
+    // 403 AGAIN (Task 34), after Task 29 moved it to 401. The binding still
+    // lives INSIDE the token as `check if bound($k), connection_peer($k)`, so
+    // the deputy is still defeated one step earlier and by the token itself;
+    // what changed is that `getClaims` no longer flattens that verification
+    // failure into "no token", so the refusal keeps its own reason and its own
+    // status. 403 is the decision: Mallory holding Alice's token cannot fix
+    // anything by refreshing, and telling a replayer to try again is the one
+    // answer this check must not give.
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: "token subject does not match connected peer",
+      reason: "peer-binding",
+    });
   });
 
   it("rejects a token minted by a different mesh", async () => {
@@ -156,18 +161,37 @@ describe("binding", () => {
       ttlMs: 60_000,
     });
     const res = await alice.call(hub.peer.peerId, "/test/whoami", { token: forged });
-    expect(res.status).toBe(401);
+    // 403, not the 401 this asserted before Task 34. A Biscuit is verified
+    // against the key the VERIFIER expects, so a token signed by an unrelated
+    // key fails at PARSE with `signature` -- the reason that deliberately
+    // collapses "corrupted" and "signed by someone else" (`TokenRejectionReason`
+    // in `types.ts`). Either way a refresh from the rogue hub produces another
+    // token this mesh will not accept, so the client must stop rather than
+    // retry: 403.
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: "token signature does not verify against this mesh's key",
+      reason: "signature",
+    });
   });
 
-  it("rejects an expired token", async () => {
-    const expired = await mintToken({
-      privateKey: await generateMeshKey(),
-      sub: alice.peerId,
-      roles: ["member"],
-      ttlMs: -1000,
-    });
+  it("rejects an expired token -- 401, because a refresh is exactly the remedy", async () => {
+    // MINTED BY THE HUB, not by a fresh unrelated key. The module comment
+    // above recorded the archive's adaptation as safe on the grounds that
+    // "`verifyToken`'s check order runs expiry BEFORE the mesh/issuer match,
+    // so an expired token is still rejected ... regardless of whose key signed
+    // it". That was true of the JWS implementation and stopped being true at
+    // ADR-0019: a Biscuit's signature is checked at parse, before any check
+    // runs, so an unrelated key produced `signature` and this test was
+    // silently a duplicate of the one above it. Both collapsed to 401, so
+    // nothing showed. Task 34 separates the two statuses and the substitution
+    // became visible -- fixed by asking the hub for a genuinely expired token,
+    // which `TestHub.mintToken` (the same closure its endpoints use) can mint.
+    const expired = await hub.mintToken(alice.peerId, ["member"], { ttlMs: -1000 });
     const res = await alice.call(hub.peer.peerId, "/test/whoami", { token: expired });
+    // 401 and not 403: this is the one refusal a fresh token really does fix.
     expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "token expired", reason: "expired" });
   });
 });
 

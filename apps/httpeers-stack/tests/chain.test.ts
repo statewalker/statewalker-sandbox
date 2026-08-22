@@ -83,13 +83,18 @@ describe("R-2: chaining", () => {
       token: aliceToken,
     });
     // Reached the hub and was refused by the binding, rather than 404ing at
-    // the relay -- which is the whole point of this test. 401 rather than the
-    // 403 this asserted before ADR-0019: the binding is now a check inside the
-    // token (`check if bound($k), connection_peer($k)`), so the hub, which
-    // proved the RELAY on this connection, cannot verify Alice's token at all
-    // and reports no claims. Either code distinguishes "the hub answered" from
-    // "the relay never forwarded", which is what C2 establishes.
-    expect(res.status).toBe(401);
+    // the relay -- which is the whole point of this test, and any status
+    // distinguishes "the hub answered" from "the relay never forwarded".
+    //
+    // 403 AGAIN (Task 34), after Task 29 moved it to 401. The binding is still
+    // a check inside the token (`check if bound($k), connection_peer($k)`), so
+    // the hub -- which proved the RELAY on this connection -- still cannot
+    // verify Alice's token; what changed is that the refusal now carries its
+    // reason instead of being flattened into "no token". 403 is the decision:
+    // Alice refreshing her token does not make it presentable over the relay's
+    // connection, so retrying cannot help.
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as any).reason).toBe("peer-binding");
     await relay.stop();
   }, 30_000);
 
@@ -107,12 +112,16 @@ describe("R-2: chaining", () => {
     const res = await alice.call(relay.peerId, `/${hub.peer.peerId}/test/whoami`, {
       token: aliceToken,
     });
-    // See C2 for why this is 401 and no longer 403. The refusal moved from
-    // `peer-handlers.ts`'s prose check to the token's own Datalog binding, so
-    // the far end refuses one step earlier -- still fails closed, still for
-    // exactly the reason this test names.
-    expect(res.status).toBe(401);
-    expect(((await res.json()) as any).error).toMatch(/membership token required/);
+    // See C2. The refusal moved from `peer-handlers.ts`'s prose check to the
+    // token's own Datalog binding at ADR-0019, so the far end refuses one step
+    // earlier -- still fails closed, still for exactly the reason this test
+    // names, and since Task 34 it SAYS so rather than answering the generic
+    // "membership token required" every verification failure used to share.
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: "token subject does not match connected peer",
+      reason: "peer-binding",
+    });
     await relay.stop();
   }, 30_000);
 

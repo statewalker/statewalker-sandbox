@@ -96,23 +96,65 @@ describe("A-24 end to end: a token names its audience", () => {
   it("AND THE OTHER PROVIDER REFUSES IT -- dialled straight at it, nothing forwarded", async () => {
     const res = await alice.call(providerB.peerId, "/test/whoami", { token: scopedToA });
 
-    // 401, not 403, and for the same reason a wrong-subject token is 401
-    // since ADR-0019: the audience check lives INSIDE the token, so the token
-    // does not verify at providerB at all. `getClaims` reports no claims and
-    // the binding middleware answers before any policy runs. The refusal is
-    // the property; the status is the shape every token-verification failure
-    // already has here.
-    //
-    // What the refusal REPORTS is finer-grained one layer down and is
-    // asserted where it is observable (`httpeers.core`'s `tokens.test.ts`):
-    // `TokenVerificationError` carries `reason: "audience"` and the failing
-    // rule text `block 0 check 2: check if audience($k), self_peer($k)`.
-    // `peer.ts`'s `getClaims` swallows every verification failure into
-    // `null`, so none of that reaches this response body. That is a gap this
-    // task did not close -- see the task report.
-    expect(res.status).toBe(401);
-    expect(((await res.json()) as { error: string }).error).toMatch(/membership token required/);
+    // 403 AND THE REASON, both of which arrived with Task 34. Task 31 left
+    // this as 401 "membership token required" and recorded the gap: the
+    // audience check lives INSIDE the token, so the token does not verify at
+    // providerB at all, and `peer.ts`'s `getClaims` swallowed every
+    // verification failure into `null` -- so `reason: "audience"` was
+    // observable only one layer down, in `httpeers.core`'s `tokens.test.ts`.
+    // The seam is now a discriminated result and the reason travels all the
+    // way to the body.
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: "this peer is not an intended audience for this token",
+      reason: "audience",
+    });
   }, 20_000);
+
+  it("THE RETRY LOOP IS GONE: refreshing the token changes nothing, and the status says so", async () => {
+    // The defect Task 34 exists for, stated as the client's own experience.
+    //
+    // Under the old collapse this refusal was 401 "membership token required"
+    // -- the same answer a client gets for presenting NO token, whose remedy
+    // is to go and get one. So a client scoped to providerA and calling
+    // providerB would refresh, present a token scoped exactly the same way,
+    // and be refused identically. Forever, with nothing in the exchange able
+    // to say that refreshing was not the remedy.
+    //
+    // The refresh here is a real one: a second, genuinely different token from
+    // the same hub through the same closure its endpoints mint with.
+    const first = await alice.call(providerB.peerId, "/test/whoami", { token: scopedToA });
+    expect(first.status).toBe(403);
+
+    const refreshed = await hub.mintToken(alice.peerId, ["member"], {
+      audience: [providerA.peerId],
+    });
+    expect(refreshed).not.toBe(scopedToA); // genuinely fresh bytes, not the same token back
+
+    const second = await alice.call(providerB.peerId, "/test/whoami", { token: refreshed });
+
+    // (i) Refreshing did not help -- the refusal is byte-identical.
+    expect(second.status).toBe(403);
+    expect(await second.json()).toEqual({
+      error: "this peer is not an intended audience for this token",
+      reason: "audience",
+    });
+
+    // (ii) And the client was TOLD not to retry. 403 is the whole signal: 401
+    // means "authenticate and try again", which is the advice that produced
+    // the loop. The counterfactual matters as much as the assertion -- a
+    // handler that answered 403 to everything would pass (i) too.
+    const tokenless = await alice.call(providerB.peerId, "/test/whoami");
+    expect(tokenless.status).toBe(401);
+    expect(((await tokenless.json()) as { error: string }).error).toBe(
+      "membership token required",
+    );
+
+    // (iii) And the refreshed token is not simply broken: it works where it
+    // is meant to, so (i) is about the destination and not about the mint.
+    const atA = await alice.call(providerA.peerId, "/test/whoami", { token: refreshed });
+    expect(atA.status).toBe(200);
+  }, 30_000);
 
   it("... AND THE CONTROL: an unrestricted token from the same hub IS admitted there", async () => {
     // Same Alice, same connection, same provider, same hub, same roles. Only
