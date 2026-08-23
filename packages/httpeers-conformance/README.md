@@ -45,27 +45,40 @@ it. §13's divergence list is precisely the set of `missing` outcomes.
 produce today. Every criterion must have a check or an explicit skip reason, and every
 skip must state one — a criterion with no outcome is how a suite quietly stops testing.
 
-## Measured, 2026-08-21
+## Measured, 2026-08-23 — after the httpeers-stack line landed
 
 **`adapters/reference.ts`** — 31 pass, 0 fail, 0 missing, 54 skip.
 
-**`@statewalker/httpeers.core`** — 4 pass, 3 fail, 24 missing, 54 skip.
+**`@statewalker/httpeers.core`** — **16 pass, 3 fail, 7 missing, 59 skip.**
 
-- **R-01…R-04 pass.** Longest-prefix matching on segment boundaries is correct.
-- **R-05…R-07 fail** (D-09). `provide()` normalises a trailing slash and accepts a
-  duplicate prefix where ADR-0006 requires a throw naming every conflict.
-- **24 missing** — the whole token and policy mechanism (D-14, D-15), which is
-  *superseded rather than incomplete*: core's tokens are JWT-shaped with the binding
-  carried by `sub` rather than a confirmation claim, no audience, no delegation, and
-  its policy is the `.access` tree that ADR-0019 replaced with Datalog. Plus the
-  intermediary transform (D-11), which has no equivalent.
-- **Dependency graph fails** (D-03): core carries 9 transport packages
-  (`libp2p`, `@libp2p/*`, `@chainsafe/*`, `@multiformats/multiaddr`) where ADR-0005
-  requires the transport behind a seam so block A builds with no network stack.
+Two days earlier the same package measured 4 / 3 / 24 / 54. The httpeers-stack line
+reconciled it to ADR-0019 — Biscuit tokens, the access tree and vocabulary rebuilt as
+Datalog rules, and `audience` with destination enforcement — which closed **twelve**
+criteria. D-12, D-14, D-15 and D-16 of §13 are done.
 
-54 criteria are skipped by construction: blocks T (needs a live libp2p transport),
-E and M (DESIGNED — no edge adapter and no hub process exist), and the parts of X
-and C that need a live peer. Every one names its reason.
+What is left, and what it means:
+
+- **R-05…R-07 FAIL** — the only genuine behavioural gap (**D-09**). `provide()`
+  normalises a trailing slash and accepts a duplicate prefix where ADR-0006 requires a
+  throw naming every conflict.
+- **X-05…X-07, X-09 missing** — the intermediary transform (**D-11**) has no
+  equivalent. This is the one that keeps a caller's mesh token out of an upstream
+  service's logs.
+- **A-13, A-13b, A-23 missing** — delegation. This is the **specified** state, not a
+  defect: ADR-0010 reserves the actor claim and defers enforcement to the reverse
+  proxy, so core correctly offers no `attenuate` and no delegation scope.
+
+Five criteria moved from `missing` to `skip` because the adapter now distinguishes two
+different claims: "core lacks this behaviour" from "this harness cannot construct the
+input through core's public API". A token carrying an extra constraint (A-20), an
+injected evaluation budget (A-25) and a literal revocation list (A-18, A-21) are the
+latter — core does these, just not through a seam a test can reach.
+
+> **The adapter is part of the measurement.** Its first version declared no `tokens`
+> capability, because core was JWT-shaped when it was written. Re-run unchanged against
+> the reconciled core, it still reported 24 missing — scoring the adapter's staleness
+> as the implementation's gap. An adapter that is not maintained alongside the thing it
+> measures reports a number that looks precise and is wrong.
 
 ## A finding, from the first run
 
