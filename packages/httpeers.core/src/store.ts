@@ -6,6 +6,9 @@
  * test, with no real timers involved. Persistence is a later task's job —
  * nothing here touches the filesystem or a database.
  */
+
+import type { RuleSet } from "./rules.js";
+import { assertValid, validateRoles } from "./rules.js";
 import type {
   Advertisement,
   AdvertisementStore,
@@ -15,8 +18,6 @@ import type {
   PresenceStore,
   PresenceWriteResult,
 } from "./types.js";
-import type { RuleSet } from "./rules.js";
-import { assertValid, validateRoles } from "./rules.js";
 
 /**
  * Durable membership: who belongs to the mesh, and with what roles.
