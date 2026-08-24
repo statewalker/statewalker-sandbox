@@ -29,7 +29,9 @@ export interface RelayStartupReport {
 /** True when this multiaddr carries TLS -- either `/wss` or the expanded `/tls/ws`. */
 function isEncrypted(addr: string): boolean {
   try {
-    const names = multiaddr(addr).getComponents().map((c) => c.name);
+    const names = multiaddr(addr)
+      .getComponents()
+      .map((c) => c.name);
     return names.includes("wss") || names.includes("tls");
   } catch {
     // Unparseable addresses are refused at config time, so reaching here means
@@ -79,9 +81,39 @@ export function relayStartupReport(
     for (const addr of config.announce) lines.push(`relay: announce   ${addr}`);
   }
 
+  // THE SUBNETWORK POLICY, because it decides who this relay will carry and
+  // it is invisible from outside: an operator looking at a peer that cannot
+  // reserve has no other way to tell an `open` relay from a `registered` one
+  // whose list does not have their name on it.
+  lines.push(`relay: mode       ${config.mode}`);
+  if (config.mode === "open") {
+    lines.push("relay:            any subnetwork name is accepted; peers announcing different");
+    lines.push("relay:            names cannot reach each other through this relay.");
+  } else {
+    lines.push(
+      `relay:            only these ${config.networks.length} subnetwork name(s) are accepted:`,
+    );
+    for (const network of config.networks) lines.push(`relay:              ${network.name}`);
+  }
+  lines.push("relay:            a peer that announces no name is refused -- there is no default.");
+
   lines.push("relay: addresses");
   for (const addr of addrs) lines.push(`relay:   ${addr}`);
   lines.push(rule);
+
+  // `open` IGNORES `RELAY_NETWORKS` ENTIRELY, and an operator who set it
+  // believes the opposite. This starts cleanly and carries every subnetwork
+  // on the internet, which is a fine thing to do on purpose and a bad thing
+  // to do by accident.
+  if (config.mode === "open" && config.networksConfigured) {
+    warnings.push(
+      [
+        "relay: WARNING: RELAY_NETWORKS is set, but RELAY_MODE is open -- the list is IGNORED.",
+        "relay: an open relay accepts any subnetwork name a peer announces. If you meant to",
+        "relay: accept only the names on that list, set RELAY_MODE=registered.",
+      ].join("\n"),
+    );
+  }
 
   // T3's loud warning. `edge` means something else terminates TLS, so what
   // peers are told to dial has to be the TLS address -- and if it is not,

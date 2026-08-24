@@ -11,11 +11,36 @@ export {
   loadRelayKey,
   RelayConfigError,
   type RelayEnv,
+  type RelayMode,
+  type RelayNetworkDescriptor,
   type RelayTlsMaterial,
   type RelayTlsMode,
-  resolveRelayConfig,
   type ResolvedRelayConfig,
+  resolveRelayConfig,
 } from "./config.js";
 export { generateRelayIdentity } from "./keygen.js";
-export { type Relay, startRelay, startRelayFromConfig, type StartRelayInit } from "./relay.js";
-export { relayStartupReport, type RelayStartupReport } from "./report.js";
+export { type Relay, type StartRelayInit, startRelay, startRelayFromConfig } from "./relay.js";
+export { type RelayStartupReport, relayStartupReport } from "./report.js";
+/**
+ * The subnetwork protocol, shared by both ends. A BROWSER PAGE SHOULD IMPORT
+ * `@statewalker/httpeers-relay/subnetwork` DIRECTLY rather than this barrel:
+ * everything else exported here reaches `node:fs` through `./config.js`.
+ */
+export {
+  type AnnounceSubnetworkInit,
+  announceSubnetwork,
+  isValidSubnetworkName,
+  MAX_SUBNETWORK_NAME_LENGTH,
+  RELAY_NET_PROTOCOL,
+  type SubnetworkAnnouncement,
+  type SubnetworkAnnouncementReply,
+  type SubnetworkRefusalReason,
+  SubnetworkRefusedError,
+  subnetworkNameProblem,
+} from "./subnetwork.js";
+export {
+  createSubnetworkRegistry,
+  DEFAULT_ADMISSION_GRACE_MS,
+  type SubnetworkRegistry,
+  type SubnetworkRegistryInit,
+} from "./subnetwork-registry.js";

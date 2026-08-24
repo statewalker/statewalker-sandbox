@@ -22,6 +22,7 @@ import { readFileSync } from "node:fs";
 import { privateKeyFromProtobuf } from "@libp2p/crypto/keys";
 import type { Ed25519PrivateKey, PrivateKey } from "@libp2p/interface";
 import { multiaddr } from "@multiformats/multiaddr";
+import { subnetworkNameProblem } from "./subnetwork.js";
 
 /** `RELAY_PORT`'s default -- matches the design spec's `/ip4/0.0.0.0/tcp/9090/ws` example. */
 export const DEFAULT_RELAY_PORT = 9090;
@@ -50,6 +51,36 @@ export const DEFAULT_RELAY_KEY_PATH = "./.httpeers/relay.key";
  */
 export type RelayTlsMode = "self" | "edge";
 
+/**
+ * How this relay decides which subnetworks it will carry.
+ *
+ * - `open` -- any well-formed subnetwork name is accepted. The relay
+ *   partitions by whatever it is told and needs no configuration, so a
+ *   subnetwork is created by picking a name. This is what a public relay
+ *   wants, and it is the default.
+ * - `registered` -- only names in `RELAY_NETWORKS`, loaded at start, are
+ *   accepted. For a private or paid relay whose operator wants to bound who
+ *   consumes the bandwidth. Adding a name means a restart.
+ *
+ * NEITHER MODE HAS A DEFAULT SUBNETWORK. A peer that announces no name is
+ * refused in both -- there is nowhere for it to land.
+ */
+export type RelayMode = "open" | "registered";
+
+/**
+ * One entry of the registered list.
+ *
+ * A DESCRIPTOR, NOT A BARE STRING, and that shape is the point rather than
+ * ceremony: a later variant carrying an `issuerPublicKey` (a subnetwork whose
+ * members prove admission rather than merely knowing its name) has somewhere
+ * to go without a config migration and without a second format for
+ * `httpeers.json` to learn.
+ */
+export interface RelayNetworkDescriptor {
+  /** The subnetwork name peers announce. */
+  name: string;
+}
+
 export interface RelayTlsMaterial {
   /** PEM certificate content -- already read from `TLS_CERT`'s file, not the path itself. */
   cert: string;
@@ -76,6 +107,12 @@ export interface ResolvedRelayConfig {
   tls?: RelayTlsMaterial;
   /** True when `RELAY_TLS` was set explicitly rather than defaulted. Reported, not enforced. */
   tlsModeExplicit: boolean;
+  /** `RELAY_MODE`. Defaults to `open`. */
+  mode: RelayMode;
+  /** `RELAY_NETWORKS`, parsed. Empty in `open` mode, where the list has no meaning. */
+  networks: RelayNetworkDescriptor[];
+  /** True when `RELAY_NETWORKS` was set. Reported, so `open` can say the list is being ignored. */
+  networksConfigured: boolean;
 }
 
 /**
@@ -161,7 +198,7 @@ function missingKeyGuidance(keyPath: string, explicitPath: boolean): string {
     'relay:                   "pnpm keygen" in @statewalker/httpeers-relay.',
     "relay:",
     `relay:   RELAY_KEY_PATH  the same protobuf as raw bytes on disk (default "${DEFAULT_RELAY_KEY_PATH}").`,
-    "relay:                   Use this locally. In the reference stack, \"pnpm bootstrap\" writes",
+    'relay:                   Use this locally. In the reference stack, "pnpm bootstrap" writes',
     "relay:                   it for you.",
     "relay:",
     "relay: refusing to start with a freshly generated key: this relay's peerId is embedded in",
@@ -331,6 +368,83 @@ function resolveTls(
   };
 }
 
+/**
+ * Reads `RELAY_MODE` and `RELAY_NETWORKS` into the subnetwork policy.
+ *
+ * `registered` WITH AN EMPTY LIST IS REFUSED, not started. A relay whose
+ * registered list is empty accepts nobody at all, which is never what anyone
+ * meant and looks from the outside exactly like a relay that is down.
+ *
+ * `open` WITH A LIST IS ALLOWED, and warned about in the startup report
+ * (`./report.ts`) rather than refused: an operator flipping a relay back to
+ * open for an afternoon should not have to delete their list to do it, but
+ * they should be told it is doing nothing.
+ */
+function resolveSubnetworks(
+  env: RelayEnv,
+): Pick<ResolvedRelayConfig, "mode" | "networks" | "networksConfigured"> {
+  const rawMode = env.RELAY_MODE?.trim();
+  let mode: RelayMode;
+  if (rawMode == null || rawMode === "") {
+    mode = "open";
+  } else if (rawMode === "open" || rawMode === "registered") {
+    mode = rawMode;
+  } else {
+    throw new RelayConfigError(
+      [
+        `relay: RELAY_MODE="${rawMode}" is not a mode.`,
+        "relay:   open        any subnetwork name is accepted; no configuration needed.",
+        "relay:   registered  only the names in RELAY_NETWORKS are accepted.",
+        "relay: unset means open. Neither mode has a default subnetwork: a peer that announces",
+        "relay: no name is refused either way.",
+      ].join("\n"),
+    );
+  }
+
+  const rawNetworks = env.RELAY_NETWORKS;
+  const networksConfigured = rawNetworks != null && rawNetworks.trim() !== "";
+  const names = networksConfigured
+    ? rawNetworks
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s !== "")
+    : [];
+
+  for (const name of names) {
+    const problem = subnetworkNameProblem(name);
+    if (problem != null) {
+      throw new RelayConfigError(
+        [
+          `relay: RELAY_NETWORKS entry "${name}" is not a usable subnetwork name -- ${problem}.`,
+          "relay: RELAY_NETWORKS is a comma-separated list of subnetwork names, e.g.",
+          'relay: RELAY_NETWORKS="a3f1c0d29b8e4711aa02,team-blue".',
+        ].join("\n"),
+      );
+    }
+  }
+
+  if (mode === "registered" && names.length === 0) {
+    throw new RelayConfigError(
+      [
+        "relay: RELAY_MODE=registered, but RELAY_NETWORKS names no subnetworks.",
+        "relay: a registered relay accepts only the names on its list, so an empty list is a",
+        "relay: relay that refuses every peer -- which is indistinguishable, from outside, from",
+        "relay: a relay that is down. Either list the subnetworks this relay carries, e.g.",
+        'relay: RELAY_NETWORKS="a3f1c0d29b8e4711aa02", or unset RELAY_MODE to run open.',
+      ].join("\n"),
+    );
+  }
+
+  // Deduplicated: a repeated name is a typo, not a second subnetwork, and a
+  // count in the startup report that double-counts it would mislead.
+  const unique = [...new Set(names)];
+  return {
+    mode,
+    networks: mode === "registered" ? unique.map((name) => ({ name })) : [],
+    networksConfigured,
+  };
+}
+
 function resolvePort(env: RelayEnv): number {
   const raw = env.RELAY_PORT;
   if (raw == null || raw.trim() === "") return DEFAULT_RELAY_PORT;
@@ -365,5 +479,6 @@ export function resolveRelayConfig(env: RelayEnv = process.env): ResolvedRelayCo
     listen: [`/ip4/0.0.0.0/tcp/${port}/${scheme}`],
     announce: env.RELAY_ANNOUNCE != null ? parseAnnounce(env.RELAY_ANNOUNCE) : [],
     ...tls,
+    ...resolveSubnetworks(env),
   };
 }

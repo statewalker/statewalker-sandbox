@@ -18,6 +18,12 @@
  * present a token bound to the key it proves, and satisfy the destination's
  * policy. Do not describe anything in this package as making a mesh secure.
  *
+ * SUBNETWORKS DO NOT CHANGE THAT. This relay partitions by subnetwork name
+ * (`./subnetwork-registry.ts`), so peers announcing different names cannot
+ * dial each other through it. That is REACHABILITY, not authorisation: it
+ * stops strangers stumbling in and stops cross-subnetwork dialling, and it
+ * makes no mesh private. The name is not a key, a secret or a credential.
+ *
  * Reservation limits are left at `circuitRelayServer()`'s own defaults --
  * they are what stops this relay becoming a free CDN for arbitrary traffic.
  * Do not raise them here "to make the demo smoother"; a real deployment that
@@ -49,9 +55,12 @@ import { createLibp2p, type Libp2p } from "libp2p";
 import {
   DEFAULT_RELAY_PORT,
   loadRelayKey,
+  type RelayMode,
+  type RelayNetworkDescriptor,
   type RelayTlsMaterial,
   type ResolvedRelayConfig,
 } from "./config.js";
+import { createSubnetworkRegistry, type SubnetworkRegistry } from "./subnetwork-registry.js";
 
 export interface StartRelayInit {
   /**
@@ -75,10 +84,24 @@ export interface StartRelayInit {
   privateKey?: Ed25519PrivateKey;
   /** When set, the relay listens `wss` and terminates TLS itself. Absent means plain `ws`. */
   tls?: RelayTlsMaterial;
+  /** `open` (the default) accepts any subnetwork name; `registered` accepts only `networks`. See `./config.ts`. */
+  mode?: RelayMode;
+  /** The registered list, consulted in `registered` mode. */
+  networks?: readonly RelayNetworkDescriptor[];
+  /** How long the gater waits for an announcement that has not arrived yet. See `./subnetwork-registry.ts`. */
+  admissionGraceMs?: number;
+  /** Where the subnetwork registry reports refusals. Defaults to `console.warn`. */
+  log?: (message: string) => void;
 }
 
 export interface Relay {
   node: Libp2p;
+  /**
+   * Who announced which subnetwork. Exposed because it is the one piece of
+   * relay state a test or an operator surface has any business reading -- the
+   * partition's whole input.
+   */
+  subnetworks: SubnetworkRegistry;
   stop: () => Promise<void>;
 }
 
@@ -95,6 +118,16 @@ export async function startRelay(init: StartRelayInit = {}): Promise<Relay> {
   const listen = init.listen ?? [`/ip4/0.0.0.0/tcp/${init.port ?? DEFAULT_RELAY_PORT}/${scheme}`];
   const announce = init.announce ?? [];
 
+  // BUILT BEFORE THE NODE, because `createLibp2p` takes the gater as
+  // construction input and the gater is where the partition is enforced. The
+  // protocol handler that feeds it is registered afterwards, by `attach`.
+  const subnetworks = createSubnetworkRegistry({
+    mode: init.mode ?? "open",
+    networks: init.networks ?? [],
+    admissionGraceMs: init.admissionGraceMs,
+    log: init.log,
+  });
+
   const node = await createLibp2p({
     privateKey,
     // `announce` replaces the listen addresses in what this node tells peers.
@@ -106,6 +139,10 @@ export async function startRelay(init: StartRelayInit = {}): Promise<Relay> {
     ],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],
+    // THE ONLY ADMISSION HOOK CIRCUIT RELAY v2 HAS. `circuitRelayServer()`
+    // takes no policy of its own -- its options are limits. See
+    // `./subnetwork-registry.ts`.
+    connectionGater: subnetworks.connectionGater,
     services: {
       identify: identify(),
       // Reservation limits: left at this call's own defaults -- see the
@@ -114,8 +151,11 @@ export async function startRelay(init: StartRelayInit = {}): Promise<Relay> {
     },
   });
 
+  await subnetworks.attach(node);
+
   return {
     node,
+    subnetworks,
     async stop() {
       await node.stop();
     },
@@ -129,5 +169,7 @@ export async function startRelayFromConfig(config: ResolvedRelayConfig): Promise
     listen: config.listen,
     announce: config.announce,
     tls: config.tls,
+    mode: config.mode,
+    networks: config.networks,
   });
 }

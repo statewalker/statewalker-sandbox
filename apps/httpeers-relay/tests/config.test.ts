@@ -301,6 +301,70 @@ describe("RELAY_PORT", () => {
   });
 });
 
+describe("RELAY_MODE and RELAY_NETWORKS", () => {
+  it("defaults to open, with no registered list", () => {
+    const config = resolveRelayConfig({ RELAY_KEY: relayKey });
+    expect(config.mode).toBe("open");
+    expect(config.networks).toEqual([]);
+    expect(config.networksConfigured).toBe(false);
+  });
+
+  it("registered parses its list into descriptors, not bare strings", () => {
+    // The shape is what lets an `issuerPublicKey` variant arrive later
+    // without a config migration -- see `RelayNetworkDescriptor`.
+    const config = resolveRelayConfig({
+      RELAY_KEY: relayKey,
+      RELAY_MODE: "registered",
+      RELAY_NETWORKS: "one, two ,three",
+    });
+    expect(config.mode).toBe("registered");
+    expect(config.networks).toEqual([{ name: "one" }, { name: "two" }, { name: "three" }]);
+  });
+
+  it("a repeated name is one subnetwork, not two", () => {
+    expect(
+      resolveRelayConfig({
+        RELAY_KEY: relayKey,
+        RELAY_MODE: "registered",
+        RELAY_NETWORKS: "one,one",
+      }).networks,
+    ).toEqual([{ name: "one" }]);
+  });
+
+  it("open keeps the list out of the policy but records that it was set", () => {
+    // So the startup report can say the list is being ignored rather than
+    // leaving an operator to believe it is in force.
+    const config = resolveRelayConfig({ RELAY_KEY: relayKey, RELAY_NETWORKS: "one" });
+    expect(config.mode).toBe("open");
+    expect(config.networks).toEqual([]);
+    expect(config.networksConfigured).toBe(true);
+  });
+
+  it("registered with an empty list is refused -- it would accept nobody at all", () => {
+    const message = expectConfigError({ RELAY_KEY: relayKey, RELAY_MODE: "registered" });
+    expect(message).toContain("RELAY_NETWORKS names no subnetworks");
+    expect(message).toContain("indistinguishable");
+  });
+
+  it("an unusable subnetwork name is refused at startup, naming the entry", () => {
+    const message = expectConfigError({
+      RELAY_KEY: relayKey,
+      RELAY_MODE: "registered",
+      RELAY_NETWORKS: "fine,not a name",
+    });
+    expect(message).toContain('"not a name"');
+  });
+
+  it("an unknown RELAY_MODE is refused and both modes are listed", () => {
+    const message = expectConfigError({ RELAY_KEY: relayKey, RELAY_MODE: "closed" });
+    expect(message).toContain("is not a mode");
+    expect(message).toContain("open");
+    expect(message).toContain("registered");
+    // And the one thing neither mode does.
+    expect(message).toContain("Neither mode has a default subnetwork");
+  });
+});
+
 function writePem(dir: string): { certPath: string; keyFilePath: string } {
   const certPath = join(dir, "cert.pem");
   const keyFilePath = join(dir, "key.pem");
@@ -308,4 +372,3 @@ function writePem(dir: string): { certPath: string; keyFilePath: string } {
   writeFileSync(keyFilePath, "KEY-PEM\n");
   return { certPath, keyFilePath };
 }
-

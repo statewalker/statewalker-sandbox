@@ -10,6 +10,10 @@ has to redeem an invitation, present a token bound to the key it proves, and
 satisfy the destination's own policy. Nothing in this package makes a mesh
 secure, and nothing here should ever be described as if it did.
 
+It does partition. Every peer announces a **subnetwork name**, and peers with
+different names cannot reach each other through this relay — see
+[Subnetworks](#subnetworks). That is reachability, not authorisation.
+
 ## Why this is its own app
 
 A relay is the one component of this system somebody wants to run on its own.
@@ -43,6 +47,10 @@ relay:            relay's own port is UNENCRYPTED plain ws and must not be
 relay:            exposed directly.
 relay: listen     /ip4/0.0.0.0/tcp/9090/ws
 relay: announce   /dns4/relay.example.net/tcp/443/wss
+relay: mode       open
+relay:            any subnetwork name is accepted; peers announcing different
+relay:            names cannot reach each other through this relay.
+relay:            a peer that announces no name is refused -- there is no default.
 relay: addresses
 relay:   /dns4/relay.example.net/tcp/443/wss/p2p/12D3KooW...
 relay: ------------------------------------------------------------
@@ -59,6 +67,8 @@ Every variable, its default, and whether it is required.
 | `RELAY_PORT` | `9090` | no | The port the relay binds. `0` binds an arbitrary free port. |
 | `RELAY_ANNOUNCE` | *(announce what it listens on)* | no | Comma-separated multiaddrs peers are told to dial, when that differs from what the relay binds. Every entry must parse as a multiaddr or the relay refuses to start. |
 | `RELAY_TLS` | `edge`, or `self` when `TLS_CERT` and `TLS_KEY` are both set | no | Who terminates TLS. See below. |
+| `RELAY_MODE` | `open` | no | `open` accepts any subnetwork name; `registered` accepts only the names in `RELAY_NETWORKS`. Neither has a default subnetwork. |
+| `RELAY_NETWORKS` | — | with `RELAY_MODE=registered` | Comma-separated subnetwork names this relay will carry. Ignored (and warned about) in `open` mode; an empty list with `RELAY_MODE=registered` refuses the startup. |
 | `TLS_CERT` | — | with `RELAY_TLS=self` | Path to a PEM **file** holding the certificate. |
 | `TLS_KEY` | — | with `RELAY_TLS=self` | Path to a PEM **file** holding the private key. |
 
@@ -152,6 +162,85 @@ success:
   Both are silent when `RELAY_TLS` was *defaulted* rather than chosen. A
   laptop announcing a plain `ws` address is correct, and a warning that fires
   on every local run is one people learn to scroll past.
+
+## Subnetworks
+
+A **subnetwork** is a named reachability domain. Peers sharing a subnetwork
+name can dial each other through this relay; peers with different names
+cannot. A subnetwork contains one or more meshes and decides nothing about
+membership.
+
+**Partitioning is not authorisation.** A name stops strangers stumbling in and
+stops cross-subnetwork dialling. It does not make a mesh private — that is
+Noise proving identity and the hub deciding what a member may do. The name is
+deliberately not called a key, a secret or a credential, because it is none of
+those: it travels in `httpeers.json`, in invitations and in QR codes, and this
+relay's operator sees every name regardless. **It is unlisted, not
+unlistenable** — an unguessable name keeps strangers from stumbling in, and it
+does not survive being shared, screenshotted or logged.
+
+Names should therefore be **randomly generated**, and the reason is collision
+rather than attack: `dev`, `test`, `home` and `demo` are what people type, and
+two unrelated groups on a shared relay would find each other by accident.
+`apps/httpeers-stack`'s `pnpm bootstrap` generates one by default.
+
+### How a peer announces one
+
+A peer opens `/httpeers/relay-net/1.0.0` after connecting and **before
+reserving**, sends its subnetwork name, and is told whether the relay accepted
+it. The relay records `peerId → name` and drops the record when that
+connection closes.
+
+```ts
+import { announceSubnetwork } from "@statewalker/httpeers-relay/subnetwork";
+
+await node.dial(relayAddr);
+await announceSubnetwork(node, relayPeerId, "a3f1c0d29b8e4711aa02");
+```
+
+Enforcement is the node's **connection gater**, which is the only admission
+hook circuit relay v2 offers — `circuitRelayServer()`'s own options are limits:
+
+- `denyInboundRelayReservation(source)` — a peer with no record cannot reserve.
+- `denyOutboundRelayedConnection(source, destination)` — two peers whose names
+  differ cannot be connected to one another. This is the half that makes a
+  subnetwork real rather than a door policy.
+
+**The gater returns a boolean, so the protocol is what explains.** A peer
+refused by the gater sees only a reservation that did not happen, and with a
+name now required, *forgot to configure one* is the commonest failure and the
+least legible. So the protocol validates and answers in words — "no subnetwork
+name announced", "not a subnetwork registered on this relay" — leaving the
+gater as the enforcement point and the exchange as the explanation point.
+
+The gater also **waits briefly** (2 s) for an announcement that has not arrived
+yet. In practice the announcement lands first — it rides the connection the
+dial just established, while libp2p is still waiting on identify before it
+reserves — but libp2p does not promptly retry a reservation the relay refused,
+so losing that race once would be a stall rather than a retry.
+
+### A name is required
+
+There is no default subnetwork. A peer that announces none is refused in both
+modes, and told so over the protocol. This is a **breaking change for every
+existing peer**: a peer that reserved against an older relay announces nothing
+and will now be refused.
+
+### Open or registered
+
+| Mode | Behaviour | For |
+|---|---|---|
+| `open` (default) | Any well-formed name is accepted. The relay partitions by whatever it is told and needs no configuration — a subnetwork is created by picking a name. | A public relay. |
+| `registered` | Only the names in `RELAY_NETWORKS`, loaded at start, are accepted. Adding one means a restart. | A private or paid relay whose operator wants to bound who consumes the bandwidth. |
+
+```bash
+RELAY_MODE=registered RELAY_NETWORKS=a3f1c0d29b8e4711aa02,team-blue pnpm start
+```
+
+A name is 1–64 characters: a letter or digit, then letters, digits, dots,
+dashes and underscores. Narrow by choice — the value is compared byte for byte
+on both sides of a partition, and is written into config files, logs and QR
+codes.
 
 ## Limits
 

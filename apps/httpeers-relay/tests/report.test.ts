@@ -30,6 +30,9 @@ function config(overrides: Partial<ResolvedRelayConfig> = {}): ResolvedRelayConf
     announce: [],
     tlsMode: "edge",
     tlsModeExplicit: false,
+    mode: "open",
+    networks: [],
+    networksConfigured: false,
     ...overrides,
   };
 }
@@ -79,7 +82,9 @@ describe("the startup log states the TLS mode and what it implies", () => {
   });
 
   it("a defaulted mode says so, so an operator can tell a choice from an accident", () => {
-    const text = relayStartupReport(config({ tlsModeExplicit: false }), peerId, []).lines.join("\n");
+    const text = relayStartupReport(config({ tlsModeExplicit: false }), peerId, []).lines.join(
+      "\n",
+    );
     expect(text).toContain("defaulted");
     expect(text).toContain("RELAY_TLS");
   });
@@ -187,5 +192,41 @@ describe("T3: edge mode announcing a non-TLS address warns loudly", () => {
       [],
     );
     expect(warnings).toEqual([]);
+  });
+});
+
+describe("the report states the subnetwork policy", () => {
+  it("open says any name is accepted, and that there is still no default", () => {
+    const { lines, warnings } = relayStartupReport(config(), peerId, []);
+    const text = lines.join("\n");
+    expect(text).toContain("mode       open");
+    expect(text).toContain("any subnetwork name is accepted");
+    // The line an operator needs when a peer of theirs cannot reserve.
+    expect(text).toContain("a peer that announces no name is refused");
+    expect(warnings).toEqual([]);
+  });
+
+  it("registered lists the names it will accept", () => {
+    const { lines } = relayStartupReport(
+      config({
+        mode: "registered",
+        networks: [{ name: "one" }, { name: "two" }],
+        networksConfigured: true,
+      }),
+      peerId,
+      [],
+    );
+    const text = lines.join("\n");
+    expect(text).toContain("mode       registered");
+    expect(text).toContain("only these 2 subnetwork name(s)");
+    expect(text).toContain("one");
+    expect(text).toContain("two");
+  });
+
+  it("warns when RELAY_NETWORKS is set on an open relay -- the list is doing nothing", () => {
+    // This starts cleanly and carries every subnetwork there is, which is a
+    // fine thing to do on purpose and a bad thing to do by accident.
+    const { warnings } = relayStartupReport(config({ networksConfigured: true }), peerId, []);
+    expect(warnings.join("\n")).toContain("RELAY_NETWORKS is set, but RELAY_MODE is open");
   });
 });

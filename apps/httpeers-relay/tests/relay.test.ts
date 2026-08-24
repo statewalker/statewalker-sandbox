@@ -20,6 +20,18 @@ import { createLibp2p, type Libp2p } from "libp2p";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveRelayConfig } from "../src/config.js";
 import { type Relay, startRelay, startRelayFromConfig } from "../src/relay.js";
+import { announceSubnetwork } from "../src/subnetwork.js";
+
+/**
+ * The subnetwork every peer in this file announces.
+ *
+ * SINCE T4 A NAME IS REQUIRED. A peer that announces none is refused a
+ * reservation on every relay in every mode -- there is no default subnetwork
+ * (decision 7) -- so the tests below that are about identity, announce
+ * addresses and TLS have to announce one before they can reserve anything.
+ * The partition itself is `subnetwork.test.ts`'s subject, not this file's.
+ */
+const SUBNETWORK = "relay-test";
 
 const running: Array<{ stop: () => Promise<void> }> = [];
 
@@ -81,6 +93,17 @@ async function startClient(): Promise<Libp2p> {
 }
 
 /**
+ * Dial the relay and announce a subnetwork, in that order -- the sequence
+ * every real peer follows (`apps/httpeers-stack/src/reservation.ts`'s
+ * `dialRelay`). The announcement has to reach the relay before the
+ * reservation does; see `src/subnetwork-registry.ts`.
+ */
+async function dialAndAnnounce(node: Libp2p, relay: Relay, addr: string): Promise<void> {
+  await node.dial(multiaddr(addr));
+  await announceSubnetwork(node, relay.node.peerId, SUBNETWORK);
+}
+
+/**
  * Polls until a `/p2p-circuit` address appears, which is the only proof the
  * relay actually granted a reservation -- `dial` resolving means the link
  * opened and says nothing about the reservation, which lands afterwards.
@@ -132,7 +155,9 @@ describe("T1: the identity a secret carries is the identity the relay boots with
 
 describe("T2: announce independent of listen", () => {
   it("by default the relay announces what it binds -- unchanged behaviour", async () => {
-    const relay = track(await startRelay({ port: 0, privateKey: await generateKeyPair("Ed25519") }));
+    const relay = track(
+      await startRelay({ port: 0, privateKey: await generateKeyPair("Ed25519") }),
+    );
     const addrs = relay.node.getMultiaddrs().map((a) => a.toString());
     expect(addrs.length).toBeGreaterThan(0);
     for (const addr of addrs) expect(addr).toContain("/ip4/");
@@ -168,7 +193,7 @@ describe("T2: announce independent of listen", () => {
     // address and holds a real reservation through it.
     const client = await startClient();
     running.push({ stop: async () => void (await client.stop()) });
-    await client.dial(multiaddr(announced[0]));
+    await dialAndAnnounce(client, relay, announced[0] as string);
     const circuit = await waitForReservation(client);
     expect(circuit).toContain(relayPeerId);
     expect(circuit).toContain("p2p-circuit");
@@ -196,11 +221,14 @@ describe("T2: announce independent of listen", () => {
 
     const listener = await startClient();
     running.push({ stop: async () => void (await listener.stop()) });
-    await listener.dial(multiaddr(relayAddr));
+    await dialAndAnnounce(listener, relay, relayAddr);
     const circuit = await waitForReservation(listener);
 
     const dialer = await startClient();
     running.push({ stop: async () => void (await dialer.stop()) });
+    // The dialer announces the SAME name -- two peers in different
+    // subnetworks cannot reach each other, which is `subnetwork.test.ts`.
+    await dialAndAnnounce(dialer, relay, relayAddr);
     const connection = await dialer.dial(multiaddr(circuit));
 
     expect(connection.remotePeer.toString()).toBe(listener.peerId.toString());
