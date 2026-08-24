@@ -51,6 +51,11 @@ relay: mode       open
 relay:            any subnetwork name is accepted; peers announcing different
 relay:            names cannot reach each other through this relay.
 relay:            a peer that announces no name is refused -- there is no default.
+relay: limits     maxReservations   15
+relay:            reservationTtl    7200000 ms
+relay:            perCircuitData    131072 bytes
+relay:            perCircuitTime    120000 ms
+relay: http       :9099 -- /health, /.well-known/httpeers-relay.json
 relay: addresses
 relay:   /dns4/relay.example.net/tcp/443/wss/p2p/12D3KooW...
 relay: ------------------------------------------------------------
@@ -69,6 +74,11 @@ Every variable, its default, and whether it is required.
 | `RELAY_TLS` | `edge`, or `self` when `TLS_CERT` and `TLS_KEY` are both set | no | Who terminates TLS. See below. |
 | `RELAY_MODE` | `open` | no | `open` accepts any subnetwork name; `registered` accepts only the names in `RELAY_NETWORKS`. Neither has a default subnetwork. |
 | `RELAY_NETWORKS` | — | with `RELAY_MODE=registered` | Comma-separated subnetwork names this relay will carry. Ignored (and warned about) in `open` mode; an empty list with `RELAY_MODE=registered` refuses the startup. |
+| `RELAY_MAX_RESERVATIONS` | `15` | no | How many peers may hold a reservation at once. |
+| `RELAY_RESERVATION_TTL_MS` | `7200000` (2 h) | no | How long a granted reservation lives before the peer must renew. |
+| `RELAY_DATA_LIMIT_BYTES` | `131072` (128 KiB) | no | Bytes one relayed circuit may carry before the relay closes it. |
+| `RELAY_DURATION_LIMIT_MS` | `120000` (2 min) | no | How long one relayed circuit may stay open. |
+| `RELAY_HTTP_PORT` | `9099` | no | The second port serving `/health` and the discovery document. `0` binds an arbitrary free port. |
 | `TLS_CERT` | — | with `RELAY_TLS=self` | Path to a PEM **file** holding the certificate. |
 | `TLS_KEY` | — | with `RELAY_TLS=self` | Path to a PEM **file** holding the private key. |
 
@@ -244,11 +254,70 @@ codes.
 
 ## Limits
 
-Reservation limits are at `circuitRelayServer()`'s own defaults — 128 KB and
-2 minutes per circuit among them. On a relay with a public name those defaults
-are the only thing standing between you and paying for strangers' bandwidth.
-Making them configurable is separate, scheduled work; until then, size the host
-for an open relay or keep it off a public name.
+**On a relay with a public name these are the only thing standing between you
+and paying for strangers' bandwidth.** They are worth reading before you point
+DNS at one.
+
+| Variable | Shipped default | What it bounds |
+|---|---|---|
+| `RELAY_MAX_RESERVATIONS` | **15** | Peers holding a reservation at once. The 16th is refused. |
+| `RELAY_RESERVATION_TTL_MS` | **7 200 000** (2 hours) | How long a reservation lives before the peer renews it. |
+| `RELAY_DATA_LIMIT_BYTES` | **131 072** (128 KiB) | Bytes one relayed circuit carries before the relay closes it. |
+| `RELAY_DURATION_LIMIT_MS` | **120 000** (2 minutes) | How long one relayed circuit stays open. |
+
+**Every default is `circuitRelayServer()`'s own**, read out of the installed
+`@libp2p/circuit-relay-v2@4.2.11` (`dist/src/constants.js`) rather than chosen
+here, so setting none of these changes nothing. That package does not export
+them — its `exports` map offers only `.` — so they are *copied*, and
+`tests/limits.test.ts` reads that same file off disk and fails if an upgrade
+moves any of the four. If you are reading this after a libp2p bump and the
+numbers disagree, that test is the thing that should have told you.
+
+**15 reservations is small for a public relay.** It is the right default —
+matching upstream means a self-hoster's relay behaves like every other one —
+but a relay at `relay.httpeers.net` serving more than fifteen simultaneous
+peers needs `RELAY_MAX_RESERVATIONS` raised deliberately, and sized against the
+bandwidth the other three limits then permit.
+
+The startup block prints all four every time, and says when one of them is no
+longer the shipped value.
+
+## Health and discovery
+
+Two routes, on a **second port** (`RELAY_HTTP_PORT`, default `9099`):
+
+| Route | Answers |
+|---|---|
+| `GET /health` | `200 {"status":"ok"}` — the liveness check a container platform calls. |
+| `GET /.well-known/httpeers-relay.json` | `200 {"peerId","addrs","mode"}` |
+
+```json
+{
+  "peerId": "12D3KooW...",
+  "addrs": ["/dns4/relay.example.net/tcp/443/wss/p2p/12D3KooW..."],
+  "mode": "open"
+}
+```
+
+Anything else is a `404`; a non-`GET` on either route is a `405` with `Allow:
+GET`. Nothing is cacheable — a proxy holding yesterday's copy would reintroduce
+the stale address this endpoint exists to remove.
+
+**`addrs` is what libp2p actually advertises**, generated per request from the
+running node: the announce addresses when `RELAY_ANNOUNCE` is set, the listen
+addresses otherwise. That is the whole point — CI and the acceptance checks
+**read** this rather than copying an address that goes stale exactly when the
+key changes.
+
+**Why a second port.** Sharing the WebSocket listener's port is not available:
+`WebSocketListenerInit` declares `server?: Server`, but the public
+`webSockets()` options expose only `http`/`https` *ServerOptions* and the
+listener calls `net.createServer` itself. Behind a reverse proxy this costs
+nothing publicly — two container ports, one public port, routed by path.
+
+There is no way to switch this surface off. `/health` is what a platform
+probes, and a liveness endpoint that can be disabled is a deployment that
+cannot be checked.
 
 ## As a library
 

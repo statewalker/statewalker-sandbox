@@ -88,6 +88,61 @@ export interface RelayTlsMaterial {
   key: string;
 }
 
+/**
+ * What stops this relay becoming a free CDN for arbitrary traffic.
+ *
+ * EVERY DEFAULT HERE IS `circuitRelayServer()`'S OWN, COPIED DELIBERATELY so
+ * that setting none of these variables changes nothing at all. They were read
+ * out of the installed package -- `@libp2p/circuit-relay-v2@4.2.11`,
+ * `dist/src/constants.js` -- and NOT guessed:
+ *
+ *   maxReservations        DEFAULT_MAX_RESERVATION_STORE_SIZE  15
+ *   reservationTtlMs       DEFAULT_MAX_RESERVATION_TTL         2 * 60 * 60_000
+ *   defaultDataLimitBytes  DEFAULT_DATA_LIMIT                  BigInt(1 << 17)
+ *   defaultDurationLimitMs DEFAULT_DURATION_LIMIT              2 * 60_000
+ *
+ * COPIED RATHER THAN IMPORTED because that package's `exports` map offers only
+ * `.`, and its index re-exports the two protocol codecs and none of these -- a
+ * deep import fails `ERR_PACKAGE_PATH_NOT_EXPORTED`. Copies drift, so
+ * `tests/limits.test.ts` reads that same constants file off disk and fails if
+ * an upgrade moves any of the four. That test is the only thing keeping this
+ * block honest; do not delete it with the numbers still here.
+ */
+export interface RelayLimits {
+  /** How many peers may hold a reservation at once. */
+  maxReservations: number;
+  /** How long a granted reservation lives before the peer must renew. */
+  reservationTtlMs: number;
+  /** Bytes a single relayed circuit may carry before the relay closes it. */
+  defaultDataLimitBytes: bigint;
+  /** How long a single relayed circuit may stay open. */
+  defaultDurationLimitMs: number;
+}
+
+/** See `RelayLimits` -- these are `circuitRelayServer()`'s own values, not this project's opinion. */
+export const DEFAULT_RELAY_LIMITS: RelayLimits = {
+  maxReservations: 15,
+  reservationTtlMs: 2 * 60 * 60_000,
+  defaultDataLimitBytes: BigInt(1 << 17),
+  defaultDurationLimitMs: 2 * 60_000,
+};
+
+/**
+ * `RELAY_HTTP_PORT`'s default.
+ *
+ * A SECOND PORT, WHICH IS SETTLED RATHER THAN PREFERRED. Sharing the
+ * WebSocket listener's port is not available: `WebSocketListenerInit` declares
+ * `server?: Server`, but the public `webSockets()` options expose only
+ * `http`/`https` *ServerOptions* and the listener calls `net.createServer`
+ * itself. Behind a reverse proxy this costs nothing publicly -- two container
+ * ports, one public port, routed by path.
+ *
+ * 9099 rather than 9091: `apps/httpeers-stack` runs its hub on 9091 and its
+ * relay on 9090 on the same host, so a default that collided would break
+ * `pnpm start` for the reference deployment.
+ */
+export const DEFAULT_RELAY_HTTP_PORT = 9099;
+
 /** Everything `startRelay` needs, with every default already applied. */
 export interface ResolvedRelayConfig {
   /** The relay's signing key, and therefore its peerId. */
@@ -113,6 +168,10 @@ export interface ResolvedRelayConfig {
   networks: RelayNetworkDescriptor[];
   /** True when `RELAY_NETWORKS` was set. Reported, so `open` can say the list is being ignored. */
   networksConfigured: boolean;
+  /** Reservation limits, defaulted to `circuitRelayServer()`'s own -- see `RelayLimits`. */
+  limits: RelayLimits;
+  /** The port `/health` and the discovery document are served on. See `DEFAULT_RELAY_HTTP_PORT`. */
+  httpPort: number;
 }
 
 /**
@@ -461,6 +520,113 @@ function resolvePort(env: RelayEnv): number {
 }
 
 /**
+ * A positive integer from the environment, or a `RelayConfigError` naming what
+ * a usable value looks like.
+ *
+ * REFUSED RATHER THAN IGNORED, which is the rule the rest of this module
+ * already follows. A relay that started with a silently dropped limit would be
+ * running at a ceiling nobody chose, and the only symptom would be a bill or a
+ * refusal much later, with nothing pointing back at the typo.
+ */
+function resolvePositiveInt(env: RelayEnv, name: string, fallback: number, unit: string): number {
+  const raw = env[name];
+  if (raw == null || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RelayConfigError(
+      [
+        `relay: ${name}="${raw}" is not a positive whole number of ${unit}.`,
+        `relay: unset it to use the default, ${fallback}.`,
+      ].join("\n"),
+    );
+  }
+  return value;
+}
+
+/**
+ * The data limit, as a `bigint` because that is what `circuitRelayServer()`
+ * takes -- 128 KiB is `BigInt(1 << 17)` there, and an operator raising it to
+ * something past `Number.MAX_SAFE_INTEGER` must not lose precision on the way
+ * through this function.
+ */
+function resolveDataLimit(env: RelayEnv, fallback: bigint): bigint {
+  const raw = env.RELAY_DATA_LIMIT_BYTES;
+  if (raw == null || raw.trim() === "") return fallback;
+  let value: bigint;
+  try {
+    value = BigInt(raw.trim());
+  } catch {
+    throw new RelayConfigError(
+      [
+        `relay: RELAY_DATA_LIMIT_BYTES="${raw}" is not a whole number of bytes.`,
+        `relay: unset it to use the default, ${fallback} (128 KiB).`,
+      ].join("\n"),
+    );
+  }
+  if (value < 1n) {
+    throw new RelayConfigError(
+      [
+        `relay: RELAY_DATA_LIMIT_BYTES="${raw}" must be at least 1 byte.`,
+        "relay: a relay that forwards zero bytes per circuit is a relay that forwards nothing;",
+        "relay: stop it rather than configure it that way.",
+      ].join("\n"),
+    );
+  }
+  return value;
+}
+
+/**
+ * Reads the four reservation limits. Units are IN THE VARIABLE NAMES
+ * (`_MS`, `_BYTES`) on purpose: a duration read as seconds where milliseconds
+ * were meant is off by a thousand and produces a relay that looks configured
+ * and behaves nothing like it.
+ */
+function resolveLimits(env: RelayEnv): RelayLimits {
+  return {
+    maxReservations: resolvePositiveInt(
+      env,
+      "RELAY_MAX_RESERVATIONS",
+      DEFAULT_RELAY_LIMITS.maxReservations,
+      "reservations",
+    ),
+    reservationTtlMs: resolvePositiveInt(
+      env,
+      "RELAY_RESERVATION_TTL_MS",
+      DEFAULT_RELAY_LIMITS.reservationTtlMs,
+      "milliseconds",
+    ),
+    defaultDataLimitBytes: resolveDataLimit(env, DEFAULT_RELAY_LIMITS.defaultDataLimitBytes),
+    defaultDurationLimitMs: resolvePositiveInt(
+      env,
+      "RELAY_DURATION_LIMIT_MS",
+      DEFAULT_RELAY_LIMITS.defaultDurationLimitMs,
+      "milliseconds",
+    ),
+  };
+}
+
+/**
+ * `RELAY_HTTP_PORT`. `0` binds an arbitrary free port, which is what every
+ * test wants; there is deliberately no way to switch this surface off, because
+ * `/health` is what a container platform probes and the discovery document is
+ * what later milestones read instead of copying an address that goes stale.
+ */
+function resolveHttpPort(env: RelayEnv): number {
+  const raw = env.RELAY_HTTP_PORT;
+  if (raw == null || raw.trim() === "") return DEFAULT_RELAY_HTTP_PORT;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new RelayConfigError(
+      [
+        `relay: RELAY_HTTP_PORT="${raw}" is not a port number (0-65535).`,
+        `relay: unset it to use the default, ${DEFAULT_RELAY_HTTP_PORT}.`,
+      ].join("\n"),
+    );
+  }
+  return port;
+}
+
+/**
  * Reads the whole environment into a `ResolvedRelayConfig`, or throws a
  * `RelayConfigError` naming what to fix. Nothing is read from the environment
  * after this returns.
@@ -480,5 +646,7 @@ export function resolveRelayConfig(env: RelayEnv = process.env): ResolvedRelayCo
     announce: env.RELAY_ANNOUNCE != null ? parseAnnounce(env.RELAY_ANNOUNCE) : [],
     ...tls,
     ...resolveSubnetworks(env),
+    limits: resolveLimits(env),
+    httpPort: resolveHttpPort(env),
   };
 }

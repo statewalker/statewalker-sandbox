@@ -6,11 +6,14 @@
  */
 
 export {
+  DEFAULT_RELAY_HTTP_PORT,
   DEFAULT_RELAY_KEY_PATH,
+  DEFAULT_RELAY_LIMITS,
   DEFAULT_RELAY_PORT,
   loadRelayKey,
   RelayConfigError,
   type RelayEnv,
+  type RelayLimits,
   type RelayMode,
   type RelayNetworkDescriptor,
   type RelayTlsMaterial,
@@ -18,6 +21,14 @@ export {
   type ResolvedRelayConfig,
   resolveRelayConfig,
 } from "./config.js";
+export {
+  DISCOVERY_PATH,
+  HEALTH_PATH,
+  type RelayDiscoveryDocument,
+  type RelayHttp,
+  type RelayHttpInit,
+  startRelayHttp,
+} from "./http.js";
 export { generateRelayIdentity } from "./keygen.js";
 export { type Relay, type StartRelayInit, startRelay, startRelayFromConfig } from "./relay.js";
 export { type RelayStartupReport, relayStartupReport } from "./report.js";

@@ -14,7 +14,25 @@
  */
 
 import { multiaddr } from "@multiformats/multiaddr";
-import type { ResolvedRelayConfig } from "./config.js";
+import { DEFAULT_RELAY_LIMITS, type RelayLimits, type ResolvedRelayConfig } from "./config.js";
+import { DISCOVERY_PATH, HEALTH_PATH } from "./http.js";
+
+/**
+ * Are these the values `circuitRelayServer()` would have used anyway?
+ *
+ * Reported rather than enforced, and it earns its line: an operator reading
+ * this block wants to know at a glance whether the numbers below are the
+ * shipped ceiling or one somebody chose, and "15" tells them nothing on its
+ * own.
+ */
+function limitsAreDefault(limits: RelayLimits): boolean {
+  return (
+    limits.maxReservations === DEFAULT_RELAY_LIMITS.maxReservations &&
+    limits.reservationTtlMs === DEFAULT_RELAY_LIMITS.reservationTtlMs &&
+    limits.defaultDataLimitBytes === DEFAULT_RELAY_LIMITS.defaultDataLimitBytes &&
+    limits.defaultDurationLimitMs === DEFAULT_RELAY_LIMITS.defaultDurationLimitMs
+  );
+}
 
 export interface RelayStartupReport {
   /** The operator-facing block, in order. One paste into an issue. */
@@ -96,6 +114,21 @@ export function relayStartupReport(
     for (const network of config.networks) lines.push(`relay:              ${network.name}`);
   }
   lines.push("relay:            a peer that announces no name is refused -- there is no default.");
+
+  // THE LIMITS, because on a relay with a public name they are the only thing
+  // standing between an operator and paying for strangers' bandwidth -- and
+  // they are invisible from outside the process. An operator debugging a peer
+  // that keeps losing its reservation needs to see the TTL and the ceiling
+  // without reading the source.
+  lines.push(`relay: limits     maxReservations   ${config.limits.maxReservations}`);
+  lines.push(`relay:            reservationTtl    ${config.limits.reservationTtlMs} ms`);
+  lines.push(`relay:            perCircuitData    ${config.limits.defaultDataLimitBytes} bytes`);
+  lines.push(`relay:            perCircuitTime    ${config.limits.defaultDurationLimitMs} ms`);
+  if (!limitsAreDefault(config.limits)) {
+    lines.push("relay:            (one or more differ from circuit-relay-v2's own defaults)");
+  }
+
+  lines.push(`relay: http       :${config.httpPort} -- ${HEALTH_PATH}, ${DISCOVERY_PATH}`);
 
   lines.push("relay: addresses");
   for (const addr of addrs) lines.push(`relay:   ${addr}`);

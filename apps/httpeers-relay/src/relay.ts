@@ -24,11 +24,12 @@
  * stops strangers stumbling in and stops cross-subnetwork dialling, and it
  * makes no mesh private. The name is not a key, a secret or a credential.
  *
- * Reservation limits are left at `circuitRelayServer()`'s own defaults --
- * they are what stops this relay becoming a free CDN for arbitrary traffic.
- * Do not raise them here "to make the demo smoother"; a real deployment that
- * needs different limits gets them from the environment, which is a separate,
- * deliberate piece of work.
+ * RESERVATION LIMITS COME FROM THE ENVIRONMENT, and default to
+ * `circuitRelayServer()`'s own values so that setting nothing changes nothing
+ * (`./config.ts`'s `RelayLimits`). They are what stops this relay becoming a
+ * free CDN for arbitrary traffic, and on a relay with a public name they are
+ * the only cost control there is. Do not raise them here "to make the demo
+ * smoother" -- a deployment that needs different limits sets the variables.
  *
  * IDENTITY IS NOT GENERATED HERE. A relay's peerId is embedded in every
  * multiaddr peers dial (`.../p2p/<relayPeerId>/...`), so an ephemeral key
@@ -53,13 +54,16 @@ import type { Ed25519PrivateKey } from "@libp2p/interface";
 import { webSockets } from "@libp2p/websockets";
 import { createLibp2p, type Libp2p } from "libp2p";
 import {
+  DEFAULT_RELAY_LIMITS,
   DEFAULT_RELAY_PORT,
   loadRelayKey,
+  type RelayLimits,
   type RelayMode,
   type RelayNetworkDescriptor,
   type RelayTlsMaterial,
   type ResolvedRelayConfig,
 } from "./config.js";
+import { type RelayHttp, startRelayHttp } from "./http.js";
 import { createSubnetworkRegistry, type SubnetworkRegistry } from "./subnetwork-registry.js";
 
 export interface StartRelayInit {
@@ -92,10 +96,21 @@ export interface StartRelayInit {
   admissionGraceMs?: number;
   /** Where the subnetwork registry reports refusals. Defaults to `console.warn`. */
   log?: (message: string) => void;
+  /** Reservation limits. Defaults to `DEFAULT_RELAY_LIMITS`, which are `circuitRelayServer()`'s own. */
+  limits?: RelayLimits;
+  /**
+   * Serve `/health` and the discovery document on this port. `0` binds an
+   * arbitrary free port. Omit to serve neither -- which is what the library
+   * tests that only want a relay do, and is NOT what a deployment does; see
+   * `./config.ts`'s `resolveHttpPort`.
+   */
+  httpPort?: number;
 }
 
 export interface Relay {
   node: Libp2p;
+  /** The `/health` + discovery surface, when `httpPort` was given. `undefined` otherwise. */
+  http?: RelayHttp;
   /**
    * Who announced which subnetwork. Exposed because it is the one piece of
    * relay state a test or an operator surface has any business reading -- the
@@ -117,6 +132,7 @@ export async function startRelay(init: StartRelayInit = {}): Promise<Relay> {
   const scheme = init.tls != null ? "wss" : "ws";
   const listen = init.listen ?? [`/ip4/0.0.0.0/tcp/${init.port ?? DEFAULT_RELAY_PORT}/${scheme}`];
   const announce = init.announce ?? [];
+  const limits = init.limits ?? DEFAULT_RELAY_LIMITS;
 
   // BUILT BEFORE THE NODE, because `createLibp2p` takes the gater as
   // construction input and the gater is where the partition is enforced. The
@@ -145,18 +161,62 @@ export async function startRelay(init: StartRelayInit = {}): Promise<Relay> {
     connectionGater: subnetworks.connectionGater,
     services: {
       identify: identify(),
-      // Reservation limits: left at this call's own defaults -- see the
-      // module comment.
-      relay: circuitRelayServer(),
+      // PASSED EXPLICITLY, and equal to this call's own defaults unless an
+      // operator said otherwise -- see `./config.ts`'s `RelayLimits` for where
+      // those numbers were read from and the test that keeps them honest.
+      relay: circuitRelayServer({
+        // NESTED UNDER `reservations`, which is where this version puts them --
+        // a flat `{ maxReservations }` is silently ignored by the type and by
+        // the runtime, so a limit set that way would look configured and do
+        // nothing.
+        reservations: {
+          maxReservations: limits.maxReservations,
+          reservationTtl: limits.reservationTtlMs,
+          defaultDataLimit: limits.defaultDataLimitBytes,
+          defaultDurationLimit: limits.defaultDurationLimitMs,
+        },
+      }),
     },
   });
 
   await subnetworks.attach(node);
 
+  // AFTER the node, because the document it serves is read from the node and
+  // an endpoint that answered before there was anything to report would be
+  // publishing an empty address list to whoever probed first.
+  let http: RelayHttp | undefined;
+  if (init.httpPort != null) {
+    try {
+      http = await startRelayHttp({
+        port: init.httpPort,
+        document: () => ({
+          peerId: node.peerId.toString(),
+          // THE SAME HONEST SOURCE `./report.ts` PRINTS. libp2p replaces the
+          // listen addresses with the announce ones when any are configured,
+          // so this is "what a peer will actually be handed" rather than
+          // "what this process was configured with".
+          addrs: node.getMultiaddrs().map((addr) => addr.toString()),
+          mode: init.mode ?? "open",
+        }),
+      });
+    } catch (err) {
+      // The node is already up and holding a port by now. A relay that came up
+      // with no liveness endpoint would be one a container platform kills on
+      // its first probe, so this fails loudly rather than half-starting.
+      await node.stop();
+      throw err;
+    }
+  }
+
   return {
     node,
     subnetworks,
+    http,
     async stop() {
+      // The HTTP surface first: it is the one thing outside this process that
+      // is actively polling us, and leaving it answering while the node goes
+      // away would report a healthy relay that no longer relays.
+      await http?.stop();
       await node.stop();
     },
   };
@@ -171,5 +231,7 @@ export async function startRelayFromConfig(config: ResolvedRelayConfig): Promise
     tls: config.tls,
     mode: config.mode,
     networks: config.networks,
+    limits: config.limits,
+    httpPort: config.httpPort,
   });
 }

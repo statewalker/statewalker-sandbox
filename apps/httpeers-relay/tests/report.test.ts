@@ -11,7 +11,11 @@ import { generateKeyPair, privateKeyToProtobuf } from "@libp2p/crypto/keys";
 import type { Ed25519PrivateKey } from "@libp2p/interface";
 import { peerIdFromPrivateKey } from "@libp2p/peer-id";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { ResolvedRelayConfig } from "../src/config.js";
+import {
+  DEFAULT_RELAY_HTTP_PORT,
+  DEFAULT_RELAY_LIMITS,
+  type ResolvedRelayConfig,
+} from "../src/config.js";
 import { relayStartupReport } from "../src/report.js";
 
 let privateKey: Ed25519PrivateKey;
@@ -33,6 +37,8 @@ function config(overrides: Partial<ResolvedRelayConfig> = {}): ResolvedRelayConf
     mode: "open",
     networks: [],
     networksConfigured: false,
+    limits: DEFAULT_RELAY_LIMITS,
+    httpPort: DEFAULT_RELAY_HTTP_PORT,
     ...overrides,
   };
 }
@@ -228,5 +234,42 @@ describe("the report states the subnetwork policy", () => {
     // fine thing to do on purpose and a bad thing to do by accident.
     const { warnings } = relayStartupReport(config({ networksConfigured: true }), peerId, []);
     expect(warnings.join("\n")).toContain("RELAY_NETWORKS is set, but RELAY_MODE is open");
+  });
+});
+
+describe("the report states the limits, which are otherwise invisible", () => {
+  it("prints all four, and says when they are the shipped ones", () => {
+    // On a relay with a public name these are the only thing between an
+    // operator and paying for strangers' bandwidth, and nothing outside the
+    // process can see them.
+    const { lines } = relayStartupReport(config(), peerId, []);
+    const text = lines.join("\n");
+    expect(text).toContain(`maxReservations   ${DEFAULT_RELAY_LIMITS.maxReservations}`);
+    expect(text).toContain(`reservationTtl    ${DEFAULT_RELAY_LIMITS.reservationTtlMs} ms`);
+    expect(text).toContain(`perCircuitData    ${DEFAULT_RELAY_LIMITS.defaultDataLimitBytes} bytes`);
+    expect(text).toContain(`perCircuitTime    ${DEFAULT_RELAY_LIMITS.defaultDurationLimitMs} ms`);
+    // Defaults are unremarkable and say nothing extra.
+    expect(text).not.toContain("differ from circuit-relay-v2");
+  });
+
+  it("says so when a limit was changed -- 15 means nothing on its own", () => {
+    const { lines } = relayStartupReport(
+      config({ limits: { ...DEFAULT_RELAY_LIMITS, maxReservations: 4096 } }),
+      peerId,
+      [],
+    );
+    const text = lines.join("\n");
+    expect(text).toContain("maxReservations   4096");
+    expect(text).toContain("differ from circuit-relay-v2");
+  });
+
+  it("names the http port and both paths", () => {
+    // An operator who cannot reach /health needs to know which port it is on
+    // without reading the source.
+    const { lines } = relayStartupReport(config({ httpPort: 9099 }), peerId, []);
+    const text = lines.join("\n");
+    expect(text).toContain(":9099");
+    expect(text).toContain("/health");
+    expect(text).toContain("/.well-known/httpeers-relay.json");
   });
 });
