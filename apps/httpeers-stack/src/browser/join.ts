@@ -46,10 +46,10 @@ import type { MeshView } from "../hub/mesh-view.js";
  * `peer.call` is attempted, so that failure mode never has a chance to
  * occur.
  *
- * ONE ATTEMPT BY DEFAULT. `init.attempts` raises it, and a JOINING peer does
- * -- see `PRE_DIAL_JOIN_ATTEMPTS` for the measurement that says why. The
- * keepalive below deliberately leaves it at one, because it already retries
- * on its own timer.
+ * EVERY CALLER STATES ITS ATTEMPT COUNT. `PreDialInit.attempts` is required
+ * and has no default -- see the field's own comment for why. A joining peer
+ * passes `PRE_DIAL_JOIN_ATTEMPTS`; the keepalive below passes `1`, because
+ * its own timer is the retry.
  */
 export function circuitWebrtcAddr(relayAddr: string, peerId: PeerIdStr): Multiaddr {
   return multiaddr(`${relayAddr}/p2p-circuit/webrtc/p2p/${peerId}`);
@@ -62,7 +62,7 @@ export async function preDialPeer(
   init: PreDialInit,
 ): Promise<void> {
   const target = circuitWebrtcAddr(relayAddr, peerId);
-  const attempts = Math.max(1, init.attempts ?? 1);
+  const attempts = Math.max(1, init.attempts);
   const retryDelayMs = init.retryDelayMs ?? PRE_DIAL_RETRY_DELAY_MS;
 
   for (let attempt = 1; ; attempt++) {
