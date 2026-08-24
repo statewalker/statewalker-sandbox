@@ -32,6 +32,7 @@ export {
 export { generateRelayIdentity } from "./keygen.js";
 export { type Relay, type StartRelayInit, startRelay, startRelayFromConfig } from "./relay.js";
 export { type RelayStartupReport, relayStartupReport } from "./report.js";
+export { SMOKE_SUBNETWORK, type SmokeInit, type SmokeResult, smokeTest } from "./smoke.js";
 /**
  * The subnetwork protocol, shared by both ends. A BROWSER PAGE SHOULD IMPORT
  * `@statewalker/httpeers-relay/subnetwork` DIRECTLY rather than this barrel:

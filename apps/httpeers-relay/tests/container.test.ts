@@ -23,6 +23,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
@@ -34,6 +35,7 @@ import { webSockets } from "@libp2p/websockets";
 import { multiaddr } from "@multiformats/multiaddr";
 import { createLibp2p, type Libp2p } from "libp2p";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { smokeTest } from "../src/smoke.js";
 import { announceSubnetwork } from "../src/subnetwork.js";
 
 const run = promisify(execFile);
@@ -41,8 +43,35 @@ const run = promisify(execFile);
 /** Where the Dockerfile expects to be built from -- the umbrella root, four levels up from this app. */
 const CONTEXT = new URL("../../../../../", import.meta.url).pathname;
 const DOCKERFILE = "workspaces/statewalker-sandbox/apps/httpeers-relay/Dockerfile";
-const IMAGE = `httpeers-relay:test-${process.pid}`;
-const CONTAINER = `httpeers-relay-test-${process.pid}`;
+/**
+ * A NAME NO CONCURRENT RUN CAN COLLIDE WITH, and this is not hypothetical
+ * caution. This suite used to name its container after `process.pid` alone.
+ * PIDs are reused and two runners can hold the same one, so the name looked
+ * unique and was not -- and a later sweep of `httpeers-relay*` removed a
+ * DIFFERENT, running container belonging to a concurrent run, mid-suite. Its
+ * last two tests failed with `No such container` from `docker stop`, which
+ * names neither the cause nor the culprit. In CI that is a deploy failing for a
+ * reason with nothing to do with the code being deployed.
+ *
+ * `randomUUID` is the part that cannot collide; the pid is kept only because it
+ * makes a stray container traceable to a process while it is still running.
+ */
+const RUN_ID = `${process.pid}-${randomUUID().slice(0, 8)}`;
+const IMAGE = `httpeers-relay:test-${RUN_ID}`;
+const CONTAINER = `httpeers-relay-test-${RUN_ID}`;
+const PROBE_CONTAINER = `${CONTAINER}-probe`;
+
+/**
+ * Stamped on every container and image this run creates, so debris can be swept
+ * BY LABEL rather than by glob:
+ *
+ *     docker ps -aq --filter label=httpeers-relay-test=1 | xargs -r docker rm -f
+ *
+ * A glob cannot tell this run's leftovers from another run's live container.
+ * That distinction is the whole lesson of the collision above, and a label is
+ * how the sweep gets to keep it.
+ */
+const RUN_LABEL = "httpeers-relay-test=1";
 
 /** The grace period `docker stop` allows before it escalates to SIGKILL. */
 const STOP_GRACE_SECONDS = 10;
@@ -78,7 +107,7 @@ describe.skipIf(!hasDocker)("the relay container", () => {
     relayKey = Buffer.from(privateKeyToProtobuf(key)).toString("base64");
     expectedPeerId = peerIdFromPrivateKey(key).toString();
 
-    await run("docker", ["build", "-f", DOCKERFILE, "-t", IMAGE, "."], {
+    await run("docker", ["build", "-f", DOCKERFILE, "-t", IMAGE, "--label", RUN_LABEL, "."], {
       cwd: CONTEXT,
       maxBuffer: 64 * 1024 * 1024,
     });
@@ -90,6 +119,8 @@ describe.skipIf(!hasDocker)("the relay container", () => {
       "-d",
       "--name",
       CONTAINER,
+      "--label",
+      RUN_LABEL,
       "-e",
       `RELAY_KEY=${relayKey}`,
       "-p",
@@ -123,12 +154,48 @@ describe.skipIf(!hasDocker)("the relay container", () => {
   }, 600_000);
 
   afterAll(async () => {
+    // BY EXACT NAME, NEVER BY PATTERN. Everything removed here was created by
+    // this run and named after `RUN_ID`; nothing else can match. A `docker rm
+    // -f httpeers-relay*` would be shorter and is exactly the weapon that took
+    // out a concurrent run once already.
     for (const node of nodes) await Promise.resolve(node.stop()).catch(() => {});
-    await run("docker", ["rm", "-f", CONTAINER]).catch(() => {});
+    for (const name of [PROBE_CONTAINER, CONTAINER]) {
+      await run("docker", ["rm", "-f", name]).catch(() => {});
+    }
     await run("docker", ["rmi", "-f", IMAGE]).catch(() => {});
   }, 120_000);
 
+  /**
+   * Fail with what actually happened.
+   *
+   * Every test below shares one container, so if it disappears -- an
+   * interrupted neighbour, an over-broad sweep, an OOM kill -- the next docker
+   * command reports `No such container` from whatever it happened to be doing.
+   * That sentence points at the command rather than at the disappearance, and
+   * it cost a real investigation once. Checking first turns it into a
+   * statement.
+   */
+  async function requireContainer(): Promise<void> {
+    const { stdout } = await run("docker", [
+      "ps",
+      "-a",
+      "--filter",
+      `name=^${CONTAINER}$`,
+      "--format",
+      "{{.Names}}",
+    ]);
+    if (stdout.trim() !== CONTAINER) {
+      throw new Error(
+        `the container ${CONTAINER} this suite created is GONE before its assertions ran. ` +
+          "Something outside this run removed it -- a sweep by pattern rather than by name is " +
+          "the way that happens. Every container and image here carries the label " +
+          `${RUN_LABEL}; sweep by that instead.`,
+      );
+    }
+  }
+
   it("runs the relay as PID 1, with no shell between it and docker stop", async () => {
+    await requireContainer();
     const { stdout } = await run("docker", [
       "exec",
       CONTAINER,
@@ -140,6 +207,7 @@ describe.skipIf(!hasDocker)("the relay container", () => {
   }, 60_000);
 
   it("runs as a non-root user", async () => {
+    await requireContainer();
     const { stdout } = await run("docker", ["exec", CONTAINER, "id", "-un"]);
     expect(stdout.trim()).toBe("node");
   }, 60_000);
@@ -201,7 +269,7 @@ describe.skipIf(!hasDocker)("the relay container", () => {
       ],
       { maxBuffer: 256 * 1024 * 1024 },
     );
-    await run("docker", ["rm", "-f", `${CONTAINER}-probe`]).catch(() => {});
+    await run("docker", ["rm", "-f", PROBE_CONTAINER]).catch(() => {});
     expect(stdout.trim()).toBe("");
   }, 300_000);
 
@@ -216,9 +284,50 @@ describe.skipIf(!hasDocker)("the relay container", () => {
     expect(stdout.trim()).toBe("");
   }, 60_000);
 
+  it("the smoke test passes against the running container -- the same code CI will point at a host", async () => {
+    // THE POINT OF WRITING IT NOW. `smokeTest` takes a multiaddr, so aiming it
+    // at `relay.httpeers.net` later is a different argument rather than
+    // different code -- and this is the run that says the code works at all.
+    await requireContainer();
+    const result = await smokeTest({
+      addr: `/ip4/127.0.0.1/tcp/${wsPort}/ws/p2p/${expectedPeerId}`,
+      expectPeerId: expectedPeerId,
+    });
+    expect(result.peerId).toBe(expectedPeerId);
+    expect(result.circuitAddr).toContain("p2p-circuit");
+  }, 120_000);
+
+  it("...and FAILS on a peerId that is not the published one, telling the operator to roll back", async () => {
+    // THE ASSERTION THE WHOLE PIPELINE EXISTS FOR, and the one a smoke test
+    // that only checked "it answered" would not make. A relay redeployed
+    // without its RELAY_KEY starts perfectly and breaks every client; this is
+    // what notices.
+    await requireContainer();
+    const wrong = "12D3KooWQc17EYqJfEK7RvJfjmQ6KnD9gD4Q5wDGpjWis3zZ9wLn";
+    expect(wrong).not.toBe(expectedPeerId);
+    const failure = await smokeTest({
+      addr: `/ip4/127.0.0.1/tcp/${wsPort}/ws/p2p/${wrong}`,
+      expectPeerId: wrong,
+      timeoutMs: 5_000,
+    }).then(
+      () => null,
+      (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    );
+    expect(failure, "a wrong peerId must fail the smoke test").not.toBeNull();
+    // AND IT MUST SAY WHAT TO DO. libp2p's own wording for this is "Payload
+    // identity key … does not match expected remote identity key", which names
+    // neither the cause nor the remedy -- and this is the message somebody
+    // reads while a deploy is broken.
+    expect(failure).toContain("ROLL BACK");
+    expect(failure).toContain("RELAY_KEY");
+  }, 120_000);
+
   it("STOPS ON SIGTERM, within the grace period, having run its shutdown", async () => {
     // The assertion this file exists for -- see the module comment. Runs last
     // because it stops the container the tests above share.
+    // Checked BEFORE the stop, so a vanished container reports itself rather
+    // than surfacing as `No such container` from `docker stop`.
+    await requireContainer();
     const startedAt = Date.now();
     await run("docker", ["stop", "-t", String(STOP_GRACE_SECONDS), CONTAINER]);
     const elapsedMs = Date.now() - startedAt;
