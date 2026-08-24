@@ -658,13 +658,21 @@ describe("ADR-0021: an evaluation that did not finish is not a refusal", () => {
   });
 
   it("marks the decision undecided rather than reporting a refusal", async () => {
+    // AN EXPLICIT, SHORT TIMEOUT, AND IT DOES NOT CATCH AN UNBOUNDED RETRY --
+    // measured, not assumed. This case forces a DETERMINISTIC `Timeout` from
+    // the real wasm, so a retry with no bound loops here forever; and because
+    // `absorbingSpuriousTimeouts` is SYNCHRONOUS, that loop never yields the
+    // thread and no vitest timeout can interrupt it. The bound is pinned
+    // instead by "A PERSISTENT TIMEOUT STILL SURFACES" in `tokens.test.ts`,
+    // whose fixture stops throwing timeouts past the expected attempt count.
+    // The five seconds is worth keeping for the ordinary stalls it does catch.
     const d = await underATinyTimeBudget(() => decide(trivial, "/x", member));
     // Still closed -- failing closed is not what ADR-0021 renegotiates.
     expect(d.allowed).toBe(false);
     expect(d.reason).toMatch(/\(Timeout\)/);
     // ...but the reason it is closed is that nothing was decided.
     expect(d.undecided).toBe("timeout");
-  });
+  }, 5_000);
 
   it("withPolicy answers 503, not 403 -- nothing about the request was refused", async () => {
     const handler = withPolicy({ rules: trivial, usesTransportIdentity: async () => false })(
@@ -676,7 +684,7 @@ describe("ADR-0021: an evaluation that did not finish is not a refusal", () => {
     expect(res.status).toBe(503);
     // The variant stays visible to whoever reads the body.
     expect(await res.json()).toEqual({ error: expect.stringContaining("(Timeout)") });
-  });
+  }, 5_000);
 
   it("503 wins over the missing-token 401, because the token was never the problem", async () => {
     // A caller with NO token still was not refused -- it got no answer. A 401
@@ -687,7 +695,7 @@ describe("ADR-0021: an evaluation that did not finish is not a refusal", () => {
     );
     const res = await underATinyTimeBudget(() => handler(new Request("http://peer/x")));
     expect(res.status).toBe(503);
-  });
+  }, 5_000);
 
   it("an ordinary refusal is untouched -- still 403", async () => {
     // The control. Same middleware, same rules, a request no policy allows:

@@ -28,8 +28,17 @@ import type { Ed25519PrivateKey } from "@libp2p/interface";
 import { peerIdFromPrivateKey } from "@libp2p/peer-id";
 import { base58btc } from "multiformats/bases/base58";
 import { sha256 } from "multiformats/hashes/sha2";
-import { beforeAll, describe, expect, it } from "vitest";
-import { LIMITS, mintToken, TokenVerificationError, verifyToken } from "../src/tokens.js";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  absorbingSpuriousTimeouts,
+  EVALUATION_ATTEMPTS,
+  evaluationTimeouts,
+  LIMITS,
+  mintToken,
+  resetEvaluationTimeouts,
+  TokenVerificationError,
+  verifyToken,
+} from "../src/tokens.js";
 import { ANONYMOUS } from "../src/types.js";
 
 const MEMBER = "12D3KooWMemberPeerIdForTests";
@@ -672,6 +681,14 @@ describe("tokens", () => {
   });
 
   it("a reported Timeout is a DIFFERENT reason from a rule set that is too big (ADR-0021)", async () => {
+    // AN EXPLICIT, SHORT TIMEOUT, AND IT DOES NOT CATCH AN UNBOUNDED RETRY --
+    // measured, not assumed. This case forces a DETERMINISTIC `Timeout` from
+    // the real wasm, so a retry with no bound loops here forever; and because
+    // `absorbingSpuriousTimeouts` is SYNCHRONOUS, that loop never yields the
+    // thread and no vitest timeout can interrupt it. The bound is pinned
+    // instead by "A PERSISTENT TIMEOUT STILL SURFACES" in `tokens.test.ts`,
+    // whose fixture stops throwing timeouts past the expected attempt count.
+    // The five seconds is worth keeping for the ordinary stalls it does catch.
     // Provoked by narrowing the time budget below the cost of an ordinary
     // verification -- the real wasm, the real throw. In the browser this same
     // throw arrives at the shipped 1 000 000 µs budget after about 2 ms, for
@@ -701,7 +718,7 @@ describe("tokens", () => {
     await expect(
       verifyToken(token, { issuer: hubPeerId, connectionPeer: MEMBER, now }),
     ).resolves.toMatchObject({ sub: MEMBER });
-  });
+  }, 5_000);
 
   // -------------------------------------------------------------------------
   // Refusals carried over from the JWS suite
@@ -856,5 +873,105 @@ describe("tokens", () => {
         }),
       ).rejects.toThrow(/safe integer milliseconds/);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR-0021 — absorbing the upstream Timeout defect
+// ---------------------------------------------------------------------------
+
+describe("absorbingSpuriousTimeouts", () => {
+  const timeout = (): unknown => ({ RunLimit: "Timeout" });
+  const tooManyFacts = (): unknown => ({ RunLimit: "TooManyFacts" });
+
+  beforeEach(() => resetEvaluationTimeouts());
+
+  it("retries a reported Timeout and returns the attempt that worked", () => {
+    let attempts = 0;
+    const result = absorbingSpuriousTimeouts(() => {
+      attempts += 1;
+      if (attempts < 2) throw timeout();
+      return "decided";
+    });
+    expect(result).toBe("decided");
+    expect(attempts).toBe(2);
+    expect(evaluationTimeouts()).toEqual({ absorbed: 1, surfaced: 0 });
+  });
+
+  it("A PERSISTENT TIMEOUT STILL SURFACES -- it is bounded, not swallowed", () => {
+    // THE FAILURE MODE THIS TEST EXISTS FOR. A retry that kept going would
+    // turn a real stall into a hang, which is worse than the defect it
+    // absorbs: the caller would wait forever instead of being told 503.
+    // THE CEILING IS IN THE FIXTURE, NOT ONLY IN THE ASSERTION, and it is the
+    // ONLY thing that catches an unbounded retry. `absorbingSpuriousTimeouts`
+    // is synchronous, so a version that never gave up would spin the thread
+    // and no test timeout anywhere could interrupt it -- verified by removing
+    // the bound: the whole suite hangs and reports nothing at all. Throwing
+    // something that is NOT a timeout past the expected attempt count is what
+    // lets this assertion be reached and fail instead.
+    let attempts = 0;
+    expect(() =>
+      absorbingSpuriousTimeouts(() => {
+        attempts += 1;
+        if (attempts > EVALUATION_ATTEMPTS + 5) {
+          throw new Error("the retry never gave up -- it must be bounded");
+        }
+        throw timeout();
+      }),
+    ).toThrow();
+    expect(attempts).toBe(EVALUATION_ATTEMPTS);
+    expect(evaluationTimeouts()).toEqual({ absorbed: EVALUATION_ATTEMPTS - 1, surfaced: 1 });
+  });
+
+  it("the surfaced error is the library's own, so callers still map it to 503", () => {
+    let thrown: unknown;
+    try {
+      absorbingSpuriousTimeouts(() => {
+        throw timeout();
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({ RunLimit: "Timeout" });
+  });
+
+  it("does NOT retry a rule set that is genuinely too big", () => {
+    // `TooManyFacts` reproduces exactly on every attempt, so retrying would
+    // spend the budget three times to reach the same answer -- and it is the
+    // pathological case ADR-0019's ceiling exists for.
+    let attempts = 0;
+    expect(() =>
+      absorbingSpuriousTimeouts(() => {
+        attempts += 1;
+        throw tooManyFacts();
+      }),
+    ).toThrow();
+    expect(attempts).toBe(1);
+    expect(evaluationTimeouts()).toEqual({ absorbed: 0, surfaced: 0 });
+  });
+
+  it("does not retry an ordinary error either", () => {
+    let attempts = 0;
+    expect(() =>
+      absorbingSpuriousTimeouts(() => {
+        attempts += 1;
+        throw new Error("something else");
+      }),
+    ).toThrow(/something else/);
+    expect(attempts).toBe(1);
+  });
+
+  it("counts what it absorbed, because a workaround that hides its rate is unfixable", () => {
+    for (let i = 0; i < 3; i++) {
+      let first = true;
+      absorbingSpuriousTimeouts(() => {
+        if (first) {
+          first = false;
+          throw timeout();
+        }
+        return null;
+      });
+    }
+    expect(evaluationTimeouts().absorbed).toBe(3);
   });
 });

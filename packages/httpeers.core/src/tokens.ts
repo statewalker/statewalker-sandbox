@@ -249,6 +249,93 @@ function rootKeyFor(issuer: string): PublicKey {
 }
 
 // ---------------------------------------------------------------------------
+// Absorbing the upstream Timeout defect (ADR-0021)
+// ---------------------------------------------------------------------------
+
+/**
+ * How many times an evaluation is attempted before a `Timeout` is believed.
+ *
+ * THREE, MIRRORING `warmUpTokens`. That function already retries this exact
+ * defect three times at start-up; this is the same shape applied to live
+ * evaluation, which is consistency rather than a new invention.
+ */
+export const EVALUATION_ATTEMPTS = 3;
+
+let absorbedTimeouts = 0;
+let surfacedTimeouts = 0;
+
+/**
+ * How often the upstream `Timeout` defect has fired in this process, and how
+ * often it survived every attempt.
+ *
+ * REPORTED AS DATA, NOT LOGGED. Nothing in this package writes to `console`
+ * and this does not change that -- an application reads these and decides
+ * where a person sees them (`apps/httpeers-stack`'s `edge-dispatch.ts` warns
+ * when `absorbed` moves).
+ *
+ * IT EXISTS BECAUSE A WORKAROUND THAT HIDES ITS OWN FREQUENCY STOPS ANYONE
+ * EVER FIXING THE CAUSE. The retry below makes a real defect invisible in
+ * ordinary operation, which is the point and also the danger: if this fires
+ * three times in eleven runs today, its rate later is the only evidence that
+ * the upstream bug is still there.
+ */
+export function evaluationTimeouts(): { absorbed: number; surfaced: number } {
+  return { absorbed: absorbedTimeouts, surfaced: surfacedTimeouts };
+}
+
+/** Test-only: forget what this process has seen, so a count can be asserted from a known zero. */
+export function resetEvaluationTimeouts(): void {
+  absorbedTimeouts = 0;
+  surfacedTimeouts = 0;
+}
+
+function isSpuriousTimeout(error: unknown): boolean {
+  return hasKey(error, "RunLimit") && error.RunLimit === "Timeout";
+}
+
+/**
+ * Run one Datalog evaluation, retrying a reported `Timeout`.
+ *
+ * THIS ABSORBS A KNOWN UPSTREAM DEFECT AND IS NOT A PERFORMANCE MEASURE. Do
+ * not delete it as one. `@biscuit-auth/biscuit-wasm@0.6.0` reports
+ * `{ RunLimit: 'Timeout' }` for reasons of its own: measured in a browser at
+ * the shipped 1 000 000 µs budget, the call that reported a timeout had run
+ * for **2 ms**. Prototype 10 recorded the same thing at process start (finding
+ * F2) and `warmUpTokens` below has retried it three times ever since; this is
+ * the same defect on a live request, and until it is understood, **`Timeout`
+ * from this library is not evidence that time elapsed, so nothing anywhere
+ * should treat it as a measurement** (ADR-0021).
+ *
+ * ONLY `Timeout` IS RETRIED. `TooManyFacts` and `TooManyIterations` describe
+ * the rule set, reproduce exactly on every attempt, and are the pathological
+ * case ADR-0019's ceiling exists for -- retrying those would spend the budget
+ * three times to reach the same answer.
+ *
+ * A PERSISTENT TIMEOUT STILL SURFACES. After `EVALUATION_ATTEMPTS` the last
+ * error is rethrown unchanged, so a caller maps it to `evaluation-timeout` and
+ * answers 503 exactly as before. A retry that turned a real stall into a hang
+ * would be worse than the defect it absorbs.
+ *
+ * `run` MUST REBUILD ITS OWN WASM HANDLES. They are consumed by the call that
+ * takes them, so an attempt that reused one would trap on a null pointer
+ * instead of retrying -- the same note `warmUpTokens` carries.
+ */
+export function absorbingSpuriousTimeouts<T>(run: () => T): T {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return run();
+    } catch (error) {
+      if (!isSpuriousTimeout(error)) throw error;
+      if (attempt >= EVALUATION_ATTEMPTS) {
+        surfacedTimeouts++;
+        throw error;
+      }
+      absorbedTimeouts++;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Warm-up
 // ---------------------------------------------------------------------------
 
@@ -493,27 +580,47 @@ export async function verifyToken(token: string, options: VerifyTokenOptions): P
   }
 
   const now = options.now ?? Date.now;
-  const builder = new AuthorizerBuilder();
-  builder.addCodeWithParameters(
-    "root_mesh({mesh}); time_ms({now});",
-    { mesh: options.issuer, now: now() },
-    {},
-  );
-  if (options.connectionPeer !== ANONYMOUS) {
-    builder.addCodeWithParameters("connection_peer({peer});", { peer: options.connectionPeer }, {});
-  }
-  // The destination's statement about itself, which the token's audience check
-  // consumes (ADR-0020). Omitted, nothing satisfies `audience($k), self_peer($k)`.
-  if (options.selfPeer !== undefined) {
-    builder.addCodeWithParameters("self_peer({peer});", { peer: options.selfPeer }, {});
-  }
-  // This verifier contributes no policy of its own — the token's checks are the
-  // whole decision. Task 30 replaces this with the access tree as Datalog.
-  builder.addCode("allow if true;");
 
-  const authorizer = builder.buildAuthenticated(parsed);
+  /**
+   * Build a fresh authorizer over the token and run it. REBUILT PER ATTEMPT,
+   * because the wasm handles are consumed by the calls that take them -- see
+   * `absorbingSpuriousTimeouts`. `parsed` is reused on the first attempt only;
+   * a retry re-parses from the token bytes, which the block above has already
+   * proven parse.
+   */
+  let attempt = 0;
+  const authorize = (): ReturnType<AuthorizerBuilder["buildAuthenticated"]> => {
+    const biscuit = attempt++ === 0 ? parsed : Biscuit.fromBase64(token, root);
+    const builder = new AuthorizerBuilder();
+    builder.addCodeWithParameters(
+      "root_mesh({mesh}); time_ms({now});",
+      { mesh: options.issuer, now: now() },
+      {},
+    );
+    if (options.connectionPeer !== ANONYMOUS) {
+      builder.addCodeWithParameters(
+        "connection_peer({peer});",
+        { peer: options.connectionPeer },
+        {},
+      );
+    }
+    // The destination's statement about itself, which the token's audience check
+    // consumes (ADR-0020). Omitted, nothing satisfies `audience($k), self_peer($k)`.
+    if (options.selfPeer !== undefined) {
+      builder.addCodeWithParameters("self_peer({peer});", { peer: options.selfPeer }, {});
+    }
+    // This verifier contributes no policy of its own — the token's checks are the
+    // whole decision. Task 30 replaces this with the access tree as Datalog.
+    builder.addCode("allow if true;");
+
+    const built = builder.buildAuthenticated(biscuit);
+    built.authorizeWithLimits(LIMITS);
+    return built;
+  };
+
+  let authorizer: ReturnType<AuthorizerBuilder["buildAuthenticated"]>;
   try {
-    authorizer.authorizeWithLimits(LIMITS);
+    authorizer = absorbingSpuriousTimeouts(authorize);
   } catch (error) {
     throw denial(error);
   }

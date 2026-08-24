@@ -26,6 +26,7 @@ import type {
   RevocationCache,
   RuleSet,
 } from "@statewalker/httpeers.core";
+import { evaluationTimeouts } from "@statewalker/httpeers.core";
 import type { MeshView } from "../hub/mesh-view.js";
 
 /**
@@ -384,6 +385,41 @@ interface RevocationsResponse {
 export const HEARTBEAT_INTERVAL_MS = 5_000;
 
 /**
+ * Say out loud how often `httpeers.core` has swallowed the upstream Datalog
+ * `Timeout` defect (ADR-0021).
+ *
+ * A WORKAROUND THAT HIDES ITS OWN FREQUENCY STOPS ANYONE EVER FIXING THE
+ * CAUSE. `absorbingSpuriousTimeouts` retries the defect away, which is what
+ * makes the mesh usable and also what would make the bug invisible; the
+ * counter it keeps is only useful if something reads it. This is that
+ * something: one line per occurrence, in the page console, where the e2e
+ * harness's fault buffer also collects it.
+ *
+ * ON THE HEARTBEAT, because it is the one timer every peer runs -- a page
+ * serving a request absorbs the defect while answering someone else's call,
+ * so a report tied to this peer's OWN outbound calls would miss exactly the
+ * case that produced the 403 this all started with.
+ *
+ * `console.warn`, NOT `error`: nothing is broken by the time this prints. The
+ * fault buffer collects both (`tests/e2e/browser.test.ts`), and the reason it
+ * collects warnings at all is this same class of message.
+ */
+let reportedAbsorbedTimeouts = 0;
+function reportAbsorbedEvaluationTimeouts(): void {
+  const { absorbed, surfaced } = evaluationTimeouts();
+  if (absorbed === reportedAbsorbedTimeouts) return;
+  const since = absorbed - reportedAbsorbedTimeouts;
+  reportedAbsorbedTimeouts = absorbed;
+  console.warn(
+    `httpeers: absorbed ${since} spurious Datalog evaluation timeout(s) since the last ` +
+      `heartbeat (${absorbed} absorbed, ${surfaced} surfaced as 503 in this page). This is ` +
+      "the known @biscuit-auth/biscuit-wasm defect ADR-0021 records -- a reported Timeout " +
+      "that is not evidence any time elapsed. Nothing is broken; the count is here so the " +
+      "defect's real rate stays visible instead of being silently retried away.",
+  );
+}
+
+/**
  * How often the connection-keepalive timer checks the link to the hub.
  * DELIBERATELY SEPARATE from `HEARTBEAT_INTERVAL_MS`: a heartbeat that
  * fails to send says "the request failed," which could be the connection,
@@ -599,7 +635,10 @@ export function startJoin(init: JoinInit): JoinHandle {
     }
   }
 
-  const heartbeatTimer = setInterval(() => void heartbeatOnce(), heartbeatIntervalMs);
+  const heartbeatTimer = setInterval(() => {
+    reportAbsorbedEvaluationTimeouts();
+    void heartbeatOnce();
+  }, heartbeatIntervalMs);
   void heartbeatOnce();
 
   let hubPeerIdObj: PeerId | undefined;

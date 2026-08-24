@@ -65,7 +65,7 @@
  */
 import { AuthorizerBuilder, Policy, Rule } from "@biscuit-auth/biscuit-wasm";
 import { lookupClaims, lookupPeer } from "./peer-context.js";
-import { LIMITS, warmUpTokens } from "./tokens.js";
+import { absorbingSpuriousTimeouts, LIMITS, warmUpTokens } from "./tokens.js";
 import type { FetchHandler, MeshClaims, PeerIdStr, UsesTransportIdentity } from "./types.js";
 import { json } from "./types.js";
 
@@ -283,14 +283,19 @@ export function capabilityNames(rules: RuleSet): string[] {
 export function deriveCapabilities(rules: RuleSet, roles: readonly string[]): Set<string> {
   assertBuilt(rules);
   warmUpTokens();
-  const builder = new AuthorizerBuilder();
-  for (const role of roles) {
-    if (typeof role !== "string") continue; // never let a non-string reach wasm
-    builder.addCodeWithParameters("role({role});", { role }, {});
-  }
-  addRules(builder, rules);
-  const authorizer = builder.buildUnauthenticated();
-  const facts = authorizer.queryWithLimits(Rule.fromString("held($c) <- capability($c)"), LIMITS);
+  // Rebuilt per attempt: the wasm handles are consumed by the calls that take
+  // them, so a retry that reused one would trap rather than retry (ADR-0021).
+  const facts = absorbingSpuriousTimeouts(() => {
+    const builder = new AuthorizerBuilder();
+    for (const role of roles) {
+      if (typeof role !== "string") continue; // never let a non-string reach wasm
+      builder.addCodeWithParameters("role({role});", { role }, {});
+    }
+    addRules(builder, rules);
+    return builder
+      .buildUnauthenticated()
+      .queryWithLimits(Rule.fromString("held($c) <- capability($c)"), LIMITS);
+  });
   return new Set(
     facts
       .map((fact: { terms(): unknown[] }) => fact.terms()[0])
@@ -397,7 +402,9 @@ export function authorize(
   };
 
   try {
-    const index = build().authorizeWithLimits(LIMITS);
+    // `build()` makes a fresh authorizer per call, which is what makes a retry
+    // safe here -- see `absorbingSpuriousTimeouts` and ADR-0021.
+    const index = absorbingSpuriousTimeouts(() => build().authorizeWithLimits(LIMITS));
     const matched = rules.policies[index];
     return { allowed: true, matched, failed: [], reason: `allowed by policy: ${matched ?? ""}` };
   } catch (error) {
