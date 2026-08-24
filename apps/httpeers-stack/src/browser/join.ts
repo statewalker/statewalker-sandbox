@@ -43,14 +43,74 @@ import type { MeshView } from "../hub/mesh-view.js";
  * full `/webrtc/p2p/...` address forces the WebRTC upgrade before any
  * `peer.call` is attempted, so that failure mode never has a chance to
  * occur.
+ *
+ * ONE ATTEMPT BY DEFAULT. `init.attempts` raises it, and a JOINING peer does
+ * -- see `PRE_DIAL_JOIN_ATTEMPTS` for the measurement that says why. The
+ * keepalive below deliberately leaves it at one, because it already retries
+ * on its own timer.
  */
 export async function preDialPeer(
   node: Libp2p,
   relayAddr: string,
   peerId: PeerIdStr,
+  init: PreDialInit = {},
 ): Promise<void> {
   const target = multiaddr(`${relayAddr}/p2p-circuit/webrtc/p2p/${peerId}`);
-  await node.dial(target);
+  const attempts = Math.max(1, init.attempts ?? 1);
+  const retryDelayMs = init.retryDelayMs ?? PRE_DIAL_RETRY_DELAY_MS;
+
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await node.dial(target);
+      return;
+    } catch (err) {
+      if (attempt >= attempts) throw err;
+      await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
+}
+
+/** How long `preDialPeer` waits between attempts. Short: a wedged handshake is not waiting on anything that a pause improves. */
+export const PRE_DIAL_RETRY_DELAY_MS = 500;
+
+/**
+ * How many times a JOINING peer pre-dials before giving up.
+ *
+ * WHY MORE THAN ONE, AND WHY THIS IS NOT A TEST WORKAROUND. The WebRTC
+ * handshake this dial performs occasionally stalls: signalling completes --
+ * offer sent, answer read, ICE candidates exchanged -- and then the
+ * `RTCPeerConnection` never reaches `connected`, so libp2p's own
+ * `ADDRESS_DIAL_TIMEOUT` (6 s) fires with no progress in between. It is not
+ * slowness, and a longer timeout does not help: measured over 16 runs of
+ * `tests/e2e/browser.test.ts`, nine stalls produced NOTHING in their six
+ * seconds, and every one of the nine connected on a later attempt in 103-195
+ * ms -- as fast as a healthy first attempt. A fresh `RTCPeerConnection` simply
+ * works.
+ *
+ * THE ASYMMETRY THIS REMOVES IS THE REAL ARGUMENT. `startJoin`'s keepalive
+ * below already calls THIS SAME FUNCTION on a timer and swallows the failure,
+ * because the next tick retries -- this codebase decided long ago that a
+ * failed pre-dial is a routine event. Only the join path treated it as
+ * permanent, so a person opening a page for the first time got six seconds of
+ * nothing and then a dead page, on a mesh that was working perfectly and
+ * serving another tab at that very moment.
+ *
+ * THREE, NOT MORE. Two of the nine stalls needed a second attempt to clear, so
+ * one retry is demonstrably not enough; none needed a third. Three bounds the
+ * worst case at roughly 18 s of dialing, which is inside the budget a page
+ * already spends waiting for a relay reservation.
+ */
+export const PRE_DIAL_JOIN_ATTEMPTS = 3;
+
+export interface PreDialInit {
+  /**
+   * How many times to dial before giving up. Defaults to **1** -- a single
+   * shot, which is what the keepalive below wants: it has its own timer and
+   * an inner retry there would multiply the two.
+   */
+  attempts?: number;
+  /** Defaults to `PRE_DIAL_RETRY_DELAY_MS`. */
+  retryDelayMs?: number;
 }
 
 export interface RouteEnsurerInit {

@@ -79,6 +79,7 @@ import type { AdvertisementInput, PresenceRefusal } from "./join.js";
 import {
   createRouteEnsurer,
   nextInitialSeq,
+  PRE_DIAL_JOIN_ATTEMPTS,
   preDialPeer,
   REVOCATION_MAX_STALENESS_MS,
   redeemInvitation,
@@ -345,6 +346,66 @@ async function fetchHttpeersConfig(url: string): Promise<HttpeersConfig> {
   return (await res.json()) as HttpeersConfig;
 }
 
+/**
+ * Is this failure -- or anything it wraps -- a dial that timed out?
+ *
+ * WALKS THE CHAIN, because libp2p reports a dial failure as a wrapper around
+ * the per-address errors and the `TimeoutError` is a level or two down. A test
+ * that read only `err.name` would be reading the wrapper, whose name is the
+ * same for every kind of failure.
+ */
+function isTimeout(err: unknown, depth = 0): boolean {
+  if (depth > 6 || !(err instanceof Error)) return false;
+  if (err.name === "TimeoutError") return true;
+  const aggregate = (err as { errors?: unknown[] }).errors;
+  if (Array.isArray(aggregate) && aggregate.some((inner) => isTimeout(inner, depth + 1))) {
+    return true;
+  }
+  return isTimeout(err.cause, depth + 1);
+}
+
+/**
+ * What a page is told when it cannot pre-dial the hub, and the two cases read
+ * differently ON PURPOSE.
+ *
+ * THE OLD MESSAGE BLAMED THE HUB'S RESERVATION FOR EVERY FAILURE, and for the
+ * commonest one that is simply false. When this dial times out, the hub is
+ * -- measured, at the instant of failure, over four separate occurrences --
+ * holding its reservation, listed by the relay, and serving another page over
+ * that same relay. What actually happened is that the WebRTC handshake
+ * stalled after signalling completed. Telling an operator to go and check the
+ * hub sends them to inspect the one component that is provably working.
+ *
+ * Exported, and a pure function of its input, because it is the whole
+ * deliverable of a failure a person has to act on -- the same reason
+ * `@statewalker/httpeers-relay`'s startup warnings live in a function rather
+ * than in `console` calls.
+ */
+export function describeHubPreDialFailure(init: {
+  hubPeerId: string;
+  relayAddr: string;
+  attempts: number;
+  err: unknown;
+}): string {
+  if (isTimeout(init.err)) {
+    return (
+      `startBrowserPeer: the connection to the hub (${init.hubPeerId}) stalled. This page ` +
+      `dialled it at <relay>/p2p-circuit/webrtc/p2p/<hub> ${init.attempts} times through the ` +
+      `relay at "${init.relayAddr}" and every attempt timed out with the WebRTC handshake ` +
+      "half-finished -- the relay carried the signalling, and the peer-to-peer connection then " +
+      "never came up. This is usually transient and reloading the page is the remedy; if it " +
+      "persists, something between this browser and the hub is dropping the peer-to-peer " +
+      `traffic the relay does not carry. Cause: ${String(init.err)}`
+    );
+  }
+  return (
+    `startBrowserPeer: could not reach the hub (${init.hubPeerId}) over the relay at ` +
+    `"${init.relayAddr}". A page reaches the hub at <relay>/p2p-circuit/webrtc/p2p/<hub>, which ` +
+    "requires the hub to hold its OWN circuit reservation -- check that the hub process is " +
+    `running and reported a relayed address at startup. Cause: ${String(init.err)}`
+  );
+}
+
 export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<BrowserPeerHandle> {
   const configUrl = init.httpeersConfigUrl ?? DEFAULT_HTTPEERS_CONFIG_URL;
   const onState = init.onState ?? ((): void => {});
@@ -424,14 +485,16 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   // separate investigations down the wrong path (Task 14). The remedy is
   // the same one every time, so it belongs in the message.
   try {
-    await preDialPeer(node, relayAddr, config.hubPeerId);
+    await preDialPeer(node, relayAddr, config.hubPeerId, { attempts: PRE_DIAL_JOIN_ATTEMPTS });
   } catch (err) {
     await startFailed();
     throw new Error(
-      `startBrowserPeer: could not reach the hub (${config.hubPeerId}) over the relay at ` +
-        `"${relayAddr}". A page reaches the hub at <relay>/p2p-circuit/webrtc/p2p/<hub>, which ` +
-        "requires the hub to hold its OWN circuit reservation -- check that the hub process is " +
-        `running and reported a relayed address at startup. Cause: ${String(err)}`,
+      describeHubPreDialFailure({
+        hubPeerId: config.hubPeerId,
+        relayAddr,
+        attempts: PRE_DIAL_JOIN_ATTEMPTS,
+        err,
+      }),
       { cause: err },
     );
   }
