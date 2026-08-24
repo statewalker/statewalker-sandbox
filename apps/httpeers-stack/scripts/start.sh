@@ -42,16 +42,48 @@ if [[ ! -f "$ROOT/httpeers.json" ]]; then
 fi
 
 pids=()
+# Signal a process and everything under it, DEEPEST FIRST.
+#
+# WHY NOT `kill -- "-$pid"`. That was the previous implementation and it could
+# never have worked: each child is spawned as `( ... ) & ` and the recorded pid
+# is the `pnpm run start:*` wrapper, which is NOT a process-group leader -- this
+# script's own group is. So the negative-pid group kill always failed, the
+# fallback reached only the wrapper, and the real `sh -c` -> `tsx` -> `node`
+# chain underneath was orphaned still holding every port. That is how a stack
+# left running on 23 August came to outlive its supervisor by a day.
+#
+# Children before parents, so `node` receives the signal while its parent still
+# exists to be waited on -- killing the wrapper first would reparent the node
+# process and leave it running. Each relay/hub/static-server has its own SIGTERM
+# handler; they were never broken, they simply never received one.
+kill_tree() {
+  local pid="$1" child
+  for child in $(ps -o pid= --ppid "$pid" 2>/dev/null); do
+    kill_tree "$child"
+  done
+  kill "$pid" 2>/dev/null || true
+}
+
 cleanup() {
   trap - EXIT INT TERM
   echo
   echo "[httpeers-stack] shutting down..."
   for pid in "${pids[@]:-}"; do
     if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
-      kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+      kill_tree "$pid"
     fi
   done
   wait 2>/dev/null || true
+
+  # The README promises no manual cleanup is ever necessary. Check it rather
+  # than assert it: a survivor here is a bug worth seeing, not something to
+  # discover later as a port that will not bind.
+  local stragglers
+  stragglers="$(pgrep -f 'src/(main|hub|static-server)/main\.ts|httpeers-relay/src/main\.ts' 2>/dev/null || true)"
+  if [[ -n "$stragglers" ]]; then
+    echo "[httpeers-stack] WARNING: these processes outlived shutdown: $stragglers" >&2
+    echo "[httpeers-stack] that is a bug in this script, not routine -- please report it." >&2
+  fi
   # The hub removes this itself on a clean SIGTERM; removing it here too
   # covers the hub dying without getting the chance, so the next run never
   # reads a ready marker left by a hub that is gone.
