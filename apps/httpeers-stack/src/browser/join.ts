@@ -62,6 +62,11 @@ export async function preDialPeer(
   init: PreDialInit,
 ): Promise<void> {
   const target = circuitWebrtcAddr(relayAddr, peerId);
+  // The clamp survives the field becoming required. A caller passing 0 has
+  // asked for something this function cannot mean: returning without dialling
+  // would be a silent no-op indistinguishable from a successful pre-dial, and
+  // the caller would then `peer.call` over a connection that was never made.
+  // One dial is the least surprising reading of "fewer than one attempt".
   const attempts = Math.max(1, init.attempts);
   const retryDelayMs = init.retryDelayMs ?? PRE_DIAL_RETRY_DELAY_MS;
 
