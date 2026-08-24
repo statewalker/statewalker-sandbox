@@ -22,7 +22,7 @@
 #
 # Env knobs:
 #   RELAY_PORT -- the relay's WS listen port (default 9090, matches
-#                 relay/main.ts's own default -- used here only to know
+#                 @statewalker/httpeers-relay's own default -- used here only to know
 #                 which local port to poll for "the relay is up").
 #   HUB_READY_FILE -- where the hub records that it has finished
 #                 bootstrapping (default .httpeers/hub-ready, matches

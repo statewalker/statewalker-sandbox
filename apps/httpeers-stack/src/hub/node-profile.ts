@@ -16,7 +16,7 @@
  *
  * FOUR TRANSPORTS, EACH LOAD-BEARING:
  *   - `webSockets()` -- how the hub DIALS the relay. The relay listens on
- *     `/ws` only (`../relay/main.ts`), so without this the hub cannot reach
+ *     `/ws` only (`@statewalker/httpeers-relay`), so without this the hub cannot reach
  *     the one process that makes it reachable.
  *   - `circuitRelayTransport()` -- how the hub HOLDS the reservation the
  *     relay grants, and therefore how it acquires a `/p2p-circuit` address

@@ -38,9 +38,19 @@ precisely because a test could reach them.
 
 ## The three processes
 
-- **relay** (`src/relay/main.ts`) — a stock libp2p circuit-relay server. Every
-  other peer, including the two browser pages, reaches the mesh through it.
-  Listens on **port 9090**.
+- **relay** (`@statewalker/httpeers-relay`) — a stock libp2p circuit-relay
+  server. Every other peer, including the two browser pages, reaches the mesh
+  through it. Listens on **port 9090**.
+
+  **It is a separate app, not part of this one.** It lives at
+  `apps/httpeers-relay` and this stack depends on it, because a relay is the
+  one component someone wants to deploy on its own: a self-hoster should be
+  able to pull a relay without pulling a demo. `pnpm start:relay` runs that
+  package's entry point from this directory, so it still reads this
+  deployment's `.httpeers/relay.key` and `pnpm start` is unchanged. Its
+  configuration — `RELAY_KEY`, `RELAY_ANNOUNCE`, `RELAY_TLS` and the rest — is
+  documented in [that app's README](../httpeers-relay/README.md); nothing here
+  sets any of it, which is what keeps the local default working.
 - **hub** (`src/hub/main.ts`) — the mesh's membership, presence, and
   invitation authority. Browser pages never dial it directly: they reach it
   over `/p2p-circuit/webrtc` through the relay, the same reservation the hub
@@ -303,10 +313,14 @@ let a second key vouch for something, without either party talking to the other.
 ### The pages need HTTPS off localhost
 
 **Not a gap — the intended deployment model.** Every publicly reachable member
-(relay, hub, and the page origins) is expected to be served over TLS. The design
-already provides for it: Node terminates TLS itself via `TLS_CERT`/`TLS_KEY`,
-with no reverse proxy, and the relay's server address is
-`/dns4/host/tcp/443/wss`.
+(relay, hub, and the page origins) is expected to be served over TLS, at a
+server address like `/dns4/host/tcp/443/wss`. The relay provides for both
+arrangements and makes the choice explicit: `RELAY_TLS=self` terminates TLS in
+Node from `TLS_CERT`/`TLS_KEY`, which is what a self-hoster on a dedicated box
+wants; `RELAY_TLS=edge` listens plain and lets a reverse proxy terminate,
+which is what a container deployment wants. See
+[the relay's README](../httpeers-relay/README.md). The hub and the static
+server still terminate TLS themselves or not at all.
 
 **The constraint to plan around** is that this is all-or-nothing, because it is
 enforced by the browser rather than by us: ServiceWorkers require a secure

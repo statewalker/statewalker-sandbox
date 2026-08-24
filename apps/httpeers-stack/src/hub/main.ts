@@ -9,7 +9,7 @@
  * the `mesh` claim in every token this hub mints restates it, which is what
  * lets a provider verify a token offline with no key fetch. An ephemeral
  * key here would not merely change an address (as it would for the relay,
- * note 07's `../relay/main.ts`) — it would make this process silently a
+ * note 07's `@statewalker/httpeers-relay`) — it would make this process silently a
  * DIFFERENT mesh on every restart, invalidating every previously issued
  * token and every policy naming the issuer, while `httpeers.json`
  * (Task 10's setup CLI) kept naming the OLD peerId as the identity every
@@ -22,7 +22,7 @@
  *
  * KEY FILE FORMAT: identical to the relay's — the protobuf encoding
  * `@libp2p/crypto/keys`'s own `privateKeyToProtobuf`/`privateKeyFromProtobuf`
- * round-trip through. Same loader shape as `../relay/main.ts`'s
+ * round-trip through. Same loader shape as `@statewalker/httpeers-relay`'s
  * `loadRelayKey`, deliberately not shared code: each process's "fail
  * loudly, name the missing file, tell the operator to run `pnpm bootstrap`"
  * message is specific to which key is missing.
@@ -93,7 +93,7 @@ export const DEFAULT_HTTPEERS_CONFIG_PATH = "./httpeers.json";
  * Browsers do not use this address at all (they take the `/p2p-circuit`
  * one), so its only job is to be knowable to a Node peer on the same host,
  * and a knowable port is the whole of that job. 9091 sits next to the
- * relay's own 9090 (`../relay/main.ts`'s `DEFAULT_RELAY_PORT`). Override
+ * relay's own 9090 (`@statewalker/httpeers-relay`'s `DEFAULT_RELAY_PORT`). Override
  * with `HUB_PORT`.
  */
 export const DEFAULT_HUB_PORT = 9091;
@@ -153,10 +153,18 @@ export interface StartHubInit {
 
 /**
  * Reads and decodes the hub's signing key from `keyPath`. Exits the process
- * (after printing guidance) if the file is absent -- mirrors
- * `../relay/main.ts`'s `loadRelayKey` exactly; see this module's own
- * comment ("IDENTITY IS NOT GENERATED HERE") for why a fresh key is not an
- * acceptable fallback here either.
+ * (after printing guidance) if the file is absent -- the shape the relay's
+ * loader had before it became `@statewalker/httpeers-relay`; see this
+ * module's own comment ("IDENTITY IS NOT GENERATED HERE") for why a fresh key
+ * is not an acceptable fallback here either.
+ *
+ * THAT PACKAGE'S `loadRelayKey` NOW THROWS INSTEAD OF EXITING, and this one
+ * has not followed it. The relay changed because it grew a second way in
+ * (`RELAY_KEY`) whose failure modes -- a malformed secret, a truncated paste
+ * -- are exactly what a test should be able to reach, and `process.exit` from
+ * library code puts them out of reach. The hub has one way in and one failure
+ * mode, so the same change here would be churn; it is worth making the day
+ * the hub's identity can also come from a secret.
  */
 function loadHubKey(keyPath: string): Ed25519PrivateKey {
   let bytes: Uint8Array;

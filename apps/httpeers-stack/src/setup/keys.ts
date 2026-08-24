@@ -20,7 +20,7 @@
  *
  * KEY FILE FORMAT: the protobuf encoding `@libp2p/crypto/keys`'s own
  * `privateKeyToProtobuf`/`privateKeyFromProtobuf` round-trip through -- the
- * exact format `../relay/main.ts`'s `loadRelayKey` reads back
+ * exact format `@statewalker/httpeers-relay`'s `loadRelayKey` reads back
  * (`privateKeyFromProtobuf(readFileSync(keyPath))`), and the same package
  * `httpeers.core`'s `tokens.ts` already depends on for `generateMeshKey`.
  * Not a choice made independently here; see that file's module comment for

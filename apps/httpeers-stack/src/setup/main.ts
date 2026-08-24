@@ -4,7 +4,7 @@
  * identity, and writing `httpeers.json` -- the invitation payload.
  *
  * ONE SHAPE, TWO DELIVERY CHANNELS (design note 07 §4). `httpeers.json` is
- * `{ relayAddrs, hubPeerId }`: the daemons (`../relay/main.ts`,
+ * `{ relayAddrs, hubPeerId }`: the daemons (`@statewalker/httpeers-relay`,
  * `../hub/main.ts`) read it from disk because an operator installed them;
  * the browser pages fetch it over HTTP (`../static-server/main.ts` already
  * serves it, with a distinct 503 when it is missing) because a browser
@@ -34,8 +34,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { dirname, resolve } from "node:path";
+import { DEFAULT_RELAY_KEY_PATH, DEFAULT_RELAY_PORT } from "@statewalker/httpeers-relay";
 import { DEFAULT_HUB_KEY_PATH } from "../hub/main.js";
-import { DEFAULT_RELAY_KEY_PATH, DEFAULT_RELAY_PORT } from "../relay/main.js";
 import { loadOrGenerateKey, peerIdOf } from "./keys.js";
 
 /**
@@ -69,7 +69,7 @@ export interface HttpeersConfig {
 }
 
 export interface SetupInit {
-  /** Defaults to `DEFAULT_RELAY_KEY_PATH` (`../relay/main.ts`'s own default -- the same path it reads back). */
+  /** Defaults to `DEFAULT_RELAY_KEY_PATH` (`@statewalker/httpeers-relay`'s own default -- the same path it reads back). */
   relayKeyPath?: string;
   /** Defaults to `DEFAULT_HUB_KEY_PATH`. */
   hubKeyPath?: string;
@@ -78,7 +78,7 @@ export interface SetupInit {
   /**
    * Defaults to `DEFAULT_RELAY_HOST` ("127.0.0.1"). The host peers dial the
    * relay at -- not necessarily where the relay binds (that is always
-   * `0.0.0.0`, see `relay/main.ts`). May be an IPv4/IPv6 literal or a
+   * `0.0.0.0`, see `@statewalker/httpeers-relay`). May be an IPv4/IPv6 literal or a
    * hostname; `relayAddrFamily` picks the right multiaddr protocol segment
    * for whichever is given (see the module comment's "ADDRESS FAMILY"
    * note) -- callers never need to say which kind of host this is.

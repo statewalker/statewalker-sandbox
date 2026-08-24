@@ -3,7 +3,7 @@
  *
  * NO LIBP2P, NO MESH IDENTITY -- this file imports neither `httpeers.core`
  * nor any `@libp2p/*`/`libp2p` package. It is a web server, full stop; the
- * relay (`../relay/main.ts`) is the one process in this app allowed to
+ * relay (`@statewalker/httpeers-relay`) is the one process in this app allowed to
  * touch libp2p, for the reasons documented there.
  *
  * ONE PORT PER PAGE IS A CORRECTNESS REQUIREMENT, NOT A CONVENIENCE. The

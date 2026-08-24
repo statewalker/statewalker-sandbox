@@ -10,9 +10,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPair, privateKeyFromProtobuf, privateKeyToProtobuf } from "@libp2p/crypto/keys";
 import { peerIdFromPrivateKey } from "@libp2p/peer-id";
+import { startRelay } from "@statewalker/httpeers-relay";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startHub } from "../src/hub/main.js";
-import { startRelay } from "../src/relay/main.js";
 import { loadOrGenerateKey, peerIdOf } from "../src/setup/keys.js";
 import { type HttpeersConfig, runSetup, type SetupInit } from "../src/setup/main.js";
 

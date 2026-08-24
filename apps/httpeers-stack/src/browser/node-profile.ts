@@ -2,7 +2,7 @@
  * The browser libp2p profile.
  *
  * A browser cannot listen for inbound TCP the way `../hub/main.ts` /
- * `../relay/main.ts` do (`transport-duplex.ts`'s `createNode`, TCP-only,
+ * `@statewalker/httpeers-relay` do (`transport-duplex.ts`'s `createNode`, TCP-only,
  * is Node-side and stays Node-side). Instead this node reserves a relayed
  * address on the deployment's relay and accepts a WebRTC upgrade brokered
  * over it -- WebSockets to dial the relay in the first place,
