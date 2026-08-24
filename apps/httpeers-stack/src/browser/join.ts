@@ -17,6 +17,7 @@
 
 import type { PeerId } from "@libp2p/interface";
 import { peerIdFromString } from "@libp2p/peer-id";
+import type { Multiaddr } from "@multiformats/multiaddr";
 import { multiaddr } from "@multiformats/multiaddr";
 import type {
   ChangeEntry,
@@ -50,13 +51,17 @@ import type { MeshView } from "../hub/mesh-view.js";
  * keepalive below deliberately leaves it at one, because it already retries
  * on its own timer.
  */
+export function circuitWebrtcAddr(relayAddr: string, peerId: PeerIdStr): Multiaddr {
+  return multiaddr(`${relayAddr}/p2p-circuit/webrtc/p2p/${peerId}`);
+}
+
 export async function preDialPeer(
   node: Libp2p,
   relayAddr: string,
   peerId: PeerIdStr,
   init: PreDialInit = {},
 ): Promise<void> {
-  const target = multiaddr(`${relayAddr}/p2p-circuit/webrtc/p2p/${peerId}`);
+  const target = circuitWebrtcAddr(relayAddr, peerId);
   const attempts = Math.max(1, init.attempts ?? 1);
   const retryDelayMs = init.retryDelayMs ?? PRE_DIAL_RETRY_DELAY_MS;
 
@@ -113,6 +118,38 @@ export interface PreDialInit {
   /** Defaults to `PRE_DIAL_RETRY_DELAY_MS`. */
   retryDelayMs?: number;
 }
+
+/**
+ * How many times `ensureRoute` dials before giving up, and how long each
+ * attempt gets.
+ *
+ * DELIBERATELY NOT A1's `3`. That bound was justified as a one-off join cost --
+ * "inside the budget a page already spends waiting for a relay reservation" --
+ * and this runs on the REQUEST path, where the same arithmetic (3 x libp2p's
+ * 6 s `ADDRESS_DIAL_TIMEOUT` = 18 s) would be far worse than the fast failure
+ * it replaced. The numbers below are from measuring this path, not that one.
+ *
+ * WHAT WAS MEASURED, on a machine at load ~6:
+ *
+ *   healthy first dial   238, 322, 583, 1608, 1629 ms   (median ~583 ms)
+ *   unreachable peer     ~63 ms -- the relay answers NO_RESERVATION at once
+ *   a stalled handshake  6 s, producing nothing at all (libp2p's own timeout)
+ *   recovery on a retry  103-195 ms (A1's measurement of the same defect)
+ *
+ * So: **2 attempts of 3 s each is a 6 s worst case -- exactly what one
+ * uncapped attempt costs today** -- and it converts the common stall into a
+ * success instead of a broken image. The cap is safe because no healthy dial
+ * has ever been observed near it (worst 1629 ms here, 2269 ms in A1 under load
+ * ~20), and because a slow-but-healthy dial that IS cut simply gets its second
+ * attempt rather than being lost.
+ *
+ * A GENUINELY UNREACHABLE PEER STILL FAILS FAST: ~63 ms twice, not 6 s twice,
+ * because that failure is a refusal rather than a stall.
+ */
+export const ROUTE_DIAL_ATTEMPTS = 2;
+
+/** See `ROUTE_DIAL_ATTEMPTS`. Below libp2p's own 6 s so two attempts cost what one does today. */
+export const ROUTE_DIAL_TIMEOUT_MS = 3_000;
 
 export interface RouteEnsurerInit {
   node: Libp2p;
@@ -183,8 +220,39 @@ export function createRouteEnsurer(init: RouteEnsurerInit): (peerId: PeerIdStr) 
     // addresses of a single peer itself, and a sequential loop would pay the
     // full dial timeout for each unreachable interface address the provider
     // reported (a browser peer behind a relay routinely reports several).
-    if (advertised.length > 0) await node.dial(advertised);
-    else await preDialPeer(node, relayAddr, peerId);
+    const targets = advertised.length > 0 ? advertised : [circuitWebrtcAddr(relayAddr, peerId)];
+
+    // NO DE-DUPLICATION HERE, AND THAT IS MEASURED RATHER THAN ASSUMED. This
+    // function is called once per dispatch, so a page fetching ten images from
+    // one peer calls it ten times before any dial finishes -- which looks like
+    // ten dials and is not. libp2p's own dial queue joins concurrent dials by
+    // peer id (`dial-queue.js`: it finds an existing job and calls
+    // `existingDial.join()`), and ten concurrent dials to an unconnected peer
+    // were measured producing **one** queued dial and nine joins, all failing
+    // together in 191 ms. Once a connection exists the early-out above returns
+    // in 2-8 ms without queueing anything. So the cost here is per PEER, not
+    // per request, and a second de-duplication layer would only duplicate
+    // libp2p's.
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= ROUTE_DIAL_ATTEMPTS; attempt++) {
+      try {
+        await node.dial(targets, { signal: AbortSignal.timeout(ROUTE_DIAL_TIMEOUT_MS) });
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    // BOUNDED AND NAMED. `edge-dispatch.ts` swallows this deliberately (its job
+    // 4) so the call that follows produces a typed `PeerCallError` instead of
+    // an untyped 500 -- but it logs the message, and that message is the only
+    // record that a route could not be built at all. It says which peer, how
+    // many attempts, and what each one was given.
+    throw new Error(
+      `could not establish a route to ${peerId} after ${ROUTE_DIAL_ATTEMPTS} attempts of ` +
+        `${ROUTE_DIAL_TIMEOUT_MS}ms: ${String(lastError)}`,
+      { cause: lastError },
+    );
   };
 }
 
