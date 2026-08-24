@@ -289,6 +289,7 @@ Two routes, on a **second port** (`RELAY_HTTP_PORT`, default `9099`):
 | Route | Answers |
 |---|---|
 | `GET /health` | `200 {"status":"ok"}` — the liveness check a container platform calls. |
+| `HEAD` on either route | The same status and headers as `GET`, with no body (RFC 9110) — probes and load balancers use it. |
 | `GET /.well-known/httpeers-relay.json` | `200 {"peerId","addrs","mode"}` |
 
 ```json
@@ -299,8 +300,8 @@ Two routes, on a **second port** (`RELAY_HTTP_PORT`, default `9099`):
 }
 ```
 
-Anything else is a `404`; a non-`GET` on either route is a `405` with `Allow:
-GET`. Nothing is cacheable — a proxy holding yesterday's copy would reintroduce
+Anything else is a `404`; anything other than `GET` or `HEAD` on either route is
+a `405` with `Allow: GET, HEAD`. Nothing is cacheable — a proxy holding yesterday's copy would reintroduce
 the stale address this endpoint exists to remove.
 
 **`addrs` is what libp2p actually advertises**, generated per request from the
@@ -318,6 +319,82 @@ nothing publicly — two container ports, one public port, routed by path.
 There is no way to switch this surface off. `/health` is what a platform
 probes, and a liveness endpoint that can be disabled is a deployment that
 cannot be checked.
+
+## Running it in a container
+
+```bash
+# From the UMBRELLA ROOT, not this directory -- see "the build context" below.
+docker build -f workspaces/statewalker-sandbox/apps/httpeers-relay/Dockerfile -t httpeers-relay .
+
+docker run -d --name relay \
+  -e RELAY_KEY="$(cat relay.key.b64)" \
+  -e RELAY_TLS=edge \
+  -e RELAY_ANNOUNCE=/dns4/relay.example.net/tcp/443/wss \
+  -p 9090:9090 -p 9099:9099 \
+  httpeers-relay
+```
+
+Everything the image needs is in the table under [Configuration](#configuration).
+**Nothing is baked in**: no config file ships in the image, there is no
+`ENV RELAY_KEY`, and no build argument carries a secret — a key in an `ENV` is a
+key in a layer, readable by anyone who pulls the image.
+
+| Property | |
+|---|---|
+| Base | `node:24-alpine`, **pinned by digest** so a rebuild is the same base or an explicit change. |
+| User | `node`. Non-root; the relay writes nothing and needs no capability beyond binding two ports. |
+| Ports | `9090` (libp2p WebSockets) and `9099` (`/health`, discovery). Both `EXPOSE`d; publish what you need. |
+| Healthcheck | `GET /health` on `RELAY_HTTP_PORT`, run by `node` itself — the image ships no curl, and adding one to answer a question node can answer is attack surface for nothing. |
+| Size | ~194 MB. |
+
+### It stops properly, and that is not automatic
+
+`docker stop` sends SIGTERM to **PID 1 only**. This image's `ENTRYPOINT` is the
+JSON-array form, so PID 1 is `node dist/main.js` with no shell and no `pnpm`
+wrapper in between — the relay's own handler runs, `stop()` closes the HTTP
+surface and the WebSocket listener, and reservations are released rather than
+dropped.
+
+If you change the entrypoint, keep that property: a shell wrapper as PID 1
+swallows the signal, the container is SIGKILLed when the grace period expires,
+and the failure is invisible — the container does stop, just violently.
+`tests/container.test.ts` asserts the **exit code is 0** rather than merely that
+the container exited, because SIGKILL satisfies "it exited" too.
+
+### The build context is the umbrella root
+
+`docker build` must run from the umbrella root with `-f` pointing here, and
+`.dockerignore` there trims the context to four files plus this app.
+
+**This is forced, not preferred.** `pnpm-lock.yaml` lives only at the umbrella
+root — this repository tracks no lockfile of its own — so a context rooted at
+this directory cannot install anything reproducibly. What the build needs is
+exactly the lockfile, `pnpm-workspace.yaml`, the root `package.json`, and this
+app; `pnpm install --frozen-lockfile --filter` resolves the 89 packages this
+relay needs from the lockfile and installs nothing else, even though the other
+workspace members are absent from the context.
+
+**One consequence worth knowing before you self-host:** cloning *this*
+repository alone is not enough to build the image, because the lockfile it needs
+is not in it. That is a property of the current repository layout rather than of
+the Dockerfile, and it is the one thing standing between this image and being
+buildable by anyone who clones the relay.
+
+### What is not in the image
+
+- **No `node-datachannel`, and that was checked rather than assumed.** It is
+  what `@libp2p/webrtc` needs and the hub does need it — but the relay carries
+  no WebRTC transport at all. `pnpm why node-datachannel` reports nothing from
+  this app and `require.resolve` fails, so there is no native addon here and no
+  prebuild step to get wrong.
+- **No TypeScript, no test runner, no package manager.** The build stage
+  compiles to `dist/` and only the compiled output and production dependencies
+  are copied forward. A runtime image that can reach a registry is one that can
+  be changed after it was signed off.
+- **No key material of any kind.** `.dockerignore` excludes `.httpeers/` and
+  `*.key` from the context, and the test asserts it against the built image's
+  filesystem rather than by reading the ignore file back — a layer is permanent
+  even if a later stage deletes the file.
 
 ## As a library
 

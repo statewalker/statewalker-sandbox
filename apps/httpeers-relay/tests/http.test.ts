@@ -157,12 +157,32 @@ describe("everything else", () => {
     });
   }, 30_000);
 
-  it("405s a non-GET on a route that exists, and says what would have worked", async () => {
+  it("405s a method that is neither GET nor HEAD, and says what would have worked", async () => {
     const relay = await startWithHttp();
     for (const path of [HEALTH_PATH, DISCOVERY_PATH]) {
       const res = await fetch(url(relay, path), { method: "POST" });
       expect(res.status).toBe(405);
-      expect(res.headers.get("allow")).toBe("GET");
+      expect(res.headers.get("allow")).toBe("GET, HEAD");
+    }
+  }, 30_000);
+
+  it("answers HEAD like GET, with no body -- a probe that uses it is not a failing check", async () => {
+    // RFC 9110: HEAD is GET without the body. An earlier version of this file
+    // answered 405, which a load balancer probing with HEAD reads as the relay
+    // being unhealthy -- a self-inflicted outage on a relay that is fine.
+    const relay = await startWithHttp();
+    for (const path of [HEALTH_PATH, DISCOVERY_PATH]) {
+      const head = await fetch(url(relay, path), { method: "HEAD" });
+      const get = await fetch(url(relay, path));
+      expect(head.status).toBe(200);
+      expect(head.status).toBe(get.status);
+      // Same headers, including the length the body WOULD have had.
+      expect(head.headers.get("content-type")).toBe(get.headers.get("content-type"));
+      expect(head.headers.get("content-length")).toBe(get.headers.get("content-length"));
+      expect(head.headers.get("cache-control")).toBe(get.headers.get("cache-control"));
+      // ...and no body.
+      expect(await head.text()).toBe("");
+      expect((await get.text()).length).toBeGreaterThan(0);
     }
   }, 30_000);
 });

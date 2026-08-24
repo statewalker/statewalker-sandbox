@@ -67,7 +67,14 @@ export interface RelayHttp {
   stop: () => Promise<void>;
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
+/**
+ * `HEAD` GETS THE SAME STATUS AND HEADERS AND NO BODY (RFC 9110). A resource
+ * that answers GET answers HEAD, and probes and load balancers use it -- an
+ * earlier version of this file answered 405, which reads to such a probe as a
+ * failing health check. `content-length` still describes the body a GET would
+ * have returned, which is what makes the two responses comparable.
+ */
+function sendJson(res: ServerResponse, status: number, body: unknown, method?: string): void {
   const text = `${JSON.stringify(body, null, 2)}\n`;
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -77,33 +84,34 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
     // this endpoint was built to remove.
     "cache-control": "no-store",
   });
-  res.end(text);
+  res.end(method === "HEAD" ? undefined : text);
 }
 
 function handle(req: IncomingMessage, res: ServerResponse, init: RelayHttpInit): void {
   // Path only. A query string is not part of either route, and `new URL`
   // against a fixed base is how the path is extracted without a dependency.
   const path = new URL(req.url ?? "/", "http://relay.invalid").pathname;
+  const method = req.method ?? "GET";
 
   if (path !== HEALTH_PATH && path !== DISCOVERY_PATH) {
-    sendJson(res, 404, { error: "not found", paths: [HEALTH_PATH, DISCOVERY_PATH] });
+    sendJson(res, 404, { error: "not found", paths: [HEALTH_PATH, DISCOVERY_PATH] }, method);
     return;
   }
 
-  if (req.method !== "GET") {
+  if (method !== "GET" && method !== "HEAD") {
     // `Allow` is not decoration -- 405 without it is a refusal that does not
     // say what would have worked.
-    res.setHeader("allow", "GET");
-    sendJson(res, 405, { error: "method not allowed", allow: "GET", path });
+    res.setHeader("allow", "GET, HEAD");
+    sendJson(res, 405, { error: "method not allowed", allow: "GET, HEAD", path }, method);
     return;
   }
 
   if (path === HEALTH_PATH) {
-    sendJson(res, 200, { status: "ok" });
+    sendJson(res, 200, { status: "ok" }, method);
     return;
   }
 
-  sendJson(res, 200, init.document());
+  sendJson(res, 200, init.document(), method);
 }
 
 /**
@@ -117,7 +125,12 @@ export async function startRelayHttp(init: RelayHttpInit): Promise<RelayHttp> {
     } catch (err) {
       // A throw from `document()` -- a node stopped underneath us, say -- must
       // not take the process down with an unhandled error inside a request.
-      sendJson(res, 500, { error: `relay: could not answer this request: ${String(err)}` });
+      sendJson(
+        res,
+        500,
+        { error: `relay: could not answer this request: ${String(err)}` },
+        req.method,
+      );
     }
   });
 

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "./src",
+    "outDir": "./dist",
+    // The container runs plain `node dist/main.js` -- no tsx, no TypeScript, no
+    // loader. Declarations and maps are for a consumer reading the package as a
+    // library from source (`main: src/index.ts`), which is how every workspace
+    // consumer already uses it; the image needs neither and they only make the
+    // layer bigger.
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": ["./src"]
+}

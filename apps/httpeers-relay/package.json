@@ -19,6 +19,7 @@
   ],
   "scripts": {
     "start": "tsx src/main.ts",
+    "build": "tsc -p tsconfig.build.json",
     "keygen": "tsx src/keygen.ts",
     "test": "pnpm run typecheck:tests && vitest run --no-file-parallelism",
     "typecheck": "tsc --noEmit",
