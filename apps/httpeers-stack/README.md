@@ -40,7 +40,8 @@ precisely because a test could reach them.
 
 - **relay** (`@statewalker/httpeers-relay`) — a stock libp2p circuit-relay
   server. Every other peer, including the two browser pages, reaches the mesh
-  through it. Listens on **port 9090**.
+  through it. Listens on **port 9090**, and serves `/health` and
+  `/.well-known/httpeers-relay.json` on **port 9099**.
 
   **It is a separate app, not part of this one.** It lives at
   `apps/httpeers-relay` and this stack depends on it, because a relay is the
@@ -124,6 +125,7 @@ bootstrap`; it keeps this deployment's keys.
 | `RELAY_SUBNETWORK` | *(generated, then kept)* | The subnetwork name this deployment announces. Written into `httpeers.json`'s relay entry by `pnpm bootstrap`. |
 | `RELAY_HOST` | `127.0.0.1` | The host peers dial the relay at — not where it binds. An IP literal or a hostname; the multiaddr family follows. |
 | `RELAY_PORT` | `9090` | The relay's port, in the address `pnpm bootstrap` writes and the port `pnpm start` waits on. |
+| `RELAY_HTTP_PORT` | `9099` | The relay's HTTP surface — `/health` and `/.well-known/httpeers-relay.json`. A second port because the WebSocket listener cannot share one; see `apps/httpeers-relay`. |
 | `RELAY_SEED` / `HUB_SEED` | — | Derive the relay/hub identity deterministically instead of from the CSPRNG, on a FIRST run only. For tests and CI, which need to name a peerId as a constant. |
 | `RELAY_ADDR` | *(`httpeers.json`)* | Overrides the relay ADDRESS the hub process dials. The subnetwork still comes from the file — it is the deployment's, not the relay's. |
 | `HUB_PORT` | `9091` | The hub's direct TCP address, for Node peers on the same host. Browsers use the relayed address instead. |
