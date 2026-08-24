@@ -72,6 +72,7 @@ import type { Ed25519PrivateKey, Mounts } from "@statewalker/httpeers.core";
 import { createPeer, RevocationCache } from "@statewalker/httpeers.core";
 import type { MeshView } from "../hub/mesh-view.js";
 import { appRules } from "../policy.js";
+import type { RelayEntry } from "../reservation.js";
 import { mountEdge } from "./edge.js";
 import { createEdgeDispatch } from "./edge-dispatch.js";
 import type { AdvertisementInput, PresenceRefusal } from "./join.js";
@@ -93,17 +94,51 @@ import {
 
 /**
  * The invitation payload's shape -- mirrors `../setup/main.ts`'s own
- * `HttpeersConfig` (`{ relayAddrs, hubPeerId }`), redeclared here rather
- * than imported from it: that module pulls in `node:fs`/`node:path` for
- * writing the file, and importing it here for the sake of one interface
- * would drag Node-only code into every page's browser bundle. See that
- * module's own "ONE SHAPE, TWO DELIVERY CHANNELS" comment -- this is the
- * browser side's half of that split, reading the same shape back over
- * HTTP instead of off disk.
+ * `HttpeersConfig` (`{ relayAddrs: [{ addr, subnetwork }], hubPeerId }`),
+ * redeclared here rather than imported from it: that module pulls in
+ * `node:fs`/`node:path` for writing the file, and importing it here for the
+ * sake of one interface would drag Node-only code into every page's browser
+ * bundle. See that module's own "ONE SHAPE, TWO DELIVERY CHANNELS" comment --
+ * this is the browser side's half of that split, reading the same shape back
+ * over HTTP instead of off disk.
+ *
+ * `RelayEntry` IS imported, from `../reservation.ts`, which is browser-safe
+ * (it touches `Libp2p.dial` and nothing else) and is where a page's relay
+ * dial already comes from.
  */
 export interface HttpeersConfig {
-  relayAddrs: string[];
+  relayAddrs: RelayEntry[];
   hubPeerId: string;
+}
+
+/**
+ * Read the one relay entry a page dials, refusing a config written before
+ * subnetworks existed.
+ *
+ * REFUSED, NOT TOLERATED. `relayAddrs` used to be `string[]`. A page handed
+ * the old shape has no subnetwork name to announce, and the relay refuses
+ * every peer that announces none -- so carrying on would produce a page that
+ * dials, waits ten seconds for a reservation nobody is going to grant, and
+ * reports the relay as unreachable. Naming the actual problem here costs one
+ * branch.
+ */
+function readRelayEntry(config: HttpeersConfig, source: string): RelayEntry {
+  const entry = config.relayAddrs?.[0] as RelayEntry | string | undefined;
+  if (entry == null) {
+    throw new Error(`startBrowserPeer: ${source}'s relayAddrs is empty -- nothing to dial.`);
+  }
+  if (typeof entry === "string") {
+    throw new Error(
+      `startBrowserPeer: ${source} holds relayAddrs in the old format -- a bare address string ` +
+        "with no subnetwork name. Every peer must announce one to reserve a circuit slot on the " +
+        'relay, so this page would be refused. Re-run "pnpm bootstrap" (it keeps this ' +
+        "deployment's keys) so the file is rewritten as relayAddrs: [{ addr, subnetwork }].",
+    );
+  }
+  if (typeof entry.addr !== "string" || typeof entry.subnetwork !== "string") {
+    throw new Error(`startBrowserPeer: ${source}'s relayAddrs[0] is not { addr, subnetwork }.`);
+  }
+  return entry;
 }
 
 /** Where both origins serve `httpeers.json` -- `../static-server/main.ts`'s `serveHttpeersConfig`. */
@@ -223,12 +258,14 @@ export interface BrowserPeerHandle {
    */
   hubPeerId: string;
   /**
-   * The relay this peer reserved through -- `relayAddrs[0]`, whether that
-   * came from `httpeers.json` or from a join blob. Echoed so a caller can
-   * REMEMBER the mesh it just joined without re-deriving where the value
-   * came from; `./mesh-memory.ts` is the one that does.
+   * The relay this peer reserved through and the subnetwork it announced
+   * there -- `relayAddrs[0]`, whether that came from `httpeers.json` or from
+   * a join blob. Echoed so a caller can REMEMBER the mesh it just joined
+   * without re-deriving where the value came from; `./mesh-memory.ts` is the
+   * one that does, and the subnetwork has to travel with the address or a
+   * resumed page would dial a relay it cannot reserve on.
    */
-  relayAddr: string;
+  relay: RelayEntry;
   /**
    * Which of the two ways in this was. `"resumed"` means the hub already
    * listed this peer and no invitation was used -- worth saying on screen,
@@ -313,11 +350,10 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   const onState = init.onState ?? ((): void => {});
 
   onState("loading-config");
+  const supplied = init.config != null;
   const config = init.config ?? (await fetchHttpeersConfig(configUrl));
-  const relayAddr = config.relayAddrs[0];
-  if (relayAddr == null) {
-    throw new Error("startBrowserPeer: httpeers.json's relayAddrs is empty -- nothing to dial.");
-  }
+  const relay = readRelayEntry(config, supplied ? "the join link" : "httpeers.json");
+  const relayAddr = relay.addr;
 
   onState("connecting-relay");
   // OR'd with the address test: the caller's `dev` stays honoured, but a
@@ -346,16 +382,18 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   };
 
   try {
-    await dialRelay(node, relayAddr);
+    await dialRelay(node, relay);
 
     onState("awaiting-reservation");
     await waitForCircuitReservation(node);
   } catch (err) {
     await startFailed();
     throw new Error(
-      `startBrowserPeer: could not reserve a circuit slot through the relay at "${relayAddr}" -- ` +
-        "this page cannot join the mesh without one. Is the relay running, and is httpeers.json's " +
-        `relayAddrs[0] the address it is actually listening on? Cause: ${String(err)}`,
+      `startBrowserPeer: could not reserve a circuit slot through the relay at "${relayAddr}" ` +
+        `in subnetwork "${relay.subnetwork}" -- this page cannot join the mesh without one. Is ` +
+        "the relay running, is httpeers.json's relayAddrs[0].addr the address it is actually " +
+        "listening on, and does that relay accept that subnetwork name? " +
+        `Cause: ${String(err)}`,
       { cause: err },
     );
   }
@@ -546,7 +584,7 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
     peerId: peer.peerId,
     baseUrl: edge.baseUrl,
     hubPeerId: config.hubPeerId,
-    relayAddr,
+    relay,
     joinedBy,
     meshView: () => join.meshView(),
     async stop() {

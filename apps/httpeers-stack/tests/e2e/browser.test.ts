@@ -368,7 +368,7 @@ async function buildSession(
   const httpeersConfigPath = join(configDir, "httpeers.json");
   writeFileSync(
     httpeersConfigPath,
-    `${JSON.stringify({ relayAddrs: [stack.relayAddr], hubPeerId: stack.hubPeerId }, null, 2)}\n`,
+    `${JSON.stringify({ relayAddrs: [stack.relay], hubPeerId: stack.hubPeerId }, null, 2)}\n`,
   );
 
   // PORT 0, NOT 5175/5176. Two ephemeral ports are still two ORIGINS, which

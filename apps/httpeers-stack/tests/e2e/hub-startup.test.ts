@@ -35,6 +35,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startHub } from "../../src/hub/main.js";
 import { loadOrGenerateKey, peerIdOf } from "../../src/setup/keys.js";
+import { SUBNETWORK } from "./harness.js";
 
 /** This suite's own seed, distinct from `harness.ts`'s so the two never share an identity. */
 const HUB_SEED = "httpeers-stack/e2e/hub-startup";
@@ -106,7 +107,7 @@ describe("Task 20: startHub's startup unwinds what it built", () => {
         stateFilePath: join(dir, "hub-state.json"),
         keyPath,
         listen: [`/ip4/127.0.0.1/tcp/${hubPort}`],
-        relayAddr,
+        relay: { addr: relayAddr, subnetwork: SUBNETWORK },
       }),
     ).rejects.toThrow(/could not reserve a circuit slot through the relay/);
 
@@ -132,7 +133,7 @@ describe("Task 20: startHub's startup unwinds what it built", () => {
       stateFilePath: join(dir, "hub-state.json"),
       keyPath,
       listen: [`/ip4/127.0.0.1/tcp/${await freePort()}`],
-      relayAddr,
+      relay: { addr: relayAddr, subnetwork: SUBNETWORK },
     }).then(
       () => null,
       (e: unknown) => e as Error,

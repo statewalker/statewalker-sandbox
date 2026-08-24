@@ -25,7 +25,12 @@ import {
 } from "../src/browser/join-blob.js";
 
 const BLOB: JoinBlob = {
-  relayAddrs: ["/ip4/127.0.0.1/tcp/9090/ws/p2p/12D3KooWRelay000000000000000000000000000000000000"],
+  relayAddrs: [
+    {
+      addr: "/ip4/127.0.0.1/tcp/9090/ws/p2p/12D3KooWRelay000000000000000000000000000000000000",
+      subnetwork: "join-blob-test",
+    },
+  ],
   hubPeerId: "12D3KooWHub00000000000000000000000000000000000000",
   invitationId: "6f1f4b7e-0c2a-4a1f-9f4c-8a2b1c3d4e5f",
 };
@@ -45,7 +50,10 @@ describe("encodeJoinBlob / decodeJoinBlob", () => {
   it("survives a non-ASCII relay host -- `btoa` alone would have thrown", () => {
     // A relay host can be a hostname an operator supplied (`RELAY_HOST`),
     // and a hostname can be an IDN. UTF-8 first, then base64.
-    const idn: JoinBlob = { ...BLOB, relayAddrs: ["/dns4/relais-café.example/tcp/443/wss"] };
+    const idn: JoinBlob = {
+      ...BLOB,
+      relayAddrs: [{ addr: "/dns4/relais-café.example/tcp/443/wss", subnetwork: "café" }],
+    };
     expect(decodeJoinBlob(encodeJoinBlob(idn))).toEqual(idn);
   });
 
@@ -65,8 +73,9 @@ describe("encodeJoinBlob / decodeJoinBlob", () => {
 
     expect(missing({ hubPeerId: "h", invitationId: "i" })).toThrow(/no relayAddrs/);
     expect(missing({ relayAddrs: [], hubPeerId: "h", invitationId: "i" })).toThrow(/no relayAddrs/);
-    expect(missing({ relayAddrs: ["/x"], invitationId: "i" })).toThrow(/no hubPeerId/);
-    expect(missing({ relayAddrs: ["/x"], hubPeerId: "h" })).toThrow(/no invitationId/);
+    const entry = [{ addr: "/x", subnetwork: "n" }];
+    expect(missing({ relayAddrs: entry, invitationId: "i" })).toThrow(/no hubPeerId/);
+    expect(missing({ relayAddrs: entry, hubPeerId: "h" })).toThrow(/no invitationId/);
   });
 });
 

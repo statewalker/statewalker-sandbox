@@ -32,7 +32,7 @@ function memoryBackend(values = new Map<string, string>()): {
 }
 
 const MESH = {
-  relayAddrs: ["/ip4/127.0.0.1/tcp/9090/ws"],
+  relayAddrs: [{ addr: "/ip4/127.0.0.1/tcp/9090/ws", subnetwork: "mesh-memory-test" }],
   hubPeerId: "12D3KooWHubHubHubHubHubHubHubHubHubHubHubHubHubHubHu",
 };
 

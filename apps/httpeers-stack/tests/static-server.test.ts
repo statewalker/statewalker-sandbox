@@ -98,7 +98,7 @@ describe("static-server: both origins", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        relayAddrs: ["/ip4/127.0.0.1/tcp/9090/ws/p2p/12D3fake"],
+        relayAddrs: [{ addr: "/ip4/127.0.0.1/tcp/9090/ws/p2p/12D3fake", subnetwork: "static" }],
         hubPeerId: "12D3fakehub",
       }),
     );

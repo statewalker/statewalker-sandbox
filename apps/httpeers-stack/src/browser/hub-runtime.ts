@@ -68,7 +68,7 @@ import type { InvitationStore, SnapshotStore } from "../hub/hub-state.js";
 import { createHubState } from "../hub/hub-state.js";
 import type { MeshView } from "../hub/mesh-view.js";
 import { HUB_RULES } from "../policy.js";
-import { dialRelay, waitForCircuitReservation } from "../reservation.js";
+import { dialRelay, type RelayEntry, waitForCircuitReservation } from "../reservation.js";
 import { mountEdge } from "./edge.js";
 import { createEdgeDispatch } from "./edge-dispatch.js";
 import { createRouteEnsurer } from "./join.js";
@@ -106,8 +106,8 @@ export interface StartBrowserHubInit {
   privateKey: Ed25519PrivateKey;
   /** Where members and spent invitation ids live -- `./snapshot-store.ts`'s IndexedDB one in the page, a fake in a test. */
   snapshotStore: SnapshotStore;
-  /** The relay to reserve through. Defaults to `relayAddrs[0]` from `httpeersConfigUrl`. */
-  relayAddr?: string;
+  /** The relay to reserve through, and the subnetwork to announce there. Defaults to `relayAddrs[0]` from `httpeersConfigUrl`. */
+  relay?: RelayEntry;
   /** Defaults to `/httpeers.json` -- read ONLY for `relayAddrs`; this hub's peerId is its own. */
   httpeersConfigUrl?: string;
   presenceTtlMs?: number;
@@ -121,8 +121,13 @@ export interface StartBrowserHubInit {
 export interface BrowserHubHandle {
   /** This hub's peerId -- and therefore the mesh's name, restated by every token's `mesh` claim. */
   peerId: PeerIdStr;
-  /** The relay this hub reserved through; the same string a joining page must be told. */
-  relayAddr: string;
+  /**
+   * The relay this hub reserved through and the subnetwork it announced
+   * there -- the same entry a joining page must be told, which is why the
+   * join blob carries both (`./join-blob.ts`). A page handed the address
+   * alone could not reserve.
+   */
+  relay: RelayEntry;
   /** The `/p2p-circuit/webrtc` address the reservation produced. */
   circuitAddr: string;
   /** The same-origin URL prefix a plain `fetch()` on the hub page reaches the mesh through -- always ending in a slash. */
@@ -178,7 +183,14 @@ export interface RemoveMemberResult {
   policyVersion: number;
 }
 
-async function fetchRelayAddr(url: string): Promise<string> {
+/**
+ * Read `relayAddrs[0]` out of the deployment's `httpeers.json`. The OLD
+ * format -- a bare address string with no subnetwork name -- is refused
+ * rather than carried: a hub page that announced nothing would be denied its
+ * reservation and would report the relay as unreachable. Same refusal, same
+ * reason, as `./peer-runtime.ts`'s.
+ */
+async function fetchRelayEntry(url: string): Promise<RelayEntry> {
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(
@@ -186,12 +198,24 @@ async function fetchRelayAddr(url: string): Promise<string> {
         'has the server been through "pnpm bootstrap" yet?',
     );
   }
-  const config = (await res.json()) as { relayAddrs?: string[] };
-  const relayAddr = config.relayAddrs?.[0];
-  if (relayAddr == null) {
+  const config = (await res.json()) as { relayAddrs?: unknown[] };
+  const entry = config.relayAddrs?.[0];
+  if (entry == null) {
     throw new Error("startBrowserHub: httpeers.json's relayAddrs is empty -- nothing to dial.");
   }
-  return relayAddr;
+  if (typeof entry === "string") {
+    throw new Error(
+      "startBrowserHub: httpeers.json holds relayAddrs in the old format -- a bare address " +
+        "string with no subnetwork name. Every peer must announce one to reserve a circuit slot " +
+        'on the relay, so this hub would be refused. Re-run "pnpm bootstrap" so the file is ' +
+        "rewritten as relayAddrs: [{ addr, subnetwork }].",
+    );
+  }
+  const { addr, subnetwork } = entry as Partial<RelayEntry>;
+  if (typeof addr !== "string" || typeof subnetwork !== "string") {
+    throw new Error("startBrowserHub: httpeers.json's relayAddrs[0] is not { addr, subnetwork }.");
+  }
+  return { addr, subnetwork };
 }
 
 /**
@@ -211,7 +235,8 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
   const configUrl = init.httpeersConfigUrl ?? "/httpeers.json";
 
   onState("loading-config");
-  const relayAddr = init.relayAddr ?? (await fetchRelayAddr(configUrl));
+  const relay = init.relay ?? (await fetchRelayEntry(configUrl));
+  const relayAddr = relay.addr;
 
   onState("connecting-relay");
   // The SAME key the hub signs with -- see `./node-profile.ts`'s
@@ -239,7 +264,7 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
 
   let circuitAddr: string;
   try {
-    await dialRelay(node, relayAddr);
+    await dialRelay(node, relay);
     onState("awaiting-reservation");
     const reserved = await waitForCircuitReservation(node);
     circuitAddr = preferWebRtcCircuitAddr(
@@ -249,9 +274,10 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
   } catch (err) {
     await startFailed();
     throw new Error(
-      `startBrowserHub: could not reserve a circuit slot through the relay at "${relayAddr}" -- ` +
-        "no page can reach this hub without one. Is the relay running, and is httpeers.json's " +
-        `relayAddrs[0] the address it is actually listening on? Cause: ${String(err)}`,
+      `startBrowserHub: could not reserve a circuit slot through the relay at "${relayAddr}" ` +
+        `in subnetwork "${relay.subnetwork}" -- no page can reach this hub without one. Is the ` +
+        "relay running, is httpeers.json's relayAddrs[0].addr the address it is actually " +
+        `listening on, and does that relay accept that subnetwork name? Cause: ${String(err)}`,
       { cause: err },
     );
   }
@@ -443,7 +469,7 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
 
   return {
     peerId: peer.peerId,
-    relayAddr,
+    relay,
     circuitAddr,
     baseUrl: edge.baseUrl,
     invitations: state.invitations,

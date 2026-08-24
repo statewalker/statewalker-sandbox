@@ -14,7 +14,13 @@ import { startRelay } from "@statewalker/httpeers-relay";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startHub } from "../src/hub/main.js";
 import { loadOrGenerateKey, peerIdOf } from "../src/setup/keys.js";
-import { type HttpeersConfig, runSetup, type SetupInit } from "../src/setup/main.js";
+import {
+  generateSubnetworkName,
+  type HttpeersConfig,
+  loadOrGenerateSubnetwork,
+  runSetup,
+  type SetupInit,
+} from "../src/setup/main.js";
 
 let workDir: string;
 
@@ -54,8 +60,8 @@ describe("setup: a clean directory", () => {
     expect(config.hubPeerId).toBe(peerIdFromPrivateKey(hubKey).toString());
     expect(config.hubPeerId).toBe(result.hubPeerId);
     expect(config.relayAddrs).toHaveLength(1);
-    expect(config.relayAddrs[0]).toContain(peerIdFromPrivateKey(relayKey).toString());
-    expect(config.relayAddrs[0]).toMatch(/^\/ip4\/127\.0\.0\.1\/tcp\/9090\/ws\/p2p\//);
+    expect(config.relayAddrs[0]?.addr).toContain(peerIdFromPrivateKey(relayKey).toString());
+    expect(config.relayAddrs[0]?.addr).toMatch(/^\/ip4\/127\.0\.0\.1\/tcp\/9090\/ws\/p2p\//);
   });
 
   it("derives relayAddrs from RELAY_HOST/RELAY_PORT -- an IPv4 literal host stays /ip4/", async () => {
@@ -68,14 +74,18 @@ describe("setup: a clean directory", () => {
       relayPort: 12345,
     });
 
-    expect(result.config.relayAddrs[0]).toMatch(/^\/ip4\/203\.0\.113\.9\/tcp\/12345\/ws\/p2p\//);
+    expect(result.config.relayAddrs[0]?.addr).toMatch(
+      /^\/ip4\/203\.0\.113\.9\/tcp\/12345\/ws\/p2p\//,
+    );
   });
 
   it("TLS env produces a wss relay address", async () => {
     const { relayKeyPath, hubKeyPath, configPath } = paths(workDir);
     const result = await runSetup({ relayKeyPath, hubKeyPath, configPath, relayTls: true });
 
-    expect(result.config.relayAddrs[0]).toMatch(/^\/ip4\/127\.0\.0\.1\/tcp\/9090\/wss\/p2p\//);
+    expect(result.config.relayAddrs[0]?.addr).toMatch(
+      /^\/ip4\/127\.0\.0\.1\/tcp\/9090\/wss\/p2p\//,
+    );
   });
 
   it("a RELAY_HOST hostname produces a /dns4/ relay address, not /ip4/", async () => {
@@ -90,7 +100,7 @@ describe("setup: a clean directory", () => {
       relayHost: "relay.example.com",
     });
 
-    expect(result.config.relayAddrs[0]).toMatch(
+    expect(result.config.relayAddrs[0]?.addr).toMatch(
       /^\/dns4\/relay\.example\.com\/tcp\/9090\/ws\/p2p\//,
     );
   });
@@ -112,7 +122,7 @@ describe("setup: a clean directory", () => {
       relayTls: true,
     });
 
-    expect(result.config.relayAddrs[0]).toMatch(
+    expect(result.config.relayAddrs[0]?.addr).toMatch(
       /^\/dns4\/relay\.example\.com\/tcp\/443\/wss\/p2p\//,
     );
   });
@@ -126,7 +136,7 @@ describe("setup: a clean directory", () => {
       relayHost: "::1",
     });
 
-    expect(result.config.relayAddrs[0]).toMatch(/^\/ip6\/::1\/tcp\/9090\/ws\/p2p\//);
+    expect(result.config.relayAddrs[0]?.addr).toMatch(/^\/ip6\/::1\/tcp\/9090\/ws\/p2p\//);
   });
 });
 
@@ -165,8 +175,8 @@ describe("setup: idempotence -- running it twice", () => {
     expect(second.hubPeerId).toBe(first.hubPeerId);
     expect(second.relayPeerId).toBe(first.relayPeerId);
     // ...only the address this run's config points at does.
-    expect(second.config.relayAddrs[0]).toContain("198.51.100.4");
-    expect(second.config.relayAddrs[0]).toContain(first.relayPeerId);
+    expect(second.config.relayAddrs[0]?.addr).toContain("198.51.100.4");
+    expect(second.config.relayAddrs[0]?.addr).toContain(first.relayPeerId);
   });
 });
 
@@ -241,7 +251,7 @@ describe("setup: the generated relay key is readable by the relay's own loader",
     try {
       expect(relay.node.peerId.toString()).toBe(result.relayPeerId);
       expect(relay.node.peerId.toString()).toBe(
-        JSON.parse(readFileSync(configPath, "utf8")).relayAddrs[0].split("/p2p/")[1],
+        JSON.parse(readFileSync(configPath, "utf8")).relayAddrs[0].addr.split("/p2p/")[1],
       );
     } finally {
       await relay.stop();
@@ -310,5 +320,73 @@ describe("keys.ts: loadOrGenerateKey directly", () => {
     writeFileSync(keyPath, privateKeyToProtobuf(secp256k1Key));
 
     await expect(loadOrGenerateKey({ keyPath })).rejects.toThrow(/secp256k1.*Ed25519|Ed25519/);
+  });
+});
+
+describe("setup: the subnetwork name", () => {
+  it("is generated, random, and written into the relay ENTRY", async () => {
+    // The name attaches to the relay entry rather than to the mesh (decision
+    // 2), which is what makes a mesh spanning subnetworks possible later
+    // without a second migration to this file.
+    const { relayKeyPath, hubKeyPath, configPath } = paths(workDir);
+    const result = await runSetup({ relayKeyPath, hubKeyPath, configPath });
+
+    expect(result.subnetwork).toMatch(/^[0-9a-f]{24}$/);
+    const config: HttpeersConfig = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(config.relayAddrs[0]?.subnetwork).toBe(result.subnetwork);
+  });
+
+  it("is different on two fresh deployments -- which is the whole point of it being random", () => {
+    // `dev`, `test` and `home` are what people type, and two unrelated groups
+    // on one shared relay would find each other by accident. This is the
+    // property that stops that, so it is asserted rather than assumed.
+    const names = new Set(Array.from({ length: 32 }, () => generateSubnetworkName()));
+    expect(names.size).toBe(32);
+  });
+
+  it("a second run keeps the first run's name -- bootstrap stays idempotent", async () => {
+    // A second run that minted a new name would move this deployment into a
+    // different subnetwork while every remembered mesh, printed join URL and
+    // QR code still named the old one.
+    const { relayKeyPath, hubKeyPath, configPath } = paths(workDir);
+    const first = await runSetup({ relayKeyPath, hubKeyPath, configPath });
+    const second = await runSetup({ relayKeyPath, hubKeyPath, configPath });
+    expect(second.subnetwork).toBe(first.subnetwork);
+
+    // ...including when the addresses move, which is the case that changes
+    // the file and could plausibly have re-derived the name with it.
+    const third = await runSetup({
+      relayKeyPath,
+      hubKeyPath,
+      configPath,
+      relayHost: "198.51.100.4",
+    });
+    expect(third.subnetwork).toBe(first.subnetwork);
+  });
+
+  it("RELAY_SUBNETWORK overrides, and an unusable one is refused rather than written", async () => {
+    const { relayKeyPath, hubKeyPath, configPath } = paths(workDir);
+    const result = await runSetup({
+      relayKeyPath,
+      hubKeyPath,
+      configPath,
+      subnetwork: "chosen-by-hand",
+    });
+    expect(result.subnetwork).toBe("chosen-by-hand");
+
+    await expect(
+      runSetup({ relayKeyPath, hubKeyPath, configPath, subnetwork: "not a name" }),
+    ).rejects.toThrow(/is not usable/);
+  });
+
+  it("a config predating subnetworks yields a fresh name rather than an empty one", () => {
+    // The old shape was `relayAddrs: string[]`. There is no name to keep in
+    // it, and a peer that announced nothing would be refused by the relay.
+    const configPath = join(workDir, "old-httpeers.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({ relayAddrs: ["/ip4/127.0.0.1/tcp/9090/ws/p2p/12D3fake"], hubPeerId: "h" }),
+    );
+    expect(loadOrGenerateSubnetwork(configPath)).toMatch(/^[0-9a-f]{24}$/);
   });
 });

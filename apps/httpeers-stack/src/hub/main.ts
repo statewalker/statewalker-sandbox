@@ -65,7 +65,7 @@ import {
   RevocationRegistry,
 } from "@statewalker/httpeers.core";
 import { HUB_RULES } from "../policy.js";
-import { dialRelay, waitForCircuitReservation } from "../reservation.js";
+import { dialRelay, type RelayEntry, waitForCircuitReservation } from "../reservation.js";
 import { APP_PORT, IMAGE_PEER_PORT } from "../static-server/main.js";
 import { createHubEndpoints, DEFAULT_PRESENCE_TTL_MS, usesTransportIdentity } from "./endpoints.js";
 import { createHubNode } from "./node-profile.js";
@@ -128,8 +128,9 @@ export interface StartHubInit {
   presenceTtlMs?: number;
   advertisementAccess?: Record<string, string>;
   /**
-   * The relay this hub reserves a slot through -- `httpeers.json`'s
-   * `relayAddrs[0]`, the same string every page dials.
+   * The relay this hub reserves a slot through, and the subnetwork it
+   * announces there -- `httpeers.json`'s `relayAddrs[0]`, the same entry
+   * every page dials.
    *
    * REQUIRED IN ANY REACHABLE DEPLOYMENT, and omitting it is a deliberate
    * choice rather than a default: a hub started without it holds no
@@ -139,7 +140,7 @@ export interface StartHubInit {
    * omitting it -- those suites test the protocol surface over direct
    * loopback and have no relay at all.
    */
-  relayAddr?: string;
+  relay?: RelayEntry;
   /**
    * A libp2p node to use INSTEAD of building one from `./node-profile.ts`.
    * The seam `../browser/peer-runtime.ts` already uses on the browser side;
@@ -199,10 +200,16 @@ function loadHubKey(keyPath: string): Ed25519PrivateKey {
 /**
  * Read `relayAddrs[0]` out of `httpeers.json`. Fails the same way
  * `loadHubKey` does -- named file, named remedy, non-zero exit -- because
- * the consequence is the same class of thing: without a relay address this
+ * the consequence is the same class of thing: without a relay entry this
  * process can come up, print a peerId, and be reachable by nobody.
+ *
+ * A BARE STRING IS REFUSED RATHER THAN CARRIED. `relayAddrs` used to be
+ * `string[]` and is now `{ addr, subnetwork }[]`; a file in the old shape
+ * names no subnetwork, and the relay refuses every peer that announces none.
+ * Accepting it here would turn a fixable "your httpeers.json predates
+ * subnetworks" into a hub that starts, cannot reserve, and blames the relay.
  */
-function readRelayAddr(configPath: string): string {
+function readRelayEntry(configPath: string): RelayEntry {
   let raw: string;
   try {
     raw = readFileSync(configPath, "utf8");
@@ -218,13 +225,32 @@ function readRelayAddr(configPath: string): string {
     }
     throw err;
   }
-  const relayAddr = (JSON.parse(raw) as { relayAddrs?: string[] }).relayAddrs?.[0];
-  if (relayAddr == null) {
+  const entry = (JSON.parse(raw) as { relayAddrs?: unknown[] }).relayAddrs?.[0];
+  if (entry == null) {
     throw new Error(
       `hub: "${configPath}" has an empty relayAddrs -- nothing to reserve a circuit slot through.`,
     );
   }
-  return relayAddr;
+  if (typeof entry === "string") {
+    throw new Error(
+      `hub: "${configPath}" holds relayAddrs in the old format -- a bare address string with no ` +
+        "subnetwork name. Every peer must announce a subnetwork name to reserve on the relay, so " +
+        'this hub would be refused. Re-run "pnpm bootstrap": it keeps this deployment\'s keys and ' +
+        "rewrites the file as relayAddrs: [{ addr, subnetwork }].",
+    );
+  }
+  const { addr, subnetwork } = entry as Partial<RelayEntry>;
+  if (
+    typeof addr !== "string" ||
+    addr === "" ||
+    typeof subnetwork !== "string" ||
+    subnetwork === ""
+  ) {
+    throw new Error(
+      `hub: "${configPath}"'s relayAddrs[0] is not { addr, subnetwork }. Re-run "pnpm bootstrap".`,
+    );
+  }
+  return { addr, subnetwork };
 }
 
 /**
@@ -317,9 +343,9 @@ export async function startHub(init: StartHubInit = {}) {
   // that point, a page that dialled immediately would race it and fail with
   // an error pointing nowhere near the cause.
   let circuitAddr: string | undefined;
-  if (init.relayAddr != null) {
+  if (init.relay != null) {
     try {
-      await dialRelay(node, init.relayAddr);
+      await dialRelay(node, init.relay);
       const reserved = await waitForCircuitReservation(node);
       circuitAddr = preferWebRtcCircuitAddr(node, reserved);
     } catch (err) {
@@ -328,9 +354,11 @@ export async function startHub(init: StartHubInit = {}) {
       // Task 20 exists to end.
       await startFailed();
       throw new Error(
-        `hub: could not reserve a circuit slot through the relay at "${init.relayAddr}" -- ` +
-          "no browser can reach this hub without one. Is the relay running, and is this the " +
-          `address "pnpm bootstrap" wrote into httpeers.json? Cause: ${String(err)}`,
+        `hub: could not reserve a circuit slot through the relay at "${init.relay.addr}" in ` +
+          `subnetwork "${init.relay.subnetwork}" -- no browser can reach this hub without one. ` +
+          'Is the relay running, is this the address "pnpm bootstrap" wrote into ' +
+          "httpeers.json, and does the relay accept that subnetwork name? " +
+          `Cause: ${String(err)}`,
         { cause: err },
       );
     }
@@ -485,11 +513,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // `RELAY_ADDR` overrides, but the FILE is the normal path: `pnpm bootstrap`
   // wrote `httpeers.json` precisely so no process has to be told the relay's
   // address twice, and `scripts/start.sh` already refuses to run without it.
-  const relayAddr = process.env.RELAY_ADDR ?? readRelayAddr(configPath);
+  const fromFile = readRelayEntry(configPath);
+  // `RELAY_ADDR` overrides only the address; the subnetwork still comes from
+  // the file, because it is the deployment's and not the relay's.
+  const relay: RelayEntry =
+    process.env.RELAY_ADDR != null ? { ...fromFile, addr: process.env.RELAY_ADDR } : fromFile;
 
   const hub = await startHub({
     listen: [`/ip4/0.0.0.0/tcp/${port}`],
-    relayAddr,
+    relay,
   });
 
   // Written only now -- after `startHub` resolved, which means after the
@@ -501,6 +533,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   writeFileSync(readyPath, `${hub.peer.peerId}\n${hub.circuitAddr ?? ""}\n`);
 
   console.log(`hub peerId: ${hub.peer.peerId}`);
+  console.log(`hub subnetwork: ${relay.subnetwork} (announced to the relay at ${relay.addr})`);
   // LABELLED FOR WHAT IT IS, because `hub addrs:` below prints the bare
   // `/p2p-circuit` sibling too and the two differ by one path segment. That
   // sibling is a limited connection on which libp2p refuses

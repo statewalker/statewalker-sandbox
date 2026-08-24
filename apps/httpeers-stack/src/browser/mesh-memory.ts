@@ -1,5 +1,6 @@
 /**
- * The mesh this origin last joined -- `{ relayAddrs, hubPeerId }`, kept
+ * The mesh this origin last joined -- `{ relayAddrs: [{ addr, subnetwork }],
+ * hubPeerId }`, kept
  * beside the identity key it belongs to.
  *
  * WHY A PAGE HAS TO REMEMBER THIS AT ALL (Task 28). A page that resumes a
@@ -30,6 +31,7 @@
  * failing the same way on every later load, with the operator's original
  * mistake no longer visible anywhere.
  */
+import type { RelayEntry } from "../reservation.js";
 import type { AsyncKeyValueBackend } from "./kv.js";
 import { idbBackend } from "./kv.js";
 import type { HttpeersConfig } from "./peer-runtime.js";
@@ -67,6 +69,14 @@ function parseMesh(raw: string | undefined): HttpeersConfig | null {
     const parsed = JSON.parse(raw) as Partial<HttpeersConfig>;
     const relayAddrs = parsed.relayAddrs;
     if (!Array.isArray(relayAddrs) || relayAddrs.length === 0) return null;
+    // A memory written before subnetworks existed names an address and no
+    // name, so resuming from it would be refused a reservation. It is not
+    // readable, in the only sense this function cares about.
+    for (const entry of relayAddrs as Array<Partial<RelayEntry> | string>) {
+      if (typeof entry !== "object" || entry == null) return null;
+      if (typeof entry.addr !== "string" || entry.addr === "") return null;
+      if (typeof entry.subnetwork !== "string" || entry.subnetwork === "") return null;
+    }
     if (typeof parsed.hubPeerId !== "string" || parsed.hubPeerId === "") return null;
     return { relayAddrs, hubPeerId: parsed.hubPeerId };
   } catch (err) {

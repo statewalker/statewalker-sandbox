@@ -1973,3 +1973,54 @@ it) behind a confirmation that says exactly that.
   a later one and resurrect a spent invitation id (a membership bypass, not an ordering
   wobble); coalesced so a burst of joins costs one put. The value is stored as a JSON
   string, so the round trip is semantically identical to the Node file store's.
+
+---
+
+## M0 T4: subnetwork names, and the `httpeers.json` migration they forced
+
+Neither a promotion nor a reconstruction — new work, recorded here because it
+**changed a format every consumer in this app reads**, and a reader arriving at
+an old `httpeers.json` deserves to find out why it is refused.
+
+**What changed.** `apps/httpeers-relay` now requires every peer to announce a
+subnetwork name over `/httpeers/relay-net/1.0.0` before it reserves, and
+partitions relayed dials by that name (see that package's README). There is no
+default name: a peer that announces none is refused. This app announced none,
+so every peer in it had to learn to.
+
+**The format.** `httpeers.json`'s `relayAddrs` was `string[]` and is now
+`{ addr, subnetwork }[]`. The name attaches to the **relay entry**, not to the
+mesh, because a subnetwork is a property of reachability through one relay —
+which is what lets a mesh span more than one subnetwork later without a second
+migration to this file. The same shape travels in the hub page's join blob
+(`browser/join-blob.ts`) and in a page's remembered mesh
+(`browser/mesh-memory.ts`).
+
+**The old shape is refused, not tolerated**, in every reader: `hub/main.ts`,
+`browser/peer-runtime.ts`, `browser/hub-runtime.ts` and `browser/join-blob.ts`
+each name the problem and the remedy. Carrying a bare string would produce a
+peer that announces nothing, waits out its reservation poll, and reports the
+relay as unreachable — a diagnosis pointing at the one component that is
+working. `browser/mesh-memory.ts` treats it as unreadable instead and returns
+`null`, which is the first-run state that module already renders; its own
+comment says why it never throws.
+
+**One seam announces.** `reservation.ts`'s `dialRelay` now takes a `RelayEntry`
+and announces as part of dialing, so "every peer announces" is true by
+construction rather than by five call sites remembering. Its callers are the
+Node hub, both browser runtimes and the e2e harness.
+
+**The name is generated.** `setup/main.ts`'s `generateSubnetworkName` mints 96
+random bits as 24 hex characters, and `loadOrGenerateSubnetwork` keeps the
+existing one on a later run — the same idempotence rule `keys.ts` states for
+the identities, for a related reason: a second bootstrap that minted a new name
+would move this deployment into a different subnetwork while every remembered
+mesh, printed join URL and QR code still named the old one. `RELAY_SUBNETWORK`
+overrides. Random rather than `dev` because two unrelated groups on one shared
+relay would otherwise collide by accident.
+
+**It is not a credential.** The name sits in a config file, in join links and
+in the hub page's rendered invitation, and the relay's operator sees every name
+regardless. Partitioning is not authorisation: this mesh's security is Noise
+proving identity and the hub deciding what a member may do. Nothing in this app
+may be described otherwise.

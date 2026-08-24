@@ -24,12 +24,99 @@
  * resolution as "ready" is exactly the race that note documents this project
  * already got bitten by once.
  */
+import type { PeerId } from "@libp2p/interface";
 import { multiaddr } from "@multiformats/multiaddr";
 import type { Libp2p } from "@statewalker/httpeers.core";
+import { announceSubnetwork } from "@statewalker/httpeers-relay/subnetwork";
 
-/** Dial the relay named by `relayAddr` (`httpeers.json`'s `relayAddrs[0]`). Resolving means the link is up -- NOT that a circuit reservation exists yet; see `waitForCircuitReservation`. */
-export async function dialRelay(node: Libp2p, relayAddr: string): Promise<void> {
-  await node.dial(multiaddr(relayAddr));
+/**
+ * One entry of `httpeers.json`'s `relayAddrs`: a relay's address AND the
+ * subnetwork this deployment belongs to on it.
+ *
+ * THE NAME ATTACHES TO THE RELAY ENTRY, NOT TO THE MESH. A subnetwork is a
+ * property of reachability through one relay, and a mesh may one day span
+ * more than one -- so the name lives beside the address that it qualifies.
+ * That is what makes a mesh spanning subnetworks possible later without a
+ * second format migration, and it is why this is an object rather than the
+ * bare string it used to be.
+ */
+export interface RelayEntry {
+  /** The relay's dialable multiaddr, `/p2p/<relayPeerId>` suffix included. */
+  addr: string;
+  /** The subnetwork name this deployment announces on that relay. */
+  subnetwork: string;
+}
+
+/**
+ * Dial the relay named by `relay.addr` and announce `relay.subnetwork` to it.
+ *
+ * ANNOUNCING IS PART OF DIALING, NOT A STEP A CALLER MAY FORGET. The relay's
+ * connection gater receives only a peer id, so it has to already know this
+ * peer's subnetwork by the time the reservation request arrives -- and a peer
+ * that never announced is refused with no reservation and, from libp2p's side,
+ * no retry. Binding the two together here is what makes "every peer announces"
+ * true by construction rather than by five call sites remembering.
+ *
+ * Resolving means the link is up and the relay accepted the name -- NOT that
+ * a circuit reservation exists yet; see `waitForCircuitReservation`.
+ *
+ * A `SubnetworkRefusedError` from here carries the relay's own words
+ * (`@statewalker/httpeers-relay/subnetwork`): it is a configuration a person
+ * fixes, and it is otherwise indistinguishable from the relay being down.
+ */
+export async function dialRelay(node: Libp2p, relay: RelayEntry): Promise<void> {
+  // `connection.remotePeer` rather than parsing `/p2p/...` out of the
+  // address: this is the peer id Noise actually proved on this connection,
+  // and there is no second place for the two to disagree.
+  const connection = await node.dial(multiaddr(relay.addr));
+  const relayPeerId = connection.remotePeer;
+  await announceSubnetwork(node, relayPeerId, relay.subnetwork);
+  keepSubnetworkAnnounced(node, relayPeerId, relay.subnetwork);
+}
+
+/**
+ * Which `(relay, subnetwork)` pairs a node already re-announces for, so a
+ * second `dialRelay` against the same relay does not stack a second listener.
+ * Keyed weakly by node: a stopped node's entry goes with it.
+ */
+const reannouncing = new WeakMap<Libp2p, Set<string>>();
+
+/**
+ * Re-announce on every LATER connection to this relay.
+ *
+ * WITHOUT THIS, ONE DROPPED WEBSOCKET COSTS A PEER THE RELAY PERMANENTLY.
+ * The relay's record of a peer's subnetwork dies with the connection it
+ * arrived on -- it has to, or a peer that reconnected under a different name
+ * would linger in the old subnetwork. libp2p re-dials a relay it has a
+ * reservation on by itself, promptly and without telling anybody, and then
+ * asks for the reservation again; the relay has no record by then, refuses,
+ * and -- as `apps/httpeers-relay`'s own tests record -- does not get asked a
+ * second time. The peer stays connected, holds no reservation, is dialable by
+ * nobody, and nothing anywhere says so until the page is reloaded.
+ *
+ * So the announcement is maintained rather than performed once. Best effort
+ * by construction: a failure here leaves exactly the state that would have
+ * obtained anyway, and the next reconnection tries again.
+ */
+function keepSubnetworkAnnounced(node: Libp2p, relayPeerId: PeerId, subnetwork: string): void {
+  const key = `${relayPeerId.toString()}/${subnetwork}`;
+  const seen = reannouncing.get(node) ?? new Set<string>();
+  if (seen.has(key)) return;
+  seen.add(key);
+  reannouncing.set(node, seen);
+
+  // Added AFTER the first dial resolved, so the connection just announced on
+  // does not fire this and announce itself twice.
+  node.addEventListener("connection:open", (event) => {
+    if (!event.detail.remotePeer.equals(relayPeerId)) return;
+    void announceSubnetwork(node, relayPeerId, subnetwork).catch((err: unknown) => {
+      console.warn(
+        `reservation: reconnected to the relay ${relayPeerId.toString()} but could not ` +
+          `re-announce subnetwork "${subnetwork}" -- this peer will hold no circuit ` +
+          `reservation until it does. Cause: ${String(err)}`,
+      );
+    });
+  });
 }
 
 /** How often `waitForCircuitReservation` re-checks `getMultiaddrs()`. */

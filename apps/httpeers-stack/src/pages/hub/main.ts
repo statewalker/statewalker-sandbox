@@ -19,7 +19,8 @@
  * runs. This hub's is not: it is generated (or reloaded) in IndexedDB, in
  * this tab, long after bootstrap. Nothing on disk can name it, so it hands
  * itself out at runtime, as a join blob (`../../browser/join-blob.ts`)
- * carrying `relayAddrs`, `hubPeerId` and one single-use invitation id.
+ * carrying `relayAddrs` -- address AND subnetwork name, or the page it admits
+ * could not reserve -- `hubPeerId` and one single-use invitation id.
  *
  * ONE INVITATION PER PAGE, NEVER ONE PER MESH. Invitations are single-use
  * by construction (`../../hub/hub-state.ts`'s `redeem` moves the id to
@@ -445,7 +446,7 @@ async function main(): Promise<void> {
   // authoritative one means a mismatch would be visible rather than
   // theoretical.
   meshIdEl.textContent = hub.peerId;
-  relayEl.textContent = hub.relayAddr;
+  relayEl.textContent = `${hub.relay.addr}  (subnetwork ${hub.relay.subnetwork})`;
   circuitEl.textContent = hub.circuitAddr;
   baseUrlEl.textContent = hub.baseUrl;
 
@@ -474,7 +475,7 @@ async function main(): Promise<void> {
     const record = hub.invitations.create(id, roles, INVITATION_TTL_MS);
     renderInvitation(
       { roles },
-      { relayAddrs: [hub.relayAddr], hubPeerId: hub.peerId, invitationId: id },
+      { relayAddrs: [hub.relay], hubPeerId: hub.peerId, invitationId: id },
       record.expiresAt,
     );
     // Immediately, for the same reason revoking re-renders immediately.

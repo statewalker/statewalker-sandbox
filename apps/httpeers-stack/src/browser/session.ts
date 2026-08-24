@@ -299,7 +299,7 @@ export function createPeerSession(init: PeerSessionInit): PeerSession {
       // Remembered only now, and only from the handle -- see
       // `./mesh-memory.ts`'s "WRITTEN ONLY AFTER A JOIN ACTUALLY SUCCEEDS".
       await meshMemory.write({
-        relayAddrs: [joined.relayAddr],
+        relayAddrs: [joined.relay],
         hubPeerId: joined.hubPeerId,
       });
 

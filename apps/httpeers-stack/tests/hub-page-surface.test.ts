@@ -316,7 +316,7 @@ describe("the hub page's origin", () => {
     writeFileSync(join(dir, "hub", "sw.js"), "// the hub page's service worker\n");
     writeFileSync(
       join(dir, "httpeers.json"),
-      JSON.stringify({ relayAddrs: ["/x"], hubPeerId: "h" }),
+      JSON.stringify({ relayAddrs: [{ addr: "/x", subnetwork: "n" }], hubPeerId: "h" }),
     );
 
     // Every port ephemeral, this suite's own included: it must never depend
@@ -364,7 +364,10 @@ describe("the hub page's origin", () => {
     expect(res.status).toBe(200);
     // `hubPeerId` is in there too and the hub page deliberately ignores it:
     // it IS a hub, and its own peerId is generated in the tab.
-    expect(await res.json()).toEqual({ relayAddrs: ["/x"], hubPeerId: "h" });
+    expect(await res.json()).toEqual({
+      relayAddrs: [{ addr: "/x", subnetwork: "n" }],
+      hubPeerId: "h",
+    });
   });
 
   it("defaults to dist/hub on port 5177 when nothing overrides it", () => {

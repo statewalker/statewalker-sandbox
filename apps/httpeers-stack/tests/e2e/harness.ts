@@ -74,14 +74,14 @@ import { tcp } from "@libp2p/tcp";
 import { webRTC } from "@libp2p/webrtc";
 import { webSockets } from "@libp2p/websockets";
 import { multiaddr } from "@multiformats/multiaddr";
-import { startRelay } from "@statewalker/httpeers-relay";
 import type { Libp2p, Mounts, PeerIdStr } from "@statewalker/httpeers.core";
+import { startRelay } from "@statewalker/httpeers-relay";
 import { createLibp2p } from "libp2p";
 import { preDialPeer, redeemInvitation } from "../../src/browser/join.js";
 import { startHub } from "../../src/hub/main.js";
 import type { MeshView } from "../../src/hub/mesh-view.js";
 import { appRules } from "../../src/policy.js";
-import { dialRelay, waitForCircuitReservation } from "../../src/reservation.js";
+import { dialRelay, type RelayEntry, waitForCircuitReservation } from "../../src/reservation.js";
 import { loadOrGenerateKey, peerIdOf } from "../../src/setup/keys.js";
 import { buildTestPeer, type TestAdvertisement, type TestPeer } from "../support/mesh.js";
 
@@ -94,6 +94,19 @@ import { buildTestPeer, type TestAdvertisement, type TestPeer } from "../support
  */
 export const RELAY_SEED = "httpeers-stack/e2e/relay";
 export const HUB_SEED = "httpeers-stack/e2e/hub";
+
+/**
+ * The subnetwork every peer in this harness announces -- `httpeers.json`'s
+ * `relayAddrs[0].subnetwork` in a real deployment, where `pnpm bootstrap`
+ * generates a random one.
+ *
+ * FIXED HERE, NOT RANDOM, because a suite that could not name the value it
+ * configured could not assert on it. It is not a shortcut around the
+ * requirement: the relay this harness boots refuses any peer that announces
+ * nothing, exactly as a deployed one does, and every peer below goes through
+ * `dialRelay`, which announces.
+ */
+export const SUBNETWORK = "httpeers-stack-e2e";
 
 /**
  * The presence TTL these tests run the hub at. `startHub`'s own knob
@@ -176,8 +189,15 @@ export interface JoinInit {
 
 export interface Stack {
   relayPeerId: PeerIdStr;
-  /** The relay's dialable `/ws` multiaddr on loopback, including its `/p2p/<relayPeerId>` suffix — `httpeers.json`'s `relayAddrs[0]` in a real deployment. */
+  /** The relay's dialable `/ws` multiaddr on loopback, including its `/p2p/<relayPeerId>` suffix. */
   relayAddr: string;
+  /**
+   * The relay entry every peer here dials — `httpeers.json`'s
+   * `relayAddrs[0]` in a real deployment, address AND subnetwork name. The
+   * name is required: this harness's relay refuses a peer that announces
+   * none, exactly as a deployed one does.
+   */
+  relay: RelayEntry;
   hubPeerId: PeerIdStr;
   /**
    * The hub's own relayed address — the one `startHub` waited for before
@@ -271,12 +291,14 @@ export async function startStack(init: StartStackInit = {}): Promise<Stack> {
   // loopback approximation of it: the hub dials the relay and holds a
   // reservation before `startHub` resolves, so by the time any peer below
   // joins, the hub is reachable the way a page reaches it.
+  const relayEntry: RelayEntry = { addr: relayAddr, subnetwork: SUBNETWORK };
+
   const hub = await startHub({
     stateFilePath: join(dir, "hub-state.json"),
     keyPath: hubKeyPath,
     listen: ["/ip4/127.0.0.1/tcp/0"],
     presenceTtlMs: init.presenceTtlMs ?? PRESENCE_TTL_MS,
-    relayAddr,
+    relay: relayEntry,
   });
   // The hub's DIRECT address, for the `hubDial: "tcp"` path — picked by
   // shape, not by index: `addrs()` now carries the relayed entries too, and
@@ -295,6 +317,7 @@ export async function startStack(init: StartStackInit = {}): Promise<Stack> {
   const stack: Stack = {
     relayPeerId,
     relayAddr,
+    relay: relayEntry,
     hubPeerId,
     hubCircuitAddr: hub.circuitAddr,
     hub,
@@ -309,7 +332,7 @@ export async function startStack(init: StartStackInit = {}): Promise<Stack> {
     async join(init) {
       const node = await createStackNode();
       nodes.push(node);
-      await dialRelay(node, relayAddr);
+      await dialRelay(node, relayEntry);
       const circuitAddr = await waitForCircuitReservation(node);
 
       const peer = await buildTestPeer({
@@ -334,7 +357,13 @@ export async function startStack(init: StartStackInit = {}): Promise<Stack> {
         token: redemption.token,
         circuitAddr,
         lastBeatAt: Number.NaN, // no heartbeat yet -- set by the first `beat()`
-        configuration: JSON.stringify({ ...init, hubPeerId, relayAddr, hubAddr }),
+        configuration: JSON.stringify({
+          ...init,
+          hubPeerId,
+          relayAddr,
+          hubAddr,
+          relay: relayEntry,
+        }),
         async beat(advertisements?: TestAdvertisement[]) {
           stackPeer.token = await peer.heartbeat(hubPeerId, stackPeer.token, advertisements);
           // AFTER the call resolves, not before: a beat the hub refused (a

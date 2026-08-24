@@ -39,7 +39,7 @@ import { createPeerSession, describeMeshDrift } from "../src/browser/session.js"
 
 const HUB = "12D3KooWHubHubHubHubHubHubHubHubHubHubHubHubHubHubHu";
 const OTHER_HUB = "12D3KooWOtherOtherOtherOtherOtherOtherOtherOtherOthe";
-const RELAY = "/ip4/127.0.0.1/tcp/9090/ws";
+const RELAY = { addr: "/ip4/127.0.0.1/tcp/9090/ws", subnetwork: "session-test" };
 
 let key: Ed25519PrivateKey;
 
@@ -93,7 +93,7 @@ function fakeHandle(joinedBy: JoinMethod, hubPeerId = HUB): FakeHandle {
     peerId: peerIdOf(key),
     baseUrl: "/app/",
     hubPeerId,
-    relayAddr: RELAY,
+    relay: RELAY,
     joinedBy,
     meshView: () => null,
     stop: async () => {
@@ -244,7 +244,7 @@ describe("which mesh a session tries", () => {
 
   it("a join blob names its own mesh and overrides the remembered one", async () => {
     const blob = encodeJoinBlob({
-      relayAddrs: ["/ip4/10.0.0.1/tcp/1/ws"],
+      relayAddrs: [{ addr: "/ip4/10.0.0.1/tcp/1/ws", subnetwork: "blob-subnetwork" }],
       hubPeerId: OTHER_HUB,
       invitationId: "blob-invite",
     });
@@ -259,7 +259,7 @@ describe("which mesh a session tries", () => {
     await session.start();
 
     expect(start.calls[0]?.config).toEqual({
-      relayAddrs: ["/ip4/10.0.0.1/tcp/1/ws"],
+      relayAddrs: [{ addr: "/ip4/10.0.0.1/tcp/1/ws", subnetwork: "blob-subnetwork" }],
       hubPeerId: OTHER_HUB,
     });
     expect(start.calls[0]?.invitationId).toBe("blob-invite");

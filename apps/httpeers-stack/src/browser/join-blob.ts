@@ -3,7 +3,7 @@
  * ANOTHER BROWSER PAGE, in one copyable string.
  *
  * WHY IT HAS TO EXIST. Every page in this stack has so far learned the mesh
- * from `httpeers.json` -- `{ relayAddrs, hubPeerId }`, written once by
+ * from `httpeers.json` -- `{ relayAddrs: [{ addr, subnetwork }], hubPeerId }`, written once by
  * `pnpm bootstrap` (`../setup/main.ts`) and served by both origins. That
  * works because the Node hub's identity comes from a key file generated at
  * bootstrap, so its peerId is knowable BEFORE it runs. The hub page's is
@@ -33,10 +33,20 @@
  * text travels in a body or a URL, never a header (HTTP header values are
  * latin1 -- see `../services/search.ts`'s own note).
  */
+import type { RelayEntry } from "../reservation.js";
 
-/** The invitation payload's shape (`../setup/main.ts`'s `HttpeersConfig`) plus the one-shot invitation id that goes with it. */
+/**
+ * The invitation payload's shape (`../setup/main.ts`'s `HttpeersConfig`) plus
+ * the one-shot invitation id that goes with it.
+ *
+ * `relayAddrs` CARRIES THE SUBNETWORK NAME, and it has to: a page handed only
+ * an address cannot announce, cannot reserve, and cannot reach the hub that
+ * invited it. The name travels here in the open, which is fine and is the
+ * point -- it is not a key, a secret or a credential, and a blob is copied
+ * into a chat window by design.
+ */
 export interface JoinBlob {
-  relayAddrs: string[];
+  relayAddrs: RelayEntry[];
   hubPeerId: string;
   invitationId: string;
 }
@@ -93,6 +103,24 @@ export function decodeJoinBlob(text: string): JoinBlob {
   const relayAddrs = blob.relayAddrs;
   if (!Array.isArray(relayAddrs) || relayAddrs.length === 0) {
     throw new Error("join blob: no relayAddrs -- there is nothing to dial.");
+  }
+  for (const entry of relayAddrs as Array<RelayEntry | string>) {
+    if (typeof entry === "string") {
+      throw new Error(
+        "join blob: this link was made before subnetworks existed -- its relay entry names an " +
+          "address but no subnetwork, so this page could not reserve a slot on that relay. Ask " +
+          "for a fresh join link.",
+      );
+    }
+    if (typeof entry?.addr !== "string" || entry.addr === "") {
+      throw new Error("join blob: a relay entry has no addr -- there is nothing to dial.");
+    }
+    if (typeof entry.subnetwork !== "string" || entry.subnetwork === "") {
+      throw new Error(
+        "join blob: a relay entry names no subnetwork -- this page would be refused a circuit " +
+          "slot on that relay. Ask for a fresh join link.",
+      );
+    }
   }
   if (typeof blob.hubPeerId !== "string" || blob.hubPeerId === "") {
     throw new Error("join blob: no hubPeerId -- this page would not know which mesh to join.");

@@ -80,12 +80,58 @@ pnpm start
 
 `pnpm bootstrap` (`src/setup/main.ts`) turns a fresh checkout into a runnable
 stack: it generates (or, on a later run, reads back) this deployment's
-persistent Ed25519 identity keys at `.httpeers/{relay,hub}.key`, and writes
-`httpeers.json` — `{ relayAddrs, hubPeerId }`, the invitation payload both
-daemons and both browser pages read to find the mesh. Running it again does
-not rotate the keys or change `httpeers.json`: it is idempotent, by design —
-the hub's peerId *is* the mesh identity, and regenerating it would silently
-invalidate every issued token.
+persistent Ed25519 identity keys at `.httpeers/{relay,hub}.key` and its
+**subnetwork name**, and writes `httpeers.json` — `{ relayAddrs: [{ addr,
+subnetwork }], hubPeerId }`, the invitation payload both daemons and both
+browser pages read to find the mesh. Running it again does not rotate the
+keys, change the subnetwork name, or otherwise disturb `httpeers.json`: it is
+idempotent, by design — the hub's peerId *is* the mesh identity, and
+regenerating it would silently invalidate every issued token.
+
+### The subnetwork name
+
+Every peer announces a subnetwork name to the relay, and peers with different
+names cannot reach each other through it. `pnpm bootstrap` generates a random
+one (24 hex characters) and keeps it on later runs; set `RELAY_SUBNETWORK` to
+choose your own.
+
+**It is random because of collision, not attack.** `dev`, `test` and `home`
+are what people type, and two unrelated groups pointing this stack at one
+shared relay would find each other by accident — each seeing the other's peers
+in its mesh view, with nothing to explain it.
+
+**It is not a key, a secret or a credential**, and nothing here treats it as
+one: it sits in `httpeers.json`, in every join link, and in the hub page's
+rendered invitation. An unguessable name keeps strangers from stumbling in; it
+does not survive being shared, screenshotted or logged, and the relay's
+operator sees every name regardless. **Partitioning is not authorisation** —
+this mesh's security is Noise proving identity and the hub deciding what a
+member may do. See `apps/httpeers-relay`'s README for the relay half.
+
+**`httpeers.json`'s format changed with it.** `relayAddrs` used to be
+`string[]`; it is now `{ addr, subnetwork }[]`, because the name qualifies one
+relay rather than the mesh — which is what lets a mesh span more than one
+subnetwork later without a second migration. A file in the old format is
+**refused with a message naming the remedy** rather than carried: a peer that
+announces no name is denied its reservation, and blaming the relay for that
+would send whoever hit it in exactly the wrong direction. Re-run `pnpm
+bootstrap`; it keeps this deployment's keys.
+
+### Environment
+
+| Variable | Default | What it does |
+|---|---|---|
+| `RELAY_SUBNETWORK` | *(generated, then kept)* | The subnetwork name this deployment announces. Written into `httpeers.json`'s relay entry by `pnpm bootstrap`. |
+| `RELAY_HOST` | `127.0.0.1` | The host peers dial the relay at — not where it binds. An IP literal or a hostname; the multiaddr family follows. |
+| `RELAY_PORT` | `9090` | The relay's port, in the address `pnpm bootstrap` writes and the port `pnpm start` waits on. |
+| `RELAY_SEED` / `HUB_SEED` | — | Derive the relay/hub identity deterministically instead of from the CSPRNG, on a FIRST run only. For tests and CI, which need to name a peerId as a constant. |
+| `RELAY_ADDR` | *(`httpeers.json`)* | Overrides the relay ADDRESS the hub process dials. The subnetwork still comes from the file — it is the deployment's, not the relay's. |
+| `HUB_PORT` | `9091` | The hub's direct TCP address, for Node peers on the same host. Browsers use the relayed address instead. |
+| `HUB_READY_FILE` | `.httpeers/hub-ready` | Where the hub records that its reservation has landed. `scripts/start.sh` waits for this file rather than sleeping. |
+| `HTTPEERS_CONFIG` | `./httpeers.json` | Where the hub reads the invitation payload from. |
+
+The relay process reads its own variables — `RELAY_KEY`, `RELAY_MODE`,
+`RELAY_NETWORKS` and the rest — documented in `apps/httpeers-relay`'s README.
 
 **The script is named `bootstrap`, not `setup`.** `pnpm setup` is a pnpm
 built-in command — it configures the user's shell environment — and a
@@ -163,7 +209,8 @@ difference:
   `httpeers.json`: that file is written at bootstrap, from a key file, and
   this hub's identity is created in a tab afterwards. So the page mints a
   single-use invitation and renders a complete **join link** carrying
-  `relayAddrs`, its own `hubPeerId`, and that invitation id. Open the link, or
+  `relayAddrs` (address *and* subnetwork name — a page handed only the address
+  could not reserve), its own `hubPeerId`, and that invitation id. Open the link, or
   paste it into the target page's join box. One link admits exactly one page —
   invitations are single-use, so mint one per page rather than sharing one.
 
