@@ -189,7 +189,7 @@ describe("preDialPeer", () => {
 
     const relayAddr = "/ip4/127.0.0.1/tcp/9090/ws";
     const targetPeerId: PeerIdStr = hub.peer.peerId;
-    await preDialPeer(clientPeer.libp2p, relayAddr, targetPeerId);
+    await preDialPeer(clientPeer.libp2p, relayAddr, targetPeerId, { attempts: 1 });
 
     expect(dialSpy).toHaveBeenCalledTimes(1);
     const [dialedTarget] = dialSpy.mock.calls[0]!;

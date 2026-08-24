@@ -59,7 +59,7 @@ export async function preDialPeer(
   node: Libp2p,
   relayAddr: string,
   peerId: PeerIdStr,
-  init: PreDialInit = {},
+  init: PreDialInit,
 ): Promise<void> {
   const target = circuitWebrtcAddr(relayAddr, peerId);
   const attempts = Math.max(1, init.attempts ?? 1);
@@ -110,11 +110,20 @@ export const PRE_DIAL_JOIN_ATTEMPTS = 3;
 
 export interface PreDialInit {
   /**
-   * How many times to dial before giving up. Defaults to **1** -- a single
-   * shot, which is what the keepalive below wants: it has its own timer and
-   * an inner retry there would multiply the two.
+   * How many times to dial before giving up.
+   *
+   * REQUIRED, WITH NO DEFAULT, AND THAT IS THE POINT. It was optional and
+   * defaulted to one, which meant a caller who simply did not think about it
+   * got the unretried behaviour -- and this codebase then shipped that exact
+   * bug twice: once on the join path (A1) and once on the request path (A2),
+   * where `ensureRoute`'s fallback branch inherited the default and treated a
+   * stalled WebRTC handshake as permanent.
+   *
+   * A comment warning about the default would only reach a reader who went
+   * looking. A required field asks every call site the question, at compile
+   * time, including the one written by somebody who never read this.
    */
-  attempts?: number;
+  attempts: number;
   /** Defaults to `PRE_DIAL_RETRY_DELAY_MS`. */
   retryDelayMs?: number;
 }
@@ -233,6 +242,13 @@ export function createRouteEnsurer(init: RouteEnsurerInit): (peerId: PeerIdStr) 
     // in 2-8 ms without queueing anything. So the cost here is per PEER, not
     // per request, and a second de-duplication layer would only duplicate
     // libp2p's.
+    // NO DELAY BETWEEN ATTEMPTS, WHERE `preDialPeer` WAITS
+    // `PRE_DIAL_RETRY_DELAY_MS`. The divergence is deliberate: this is the
+    // request path, where a pause is latency a person is watching, and a
+    // wedged handshake is not waiting for anything a pause improves -- a fresh
+    // `RTCPeerConnection` is what clears it, and A1 measured that happening in
+    // 103-195 ms. The join path can afford the half-second; a stalled image
+    // cannot.
     let lastError: unknown;
     for (let attempt = 1; attempt <= ROUTE_DIAL_ATTEMPTS; attempt++) {
       try {
@@ -720,7 +736,9 @@ export function startJoin(init: JoinInit): JoinHandle {
     const stillOpen =
       hubPeerIdObj != null && node.getConnections(hubPeerIdObj).some((c) => c.status === "open");
     if (stillOpen) return;
-    void preDialPeer(node, relayAddr, hubPeerId).catch(() => {
+    // ONE ATTEMPT, DELIBERATELY: this timer IS the retry. An inner retry here
+    // would multiply the two and turn a tick into a multi-second block.
+    void preDialPeer(node, relayAddr, hubPeerId, { attempts: 1 }).catch(() => {
       // Best-effort -- the next tick retries, and a heartbeat that keeps
       // failing on its own schedule surfaces the same underlying
       // unreachability independently.

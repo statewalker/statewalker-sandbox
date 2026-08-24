@@ -45,12 +45,13 @@ function fakeNode(failures: number, err: () => Error = timeoutError) {
 }
 
 describe("preDialPeer: the bound, and where it does not apply", () => {
-  it("is single-shot by default -- the keepalive has its own timer", async () => {
-    // `startJoin`'s keepalive calls this same function every tick and swallows
-    // the failure. An inner retry there would multiply the two, which is why
-    // the default has to stay 1 rather than becoming "whatever join wants".
+  it("attempts: 1 means one dial -- the shape the keepalive asks for", async () => {
+    // `startJoin`'s keepalive passes 1 EXPLICITLY, because its own timer is the
+    // retry and an inner retry would multiply the two. It used to rely on the
+    // default; there is no default any more (see `PreDialInit.attempts`), so
+    // the intent is now stated at that call site rather than inherited here.
     const { node, dialled } = fakeNode(1);
-    await expect(preDialPeer(node, RELAY, HUB)).rejects.toThrow(/timed out/);
+    await expect(preDialPeer(node, RELAY, HUB, { attempts: 1 })).rejects.toThrow(/timed out/);
     expect(dialled).toHaveLength(1);
   });
 

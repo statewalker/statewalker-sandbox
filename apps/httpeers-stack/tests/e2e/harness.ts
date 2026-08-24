@@ -77,7 +77,7 @@ import { multiaddr } from "@multiformats/multiaddr";
 import type { Libp2p, Mounts, PeerIdStr } from "@statewalker/httpeers.core";
 import { startRelay } from "@statewalker/httpeers-relay";
 import { createLibp2p } from "libp2p";
-import { preDialPeer, redeemInvitation } from "../../src/browser/join.js";
+import { PRE_DIAL_JOIN_ATTEMPTS, preDialPeer, redeemInvitation } from "../../src/browser/join.js";
 import { startHub } from "../../src/hub/main.js";
 import type { MeshView } from "../../src/hub/mesh-view.js";
 import { appRules } from "../../src/policy.js";
@@ -345,8 +345,11 @@ export async function startStack(init: StartStackInit = {}): Promise<Stack> {
       // call rides it. `"webrtc"` is `src/browser/join.ts`'s OWN
       // `preDialPeer`, unmodified, against the same address a page composes;
       // `"tcp"` is the direct same-host dial. See the module comment.
-      if (init.hubDial === "webrtc") await preDialPeer(node, relayAddr, hubPeerId);
-      else await node.dial(multiaddr(hubAddr));
+      // `PRE_DIAL_JOIN_ATTEMPTS`, because this stands in for what a JOINING
+      // page does -- `startBrowserPeer` passes the same value.
+      if (init.hubDial === "webrtc") {
+        await preDialPeer(node, relayAddr, hubPeerId, { attempts: PRE_DIAL_JOIN_ATTEMPTS });
+      } else await node.dial(multiaddr(hubAddr));
 
       const redemption = await redeemInvitation(peer, hubPeerId, stack.invite(init.roles));
 
