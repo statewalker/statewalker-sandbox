@@ -632,8 +632,12 @@ function parseFailure(error: unknown): TokenVerificationError {
  */
 function denial(error: unknown): TokenVerificationError {
   if (hasKey(error, "RunLimit")) {
+    // The three `RunLimit` variants are not one outcome -- see ADR-0021.
+    // `TooManyFacts`/`TooManyIterations` describe the rule set and reproduce
+    // on every retry; `Timeout` describes neither the rule set nor, reliably,
+    // the clock.
     return new TokenVerificationError(
-      "evaluation-budget",
+      error.RunLimit === "Timeout" ? "evaluation-timeout" : "evaluation-complexity",
       `evaluation budget exhausted (${String(error.RunLimit)})`,
     );
   }

@@ -326,6 +326,18 @@ export interface Decision {
   failed: string[];
   /** Human-readable, for a response BODY. Never a header. */
   reason: string;
+  /**
+   * Set when the evaluator did not reach a decision at all, as opposed to
+   * reaching a decision to refuse. `allowed` is `false` either way -- failing
+   * closed is not negotiable -- but the two are different events and a caller
+   * turning this into a status must not report them the same way: nothing
+   * about the request was refused here. See ADR-0021, and `withPolicy` below
+   * for the one place it changes an answer.
+   *
+   * A UNION OF ONE, so a second cause has somewhere to go and a `switch` over
+   * it stays honest.
+   */
+  undecided?: "timeout";
 }
 
 /**
@@ -400,11 +412,17 @@ function denial(
   build: (extraCapability?: string) => { authorizeWithLimits(limits: unknown): number },
 ): Decision {
   if (hasKey(error, "RunLimit")) {
-    // P9 / A-25: a pathological rule set denies instead of becoming a DoS.
+    // P9 / A-25: a pathological rule set denies instead of becoming a DoS --
+    // and that is `TooManyFacts`/`TooManyIterations`, which describe the rule
+    // set and reproduce on every retry. `Timeout` describes neither the rule
+    // set nor, reliably, the clock (ADR-0021: measured firing 2 ms into a
+    // 1000 ms budget), so it is marked undecided rather than reported as a
+    // refusal that never happened.
     return {
       allowed: false,
       failed: [],
       reason: `evaluation budget exhausted (${String(error.RunLimit)})`,
+      ...(error.RunLimit === "Timeout" ? { undecided: "timeout" as const } : {}),
     };
   }
 
@@ -526,6 +544,11 @@ export function withPolicy(init: PolicyInit) {
         // "required" and does not try to say why: `lookupClaims` reports
         // usable claims, and a policy has no business distinguishing the two
         // unusable states.
+        // BEFORE the token check, because this is not a statement about the
+        // token: a caller with no token at all still did not get refused, it
+        // got no answer. Answering 401 here would send them to the hub for a
+        // credential that was never the problem. See ADR-0021.
+        if (decision.undecided != null) return json({ error: decision.reason }, 503);
         if (claims == null) return json({ error: "membership token required" }, 401);
         return json({ error: decision.reason }, 403);
       }

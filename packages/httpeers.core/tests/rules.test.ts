@@ -37,13 +37,13 @@ import {
   capabilityNames,
   DEFAULT_RULES,
   deriveCapabilities,
-  roleNames,
   RuleSetError,
+  roleNames,
   ruleSet,
   validateRoles,
   withPolicy,
 } from "../src/rules.js";
-import { mintToken, TokenVerificationError, verifyToken } from "../src/tokens.js";
+import { LIMITS, mintToken, TokenVerificationError, verifyToken } from "../src/tokens.js";
 import type { MeshClaims } from "../src/types.js";
 
 const claims = (...roles: string[]): MeshClaims => ({
@@ -258,9 +258,9 @@ describe("fail fast, not closed", () => {
     // The verifier therefore supplies `time_ms` and never `time`, so a rule
     // ported verbatim is refused BY NAME at construction rather than silently
     // comparing two different notions of time.
-    expect(() =>
-      ruleSet({ policies: ['allow if time($t), $t < 2026-08-22T00:00:00Z;'] }),
-    ).toThrow(/names predicate 'time', which nothing asserts/);
+    expect(() => ruleSet({ policies: ["allow if time($t), $t < 2026-08-22T00:00:00Z;"] })).toThrow(
+      /names predicate 'time', which nothing asserts/,
+    );
     expect(() => ruleSet({ policies: ["allow if time_ms($t), $t < 100;"] })).not.toThrow();
   });
 
@@ -319,7 +319,10 @@ describe("fail fast, not closed", () => {
 
 describe("explainable decisions (A-06)", () => {
   const rules = ruleSet({
-    rules: ['capability("std:mesh.admin") <- role("admin");', 'capability("std:test") <- role("member");'],
+    rules: [
+      'capability("std:mesh.admin") <- role("admin");',
+      'capability("std:test") <- role("member");',
+    ],
     policies: [
       'allow if capability("std:mesh.admin"), resource($r), $r.starts_with("/admin/");',
       'allow if capability("std:test"), resource($r), $r.starts_with("/test/");',
@@ -376,6 +379,12 @@ describe("the evaluation budget", () => {
     const d = decide(rules, "/x", member);
     expect(d.allowed).toBe(false);
     expect(d.reason).toMatch(/evaluation budget exhausted/);
+    // A REFUSAL, NOT AN ABSENCE OF ONE. This rule set is pathological, the
+    // limit that catches it describes the rule set, and it reproduces on
+    // every retry -- so the decision stands and `undecided` stays unset.
+    // ADR-0021 is about the OTHER variant.
+    expect(d.reason).toMatch(/TooManyFacts|TooManyIterations/);
+    expect(d.undecided).toBeUndefined();
   });
 });
 
@@ -494,7 +503,13 @@ describe("end to end, through a real token", () => {
   };
 
   it("an appended block cannot grant a role, so it cannot reach a policy either (A-23)", async () => {
-    const token = await mintToken({ privateKey: hubKey, sub: MEMBER, roles: [], ttlMs: 60_000, now });
+    const token = await mintToken({
+      privateKey: hubKey,
+      sub: MEMBER,
+      roles: [],
+      ttlMs: 60_000,
+      now,
+    });
     const forged = appendBlock(token, 'role("admin");');
 
     const verified = await verifyToken(forged, {
@@ -543,7 +558,11 @@ describe("end to end, through a real token", () => {
     const lying = appendBlock(token, 'resource("/admin/x"); operation("GET");');
 
     const verified = await verifyToken(lying, { issuer: hubPeerId, connectionPeer: MEMBER, now });
-    const d = authorize(rules, { operation: "GET", resource: "/nothing/here", now: now() }, verified);
+    const d = authorize(
+      rules,
+      { operation: "GET", resource: "/nothing/here", now: now() },
+      verified,
+    );
 
     expect(d.allowed).toBe(false);
     expect(d.reason).toBe("no policy allows GET /nothing/here");
@@ -568,8 +587,8 @@ describe("end to end, through a real token", () => {
 
     // ... and with no claims, the policy layer denies, and says which kind of
     // failure it was: no usable token, not an insufficient one.
-    const handler = withPolicy({ rules, usesTransportIdentity: async () => false })(async () =>
-      new Response("ok"),
+    const handler = withPolicy({ rules, usesTransportIdentity: async () => false })(
+      async () => new Response("ok"),
     );
     const res = await handler(new Request("http://peer/admin/x"));
     expect(res.status).toBe(401);
@@ -604,4 +623,81 @@ describe("equivalence with DEFAULT_ACCESS_TREE + DEFAULT_VOCABULARY", () => {
       expect(decide(DEFAULT_RULES, path, who).allowed).toBe(expected);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// ADR-0021 — a reported Timeout is not a denial
+// ---------------------------------------------------------------------------
+
+describe("ADR-0021: an evaluation that did not finish is not a refusal", () => {
+  /**
+   * Provokes a REAL `RunLimit: Timeout` from the real wasm by lowering the
+   * budget below the cost of a trivial evaluation -- measured: denials are
+   * total at 10 µs and absent at 100 µs. No mock, no stub: the same throw the
+   * browser produces at 1 000 000 µs for reasons of its own (ADR-0021), which
+   * is the failure this behaviour exists for and the one nobody can provoke
+   * on demand.
+   */
+  async function underATinyTimeBudget<T>(run: () => T | Promise<T>): Promise<T> {
+    const original = LIMITS.max_time_micro;
+    (LIMITS as { max_time_micro: number }).max_time_micro = 1;
+    try {
+      // AWAITED INSIDE THE `try`, which is the whole point: returning the
+      // promise instead would restore the budget before the evaluation this
+      // narrows it for ever runs, and every assertion below would pass or
+      // fail for the wrong reason.
+      return await run();
+    } finally {
+      (LIMITS as { max_time_micro: number }).max_time_micro = original;
+    }
+  }
+
+  const trivial = ruleSet({
+    rules: ['capability("std:mesh.read") <- role("member");'],
+    policies: ['allow if capability("std:mesh.read");'],
+  });
+
+  it("marks the decision undecided rather than reporting a refusal", async () => {
+    const d = await underATinyTimeBudget(() => decide(trivial, "/x", member));
+    // Still closed -- failing closed is not what ADR-0021 renegotiates.
+    expect(d.allowed).toBe(false);
+    expect(d.reason).toMatch(/\(Timeout\)/);
+    // ...but the reason it is closed is that nothing was decided.
+    expect(d.undecided).toBe("timeout");
+  });
+
+  it("withPolicy answers 503, not 403 -- nothing about the request was refused", async () => {
+    const handler = withPolicy({ rules: trivial, usesTransportIdentity: async () => false })(
+      async () => new Response("ok"),
+    );
+    const req = new Request("http://peer/x");
+    cacheClaims(req, { status: "verified", claims: member });
+    const res = await underATinyTimeBudget(() => handler(req));
+    expect(res.status).toBe(503);
+    // The variant stays visible to whoever reads the body.
+    expect(await res.json()).toEqual({ error: expect.stringContaining("(Timeout)") });
+  });
+
+  it("503 wins over the missing-token 401, because the token was never the problem", async () => {
+    // A caller with NO token still was not refused -- it got no answer. A 401
+    // here would send them to the hub for a credential that was never at
+    // fault, which is the same mistake the 403 made in a different place.
+    const handler = withPolicy({ rules: trivial, usesTransportIdentity: async () => false })(
+      async () => new Response("ok"),
+    );
+    const res = await underATinyTimeBudget(() => handler(new Request("http://peer/x")));
+    expect(res.status).toBe(503);
+  });
+
+  it("an ordinary refusal is untouched -- still 403", async () => {
+    // The control. Same middleware, same rules, a request no policy allows:
+    // that IS a decision, and it keeps saying so.
+    const handler = withPolicy({ rules: trivial, usesTransportIdentity: async () => false })(
+      async () => new Response("ok"),
+    );
+    const req = new Request("http://peer/nope");
+    cacheClaims(req, { status: "verified", claims: claims("nobody") });
+    const res = await handler(req);
+    expect(res.status).toBe(403);
+  });
 });

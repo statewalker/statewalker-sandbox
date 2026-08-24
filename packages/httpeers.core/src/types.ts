@@ -240,7 +240,19 @@ export type TokenRejectionReason =
   | "audience"
   | "expired"
   | "unsatisfied-constraint"
-  | "evaluation-budget"
+  /**
+   * The rule set is too big to evaluate: `TooManyFacts` / `TooManyIterations`.
+   * A property of the token, reproduced exactly on every retry -- which is the
+   * pathological case ADR-0019's ceiling exists for.
+   */
+  | "evaluation-complexity"
+  /**
+   * The evaluator reported `Timeout`. NOT a property of the token, and -- see
+   * ADR-0021 -- not reliable evidence that any time elapsed: it has been
+   * observed firing 2 ms into a 1000 ms budget. Nothing about the request was
+   * refused; no decision was reached.
+   */
+  | "evaluation-timeout"
   | "malformed-claims";
 
 /**

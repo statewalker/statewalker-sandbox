@@ -25,7 +25,7 @@
  * `REFUSAL_STATUS` below. The reason itself is not decided here; it is
  * `verifyToken`'s, carried through unaltered.
  */
-import { ANONYMOUS, json } from "./types.js";
+
 import type {
   FetchHandler,
   GetClaims,
@@ -35,6 +35,7 @@ import type {
   TokenRejectionReason,
   UsesTransportIdentity,
 } from "./types.js";
+import { ANONYMOUS, json } from "./types.js";
 
 /**
  * WHAT SHOULD THE CLIENT DO NEXT — the only question this table answers.
@@ -49,6 +50,11 @@ import type {
  *         refresh reproduces exactly: it names another mesh, another peer,
  *         another audience, or it carries a check this verifier cannot
  *         satisfy. A client that retries here loops forever.
+ *   503 — "nothing about your request was refused." No decision was reached
+ *         at all, so answering 401 or 403 would report an outcome that did
+ *         not happen. The one row here, `evaluation-timeout`, is the only
+ *         entry that describes THIS VERIFIER rather than the presented token.
+ *         See ADR-0021.
  *
  * The audience row is the one this table was written for. Before it, ADR-0020
  * refusals answered 401, so a client scoped to peer A and calling peer B
@@ -79,6 +85,23 @@ import type {
  * retry. The reason still travels in the body, so the distinction stays legible
  * to anyone reading the refusal.
  *
+ * `evaluation-complexity` AND `evaluation-timeout` WERE ONE ROW, AND SPLITTING
+ * THEM IS THIS TABLE'S OWN QUESTION ANSWERED HONESTLY (ADR-0021). Biscuit
+ * reports three `RunLimit` variants and they do not answer "would retrying
+ * help?" the same way. `TooManyFacts`/`TooManyIterations` are properties of
+ * the rule set: deterministic, reproduced exactly on retry, and the
+ * pathological case ADR-0019's ceiling was argued for — 403, unchanged.
+ * `Timeout` is a property of neither the token nor, reliably, the clock: it
+ * was measured firing 2 ms into a 1000 ms budget, in a browser, on an
+ * ordinary member's ordinary request. Nothing was refused; the evaluator
+ * simply did not finish.
+ *
+ * NOT 401, EVEN THOUGH THE `peer-binding` REASONING POINTS THAT WAY. "A false
+ * stop is worse than a harmless retry" would demote it — but 401 asserts the
+ * credential is missing or stale and sends the client to the hub for a new
+ * one. The credential is perfect, so that is a false statement AND a remedy
+ * that cannot work. The row belongs outside the credential question entirely.
+ *
  * `unparseable-issuer` / `issuer-not-ed25519` describe THIS peer's own
  * configured `hubPeerId`, not the presented token: they fire before any token
  * is examined, and they fire for every request. 403 is right for the reason
@@ -89,7 +112,7 @@ import type {
  * branch: a reason added to the union without a decision here is a compile
  * error rather than a silent fall-through to whichever status looked safe.
  */
-const REFUSAL_STATUS: Record<TokenRejectionReason, 401 | 403> = {
+const REFUSAL_STATUS: Record<TokenRejectionReason, 401 | 403 | 503> = {
   expired: 401,
   "malformed-token": 401,
   "peer-binding": 401,
@@ -97,7 +120,8 @@ const REFUSAL_STATUS: Record<TokenRejectionReason, 401 | 403> = {
   "mesh-mismatch": 403,
   audience: 403,
   "unsatisfied-constraint": 403,
-  "evaluation-budget": 403,
+  "evaluation-complexity": 403,
+  "evaluation-timeout": 503,
   "malformed-claims": 403,
   "unparseable-issuer": 403,
   "issuer-not-ed25519": 403,
@@ -185,7 +209,8 @@ export function newPeerHandlers(init: PeerHandlersInit): FetchHandler {
     // peer: a supplier that is not enforcing the binding at all. That is a
     // deployment bug, not a stale credential, and no token this client can
     // fetch changes it — so "stop" is the honest answer.
-    if (claims.sub !== peer) return json({ error: "token subject does not match connected peer" }, 403);
+    if (claims.sub !== peer)
+      return json({ error: "token subject does not match connected peer" }, 403);
 
     const revoked = await isRevoked(claims);
     if (revoked != null) return json({ error: revoked }, 403);

@@ -20,6 +20,12 @@
  *    debuggable by someone who did not write the policy. It is rendered
  *    unaltered -- summarising it would throw away the only thing that makes
  *    a denial explicable.
+ *
+ *    A 503 IS DELIBERATELY NOT ONE OF THESE. Since ADR-0021 the provider
+ *    answers 503 when its evaluator did not finish -- nothing was refused, so
+ *    calling it `denied` would repeat the very misstatement that ADR exists to
+ *    end. It falls through to `failed` below, which is what it is, and the
+ *    provider's own words still reach the screen.
  *  - `unreachable`: the provider never answered at all. This is the row
  *    `edge-dispatch.ts` synthesises from a thrown `PeerCallError`, and
  *    `kind` says which of T-2's conditions it was.

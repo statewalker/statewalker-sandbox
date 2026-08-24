@@ -79,6 +79,30 @@ function subject(opts: SubjectOpts) {
 const req = (method = "GET") => new Request("http://peer/test/whoami", { method });
 
 describe("newPeerHandlers", () => {
+  // ADR-0021: the two halves of what used to be `evaluation-budget` answer
+  // this table's own question differently, so they get different statuses.
+  it("answers 503 for an evaluation that did not finish -- nothing was refused", async () => {
+    const s = subject({
+      peer: ALICE,
+      found: refused("evaluation-timeout", "evaluation budget exhausted (Timeout)"),
+    });
+    const res = await s.handler(req());
+    expect(res.status).toBe(503);
+    expect(s.reached()).toBe(false);
+    // The reason still travels in the body, variant included.
+    expect(await res.json()).toMatchObject({ reason: "evaluation-timeout" });
+  });
+
+  it("keeps 403 for a rule set that is genuinely too big -- that IS a decision", async () => {
+    // The control, and the DoS property ADR-0019 argued for: this one
+    // reproduces on every retry, so the client is told to stop.
+    const s = subject({
+      peer: ALICE,
+      found: refused("evaluation-complexity", "evaluation budget exhausted (TooManyFacts)"),
+    });
+    expect((await s.handler(req())).status).toBe(403);
+  });
+
   it("admits a matching peer and token", async () => {
     const s = subject({ peer: ALICE, found: verified(claimsFor(ALICE)) });
     expect((await s.handler(req())).status).toBe(200);

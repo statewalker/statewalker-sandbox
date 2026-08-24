@@ -29,7 +29,7 @@ import { peerIdFromPrivateKey } from "@libp2p/peer-id";
 import { base58btc } from "multiformats/bases/base58";
 import { sha256 } from "multiformats/hashes/sha2";
 import { beforeAll, describe, expect, it } from "vitest";
-import { mintToken, TokenVerificationError, verifyToken } from "../src/tokens.js";
+import { LIMITS, mintToken, TokenVerificationError, verifyToken } from "../src/tokens.js";
 import { ANONYMOUS } from "../src/types.js";
 
 const MEMBER = "12D3KooWMemberPeerIdForTests";
@@ -662,10 +662,45 @@ describe("tokens", () => {
     const started = Date.now();
     await expect(
       verifyToken(hostile, { issuer: hubPeerId, connectionPeer: MEMBER, now }),
-    ).rejects.toMatchObject({ reason: "evaluation-budget" });
+      // COMPLEXITY, not timeout: an exploding rule set is a property of the
+      // token and reproduces on every retry, which is why it keeps the 403
+      // that tells such a caller to stop (ADR-0021).
+    ).rejects.toMatchObject({ reason: "evaluation-complexity" });
     // Not a benchmark — the claim is only that it terminates on the budget
     // rather than running until something else gives up.
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("a reported Timeout is a DIFFERENT reason from a rule set that is too big (ADR-0021)", async () => {
+    // Provoked by narrowing the time budget below the cost of an ordinary
+    // verification -- the real wasm, the real throw. In the browser this same
+    // throw arrives at the shipped 1 000 000 µs budget after about 2 ms, for
+    // reasons of the wasm's own; that is what ADR-0021 records and what this
+    // reason exists to stop reporting as a refusal.
+    const now = () => 1_000_000;
+    const token = await mintToken({
+      privateKey: hubKey,
+      sub: MEMBER,
+      roles: ["member"],
+      ttlMs: 60_000,
+      now,
+    });
+
+    const original = LIMITS.max_time_micro;
+    (LIMITS as { max_time_micro: number }).max_time_micro = 1;
+    try {
+      await expect(
+        verifyToken(token, { issuer: hubPeerId, connectionPeer: MEMBER, now }),
+      ).rejects.toMatchObject({ reason: "evaluation-timeout" });
+    } finally {
+      (LIMITS as { max_time_micro: number }).max_time_micro = original;
+    }
+
+    // And the same token verifies perfectly once the budget is back -- which
+    // is the property that makes "denied" the wrong word for it.
+    await expect(
+      verifyToken(token, { issuer: hubPeerId, connectionPeer: MEMBER, now }),
+    ).resolves.toMatchObject({ sub: MEMBER });
   });
 
   // -------------------------------------------------------------------------
