@@ -79,6 +79,12 @@ pnpm bootstrap
 pnpm start
 ```
 
+`pnpm howto` prints this walkthrough in the terminal — testing, launching, and
+driving the pages in a browser. **It is not `pnpm help`**: like `setup` below,
+`help` is a pnpm built-in and wins over a package script of the same name, so
+a `"help"` entry would be unreachable and `pnpm help` would print pnpm's own
+usage instead. `howto` is not a pnpm command, so it reaches `scripts/help.sh`.
+
 `pnpm bootstrap` (`src/setup/main.ts`) turns a fresh checkout into a runnable
 stack: it generates (or, on a later run, reads back) this deployment's
 persistent Ed25519 identity keys at `.httpeers/{relay,hub}.key` and its

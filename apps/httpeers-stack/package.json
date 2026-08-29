@@ -10,6 +10,7 @@
     "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
   },
   "scripts": {
+    "howto": "bash scripts/help.sh",
     "test": "pnpm run typecheck:tests && vitest run --no-file-parallelism",
     "typecheck": "tsc --noEmit",
     "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit",
