@@ -15,9 +15,9 @@
     "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
   },
   "scripts": {
-    "build": "turbo run build",
-    "test": "turbo run test",
-    "typecheck": "turbo run typecheck",
+    "build": "pnpm -r run build",
+    "test": "pnpm -r run test",
+    "typecheck": "pnpm -r run typecheck",
     "lint": "biome check --write .",
     "lint:check": "biome check .",
     "format": "biome format --write .",

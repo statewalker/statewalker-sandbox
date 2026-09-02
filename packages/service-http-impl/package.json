@@ -37,8 +37,8 @@
     "@statewalker/service-rpc": "workspace:*",
     "hono": "catalog:",
     "ws": "catalog:",
-    "@statewalker/shared-adapters": "workspace:*",
-    "@statewalker/shared-logger": "workspace:*"
+    "@statewalker/shared-adapters": "catalog:",
+    "@statewalker/shared-logger": "catalog:"
   },
   "devDependencies": {
     "@types/ws": "catalog:",
@@ -48,6 +48,6 @@
     "typescript": "catalog:",
     "vitest": "catalog:",
     "tsx": "catalog:",
-    "@statewalker/shared-registry": "workspace:*"
+    "@statewalker/shared-registry": "catalog:"
   }
 }

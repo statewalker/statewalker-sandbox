@@ -40,9 +40,9 @@
     "@libp2p/websockets": "10.1.19",
     "@multiformats/multiaddr": "13.0.3",
     "@statewalker/httpeers.core": "workspace:*",
-    "@statewalker/webrun-files": "workspace:*",
-    "@statewalker/webrun-files-mem": "workspace:*",
-    "@statewalker/webrun-http-browser": "workspace:*",
+    "@statewalker/webrun-files": "catalog:",
+    "@statewalker/webrun-files-mem": "catalog:",
+    "@statewalker/webrun-http-browser": "catalog:",
     "hono": "catalog:",
     "idb-keyval": "catalog:",
     "libp2p": "3.3.8"

@@ -12,15 +12,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@statewalker/webrun-files": "workspace:*",
-    "@statewalker/webrun-files-node": "workspace:*",
-    "@statewalker/webrun-modules": "workspace:*",
-    "@statewalker/webrun-modules-build": "workspace:*",
+    "@statewalker/webrun-files": "catalog:",
+    "@statewalker/webrun-files-node": "catalog:",
+    "@statewalker/webrun-modules": "catalog:",
+    "@statewalker/webrun-modules-build": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:"
   },
   "devDependencies": {
-    "@statewalker/webrun-files-mem": "workspace:*",
+    "@statewalker/webrun-files-mem": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "tsx": "catalog:",
