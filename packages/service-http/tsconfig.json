@@ -1,6 +1,10 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
+    // `process` is used in src/http-service-config.ts. Under TypeScript 6 with
+    // @types/node 25+, node globals are no longer picked up by automatic @types
+    // discovery here, so the dependency has to be named explicitly.
+    "types": ["node"],
     "target": "ES2022",
     "module": "Preserve",
     "moduleResolution": "Bundler",

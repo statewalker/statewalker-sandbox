@@ -2,7 +2,7 @@
  * The suite's own integrity. Two ways a conformance suite rots quietly:
  * a criterion loses its check, or the spec moves and the registry does not.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -11,7 +11,20 @@ import { CRITERIA } from "../src/criteria.js";
 import { parseCriteria, render } from "../scripts/sync-criteria.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SPEC = resolve(join(here, "../../../../../docs/superpowers/specs/2026-08-20-httpeers-api-design.md"));
+
+/**
+ * The specification lives in the umbrella repository, not in this one — five levels up from
+ * here, which resolves only when this repo is checked out inside an umbrella assembly. That
+ * is a real path when assembled and no path at all when this repo is built standalone, so
+ * the drift check below is skipped rather than failed when the spec cannot be reached: a
+ * repository must not fail its own test suite because a *different* repository is absent.
+ *
+ * Set HTTPEERS_SPEC to check drift against a spec kept somewhere else.
+ */
+const SPEC = process.env.HTTPEERS_SPEC
+  ? resolve(process.env.HTTPEERS_SPEC)
+  : resolve(join(here, "../../../../../docs/superpowers/specs/2026-08-20-httpeers-api-design.md"));
+const SPEC_REACHABLE = existsSync(SPEC);
 
 describe("conformance suite integrity", () => {
   it("every criterion has a check or an explicit skip reason", () => {
@@ -32,7 +45,7 @@ describe("conformance suite integrity", () => {
     expect(mute).toEqual([]);
   });
 
-  it("the registry matches the specification (no drift)", () => {
+  it.skipIf(!SPEC_REACHABLE)("the registry matches the specification (no drift)", () => {
     const regenerated = render(parseCriteria(readFileSync(SPEC, "utf8")), SPEC);
     const current = readFileSync(join(here, "../src/criteria.ts"), "utf8");
     expect(

@@ -2,6 +2,14 @@ packages:
   - "packages/*"
   - "apps/*"
 
+
+# Dependency build scripts are blocked by default in pnpm 10; only the ones listed here run.
+# node-datachannel is the Node-side WebRTC backend behind @libp2p/webrtc: without its
+# `install` script (prebuild-install) there is no build/Release/node_datachannel.node, and
+# every test that starts a Node libp2p peer dies at import.
+onlyBuiltDependencies:
+  - node-datachannel
+
 catalog:
   "@statewalker/ai-openai-compat.core": ^0.1.1
   "@statewalker/webrun-modules-build": ^0.1.2
