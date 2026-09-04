@@ -2,17 +2,39 @@
 
 `pnpm test Z-static-schema`
 
+## Goal
+
 **Question**: can JSON Schema be derived statically from a Zod expression,
 without executing the module?
 
 **Answer: yes, for the subset the shell actually uses.**
 
-This was the top-ranked open thread of [rung 04](../04-manifest-generation).
-That rung derives command keys, policies and UX metadata from source but not
-`inputJsonSchema`, and projection to OpenAPI and MCP tools depends on the schema.
-A negative answer would have meant projection stays a runtime concern and the
-build-time manifest story weakens. A positive one means the manifest *can* carry
-`inputJsonSchema`, so projection can be fully build-time.
+### Why this mattered in the ladder
+
+This was the **top-ranked open thread of [rung 04](../04-manifest-generation)**,
+and the reason is structural rather than cosmetic.
+
+Rung 04 established that a manifest can be derived from source without running
+it — which is what lets the shell render a peer's contributions before, and
+without, importing that peer's code. But the manifest it produces carries keys,
+policies and UX metadata and **not** `inputJsonSchema`. A command's schema is
+what a tool projection (OpenAPI, MCP) needs to describe the command to an agent,
+and what a form generator needs to render it.
+
+So the question was whether rung 04's guarantee extends all the way, or stops one
+field short. A "no" would have meant:
+
+- **The manifest could not fully drive projection.** Half of it would be a build
+  artifact and half of it a runtime one, and the runtime half is exactly the half
+  that requires importing a peer's module — reintroducing the execution rung 04
+  was built to avoid, one field at a time.
+- **Projection would stay a runtime concern**, so the shell could not publish a
+  peer application's tool surface without first activating that application.
+- **Rung 04's answer would have been narrower than it looked.** "The manifest is
+  derivable" would have quietly meant "the parts of it that are string literals".
+
+A "yes" closes rung 04's largest open thread: the manifest *can* carry
+`inputJsonSchema`, and projection can be fully build-time.
 
 `deriveJsonSchema(expression)` takes the **text** of a Zod expression, parses it
 with the TypeScript compiler API, and returns a JSON Schema — or throws
@@ -77,44 +99,7 @@ Where the note is silent, this is the reconstruction's judgement, not history:
 
 ---
 
-## Method: the runtime derivation is the oracle
-
-Each derivation test writes its schema **once, as a string**. That one string is
-both what the static deriver parses and what the oracle evaluates:
-
-```ts
-async function agree(source: string) {
-  const runtime = await runtimeSchema(source);   // evaluated, via shared-commands
-  expect(deriveJsonSchema(source)).toEqual(runtime);  // parsed, never evaluated
-  return runtime;
-}
-```
-
-There is no hand-written expectation to drift, and no way for a test to agree
-with the deriver by copying it.
-
-The oracle is the only evaluation in the rung, and it is on the *oracle* side by
-construction — the deriver's input is text and its only tool is
-`ts.createSourceFile`. The strongest evidence of that is test 13: deriving
-`z.object({ input: NotesInput })` throws `UnresolvableSchemaError`, not
-`ReferenceError`. `NotesInput` does not exist. Evaluation was never attempted.
-
-### The method paid for itself, again
-
-The note records three tests failing on first run against the oracle. This
-reconstruction was written against the oracle from the start, and it still turned
-up two facts no note states:
-
-- `z.int()` emits a **negative safe-integer minimum** too (`-9007199254740991`).
-  Note 39 names only the maximum.
-- An explicit `.min()`/`.max()` on an integer **replaces** the safe-integer bound
-  rather than narrowing alongside it — `z.int().min(0).max(10)` yields exactly
-  `{minimum: 0, maximum: 10}`.
-
-Both are pinned by test. Both are the same shape of quirk the note warns about:
-unguessable from the method name.
-
-## What each test establishes
+## Findings
 
 ### Derivation — twelve tests, each checked against the oracle
 
@@ -147,18 +132,186 @@ unguessable from the method name.
 | 20 | The error names the offending source | `error.source` contains `z.enum(KINDS)`; the message carries the reason | An error a build log cannot locate |
 | 21 | Nothing is emitted when any part fails | `z.object({good: z.string(), bad: z.instanceof(Blob)})` throws rather than returning `{good}` | A partial schema, which is a *wrong* schema wearing a plausible shape |
 
-The suite passed on its first run. Note 39's own method finding says to treat
-that as suspicious rather than reassuring, so it was mutation-tested: emitting
-`required: []`, dropping the negative safe-integer bound, flipping
-`additionalProperties` to `true`, ignoring an object spread, and ignoring
-`.optional()` each fail 1, 4, 12, 1 and 3 tests respectively. No mutation
-survived.
+### Two facts found that no note states
 
-## What this constrains
+Both surfaced from the oracle, not from reading, and both are pinned by test:
 
-Applications must write command schemas as **literal `z.*` expressions with
-literal enum members** — the same shape of constraint rung 04 imposes on command
-keys, and now enforced rather than assumed.
+- `z.int()` emits a **negative safe-integer minimum** too (`-9007199254740991`).
+  Note 39 names only the maximum.
+- An explicit `.min()`/`.max()` on an integer **replaces** the safe-integer bound
+  rather than narrowing alongside it — `z.int().min(0).max(10)` yields exactly
+  `{minimum: 0, maximum: 10}`.
+
+## Techniques and APIs
+
+### Method: the runtime derivation is the oracle
+
+This is the note's method, kept verbatim, and it is the technique this rung
+exists to demonstrate. Each derivation test writes its schema **once, as a
+string**. That one string is both what the static deriver parses and what the
+oracle evaluates:
+
+```ts
+async function agree(source: string) {
+  const runtime = await runtimeSchema(source);        // evaluated, via shared-commands
+  expect(deriveJsonSchema(source)).toEqual(runtime);  // parsed, never evaluated
+  return runtime;
+}
+```
+
+There is no hand-written expectation to drift, and no way for a test to agree
+with the deriver by copying it. As the note puts it: "There is no point inventing
+an independent expectation; agreement with the runtime path *is* the
+requirement."
+
+The oracle is the only evaluation in the rung, and it is on the *oracle* side by
+construction — the deriver's input is text and its only tool is
+`ts.createSourceFile`. The strongest evidence of that is test 13: deriving
+`z.object({ input: NotesInput })` throws `UnresolvableSchemaError`, not
+`ReferenceError`. `NotesInput` does not exist. Evaluation was never attempted.
+
+### Why the oracle goes through `CommandDeclaration`, not `z.toJSONSchema`
+
+```ts
+const declaration = Command.async(`oracle:${n}`).input(schema).output(z.object({})).build();
+const runtime = await declaration.inputJsonSchema;   // Promise<Record<string, unknown>>
+```
+
+`z.toJSONSchema(schema)` would be shorter and, for every case in this suite,
+returns the same thing. It is still the wrong oracle. `shared-commands@0.2.1`
+derives `inputJsonSchema` through **`@standard-community/standard-json`**, which
+loads schema-vendor adapters by dynamic import — hence the `Promise`. That bridge
+is the shell's **actual** derivation route, and it is a layer that can diverge
+from Zod's own converter without anyone noticing.
+
+Comparing against the route the shell really uses means a future bump of
+`shared-commands`, of the bridge, or of Zod shows up here as a failing test rather
+than as a wrong tool description handed to an agent. Comparing against
+`z.toJSONSchema` would test a path the shell does not take.
+
+### The static side
+
+The parser is the same one rung 04 uses, and for the same reason — see that
+rung's README for the compiler-API surface. What differs here:
+
+- **The whole expression is wrapped, not visited.** `deriveJsonSchema` parses
+  `` `const __schema = (${expression});` `` and takes
+  `statements[0].declarationList.declarations[0].initializer`, then unwraps any
+  `ts.isParenthesizedExpression`. There is no `forEachChild` walk: recursion
+  follows the *schema* structure (object properties, array items), not the AST
+  generally.
+- **Chains are walked root-first.** `chainOf` collects links outermost-first then
+  reverses, so `z.string().min(2).optional()` becomes base `string` followed by
+  modifiers `min`, `optional`. The base constructor decides the JSON type;
+  modifiers refine it.
+- **`.min()`/`.max()` are polymorphic on the derived type so far** — `minLength`
+  on a string, `minimum` on a number or integer, `minItems` on an array, and an
+  `unsupported-type` error on anything else.
+
+### Public surface
+
+```ts
+function deriveJsonSchema(expression: string): JsonSchema;   // throws UnresolvableSchemaError
+type JsonSchema = Record<string, unknown>;
+
+class UnresolvableSchemaError extends Error {
+  readonly reason: UnresolvableReason;
+  readonly source: string;   // the offending source text, for a build log
+}
+
+type UnresolvableReason =
+  | "imported-symbol"    // z.object({ input: NotesInput }), NotesInput.extend({...}), { title }
+  | "computed-enum"      // z.enum(KINDS)
+  | "refinement"         // .refine() / .superRefine() — carries a predicate
+  | "executable"         // .transform() / .pipe() — carries code
+  | "non-serialisable"   // z.instanceof(Blob), z.file()
+  | "object-spread"      // z.object({ ...base, x })
+  | "unsupported-type";  // z.union, z.literal, z.record, .nullable(), z.date(), .default()
+```
+
+The first six are the note's categories verbatim; `unsupported-type` is this
+reconstruction's addition, covering the note's open-thread types.
+
+### The derivable subset
+
+| Construct | Emits |
+|---|---|
+| `z.object({...})` | `{type:"object", properties, required?, additionalProperties:false}` — `required` omitted when empty |
+| `z.string()` | `{type:"string"}` |
+| `z.number()` | `{type:"number"}` |
+| `z.int()`, `z.number().int()` | `{type:"integer", minimum:-2^53+1, maximum:2^53-1}` |
+| `z.boolean()` | `{type:"boolean"}` |
+| `z.array(inner)` | `{type:"array", items: <derived inner>}` |
+| `z.enum(["a","b"])` — literal members only | `{type:"string", enum:["a","b"]}` |
+| `.optional()` | the property is left out of `required` |
+| `.describe("…")` — string literal only | `description` |
+| `.min(n)` / `.max(n)` — numeric literal only | `minLength`/`maxLength`, `minimum`/`maximum`, or `minItems`/`maxItems` |
+
+Everything else throws. **The constraint this imposes on application authors**:
+command schemas must be written as **literal `z.*` expressions with literal enum
+members** — the same shape of constraint rung 04 imposes on command keys, and now
+enforced rather than assumed.
+
+### Mutation testing
+
+The suite passed on its first run, which is a reason for suspicion rather than
+confidence (see Lessons). It was therefore mutation-tested by editing the deriver
+and re-running:
+
+| Mutant | Tests killed |
+|---|---|
+| Always emit `required: []` instead of omitting it when empty | 1 |
+| Change the safe-integer minimum from `-2^53+1` to `0` | 4 |
+| Emit `additionalProperties: true` | 12 |
+| Silently skip an object spread instead of reporting it | 1 |
+| Make `.optional()` mark nothing | 3 |
+
+No mutant survived. The `additionalProperties` mutant killing 12 is the useful
+signal: it confirms the `agree()` oracle comparison is live in every derivation
+test rather than short-circuiting somewhere. The two mutants that kill only one
+test each mark the thinnest coverage in the suite.
+
+## Lessons learned
+
+- **The `typescript@5.9.3` pin is load-bearing here too.** TypeScript 7 — the Go
+  native port — ships no compiler API: its main export is version constants, and
+  `typescript/unstable/ast` has type guards and enums with no `createSourceFile`
+  and no `forEachChild`. This rung and [rung 04](../04-manifest-generation) both
+  break on an upgrade. Anyone bumping `typescript` in this app must read both.
+- **Report, never guess, is stronger here than at rung 04.** A wrong command key
+  fails loudly at dispatch. A wrong *schema* fails quietly and far away: an agent
+  builds arguments that satisfy the published tool interface, and validation
+  rejects them at the command bus, a long way from the cause. Hence: any
+  underivable member fails the whole derivation. There is no partial output.
+- **Zod 4 emits things you would not guess from the method name.** `.int()` adds a
+  safe-integer range — and note 39 records only the maximum; the minimum
+  (`-9007199254740991`) is real and is not written down anywhere. An explicit
+  `.min()`/`.max()` *replaces* that bound rather than narrowing alongside it,
+  which is also unrecorded. `required` is omitted rather than emitted empty. Each
+  of these is a fact about the vendor, not about JSON Schema, and none is
+  derivable by reasoning — which is the entire argument for the oracle method.
+- **Note 29's own record does not add up, so one divergence cannot be confirmed
+  reproduced.** Its prose says "**Three tests failed on first run**, all genuine
+  divergences"; the table immediately beneath it lists **two**. The two are `.int()`'s
+  safe-integer bound and the omitted `required`, both reproduced here. The third
+  is unrecorded and this reconstruction cannot claim to have hit it. If it was a
+  third vendor quirk, it is still out there.
+- **A suite that passes on its first run deserves suspicion, not relief.** Note 39
+  lists this as a method finding of the original session, alongside the note that
+  mutation testing found a weak test at three of the four rungs where it was
+  applied — every time an assertion that was true but tested the wrong side of a
+  boundary. This suite passed first run, so it was mutation-tested; see above.
+- **Note 16's rule-3 wording is loose.** It says the policy is "the outermost
+  chain link". In a `Command.async(k)…build()` chain, `.build()` is outermost and
+  the policy is the link nearest the root. Rung 04's code is right; the prose
+  would mislead anyone reimplementing from the note alone — as this rung had to
+  do from note 29.
+- **The app-level `pnpm typecheck` does not currently cover this folder.** The app
+  `tsconfig.json`'s `include` pattern `Z-*` is matched as a *file* pattern, so no
+  rung directory is picked up and `tsc --noEmit` passes vacuously. Fixed on base
+  after merge; left alone here. This folder and rung 04 were verified to typecheck
+  cleanly under the app's own compiler options via a throwaway config — but until
+  the `include` fix lands, the app-level green is not evidence for either.
 
 ## Not covered here
 
@@ -173,3 +326,5 @@ keys, and now enforced rather than assumed.
 - **Formats are untested.** `z.email()` emits a `format` and a long `pattern` at
   runtime; nothing here derives them, and `z.email()` is reported as
   `unsupported-type` rather than approximated.
+- **Output schemas are not exercised.** The oracle reads `inputJsonSchema` only;
+  `outputJsonSchema` goes through the same bridge and is assumed, not tested.
