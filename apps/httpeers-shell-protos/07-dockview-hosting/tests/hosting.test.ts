@@ -6,7 +6,11 @@
 // Rung 7: does Dockview host one A2UI surface per pane, and on what contract?
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { DockviewComponent, themeLight } from "dockview-core";
+import {
+  DockviewComponent,
+  type GroupPanelPartInitParameters,
+  themeLight,
+} from "dockview-core";
 import { createShellDock, type PaneSpec } from "../../lib/dock.js";
 import { shellCatalog } from "../../lib/catalog.js";
 import type { A2uiMessage } from "../../lib/renderer.js";
@@ -52,8 +56,13 @@ describe("the IContentRenderer contract (rung 7's expensive finding)", () => {
         const element = document.createElement("div");
         return {
           element,
-          init: (params: Record<string, unknown>) => {
-            seen = params;
+          // Typed as Dockview's own init parameter so the compiler checks this
+          // fake against the real IContentRenderer. The cast is on the capture,
+          // not the signature: widening the signature to Record<string, unknown>
+          // is what let this file go unchecked, since GroupPanelPartInitParameters
+          // has no index signature.
+          init: (params: GroupPanelPartInitParameters) => {
+            seen = params as unknown as Record<string, unknown>;
           },
         };
       },

@@ -12,5 +12,5 @@
     "verbatimModuleSyntax": true,
     "types": ["node"]
   },
-  "include": ["lib", "0*", "Z-*"]
+  "include": ["lib/**/*", "0*/**/*", "Z-*/**/*"]
 }
