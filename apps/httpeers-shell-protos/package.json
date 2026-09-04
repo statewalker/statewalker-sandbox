@@ -1,0 +1,30 @@
+{
+  "name": "@statewalker/httpeers-shell-protos",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The httpeers shell prototype ladder, restored as runnable code: twelve rungs over one consolidated shell-core.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "build:css": "tailwindcss -i 06a-tailwind-build/input.css -o 06a-tailwind-build/dist/shell.css --minify"
+  },
+  "dependencies": {
+    "@biscuit-auth/biscuit-wasm": "0.6.0",
+    "@statewalker/shared-adapters": "0.1.1",
+    "@statewalker/shared-commands": "0.2.1",
+    "@statewalker/shared-slots": "0.2.1",
+    "basecoat-css": "1.0.2",
+    "dockview-core": "8.2.0",
+    "typescript": "5.9.3",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "@types/node": "^25.6.0",
+    "happy-dom": "20.14.0",
+    "tailwindcss": "4.3.3",
+    "vitest": "4.1.11"
+  }
+}
