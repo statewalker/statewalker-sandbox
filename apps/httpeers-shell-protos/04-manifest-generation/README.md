@@ -225,13 +225,17 @@ leaves room for an async file read without a breaking change.
   `createSourceFile` makes `getText()`, `getStart()` and therefore every
   diagnostic line number throw at runtime, with an error that does not mention the
   flag. This is the single easiest way to break this file.
-- **The app-level `pnpm typecheck` does not currently cover this folder.** The
-  app `tsconfig.json`'s `include` pattern `0*` is matched as a *file* pattern, so
-  no rung directory is picked up and `tsc --noEmit` passes vacuously. Fixed on
-  base after merge; left alone here. Both this folder and `Z-static-schema` were
-  verified to typecheck cleanly under the app's own compiler options via a
-  throwaway config, so the clean result is real — but do not read the app-level
-  green as evidence for it until the `include` fix lands.
+- **The app-level `pnpm typecheck` did not cover this folder while the rung was
+  being restored, and that is worth knowing about.** The app `tsconfig.json` had
+  `include: ["lib", "0*", "Z-*"]`; TypeScript expands a bare directory name but
+  matches a wildcard entry as a *file* pattern, so `tsc --listFiles` returned the
+  seven files in `lib/` and no rung directory at all. Every "typecheck clean"
+  reported during the restoration was therefore vacuous. This folder and
+  `Z-static-schema` were verified under the app's own compiler options via a
+  throwaway config at the time, so the clean result was real when claimed. The
+  `include` is now `["lib/**/*", "0*/**/*", "Z-*/**/*"]` and the app-level green
+  covers 49 files — it is evidence again. A typecheck that silently covers
+  nothing is the same failure mode as a test that silently asserts nothing.
 
 ## Not covered here
 

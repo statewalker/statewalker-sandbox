@@ -306,12 +306,14 @@ test each mark the thinnest coverage in the suite.
   the policy is the link nearest the root. Rung 04's code is right; the prose
   would mislead anyone reimplementing from the note alone — as this rung had to
   do from note 29.
-- **The app-level `pnpm typecheck` does not currently cover this folder.** The app
-  `tsconfig.json`'s `include` pattern `Z-*` is matched as a *file* pattern, so no
-  rung directory is picked up and `tsc --noEmit` passes vacuously. Fixed on base
-  after merge; left alone here. This folder and rung 04 were verified to typecheck
-  cleanly under the app's own compiler options via a throwaway config — but until
-  the `include` fix lands, the app-level green is not evidence for either.
+- **The app-level `pnpm typecheck` did not cover this folder while the rung was
+  being restored.** The app `tsconfig.json` had `include: ["lib", "0*", "Z-*"]`;
+  TypeScript expands a bare directory name but matches a wildcard entry as a
+  *file* pattern, so no rung directory was picked up and `tsc --noEmit` passed
+  vacuously. This folder and rung 04 were verified under the app's own compiler
+  options via a throwaway config at the time, so the clean result was real when
+  claimed. The `include` is now `["lib/**/*", "0*/**/*", "Z-*/**/*"]`, the
+  app-level green covers 49 files, and it is evidence again.
 
 ## Not covered here
 

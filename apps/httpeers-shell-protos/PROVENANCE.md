@@ -72,6 +72,16 @@ fixed — deliberately, so a fix cannot land silently.
    construction, which only `mountStandalone` does; `lib/dock.ts` builds each pane's
    renderer with no options. A module in a Dockview pane renders and holds data
    correctly and **its buttons are dead**. (06, test 11)
+
+   Documenting the signatures sharpened the diagnosis: `createAppHost` takes
+   `(renderer, surfaceId, catalog, options)`, so the renderer already exists by the
+   time the host does and `onAction` is *structurally* unhonourable there — a field on
+   the wrong type, not an omission in a function body. So this is **one fix in two
+   halves, not a choice between two**: `AppHostOptions` shrinks to `{ onNotify }`, and
+   `createShellDock` grows a real seam that forwards `RendererOptions` into its
+   `createRenderer` call — which amounts to restoring the `dock.mountApp` note 33
+   describes and consolidation dropped. Removing the field is the half that must come
+   first, because while it stands the type asserts a capability that cannot exist.
 2. **The note-35 theme bug is still present.** `lib/dock.ts` hard-codes
    `theme: themeLight`, so Dockview writes its own class on the inner `.dv-shell` — a
    nearer ancestor of pane content than the host — and the bridge class always loses.
@@ -85,7 +95,22 @@ fixed — deliberately, so a fix cannot land silently.
    because the prebuilt pack has no Tailwind utilities; `Text` still emits `text-sm`,
    `tracking-tight` and friends, which that pack does not define. Variants are distinct
    but **unstyled** on the zero-build path. (06b, test 20)
-5. Minor: `fromJSON` recovers origins twice, so no test can tell which path supplied the
+5. **The enum hole is wider than `ORIGIN.md` records.** It says a binding may resolve
+   to a value the catalogue forbids. In fact `validate()` iterates only over the props
+   the catalogue *declares*, so a component may carry arbitrary **undeclared**
+   properties and they are accepted without comment. This is safe today only because
+   `build()`/`apply()` never read `class`, `className` or `style` from a message — an
+   invariant of those two functions, not something validation enforces. For a surface
+   authored by a foreign peer that is a materially weaker statement than the recorded
+   one. (Found while documenting rung 02/03's API surface.)
+6. **`handle` fails silently in two places**: `deleteSurface` for an unknown surface is
+   a no-op, and a message with none of the four keys set is ignored entirely. There is
+   no "unrecognised message" error, so a typo'd key is invisible on a boundary that
+   otherwise throws on everything.
+7. **`dataModel(surfaceId)` returns the live object, not a copy.** A caller mutating it
+   corrupts the surface, and because `writePath` is copy-on-write any retained
+   reference silently goes stale.
+8. Minor: `fromJSON` recovers origins twice, so no test can tell which path supplied the
    value; and `mountPeerApp` ships the whole `dataModel` snapshot back with every
    action — defensible, since it is the peer's own surface, but undocumented.
 
