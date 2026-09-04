@@ -10,7 +10,7 @@ these tests are written fresh from notes 31, 32, 34, 35 and 36 against code
 that already exists — every file carries `DERIVED-FROM-NOTE` headers naming
 which note each claim comes from.
 
-## The questions
+## Goal
 
 **7 — does Dockview host one A2UI surface per pane?** Yes, and the join is
 tighter than the documentation suggests: `IContentRenderer` requires the
@@ -32,7 +32,39 @@ time, not written down here.
 This is the rung where unit tests lie. The bridge that shipped in 7b passed 61
 of them and did not work in a browser.
 
-## Verified
+### Why the rung mattered
+
+**Hosting is what makes the shell a workspace rather than a page.** Everything
+below rung 7 renders one surface into one root: rung 2 proved a catalogue
+constrains what a peer may express, rung 3 added binding and dispatch, rung 6
+gave a module a host it cannot discover. All of it assumes a single surface. A
+"browser for meshes" that can only show one peer's application at a time is a
+viewer, not a workspace — the whole point is holding several peers' surfaces
+side by side and moving between them. Rung 7 is where that stops being an
+assumption. **A "no" here would have invalidated the shell's shape**: the
+alternative is one surface per browser tab, which throws away cross-pane work
+and hands layout back to the operating system.
+
+**7a's identity-not-content rule is what makes a restored layout safe.** The
+geometry was never in doubt — Dockview ships `toJSON`/`fromJSON`. The question
+that mattered is narrower and is a *security* question as much as a persistence
+one: the content in a pane was authored by a foreign peer. Persisting rendered
+components would resurrect stale content and, worse, store another peer's
+markup across sessions, to be replayed later with no live conversation to
+justify it. Storing an `origin` and re-requesting instead means a restore
+re-enters the conversation rather than reconstructing a memory of it. **A "no"
+here** — a layout that draws the right boxes but cannot say which peer fed
+which box — **would have made layout persistence useless**, since a pane that
+cannot be reassociated with its peer cannot be repopulated, and the only safe
+fallback would have been to persist nothing.
+
+**7b decides whether the shell has one palette or two.** The reject condition
+was explicit in note 34: if Dockview's variables could not be expressed in
+terms of shadcn tokens, two palettes would have to be maintained in parallel,
+every theme change made twice, guaranteed to drift. A "no" would not have
+blocked the ladder, but it would have made theming a permanent tax.
+
+## Findings
 
 ### Hosting — `tests/hosting.test.ts`
 
@@ -114,6 +146,230 @@ These pin **current** behaviour. None asserts it is correct.
 | 35 | happy-dom resolves **no** CSS custom property from a stylesheet | With the bridge installed and the class applied, `getComputedStyle(el).getPropertyValue("--dv-group-view-background-color")` is `""` | happy-dom gains cascade support — which would make a *little* more of 7b testable here |
 | 36 | The element that consumes the floating shadow is reachable, its style is not | `.dv-resize-container` exists after `addFloatingGroup`; its computed `box-shadow` is `""` | happy-dom starts computing shadows |
 | 37 | Synthetic drag events produce no drop target | `dragstart` / `dragenter` / `dragover` on a real tab and group yield zero `[class*=drop-target]` elements | Dockview stops using native HTML5 DnD |
+
+## Techniques and APIs
+
+### Dockview 8.2.0
+
+**`createComponent` is a factory, and the thing it returns owns its DOM.** The
+`IContentRenderer` contract is small and its shape is the finding:
+
+```ts
+new DockviewComponent(host, {
+  theme: themeLight,
+  createComponent: (options) => {          // options.id is the panel id
+    const element = document.createElement("div");   // WE create it
+    element.style.height = "100%";
+    return {
+      element,                             // readonly, Dockview mounts THIS instance
+      init: (params) => createRenderer(element, shellCatalog),
+    };
+  },
+});
+```
+
+`element` is a `readonly HTMLElement` on the renderer, and Dockview appends
+that exact instance into a `.dv-content-container` it owns. **There is no
+`params.containerElement`** — the published examples showing one are wrong for
+v8, and the failure is `Cannot read properties of undefined (reading
+'appendChild')` at the first `addPanel`. The corrected shape is a better fit
+anyway: the A2UI renderer takes one DOM root, so the component's own element is
+handed straight to it with no adapter in between.
+
+**`init` receives `GroupPanelPartInitParameters`**, exported from
+`dockview-core`, and it has exactly four members:
+
+```ts
+interface GroupPanelPartInitParameters {
+  params: Parameters;            // the round-tripped bag — see toJSON below
+  title: string;
+  api: DockviewPanelApi;
+  containerApi: DockviewApi;
+}
+```
+
+**A test fake must satisfy that interface, not a convenient approximation of
+it.** Typing the fake's `init` as `(params: Record<string, unknown>)` compiles
+in isolation but does not satisfy `IContentRenderer`, because
+`GroupPanelPartInitParameters` has no index signature — a fake that would not
+be accepted by the real API is not evidence about the real API. The fake here
+is typed with Dockview's own parameter type and the cast is moved to the
+*capture*, which is where the looseness genuinely belongs. This was caught late
+because the app's `tsconfig` `include` had been matching `0*` as a file pattern,
+so no rung folder was ever typechecked at all — worth stating plainly, since a
+typecheck that silently covers nothing is the same failure mode as a test that
+silently asserts nothing, which is the theme of this whole rung.
+
+**The shell's own surface** (`lib/dock.ts`):
+
+```ts
+function createShellDock(host: HTMLElement): ShellDock;
+
+interface PaneSpec {
+  readonly id: string;
+  readonly title: string;
+  readonly origin: string;                 // opaque URL, provenance-blind
+  readonly messages?: A2uiMessage[];       // first open only; never persisted
+  readonly position?: { referencePanel: string;
+                        direction: "right" | "below" | "left" | "above" };
+}
+
+interface ShellDock {
+  readonly dockview: DockviewComponent;
+  readonly renderers: Map<string, Renderer>;   // one per pane, never shared
+  addPane(spec: PaneSpec): void;
+  paneIds(): string[];
+  originOf(paneId: string): string | undefined;
+  toJSON(): object;
+  fromJSON(layout: object): void;
+}
+```
+
+**`params` is the persistence hook.** `addPanel({ params: { origin } })` writes
+it; `toJSON()` emits it verbatim under `panels[id].params`; `fromJSON()` hands
+it back to `createComponent`'s `init` as `params.params.origin`. That verbatim
+round-trip is the entire mechanism by which surface identity survives, and the
+convention is that **exactly one key** lives there. `PaneParams.origin` is
+typed **optional** even though the shell always writes it, because Dockview's
+`Parameters` makes no guarantee and a layout can be hand-edited or arrive from
+an older version — the compiler was right and the first draft was wrong.
+Titles are persisted too, but by Dockview under `panels[id].title`, not through
+`params`.
+
+**`updateOptions({ theme })` re-themes a live component.** A Dockview theme is
+a plain object — `{ name, className, colorScheme, ... }` — and passing one at
+construction, or later through `updateOptions`, makes Dockview apply
+`className` to the `.dv-shell` element it creates *inside* the host. That is
+the whole of the note 35 fix: supply a theme object rather than adding a class
+to the host.
+
+### The theme bridge
+
+`lib/theme-bridge.ts` is CSS and four exported lists — no JavaScript in the
+mapping at all:
+
+| Export | What it is |
+|---|---|
+| `DOCKVIEW_SHADCN_BRIDGE` | One class, `.dockview-theme-shadcn`, in which every `--dv-*` value is a `var(--shadcn-token)` reference |
+| `SHADCN_THEME_CLASS` | The class name, for the theme object's `className` |
+| `BRIDGED_VARIABLES` (40) | Documentation of what the stylesheet declares |
+| `UNBRIDGED_BY_DESIGN` (22) | Metrics, timings and z-indices, which have no shadcn equivalent |
+| `REQUIRED_TOKENS` (11) | `--background`, `--foreground`, `--card`, `--muted`, `--muted-foreground`, `--border`, `--ring`, `--accent`, `--popover`, `--popover-foreground`, `--radius` |
+| `installBridge(doc)` | Appends the stylesheet to `<head>` |
+
+Overriding CSS variables in a later stylesheet is the documented cascade, so
+the bridge **replaces** Dockview's bundled themes rather than extending them —
+its per-theme palettes (`--dv-color-abyss-*` and friends) are deliberately
+untouched. Composite values are allowed to carry structure
+(`--dv-drag-over-border: 1px dashed var(--ring)`), and all three Dockview radii
+take shadcn's single `--radius`.
+
+### Testing techniques — the transferable part
+
+**1. Extract the artefact and assert set equality against it.** Dockview ships
+no `.css` file; its stylesheet is a JS string literal inside
+`dist/dockview-core.js`. `src/dockview-css.ts` slices that literal out and
+`JSON.parse`s it (a double-quoted JS string literal is valid JSON), then
+derives the variables Dockview *consumes* by scanning for `var(--dv-…)`. The
+coverage test then asserts **set equality in both directions** between
+`bridged ∪ unbridged-by-design` and that derived set. This is the whole answer
+to note 34 §3 and note 39: **no list of Dockview variables appears anywhere in
+a test file**, so the tests cannot restate the bridge's own assumptions, and a
+Dockview upgrade that adds a variable fails the build instead of silently
+rendering unthemed.
+
+**2. Make an extraction fail loudly.** `extractDockviewStylesheet()` throws if
+the marker is missing, and the first test asserts the result is >100 KB, contains
+`.dv-tab`, and yields >50 semantic and >20 colour-bearing variables. An
+extraction that silently returned `""` would make every coverage assertion pass
+*vacuously* — which is exactly the class of bug this rung exists to catch, so
+the fixture has to be checked before it is trusted.
+
+**3. Derive the classification too, not just the list.** "Colour-bearing" is
+computed from the values Dockview's **own themes assign** to each variable, not
+from a judgement about its name. A name heuristic would misclassify
+`--dv-tab-group-color`, which reads as a colour and carries no colour default.
+The rule for what must be bridged is therefore a fact about Dockview, not an
+opinion in the test.
+
+**4. Positive control before asserting absence.** Note 32 §4 records the
+original round-trip test asserting a restored host contained no old content —
+which passes trivially, because a fresh `ShellDock` has nothing to replay. It
+tested the constructor. Here the test first asserts the content **was really
+there** (in the live DOM, and in the live data model) and only then asserts it
+is absent from the serialised JSON. Paired with claim 11, which repopulates a
+restored pane, neither half can pass by the code doing nothing.
+
+**5. Force the artefact across a real boundary.** Every restore goes through
+`JSON.stringify` into a **separate dock on a separate host**, whose `pending`
+map is empty. Only data that survives serialisation can carry identity; no
+in-memory reference can be smuggled across and mistaken for persistence.
+
+**6. Mutation testing, five mutants, all killed.** Written against throwaway
+copies of `lib/` so the shared library was never edited:
+
+| Mutant | Killed by |
+|---|---|
+| Drop `params` from `addPanel` | Claims 7 and 10 — the origin vanishes from the JSON and from the restore |
+| Leak `messages` into `params` | Claims 7 and 8 — `params` keys are no longer exactly `["origin"]`, and the rendered text appears in the JSON |
+| Ignore `params.origin` on restore | Claim 10 — `originOf` returns `undefined` after a round-trip |
+| Delete one bridged declaration | Claim 16 — `--dv-sash-color` becomes unaccounted for |
+| Replace a token with `#e5e5e5` | Claim 20 — a literal colour is detected |
+
+One mutation is deliberately **not** claimed: forcing the replay branch in
+`init` to always run changes nothing, because there is no stored content to
+replay. Note 32 §4 found the same thing. That mutant is equivalent, which is
+itself the point — content cannot resurrect because nothing persists it.
+
+## Lessons learned
+
+**happy-dom resolves no CSS custom property from a stylesheet.** Not "resolves
+them imprecisely" — `getComputedStyle(el).getPropertyValue("--dv-…")` returns
+`""` even with the bridge installed and the class applied (claim 35). So the
+assertion class the shipped 7b suite leaned on, "the variables resolve on an
+element carrying the bridge class", is **unavailable here, not merely weak**.
+Any future rung tempted to test styling in this environment should read claim
+35 first and then not.
+
+**Note 39 records 7b passing every unit test and failing in a browser.** Sixty-one
+green tests, three of them true and useful, and the bridge did nothing: they
+asserted the stylesheet was right, never that it reached the element Dockview
+reads. The implication for this suite is uncomfortable and worth stating rather
+than hiding: **a green run here is evidence about structure and serialisation,
+and almost no evidence about appearance.** That is why this README leads to
+"what these tests cannot prove" from the top, and why the claim table names a
+falsifier for every row — a claim whose falsifier cannot be described is
+usually a claim that is not being made.
+
+**`colorScheme` in dockview-core 8.2.0 is never read at all.** Note 35 §6
+recorded it as "read once at construction". The bundle is stricter than that:
+all 18 occurrences in the shipped ESM entry are object-literal keys on bundled
+theme definitions, with no property read and no bracket access anywhere (claim
+34). Its own type calls it "useful for adapting panel content colors" — it is
+**advisory metadata the embedder must act on**, so a shell that sets it and
+expects native affordances to follow will be quietly disappointed. The general
+form: when a note says a value is "read once", check whether it is read at all.
+
+**"Never injected" is true of the ESM entry and false of the standalone build.**
+Note 31 §3.1 is right about the case that matters — `dist/package/main.esm.mjs`,
+what `import "dockview-core"` resolves to, carries no CSS and injects nothing —
+but `dist/dockview-core.js` does `document.head.appendChild(s)` for itself.
+A packaging finding is a finding about **one entry point**, and is worth
+recording as such, because the next person reaching for the standalone build
+will otherwise extract a stylesheet that was already going to install itself.
+
+**The big one: the note 35 fix never reached the consolidated code.** The bug
+was found in September, root-caused precisely, fixed, browser-verified and
+written up — and `lib/dock.ts` still passes `themeLight`, so the bridge class
+never reaches `.dv-shell` and the theme bridge is inert in any app built on the
+consolidated shell-core (defect A). `lib/theme-bridge.ts` does not export the
+`shadcnTheme()` helper note 35 introduced, either. **This is a lesson about the
+record, not about Dockview.** Consolidation caught renderer drift precisely
+because the copies met and a stale test failed (note 32 §1); the theme fix drifted
+the other way, from a note into nothing, because no test travelled with it. A
+finding written into prose and not into an executable assertion has a half-life.
+Claim 31 is written to pin the current, wrong behaviour and turn **red** when
+the fix lands, so this particular finding now travels with a test.
 
 ## What these tests cannot prove
 
