@@ -69,6 +69,7 @@ import { createHubState } from "../hub/hub-state.js";
 import type { MeshView } from "../hub/mesh-view.js";
 import { HUB_RULES } from "../policy.js";
 import { dialRelay, waitForCircuitReservation } from "../reservation.js";
+import { describeError } from "./describe-error.js";
 import { mountEdge } from "./edge.js";
 import { createEdgeDispatch } from "./edge-dispatch.js";
 import { createRouteEnsurer } from "./join.js";
@@ -251,7 +252,7 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
     throw new Error(
       `startBrowserHub: could not reserve a circuit slot through the relay at "${relayAddr}" -- ` +
         "no page can reach this hub without one. Is the relay running, and is httpeers.json's " +
-        `relayAddrs[0] the address it is actually listening on? Cause: ${String(err)}`,
+        `relayAddrs[0] the address it is actually listening on? Cause: ${describeError(err)}`,
       { cause: err },
     );
   }

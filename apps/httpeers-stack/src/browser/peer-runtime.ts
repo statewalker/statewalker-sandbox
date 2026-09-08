@@ -72,6 +72,7 @@ import type { Ed25519PrivateKey, Mounts } from "@statewalker/httpeers.core";
 import { createPeer, RevocationCache } from "@statewalker/httpeers.core";
 import type { MeshView } from "../hub/mesh-view.js";
 import { appRules } from "../policy.js";
+import { describeError } from "./describe-error.js";
 import { mountEdge } from "./edge.js";
 import { createEdgeDispatch } from "./edge-dispatch.js";
 import type { AdvertisementInput, PresenceRefusal } from "./join.js";
@@ -355,7 +356,7 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
     throw new Error(
       `startBrowserPeer: could not reserve a circuit slot through the relay at "${relayAddr}" -- ` +
         "this page cannot join the mesh without one. Is the relay running, and is httpeers.json's " +
-        `relayAddrs[0] the address it is actually listening on? Cause: ${String(err)}`,
+        `relayAddrs[0] the address it is actually listening on? Cause: ${describeError(err)}`,
       { cause: err },
     );
   }
@@ -393,7 +394,7 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
       `startBrowserPeer: could not reach the hub (${config.hubPeerId}) over the relay at ` +
         `"${relayAddr}". A page reaches the hub at <relay>/p2p-circuit/webrtc/p2p/<hub>, which ` +
         "requires the hub to hold its OWN circuit reservation -- check that the hub process is " +
-        `running and reported a relayed address at startup. Cause: ${String(err)}`,
+        `running and reported a relayed address at startup. Cause: ${describeError(err)}`,
       { cause: err },
     );
   }
@@ -424,7 +425,7 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
     await startFailed();
     throw new Error(
       `startBrowserPeer: could not ask the hub (${config.hubPeerId}) whether this peer is ` +
-        `still a member -- the call did not reach it. Cause: ${String(err)}`,
+        `still a member -- the call did not reach it. Cause: ${describeError(err)}`,
       { cause: err },
     );
   }

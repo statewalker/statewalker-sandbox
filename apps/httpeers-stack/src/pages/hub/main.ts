@@ -58,6 +58,8 @@
  * including what the direct call bypasses and why that is not a privilege
  * escalation.
  */
+
+import { describeError } from "../../browser/describe-error.js";
 import type { BrowserHubHandle, BrowserHubState } from "../../browser/hub-runtime.js";
 import { startBrowserHub } from "../../browser/hub-runtime.js";
 import { clearIdentity, loadOrCreateIdentity, peerIdOf } from "../../browser/identity.js";
@@ -523,9 +525,22 @@ resetButton.addEventListener("click", () => {
 
 main().catch((err: unknown) => {
   setState("error");
+  // The old hint said "served from port 5177, run pnpm bootstrap" wherever the
+  // page came from. Shown to someone on https://hub.httpeers.net it sends them
+  // to inspect a local development setup they do not have -- which is exactly
+  // what it did the first time a phone failed to reach the relay.
+  const localRun =
+    location.hostname === "localhost" ||
+    location.hostname === "127.0.0.1" ||
+    location.port === String(HUB_PAGE_PORT);
   showError(
-    `${String(err)}\n\nThis page is served from port ${HUB_PAGE_PORT}; it still needs the relay ` +
-      'that "pnpm bootstrap" wrote into httpeers.json to be running.',
+    localRun
+      ? `${describeError(err)}\n\nThis page is served from port ${HUB_PAGE_PORT}; it still ` +
+          'needs the relay that "pnpm bootstrap" wrote into httpeers.json to be running.'
+      : `${describeError(err)}\n\nThis page is served from ${location.origin}. The relay it ` +
+          "dials is named in httpeers.json. If that relay is reachable from other networks, " +
+          "the remaining causes are local to this one: a network that blocks the WebSocket, " +
+          "or DNS for the relay's hostname failing here.",
   );
   console.error("hub page: failed to start the hub:", err);
 });
