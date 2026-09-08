@@ -72,14 +72,25 @@ export interface ImagesEndpointInit {
 /** `GET /images` (list) and `GET /images/{id}` (streamed bytes) -- see the module comment. Capability gating is `IMAGES_ACCESS_TREE`'s job, not this handler's (same split `search.ts`'s `createSearchEndpoint` uses against `policy.ts`). */
 export function createImagesEndpoint(init: ImagesEndpointInit): FetchHandler {
   const chunkSize = init.chunkSize ?? DEFAULT_CHUNK_SIZE;
-  const byId = new Map(init.images.map((img) => [img.id, img]));
+  // RESOLVED PER REQUEST, NOT SNAPSHOTTED. `init.images` is the provider's
+  // live catalogue and callers append to it -- the image-peer page adds
+  // pictures pulled from an image stock, chosen from a file, or just
+  // photographed. A Map built here would freeze the catalogue at construction,
+  // so a later addition would appear in `GET /images` and 404 on
+  // `GET /images/{id}`: the listing and what is servable would disagree, which
+  // reads as a corrupt provider rather than a stale index.
+  //
+  // A linear scan is right for this shape of data -- a gallery is tens of
+  // entries, not thousands -- and keeping a Map in sync with an array someone
+  // else owns is the kind of bookkeeping that goes wrong quietly.
+  const lookup = (id: string): ImageInfo | undefined => init.images.find((img) => img.id === id);
   const app = new Hono();
 
   app.get("/images", (c) => c.json({ images: init.images }));
 
   app.get("/images/:id", (c) => {
     const id = c.req.param("id");
-    const meta = byId.get(id);
+    const meta = lookup(id);
     if (meta == null) {
       return c.json({ error: `no such image: ${id}` }, 404);
     }

@@ -35,6 +35,10 @@
         padding: 0.5rem 0.75rem;
         margin: 1rem 0;
       }
+      .pickers { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+      .picker { display: inline-flex; flex-direction: column; gap: 0.25rem; font-weight: 600; }
+      #gallery-source { color: #555; font-size: 0.9rem; }
+      #add-status { min-height: 1.2em; }
       #gallery {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
@@ -116,7 +120,7 @@
 
     <p id="warning">
       <strong>Closing this tab removes these images from the mesh.</strong>
-      This page serves the fixture gallery below over WebRTC while it stays
+      This page serves the gallery below over WebRTC while it stays
       open — no page, no service. Its identity is saved in this browser, so
       reopening it resumes the same provider without a new invitation.
     </p>
@@ -156,8 +160,28 @@
       <button type="button" id="reset-identity" hidden>reset identity</button>
     </p>
 
-    <h2>fixture gallery</h2>
+    <h2>gallery</h2>
+    <p id="gallery-source">loading pictures…</p>
     <div id="gallery"></div>
+
+    <h2>add your own</h2>
+    <p>
+      Anything added here is served to the mesh exactly like the rest — other
+      peers see it in this provider's catalogue and fetch the bytes from this
+      tab. It lives for as long as the page does; a reload starts over with a
+      fresh set from the stock.
+    </p>
+    <p class="pickers">
+      <label class="picker">
+        choose image
+        <input id="pick-file" type="file" accept="image/*" multiple />
+      </label>
+      <label class="picker">
+        take photo
+        <input id="take-photo" type="file" accept="image/*" capture="environment" />
+      </label>
+    </p>
+    <p id="add-status"></p>
 
     <script type="module" src="./main.ts"></script>
   </body>

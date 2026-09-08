@@ -315,3 +315,44 @@ describe("Task 12: the real fixture set (image-fixtures/, loaded off disk)", () 
     await peer.stop();
   });
 });
+
+describe("a catalogue that grows after the endpoint is built", () => {
+  // The image-peer page adds images at runtime -- from an image stock, from a
+  // file the user picked, from a photo they just took -- into the same
+  // `images` array and the same `FilesApi` it started with. The endpoint
+  // originally snapshotted the array into a Map at construction, so such an
+  // image LISTED in GET /images and then 404'd on GET /images/{id}: the
+  // catalogue and what was actually servable disagreed, which reads as a
+  // corrupt provider rather than a stale index.
+  it("serves an image appended after construction", async () => {
+    const files = new MemFilesApi({ initialFiles: {} });
+    const images: ImageInfo[] = [];
+    const handler = createImagesEndpoint({ files, images });
+
+    const bytes = new TextEncoder().encode("late-arrival");
+    await files.write(imagePath("late"), [bytes]);
+    images.push({
+      id: "late",
+      title: "Added after the endpoint existed",
+      contentType: "image/png",
+      size: bytes.length,
+    });
+
+    const listed = await (await handler(new Request("http://p/images"))).json();
+    expect((listed as { images: ImageInfo[] }).images.map((i) => i.id)).toContain("late");
+
+    const res = await handler(new Request("http://p/images/late"));
+    expect(res.status).toBe(200);
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("still 404s an id that is not in the catalogue", async () => {
+    const files = new MemFilesApi({ initialFiles: {} });
+    const images: ImageInfo[] = [];
+    const handler = createImagesEndpoint({ files, images });
+    // Bytes present but unlisted must NOT be servable -- the catalogue is the
+    // authority, not the filesystem.
+    await files.write(imagePath("sneaky"), [new TextEncoder().encode("x")]);
+    expect((await handler(new Request("http://p/images/sneaky"))).status).toBe(404);
+  });
+});

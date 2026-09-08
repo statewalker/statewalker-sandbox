@@ -71,6 +71,8 @@ import { createPeerSession } from "../../browser/session.js";
 import type { ImageInfo } from "../../services/images.js";
 import { createImagesEndpoint, IMAGES_POLICIES, imagePath } from "../../services/images.js";
 import { loadFixtureImages } from "./fixtures.js";
+import { fileToImage } from "./local-image.js";
+import { loadStockImages } from "./stock.js";
 import { pacedFiles, readStreamPacing } from "./pacing.js";
 
 const el = <T extends HTMLElement>(id: string): T => document.querySelector<T>(`#${id}`)!;
@@ -107,23 +109,107 @@ function renderGallery(images: ImageInfo[], bytesById: Map<string, Uint8Array>):
 }
 
 /**
- * Loaded once, on page load, INDEPENDENT of whether/when this peer ever
- * joins the mesh -- see the module comment's "THE GALLERY RENDERS FROM
- * LOCAL BYTES" note. `buildMounts` below reuses this same load rather than
- * fetching the fixtures a second time, which also means a reconnect serves
- * the same bytes rather than a second copy of them.
+ * ONE LIBRARY, SHARED BY THE GALLERY AND THE MESH.
+ *
+ * Everything this peer serves lives in these three, for the life of the page:
+ * the bytes in `galleryFiles`, the catalogue in `catalogue`, and a copy of the
+ * bytes in `bytesById` so the gallery can render without fetching itself.
+ *
+ * They are created ONCE at module scope rather than per connection, because
+ * pictures arrive at three different times -- from an image stock when the
+ * page loads, from a file the person picks, from a photo they take -- and every
+ * one of them must be servable the moment it exists, whether or not this peer
+ * has joined a mesh yet, and without disturbing an existing connection.
+ *
+ * `createImagesEndpoint` resolves ids against `catalogue` per request precisely
+ * so this can grow after the endpoint was built.
  */
-const fixturesLoaded = loadFixtureImages();
-fixturesLoaded
-  .then(({ images, initialFiles }) => {
-    const bytesById = new Map(images.map((img) => [img.id, initialFiles[imagePath(img.id)]!]));
-    renderGallery(images, bytesById);
-  })
-  .catch((err: unknown) => {
-    // The gallery staying empty is a visible, honest failure on its own;
-    // this is only so the cause shows up somewhere.
-    console.error("image-peer: failed to load fixtures:", err);
+const galleryFiles = new MemFilesApi({ initialFiles: {} });
+const catalogue: ImageInfo[] = [];
+const bytesById = new Map<string, Uint8Array>();
+
+const gallerySourceEl = el<HTMLParagraphElement>("gallery-source");
+const addStatusEl = el<HTMLParagraphElement>("add-status");
+
+/** Put one picture into the library and show it. Safe at any time, joined or not. */
+async function addImage(info: ImageInfo, bytes: Uint8Array): Promise<void> {
+  await galleryFiles.write(imagePath(info.id), [bytes]);
+  catalogue.push(info);
+  bytesById.set(info.id, bytes);
+  renderGallery(catalogue, bytesById);
+}
+
+/**
+ * Fill the library on load: pictures fetched from a public image stock, so this
+ * peer serves bytes it went and got rather than only what was bundled with it.
+ *
+ * FIXTURES ARE THE FALLBACK, NOT THE DEFAULT. If the stock cannot be reached --
+ * offline, a blocked domain, a VPN, a rate limit -- the bundled set is used
+ * instead. A peer advertising an image service with an empty catalogue is a
+ * worse demonstration than one serving four familiar pictures, and the
+ * difference is invisible to every other peer.
+ */
+const initialLoad = (async (): Promise<void> => {
+  const stock = await loadStockImages();
+  if (stock.images.length > 0) {
+    for (const info of stock.images) {
+      await addImage(info, stock.initialFiles[imagePath(info.id)] as Uint8Array);
+    }
+    gallerySourceEl.textContent =
+      `${stock.images.length} picture(s) fetched from an image stock when this page loaded. ` +
+      "Reload for a different set.";
+    return;
+  }
+  try {
+    const fixtures = await loadFixtureImages();
+    for (const info of fixtures.images) {
+      await addImage(info, fixtures.initialFiles[imagePath(info.id)] as Uint8Array);
+    }
+    gallerySourceEl.textContent =
+      "The image stock could not be reached, so these are the pictures bundled with this page.";
+  } catch (err) {
+    gallerySourceEl.textContent =
+      "No pictures could be loaded. This peer will advertise an image service with nothing in it.";
+    console.error("image-peer: neither the stock nor the fixtures loaded:", err);
+  }
+})();
+
+/**
+ * The two pickers. `accept="image/*"` alone lets a phone offer the camera OR
+ * the photo library; the second control adds `capture="environment"`, which
+ * goes straight to the rear camera. Both exist because `capture` on the only
+ * control would REMOVE the ability to choose an existing picture, which is half
+ * the feature.
+ */
+function wirePicker(id: string): void {
+  const input = el<HTMLInputElement>(id);
+  input.addEventListener("change", () => {
+    void (async () => {
+      const files = Array.from(input.files ?? []);
+      if (files.length === 0) return;
+      let added = 0;
+      for (const file of files) {
+        try {
+          const { info, bytes } = await fileToImage(file);
+          await addImage(info, bytes);
+          added += 1;
+        } catch (err) {
+          // One bad file must not silently swallow the rest of a multi-select.
+          addStatusEl.textContent = `${file.name}: ${err instanceof Error ? err.message : String(err)}`;
+          console.warn("image-peer: could not add a picture:", err);
+        }
+      }
+      if (added > 0) {
+        addStatusEl.textContent =
+          `Added ${added} picture(s). They are being served to the mesh now.`;
+      }
+      // Reset, so choosing the same file again fires `change` a second time.
+      input.value = "";
+    })();
   });
+}
+wirePicker("pick-file");
+wirePicker("take-photo");
 
 /**
  * `?chunk=` / `?delay=` -- absent (the normal case) this is `{ delayMs: 0 }`
@@ -149,11 +235,16 @@ document.body.dataset.pacing = JSON.stringify(pacing);
  * way -- see `fixturesLoaded` above.
  */
 async function buildMounts(): Promise<ReturnType<typeof createMounts>> {
-  const { initialFiles, images } = await fixturesLoaded;
-  const stored = new MemFilesApi({ initialFiles });
-  const files = pacing.delayMs > 0 ? pacedFiles(stored, pacing.delayMs) : stored;
+  // Wait for the first load so a peer that joins immediately does not advertise
+  // an empty catalogue -- but serve the SHARED library, not a snapshot of it,
+  // so pictures added later are servable over a connection opened before them.
+  await initialLoad;
+  const files = pacing.delayMs > 0 ? pacedFiles(galleryFiles, pacing.delayMs) : galleryFiles;
   const mounts = createMounts();
-  mounts.provide("/images", createImagesEndpoint({ files, images, chunkSize: pacing.chunkSize }));
+  mounts.provide(
+    "/images",
+    createImagesEndpoint({ files, images: catalogue, chunkSize: pacing.chunkSize }),
+  );
   return mounts;
 }
 
