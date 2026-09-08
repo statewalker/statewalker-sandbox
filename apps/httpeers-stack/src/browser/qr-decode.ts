@@ -1,29 +1,28 @@
 /**
- * Reading an invitation out of a picture -- one chosen from the photo library,
- * or one just taken of somebody's hub screen.
+ * Reading an invitation out of a QR code -- from a live camera, or from a
+ * picture already on the device.
  *
- * WHY jsQR AND NOT `BarcodeDetector`. The platform API is not available on
- * every browser this has to work on, so using it means a capability branch,
- * and the fallback arm would be the one that almost never runs -- which is
- * exactly where a bug survives unnoticed. One code path everywhere is worth
- * the bytes.
+ * WHY html5-qrcode AND NOT jsQR. The first version decoded a still photo with
+ * jsQR, and it did not work on real photographs: a screenshot decoded fine, a
+ * photo of the same screen did not. A still frame gets exactly one attempt, and
+ * that attempt has to survive whatever angle, blur, glare and white balance the
+ * phone happened to produce. html5-qrcode carries a better-tuned pipeline (and
+ * will use the platform's own `BarcodeDetector` where it exists) and, more
+ * importantly, gives us the LIVE camera -- which is a different proposition
+ * entirely: dozens of frames a second, each one a fresh attempt, while the
+ * person watches the preview and adjusts. Aiming feedback is what makes
+ * scanning reliable, and a file picker cannot offer it.
  *
- * WHY THE PHOTO IS DOWNSCALED. jsQR walks every pixel, and a modern phone
- * photo is 4000x3000 -- twelve million pixels to find a 45x45 grid in. Scaling
- * the long edge down first makes it fast without hurting detection, because a
- * QR code that is unreadable at 1600px was not going to decode at 4000px
- * either.
+ * The file path is kept, because a code can arrive as a screenshot someone
+ * sent, and because a camera can be refused or absent.
  *
- * This resize is the OPPOSITE of the gallery's rule in `./local-image.ts`,
- * which deliberately serves a photo's bytes untouched. The difference is what
- * happens to the result: there the bytes are what other peers receive, here
- * they are thrown away the moment the code is read. Nothing downscaled by this
- * module is ever stored or served.
+ * NO DOWNSCALING HERE ANY MORE. The old code shrank photos to 1600px before
+ * decoding; measurement showed that was not what broke real photos (a QR
+ * survives to about 4 device pixels per module, and the downscale stayed above
+ * that), so the resize was doing nothing but cost fidelity. The library sizes
+ * its own work.
  */
-import jsQR from "jsqr";
-
-/** Longest edge fed to the decoder. Comfortably above what a QR needs; far below what a phone produces. */
-export const QR_DECODE_MAX_DIMENSION = 1600;
+import { Html5Qrcode } from "html5-qrcode";
 
 /** Shape of a decoded invitation, or the reason there isn't one. */
 export type QrScan =
@@ -67,43 +66,104 @@ function looksLikeCode(value: string): boolean {
   return value.startsWith("eyJ") && /^[A-Za-z0-9_-]{40,}$/.test(value);
 }
 
-/** Draw `bitmap` into a canvas no larger than `QR_DECODE_MAX_DIMENSION` and return its pixels. */
-function pixelsOf(bitmap: ImageBitmap): ImageData | null {
-  const longest = Math.max(bitmap.width, bitmap.height);
-  const scale = longest > QR_DECODE_MAX_DIMENSION ? QR_DECODE_MAX_DIMENSION / longest : 1;
-  const width = Math.max(1, Math.round(bitmap.width * scale));
-  const height = Math.max(1, Math.round(bitmap.height * scale));
-
-  const canvas = new OffscreenCanvas(width, height);
-  const ctx = canvas.getContext("2d");
-  if (ctx == null) return null;
-  ctx.drawImage(bitmap, 0, 0, width, height);
-  return ctx.getImageData(0, 0, width, height);
+/** A detached element for the library to work in when scanning a file -- it renders nothing we show. */
+function scratchHost(): HTMLElement {
+  const host = document.createElement("div");
+  host.id = `qr-scan-${Math.random().toString(36).slice(2)}`;
+  host.hidden = true;
+  document.body.append(host);
+  return host;
 }
 
 /** Find an invitation in an image file. Never throws: every failure is a reason the caller can render. */
 export async function scanInvitation(file: File): Promise<QrScan> {
-  let bitmap: ImageBitmap;
+  const host = scratchHost();
+  const reader = new Html5Qrcode(host.id, { verbose: false });
   try {
-    bitmap = await createImageBitmap(file);
+    // `showImage: false` -- the library would otherwise paint the picture into
+    // our hidden host, which costs a full-size decode of a phone photo for
+    // something nobody sees.
+    const result = await reader.scanFileV2(file, false);
+    const text = result.decodedText;
+    const code = invitationFromQrText(text);
+    return code != null ? { ok: true, code } : { ok: false, reason: "not-an-invitation", text };
   } catch {
+    // The library rejects when it finds nothing; it does not distinguish
+    // "no code" from "unreadable", and neither can the person holding the
+    // phone -- both mean try again with a better view.
     return { ok: false, reason: "no-qr" };
-  }
-
-  try {
-    const pixels = pixelsOf(bitmap);
-    if (pixels == null) return { ok: false, reason: "no-qr" };
-
-    // `attemptBoth` also tries inverted colours, which is what a photo of a
-    // dark-mode screen produces.
-    const found = jsQR(pixels.data, pixels.width, pixels.height, {
-      inversionAttempts: "attemptBoth",
-    });
-    if (found == null) return { ok: false, reason: "no-qr" };
-
-    const code = invitationFromQrText(found.data);
-    return code != null ? { ok: true, code } : { ok: false, reason: "not-an-invitation", text: found.data };
   } finally {
-    bitmap.close();
+    try {
+      reader.clear();
+    } catch {
+      /* nothing rendered, nothing to clear */
+    }
+    host.remove();
   }
+}
+
+export interface CameraScan {
+  /** Stop the camera and release the track. Safe to call twice. */
+  stop: () => Promise<void>;
+}
+
+/**
+ * Scan continuously from the rear camera into `host`, calling `onCode` with the
+ * first invitation seen and stopping itself.
+ *
+ * Rejects if the camera cannot be started at all -- refused permission, no
+ * camera, or an insecure origin -- which the caller renders, because those are
+ * the cases where the file picker is the way through.
+ */
+export async function scanFromCamera(
+  host: HTMLElement,
+  onCode: (code: string) => void,
+): Promise<CameraScan> {
+  const reader = new Html5Qrcode(host.id, { verbose: false });
+  let stopped = false;
+
+  const stop = async (): Promise<void> => {
+    if (stopped) return;
+    stopped = true;
+    try {
+      if (reader.isScanning) await reader.stop();
+      reader.clear();
+    } catch {
+      /* already torn down */
+    }
+  };
+
+  await reader.start(
+    // `facingMode: environment` asks for the rear camera by constraint rather
+    // than by device id, so it works without first enumerating devices --
+    // which on some browsers needs permission of its own.
+    { facingMode: "environment" },
+    {
+      fps: 10,
+      // NO `qrbox`. It is a CROP, not a decoration: html5-qrcode only decodes
+      // what falls inside it, and it is measured against the rendered
+      // viewfinder rather than the camera's own resolution. Both a fixed
+      // 260x260 box and a box computed from the 320px preview cut a QR that
+      // fills the frame -- which is exactly what a person does when told to
+      // point the camera at a code. Verified: a 1280x720 frame whose QR was
+      // decodable by the file path scanned as nothing in the live path until
+      // this was removed.
+      //
+      // Scanning the whole frame costs a little more work per frame, on a
+      // task that runs for a few seconds once.
+      aspectRatio: undefined,
+    },
+    (text) => {
+      const code = invitationFromQrText(text);
+      // A QR that is not an invitation must NOT stop the scan: the camera is
+      // very likely still pointed at a poster or a wifi sticker, and giving up
+      // on the first wrong code would be worse than carrying on looking.
+      if (code == null) return;
+      void stop().then(() => onCode(code));
+    },
+    // Per-frame misses are the normal state of a live scanner, not errors.
+    () => {},
+  );
+
+  return { stop };
 }

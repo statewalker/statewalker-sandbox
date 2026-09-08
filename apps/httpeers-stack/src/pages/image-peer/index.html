@@ -116,6 +116,13 @@
           .scan { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; margin-top: 0.5rem; }
       .scan .picker { display: inline-flex; flex-direction: column; gap: 0.2rem; font-weight: 600; }
       #scan-status { min-height: 1.2em; margin: 0.25rem 0 0; }
+      /* THE PREVIEW'S WIDTH IS THE SCAN RESOLUTION. html5-qrcode sizes its
+         capture canvas to this container, not to the camera: at 320px a
+         1280x720 feed was captured at 320x180, so a QR filling the frame
+         arrived as 1.9 pixels per module and never decoded. Wide as the
+         layout allows. */
+      #scan-camera-host { width: 100%; max-width: 640px; margin: 0.5rem 0; }
+      #scan-camera-host video { width: 100%; border-radius: 4px; }
 </style>
   </head>
   <body>
@@ -149,19 +156,7 @@
         placeholder="an invitation id, a join blob, or a whole join link"
       />
       <button type="submit">join mesh</button>
-          <p class="scan">
-        or scan it from a picture:
-        <label class="picker">
-          scan image
-          <input id="scan-file" type="file" accept="image/*" />
-        </label>
-        <label class="picker">
-          scan photo
-          <input id="scan-photo" type="file" accept="image/*" capture="environment" />
-        </label>
-      </p>
-      <p id="scan-status"></p>
-</form>
+    </form>
 
     <p id="session-controls">
       <!--

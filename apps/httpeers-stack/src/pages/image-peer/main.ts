@@ -75,6 +75,7 @@ import { fileToImage } from "./local-image.js";
 import { loadStockImages } from "./stock.js";
 import { pacedFiles, readStreamPacing } from "./pacing.js";
 import { wireQrJoin } from "../../browser/qr-join.js";
+import { createQrJoinUi } from "../../browser/qr-join-ui.js";
 
 const el = <T extends HTMLElement>(id: string): T => document.querySelector<T>(`#${id}`)!;
 
@@ -372,11 +373,14 @@ main().catch((err: unknown) => {
 // Scanning a picture is a second way to fill the same field the join form
 // already reads -- see `../../browser/qr-join.ts` for why there are two inputs
 // and why the code is shown rather than used silently.
+const qrUi = createQrJoinUi(joinForm);
 wireQrJoin({
-  inputs: [el<HTMLInputElement>("scan-file"), el<HTMLInputElement>("scan-photo")],
+  fileInputs: [qrUi.fileInput],
+  cameraButton: qrUi.cameraButton,
+  cameraHost: qrUi.cameraHost,
   field: el<HTMLInputElement>("invite"),
   onCode: () => joinForm.requestSubmit(),
   status: (message) => {
-    el<HTMLParagraphElement>("scan-status").textContent = message;
+    qrUi.status.textContent = message;
   },
 });

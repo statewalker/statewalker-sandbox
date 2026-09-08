@@ -79,6 +79,7 @@ import type { CallOutcome } from "./outcome.js";
 import { describeOutcome, readOutcome } from "./outcome.js";
 import { type ConnectionKind, describeConnection } from "../../browser/connection-kind.js";
 import { wireQrJoin } from "../../browser/qr-join.js";
+import { createQrJoinUi } from "../../browser/qr-join-ui.js";
 
 /**
  * This peer's ServiceWorker adapter key, and therefore the first segment of
@@ -564,11 +565,14 @@ void session.start();
 // Scanning a picture is a second way to fill the same field the join form
 // already reads -- see `../../browser/qr-join.ts` for why there are two inputs
 // and why the code is shown rather than used silently.
+const qrUi = createQrJoinUi(joinForm);
 wireQrJoin({
-  inputs: [el<HTMLInputElement>("scan-file"), el<HTMLInputElement>("scan-photo")],
+  fileInputs: [qrUi.fileInput],
+  cameraButton: qrUi.cameraButton,
+  cameraHost: qrUi.cameraHost,
   field: el<HTMLInputElement>("invite"),
   onCode: () => joinForm.requestSubmit(),
   status: (message) => {
-    el<HTMLParagraphElement>("scan-status").textContent = message;
+    qrUi.status.textContent = message;
   },
 });
