@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_IMAGE_DIMENSION, fileToImage } from "../src/pages/image-peer/local-image.js";
+import { fileToImage } from "../src/pages/image-peer/local-image.js";
 import { imagePath } from "../src/services/images.js";
 
 function fileOf(name: string, type: string, bytes = 64): File {
@@ -34,11 +34,17 @@ describe("fileToImage", () => {
     expect(info.contentType).toMatch(/^image\//);
   });
 
-  // A phone photo is several megabytes. The relay's per-connection data limit
-  // is 1 MiB, so a peer that fails its WebRTC upgrade and falls back to the
-  // circuit would have the transfer cut off mid-stream.
-  it("caps the dimension it will serve", () => {
-    expect(MAX_IMAGE_DIMENSION).toBeGreaterThan(0);
-    expect(MAX_IMAGE_DIMENSION).toBeLessThanOrEqual(2048);
+  // Nothing is re-encoded: peers upgrade to WebRTC and a direct, unlimited
+  // connection, so degrading every photograph to guard a fallback that mostly
+  // does not happen would throw away the user's bytes for nothing.
+  it("serves the bytes exactly as given, without re-encoding", async () => {
+    const original = new Uint8Array(4096).map((_, i) => i % 251);
+    const { info, bytes } = await fileToImage(
+      new File([original], "big.png", { type: "image/png" }),
+    );
+    expect(bytes).toEqual(original);
+    expect(info.size).toBe(original.length);
+    expect(info.contentType).toBe("image/png");
   });
+
 });
