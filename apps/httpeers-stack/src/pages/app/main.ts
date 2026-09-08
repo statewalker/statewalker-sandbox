@@ -77,6 +77,7 @@ import type { ProviderState } from "./discovery.js";
 import { createProviderResolver, describeProvider, IMAGES_KIND, SEARCH_KIND } from "./discovery.js";
 import type { CallOutcome } from "./outcome.js";
 import { describeOutcome, readOutcome } from "./outcome.js";
+import { type ConnectionKind, describeConnection } from "../../browser/connection-kind.js";
 
 /**
  * This peer's ServiceWorker adapter key, and therefore the first segment of
@@ -133,9 +134,33 @@ function clearStatus(target: HTMLElement): void {
   target.textContent = "";
 }
 
+/**
+ * The peer handle, once this page has joined -- read for `connectionKind` only.
+ * Null before a join and after a disconnect, which `renderProvider` treats the
+ * same as "not connected yet".
+ */
+let peerHandle: { connectionKind(peerId: string): ConnectionKind } | null = null;
+
 function renderProvider(target: HTMLElement, label: string, state: ProviderState): void {
   target.dataset.status = state.status;
-  target.textContent = describeProvider(label, state);
+
+  // SAY WHICH TRANSPORT IS CARRYING THIS. libp2p does not upgrade a circuit to
+  // WebRTC by itself; `preDialPeer` asks for it explicitly and the failure is
+  // swallowed, so a peer pair that could not hole-punch silently keeps talking
+  // through the relay -- far slower, on the relay operator's bandwidth, and
+  // until recently truncated mid-transfer by the relay's data cap. That showed
+  // up as broken images with no explanation anywhere. One line here turns it
+  // into something a person can read.
+  let transport = "";
+  if (state.status === "present" && peerHandle != null) {
+    const kind = peerHandle.connectionKind(state.peerId);
+    transport = ` · ${describeConnection(kind)}`;
+    target.dataset.transport = kind;
+  } else {
+    delete target.dataset.transport;
+  }
+
+  target.textContent = describeProvider(label, state) + transport;
 }
 
 function renderProviders(view: MeshView | null): void {
@@ -397,6 +422,11 @@ function refresh(): void {
  * form is open" and "this page is not joined" from ever disagreeing.
  */
 function renderSession(state: SessionState): void {
+  // Kept in step with the session: `connectionKind` is only meaningful while a
+  // peer is live, and reading a stale handle after a disconnect would report a
+  // transport for a connection that no longer exists.
+  peerHandle = state.handle;
+
   handle = state.handle;
 
   peerIdEl.textContent = state.identity ?? "none saved yet";

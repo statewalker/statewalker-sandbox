@@ -91,6 +91,8 @@ import {
   dialRelay,
   waitForCircuitReservation,
 } from "./node-profile.js";
+import { peerIdFromString } from "@libp2p/peer-id";
+import { type ConnectionKind, classifyConnection } from "./connection-kind.js";
 
 /**
  * The invitation payload's shape -- mirrors `../setup/main.ts`'s own
@@ -239,6 +241,14 @@ export interface BrowserPeerHandle {
   joinedBy: JoinMethod;
   /** The mesh view as of the last heartbeat that reported a moved `versions.mesh` -- `null` before the first heartbeat lands. See the module comment's "A PEER'S ADDRS COME FROM THE MESH VIEW" note before dialing anything discovered through this. */
   meshView(): MeshView | null;
+  /**
+   * Is `peerId` reached directly (WebRTC) or through the relay?
+   *
+   * A relayed peer works but is far slower and spends the relay's bandwidth,
+   * and nothing else anywhere reports the difference -- see
+   * `./connection-kind.ts` for why that silence caused a real bug.
+   */
+  connectionKind(peerId: string): ConnectionKind;
   /**
    * Stop this peer: drop presence, KEEP MEMBERSHIP.
    *
@@ -550,6 +560,23 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
     relayAddr,
     joinedBy,
     meshView: () => join.meshView(),
+    connectionKind(peerIdStr: string): ConnectionKind {
+      // Read the OPEN connection's own address. This is the only place that
+      // knows whether the WebRTC upgrade actually happened: `preDialPeer`'s
+      // failure is swallowed by design (`edge-dispatch.ts` job 4), so nothing
+      // upstream of here can tell a direct peer from a relayed one.
+      try {
+        return classifyConnection(
+          node
+            .getConnections(peerIdFromString(peerIdStr))
+            .filter((c) => c.status === "open")
+            .map((c) => c.remoteAddr.toString()),
+        );
+      } catch {
+        // A malformed peer id is a caller error, not a transport state.
+        return "none";
+      }
+    },
     async stop() {
       try {
         join.stop();
