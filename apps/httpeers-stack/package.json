@@ -46,12 +46,12 @@
     "hono": "catalog:",
     "html5-qrcode": "^2.3.8",
     "idb-keyval": "catalog:",
-    "jsqr": "^1.4.0",
     "libp2p": "3.3.8",
     "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "jsqr": "^1.4.0",
     "playwright": "1.58.0",
     "tsx": "catalog:",
     "typescript": "catalog:",
