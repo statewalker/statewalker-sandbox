@@ -179,7 +179,15 @@
         font-size: 0.75rem;
         padding: 0.15rem 0.5rem;
       }
-    </style>
+          .qr { margin-top: 0.75rem; }
+      /* 320px, not 180. A 315-character invitation is a 69-module code, and with
+         its quiet zone that is 77 modules across -- at 180px each module is 2.3
+         device pixels, below what any decoder reliably resolves, so the code
+         rendered fine and scanned as nothing. 320px gives ~4.2px per module,
+         which survives being photographed off a screen at an angle. */
+      .qr svg { width: 320px; max-width: 100%; height: auto; display: block; border: 1px solid #ddd; }
+      .qr-hint { margin: 0.35rem 0 0; font-size: 0.85rem; color: #555; }
+</style>
   </head>
   <body>
     <h1>httpeers hub &mdash; running in this page</h1>

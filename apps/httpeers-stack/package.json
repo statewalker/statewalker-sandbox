@@ -45,7 +45,9 @@
     "@statewalker/webrun-http-browser": "catalog:",
     "hono": "catalog:",
     "idb-keyval": "catalog:",
-    "libp2p": "3.3.8"
+    "jsqr": "^1.4.0",
+    "libp2p": "3.3.8",
+    "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {
     "@types/node": "catalog:",

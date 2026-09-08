@@ -78,6 +78,7 @@ import { createProviderResolver, describeProvider, IMAGES_KIND, SEARCH_KIND } fr
 import type { CallOutcome } from "./outcome.js";
 import { describeOutcome, readOutcome } from "./outcome.js";
 import { type ConnectionKind, describeConnection } from "../../browser/connection-kind.js";
+import { wireQrJoin } from "../../browser/qr-join.js";
 
 /**
  * This peer's ServiceWorker adapter key, and therefore the first segment of
@@ -559,3 +560,15 @@ resetButton.addEventListener("click", () => {
 setInterval(refresh, VIEW_POLL_INTERVAL_MS);
 
 void session.start();
+
+// Scanning a picture is a second way to fill the same field the join form
+// already reads -- see `../../browser/qr-join.ts` for why there are two inputs
+// and why the code is shown rather than used silently.
+wireQrJoin({
+  inputs: [el<HTMLInputElement>("scan-file"), el<HTMLInputElement>("scan-photo")],
+  field: el<HTMLInputElement>("invite"),
+  onCode: () => joinForm.requestSubmit(),
+  status: (message) => {
+    el<HTMLParagraphElement>("scan-status").textContent = message;
+  },
+});

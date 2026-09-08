@@ -71,6 +71,7 @@ import { createIdbSnapshotStore } from "../../browser/snapshot-store.js";
 // run-as-a-process guard evaluates `process.argv` at top level, which is a
 // ReferenceError in a tab before any page code runs. See `ports.ts`.
 import { HUB_PAGE_PORT } from "../../ports.js";
+import { qrSvg } from "../../browser/qr-encode.js";
 
 /**
  * This peer's ServiceWorker adapter key, and therefore the first segment of
@@ -238,7 +239,22 @@ function renderInvitation(target: MintTarget, blob: JoinBlob, expiresAt: number)
   appendCopyRow(dl, "code", encoded);
   appendCopyRow(dl, "id", blob.invitationId);
 
-  box.append(header, dl);
+  // THE SAME CODE, AS A PICTURE. A guest with a phone photographs this and
+  // feeds the photo to their page's scanner; the alternative is retyping 315
+  // base64 characters from someone else's screen.
+  //
+  // It carries the BARE CODE, not a link to a particular page -- see this
+  // module's "AN INVITATION IS NOT TIED TO A PAGE": any page redeems any code,
+  // and a deep link would quietly undo that and teach the hub its guests' URLs.
+  const qr = document.createElement("div");
+  qr.className = "qr";
+  qr.innerHTML = qrSvg(encoded);
+  const qrHint = document.createElement("p");
+  qrHint.className = "qr-hint";
+  qrHint.textContent = "photograph this, then use \u201cscan image\u201d on the joining page";
+  qr.append(qrHint);
+
+  box.append(header, dl, qr);
 
   minted.push({
     id: blob.invitationId,

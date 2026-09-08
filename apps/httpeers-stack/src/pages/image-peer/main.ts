@@ -74,6 +74,7 @@ import { loadFixtureImages } from "./fixtures.js";
 import { fileToImage } from "./local-image.js";
 import { loadStockImages } from "./stock.js";
 import { pacedFiles, readStreamPacing } from "./pacing.js";
+import { wireQrJoin } from "../../browser/qr-join.js";
 
 const el = <T extends HTMLElement>(id: string): T => document.querySelector<T>(`#${id}`)!;
 
@@ -366,4 +367,16 @@ main().catch((err: unknown) => {
   sessionStatusEl.dataset.tone = "failed";
   sessionStatusEl.textContent = String(err);
   console.error("image-peer: failed to start:", err);
+});
+
+// Scanning a picture is a second way to fill the same field the join form
+// already reads -- see `../../browser/qr-join.ts` for why there are two inputs
+// and why the code is shown rather than used silently.
+wireQrJoin({
+  inputs: [el<HTMLInputElement>("scan-file"), el<HTMLInputElement>("scan-photo")],
+  field: el<HTMLInputElement>("invite"),
+  onCode: () => joinForm.requestSubmit(),
+  status: (message) => {
+    el<HTMLParagraphElement>("scan-status").textContent = message;
+  },
 });
