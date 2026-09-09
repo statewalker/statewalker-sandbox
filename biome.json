@@ -33,5 +33,12 @@
       "enabled": true,
       "indentWidth": 2
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/httpeers-wire-protos/src/**"],
+      "formatter": { "enabled": false },
+      "assist": { "enabled": false }
+    }
+  ]
 }
