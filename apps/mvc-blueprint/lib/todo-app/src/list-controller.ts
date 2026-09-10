@@ -15,6 +15,9 @@ export type PanelOutcome = { ok: true } | { ok: false; error: unknown };
 /** What a failure says to the user. A `CommandError`'s message already names its kind and key. */
 const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+/** "1 completed todo", "3 completed todos". */
+const completedTodos = (n: number): string => `${n} completed todo${n === 1 ? "" : "s"}`;
+
 /**
  * Owns the external service and the bus; never sees a view.
  *
@@ -48,11 +51,17 @@ export class ListController {
    */
   private _handledRefresh = -1;
   /**
-   * The `clearCompletedCount` the user has been answered for. Starts at 0 —
-   * unlike `_handledRefresh`, nothing is owed at startup. Moves only once the
-   * work has landed: a declined confirm (the answer IS the work), or a
-   * confirmed clear the command accepted. See `_clearCompleted()` for WHEN
-   * the target is read, which is what makes two quick presses one dialog.
+   * The `clearCompletedCount` whose intent has been CONSUMED. Starts at 0 —
+   * unlike `_handledRefresh`, nothing is owed at startup.
+   *
+   * The rule, stated precisely: a watermark moves once the user's intent is
+   * consumed — and for an intent that asks the user a question, the ANSWER is
+   * the consumption. Yes or no, and whether or not the clear that follows a
+   * yes succeeds (a failure is reported, and the user retries by pressing
+   * again). An intent with nothing to ask about is consumed without asking.
+   * Only a question that was never answered — the confirm itself failed —
+   * leaves it owed. See `_clearCompleted()` for WHEN the target is read,
+   * which is what makes two quick presses one dialog.
    */
   private _handledClearCompleted = 0;
   /**
@@ -264,10 +273,17 @@ export class ListController {
     // A reload that failed is not retried within the same run: the backend is
     // down, and looping on it would spin. It stays OWED (the watermark did not
     // move), so the next run — one bump, or any other edge — repays it.
+    //
+    // Clear-completed does NOT follow this rule once the user has answered,
+    // and the difference is deliberate. A reload is invisible and idempotent,
+    // so repaying it on whatever edge next wakes the loop is free and silent.
+    // Repaying a clear would re-open a MODAL confirm for someone who already
+    // answered, on an unrelated edge — a toggle popping the dialog back up.
+    // So for a clear, the answer consumes the intent (see
+    // `_handledClearCompleted`); only a question that could not be asked at
+    // all stays owed, and `clearOwed` stops this run from trying again at once.
     let refreshFailed = false;
-    // Same for a clear-completed that failed: it stays owed, but re-asking
-    // within this run would open the dialog again at once.
-    let clearFailed = false;
+    let clearOwed = false;
     try {
       let again = true;
       while (again && !this._disposed) {
@@ -315,13 +331,23 @@ export class ListController {
         // STATE-LATEST edge, through a dialog: confirm, clear, notify. Checked
         // after the event edges, so a toggle pressed before "clear completed"
         // has landed before the question counts what is completed.
-        if (!clearFailed && input.clearCompletedCount > this._handledClearCompleted) {
-          didWork = true;
-          const cleared = await this._clearCompleted();
-          if (cleared.answered !== undefined) this._handledClearCompleted = cleared.answered;
-          else clearFailed = true;
-          failure ??= cleared.failure;
-          again = true; // we awaited: anything may have arrived meanwhile
+        if (!clearOwed && input.clearCompletedCount > this._handledClearCompleted) {
+          const completed = this._model.todos.filter((t) => t.done).length;
+          if (completed === 0) {
+            // A question with no content is not asked — of a user, a host, or
+            // an agent raising this intent through the command surface; a
+            // view disabling its button cannot speak for the other two. The
+            // intent is consumed on the spot: no dialog, no command, no toast,
+            // no model write, so it is not counted as work either.
+            this._handledClearCompleted = input.clearCompletedCount;
+          } else {
+            didWork = true;
+            const clear = await this._clearCompleted(completed);
+            if (clear.consumed !== undefined) this._handledClearCompleted = clear.consumed;
+            else clearOwed = true;
+            failure ??= clear.failure;
+            again = true; // we awaited: anything may have arrived meanwhile
+          }
         }
 
         // STATE-LATEST edge, coalesced leading + trailing: compare against a
@@ -382,12 +408,15 @@ export class ListController {
 
   /**
    * The spec §5 chain on a real feature: a short-lived view (confirm), a
-   * command, and a fire-and-forget view (notify). Never rejects.
+   * command, and a fire-and-forget view (notify). Never rejects. `completed`
+   * is the model's count, and is never 0 — the caller skips an empty question.
    *
-   * `answered` is the `clearCompletedCount` this pass has repaid, or
-   * `undefined` if it repaid nothing — the question failed, or the user said
-   * yes and the clear did not land — so the edge stays OWED, exactly like a
-   * failed refresh.
+   * `consumed` is the `clearCompletedCount` whose intent this pass consumed:
+   * set as soon as the user has answered, whatever follows — a decline, a
+   * clear that lands, or a clear that fails (reported through `failure`, and
+   * never re-asked; the user retries by pressing again). It is `undefined`
+   * only when the question itself failed and so was never answered: then
+   * the edge stays owed.
    *
    * WHY THE TARGET IS READ AFTER THE ANSWER, not before the question (where
    * `refreshCount`'s is read). A state-latest edge captures its target at the
@@ -400,51 +429,59 @@ export class ListController {
    * above the target, and earns exactly one follow-up dialog: coalesced,
    * never lost.
    *
-   * No wait is added to `dispose()` for any of this: if teardown starts while
-   * the dialog is open, the view layer's own `dispose()` force-rejects it,
-   * that rejection is caught below, and `_disposed` stops the run.
+   * TEARDOWN. `dispose()` does not wait for any of this, so nothing here may
+   * depend on being unstuck in time. If teardown starts while the dialog is
+   * open, this run stays suspended until someone settles the confirm:
+   * `ViewAdapter.dispose()` force-rejects it (caught below), and a view layer
+   * that never settles it leaves the run suspended for good — harmless,
+   * because the model is written only after a `_disposed` check (here, in
+   * `_reload()`, and in the loop), whichever settles first and in whichever
+   * order the registry tears things down.
    */
-  private async _clearCompleted(): Promise<{ answered?: number; failure?: string }> {
-    const completed = this._model.todos.filter((t) => t.done).length;
+  private async _clearCompleted(completed: number): Promise<{ consumed?: number; failure?: string }> {
     let confirmed: boolean;
     try {
-      const question = new ConfirmModel(`Clear ${completed} completed todos?`);
+      const question = new ConfirmModel(`Clear ${completedTodos(completed)}?`);
       ({ confirmed } = await this._commands.call(uiConfirm, question).promise);
     } catch (error) {
       return { failure: `confirm failed: ${reason(error)}` };
     }
-    const answered = this._model.input.clearCompletedCount;
-    if (this._disposed) return {};
-    // Declined: the answer is the work, and it has landed. Nothing to do.
-    if (!confirmed) return { answered };
+    // The answer consumes every press made up to now — see above.
+    const consumed = this._model.input.clearCompletedCount;
+    if (this._disposed) return { consumed };
+    if (!confirmed) return { consumed };
 
     let cleared: number;
     try {
       ({ cleared } = await this._commands.call(todosClearCompleted, {}).promise);
     } catch (error) {
-      return { failure: `clear completed failed: ${reason(error)}` };
+      // Answered, so consumed: reported once, never re-asked.
+      return { consumed, failure: `clear completed failed: ${reason(error)}` };
     }
-    if (this._disposed) return {};
+    if (this._disposed) return { consumed };
 
     // Fire-and-forget: the toast settles itself, so it is not awaited — a
     // controller waiting out a timeout would stall every other edge behind
-    // it. Its rejection still needs a handler, attached in this same turn so
-    // it can never go unhandled. A DISPATCH-time failure (`no-handlers`: no
-    // view layer for notify) rejects synchronously inside `call()`, so its
-    // handler is queued before the reload's continuation and has run by the
-    // time the reload returns — it is folded into this run's outcome there.
-    // A LATER rejection can only be the view layer force-closing an open
-    // toast at teardown; `_disposed` is already set by then (LIFO), and there
-    // is nobody left to tell.
+    // it. Its rejection still gets a handler, attached in this same turn, so
+    // it can never go unhandled. What the handler's result MEANS depends only
+    // on timing, never on teardown order:
+    // - A DISPATCH-time failure (`no-handlers`: no notify view) rejects
+    //   synchronously inside `call()`, so its handler is queued before the
+    //   reload's continuation, has run by the time the reload returns, and is
+    //   folded into this run's outcome below.
+    // - ANY later rejection (a view layer force-closing an open toast, or a
+    //   view rejecting it) lands in `notifyFailed` after this method has
+    //   already returned and nobody reads it again — so it is dropped. That
+    //   is deliberate: the clear it announced has already landed and been
+    //   reported, and a toast that failed to finish showing is not news.
     let notifyFailed: string | undefined;
-    const note = this._commands.call(uiNotify, new NotifyModel(`${cleared} cleared`));
+    const note = this._commands.call(uiNotify, new NotifyModel(`Cleared ${completedTodos(cleared)}`));
     note.promise.then(undefined, (error: unknown) => {
       notifyFailed = `notify failed: ${reason(error)}`;
     });
 
     const reloaded = await this._reload();
-    // The clear landed, so the edge is repaid whatever the reload did.
-    return { answered, failure: notifyFailed ?? (reloaded.ok ? undefined : reloaded.failure) };
+    return { consumed, failure: notifyFailed ?? (reloaded.ok ? undefined : reloaded.failure) };
   }
 
   /** Never rejects: a failed list is a result, so the caller decides what it means. */

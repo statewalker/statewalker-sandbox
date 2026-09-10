@@ -130,7 +130,12 @@ describe("B3 · dispose() liveness — a controller stuck on a view-settled comm
       let views!: ViewAdapter;
       let confirmCleanupRan = false;
       let clearCalls = 0;
-      const api = { ...seededApi(), clearCompleted: async () => ++clearCalls };
+      // A completed row, or there is nothing to ask about and no dialog opens.
+      const api = {
+        ...seededApi(),
+        list: async () => [{ id: "1", title: "seed", done: true }],
+        clearCompleted: async () => ++clearCalls,
+      };
       const app = bootstrap({
         commands,
         api,
