@@ -1,6 +1,7 @@
 import { CommandError, Commands } from "@statewalker/shared-commands";
 import { beforeEach, describe, expect, it } from "vitest";
-import { ConfirmModel, NotifyModel, TodoListModel, uiConfirm, uiNotify, uiShowList } from "@todo/app";
+// The view layer's suite takes what the view layer may take: models and declarations.
+import { ConfirmModel, NotifyModel, TodoListModel, uiConfirm, uiNotify, uiShowList } from "@todo/app/models";
 import { ViewAdapter } from "@todo/ui";
 
 describe("B4 · view protocol", () => {

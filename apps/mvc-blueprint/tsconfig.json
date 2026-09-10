@@ -13,6 +13,7 @@
     "paths": {
       "@todo/core": ["./lib/todo-core/src/index.ts"],
       "@todo/app": ["./lib/todo-app/src/index.ts"],
+      "@todo/app/models": ["./lib/todo-app/src/models.ts"],
       "@todo/ui": ["./lib/todo-ui/src/index.ts"]
     }
   },

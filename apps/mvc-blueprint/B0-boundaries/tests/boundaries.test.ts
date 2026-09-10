@@ -118,6 +118,33 @@ describe("B0 · package boundaries", () => {
   });
 
   describe("todo-ui reaches the core only through the app layer", () => {
+    // Spec §1.1: "Views know only models. Nothing else. Never." todo-ui needs
+    // todo-app for model types, so a blanket ban is wrong; the separation is
+    // the models-only entry point, `@todo/app/models`.
+    it("reaches todo-app only through @todo/app/models — never a controller", () => {
+      const beyondModels = new RegExp(
+        `@todo/app(?!/models${QUOTE})|${QUOTE}\\.\\.?/${NOT_QUOTE}*\\btodo-app/`,
+      );
+      for (const { file, code } of sources("todo-ui")) {
+        expect(code, `${file} must import todo-app only as "@todo/app/models"`).not.toMatch(beyondModels);
+      }
+    });
+
+    it("keeps @todo/app/models free of controllers, bootstrap and the token", async () => {
+      // The grep above is only as good as the entry it points at: if models.ts
+      // ever re-exported a controller, the rule would still pass. So check what
+      // the entry actually exports, transitive re-exports included.
+      const names = Object.keys(await import("@todo/app/models"));
+      expect(names, "the entry must carry the models a view renders").toEqual(
+        expect.arrayContaining(["TodoListModel", "TodoListInput", "MenuModel", "uiShowList"]),
+      );
+      for (const name of names) {
+        expect(name, `@todo/app/models must not export ${name}`).not.toMatch(
+          /Controller|bootstrap|ViewsReady|^expect/,
+        );
+      }
+    });
+
     it("never imports todo-core", () => {
       for (const { file, code } of sources("todo-ui")) {
         expect(code, `${file} must not import the core directly`).not.toMatch(importOf("core"));

@@ -8,6 +8,10 @@ const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
  * these aliases are the seam under test, not a convenience.
  */
 export const alias = {
+  // Before "@todo/app": Vite matches string aliases by PREFIX in declaration
+  // order, so the other way round "@todo/app/models" resolves to
+  // ".../index.ts/models".
+  "@todo/app/models": r("./lib/todo-app/src/models.ts"),
   "@todo/core": r("./lib/todo-core/src/index.ts"),
   "@todo/app": r("./lib/todo-app/src/index.ts"),
   "@todo/ui": r("./lib/todo-ui/src/index.ts"),
