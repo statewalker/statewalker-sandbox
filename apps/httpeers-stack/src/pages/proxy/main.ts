@@ -28,7 +28,6 @@
  */
 import { createMounts } from "@statewalker/httpeers.core";
 import type { AdvertisementInput } from "../../browser/join.js";
-import type { BrowserPeerHandle } from "../../browser/peer-runtime.js";
 import { createQrJoinUi } from "../../browser/qr-join-ui.js";
 import { wireQrJoin } from "../../browser/qr-join.js";
 import type { PeerSession, SessionState } from "../../browser/session.js";
@@ -80,8 +79,6 @@ let stored: StoredRoute[] = loadRoutes(localStorage);
  */
 const currentRoutes = (): ProxyRoute[] => withSecrets(stored, secrets);
 
-/** Live only while `phase.kind === "live"` -- the console has nothing to call otherwise. */
-let handle: BrowserPeerHandle | null = null;
 
 /**
  * A `Name: value` per line textarea, as a header record.
@@ -249,10 +246,6 @@ function addRoute(): void {
  * which is the exact failure this console exists to rule out.
  */
 async function runConsole(): Promise<void> {
-  if (handle == null) {
-    consoleStatusEl.textContent = "not joined — the console calls this page's own mesh edge.";
-    return;
-  }
   const typed = consolePathEl.value.trim();
   const prefix = typed.startsWith("/") ? typed : `/${typed}`;
   const body = consoleBodyEl.value;
@@ -261,11 +254,16 @@ async function runConsole(): Promise<void> {
   consoleOutputEl.textContent = "";
   consoleSendButton.disabled = true;
   try {
-    const res = await fetch(`${handle.baseUrl}${handle.peerId}/proxy${prefix}`, {
-      method: consoleMethodEl.value,
-      headers: parseHeaders(consoleHeadersEl.value),
-      ...(body !== "" ? { body } : {}),
-    });
+    // Straight to the endpoint -- see `proxyEndpoint`'s comment for why not
+    // through this page's own edge. The origin is arbitrary and never used:
+    // the endpoint reads the path and strips its own `/proxy` mount.
+    const res = await proxyEndpoint(
+      new Request(`http://proxy.local/proxy${prefix}`, {
+        method: consoleMethodEl.value,
+        headers: parseHeaders(consoleHeadersEl.value),
+        ...(body !== "" ? { body } : {}),
+      }),
+    );
     consoleStatusEl.textContent =
       `${res.status} ${res.statusText} · ${res.headers.get("content-type") ?? ""}` +
       // The proxy's OWN answers are marked, so a 404 from this page is never
@@ -298,9 +296,27 @@ async function runConsole(): Promise<void> {
  * reconnect) serves the same live route table rather than a snapshot of
  * whatever was configured at the moment it last connected.
  */
+/**
+ * ONE endpoint, mounted for the mesh AND called directly by the console.
+ *
+ * The console used to go out through this page's own edge --
+ * `${baseUrl}${peerId}/proxy/...` -- on the reasoning that a peer can address
+ * itself. It cannot: that request hangs indefinitely, with no error and no
+ * timeout, while the identical call from a SECOND peer answers in under a
+ * second. Verified both ways before changing anything.
+ *
+ * Calling the handler directly is also the better tool. It answers before this
+ * page has joined any mesh, so routes can be tried while they are being
+ * configured, and it isolates what the console is for -- did MY route, MY
+ * headers and MY upstream behave -- from whether the mesh is currently
+ * healthy. The mesh path has its own proof: another peer fetching
+ * `/proxy/openai/models` and getting the upstream's own answer.
+ */
+const proxyEndpoint = createProxyEndpoint({ routes: currentRoutes });
+
 async function buildMounts(): Promise<ReturnType<typeof createMounts>> {
   const mounts = createMounts();
-  mounts.provide("/proxy", createProxyEndpoint({ routes: currentRoutes }));
+  mounts.provide("/proxy", proxyEndpoint);
   return mounts;
 }
 
@@ -309,10 +325,6 @@ async function buildMounts(): Promise<ReturnType<typeof createMounts>> {
  * this page that writes a status line or enables a control.
  */
 function renderSession(state: SessionState): void {
-  // Kept in step with the session: the console composes its URL from this
-  // handle, and a stale one after a disconnect would address a peer that is no
-  // longer in the mesh.
-  handle = state.handle;
 
   peerIdEl.textContent = state.identity ?? "none saved yet";
 
