@@ -21,7 +21,35 @@ const sources = (pkg: string) =>
       code: stripComments(readFileSync(`${ROOT}lib/${pkg}/src/${f}`, "utf8")),
     }));
 
-/** A package's suites, found by the alias they import — not by directory. */
+const QUOTE = "[\"'`]";
+const NOT_QUOTE = "[^\"'`\\n]";
+
+/**
+ * An import of layer `pkg`, by alias OR by a relative path walking into its
+ * directory. An alias-only grep is walked straight past by
+ * `"../../todo-app/src/todo-model.js"`, which reaches the same file and names no
+ * alias — so every import assertion below goes through this, never a bare
+ * `/@todo\/x/`. The relative half requires a leading `./` or `../`, which is
+ * what an import specifier looks like and a path in a message does not.
+ */
+const importOf = (pkg: string) =>
+  new RegExp(`@todo/${pkg}\\b|${QUOTE}\\.\\.?/${NOT_QUOTE}*\\btodo-${pkg}/`);
+
+/**
+ * A write to a model field from outside the model (spec §4.8): plain, compound
+ * or `??=` assignment, and `++`/`--` either side. The receiver is anything whose
+ * name contains "model" — a controller's `_model`, a `model` parameter, a
+ * `listModel` — followed by any member chain, so `this._model.todos = […]` is
+ * caught as surely as `model.input.pending = []`. `=(?![=>])` keeps `==`, `===`
+ * and `=>` out of it.
+ */
+const MODEL_CHAIN = String.raw`\b\w*[Mm]odel\w*(?:\.\w+)+`;
+const ASSIGN = String.raw`(?:[-+*/%&|^]|\*\*|<<|>>>?|&&|\|\||\?\?)?=(?![=>])`;
+const MODEL_FIELD_WRITE = new RegExp(
+  `${MODEL_CHAIN}\\s*(?:${ASSIGN}|\\+\\+|--)|(?:\\+\\+|--)\\s*${MODEL_CHAIN}`,
+);
+
+/** A package's suites, found by what they import — alias or relative path — not by directory. */
 const suitesUsing = (pkg: string) =>
   readdirSync(ROOT, { withFileTypes: true })
     .filter((d) => d.isDirectory() && !["lib", "node_modules", "src"].includes(d.name))
@@ -38,7 +66,7 @@ const suitesUsing = (pkg: string) =>
         code: stripComments(readFileSync(`${dir}/${f}`, "utf8")),
       }));
     })
-    .filter(({ code }) => new RegExp(`@todo/${pkg}`).test(code));
+    .filter(({ code }) => importOf(pkg).test(code));
 
 const DOM_GLOBALS = /\b(document|window|HTMLElement|navigator)\b/;
 
@@ -61,7 +89,8 @@ describe("B0 · package boundaries", () => {
 
     it("imports nothing from todo-app or todo-ui", () => {
       for (const { file, code } of sources("todo-core")) {
-        expect(code, `${file} must not import the app or ui layer`).not.toMatch(/@todo\/(app|ui)/);
+        expect(code, `${file} must not import the app layer`).not.toMatch(importOf("app"));
+        expect(code, `${file} must not import the ui layer`).not.toMatch(importOf("ui"));
       }
     });
 
@@ -75,7 +104,7 @@ describe("B0 · package boundaries", () => {
   describe("todo-app is the view-free layer", () => {
     it("imports nothing from todo-ui", () => {
       for (const { file, code } of sources("todo-app")) {
-        expect(code, `${file} must not import the ui layer`).not.toMatch(/@todo\/ui/);
+        expect(code, `${file} must not import the ui layer`).not.toMatch(importOf("ui"));
       }
     });
 
@@ -89,7 +118,7 @@ describe("B0 · package boundaries", () => {
   describe("todo-ui reaches the core only through the app layer", () => {
     it("never imports todo-core", () => {
       for (const { file, code } of sources("todo-ui")) {
-        expect(code, `${file} must not import the core directly`).not.toMatch(/@todo\/core/);
+        expect(code, `${file} must not import the core directly`).not.toMatch(importOf("core"));
       }
     });
 
@@ -105,8 +134,12 @@ describe("B0 · package boundaries", () => {
     });
 
     it("holds for todo-ui SUITES too — a suite can breach a boundary as easily as a module", () => {
-      for (const { file, code } of suitesUsing("ui")) {
-        expect(code, `${file} must not import the core directly`).not.toMatch(/@todo\/core/);
+      const suites = suitesUsing("ui");
+      // The same empty-loop shape the recursion guard above exists for: if the
+      // discovery ever finds nothing, the loop below asserts nothing and passes.
+      expect(suites.length, "found no todo-ui suite — the check below would be vacuous").toBeGreaterThan(0);
+      for (const { file, code } of suites) {
+        expect(code, `${file} must not import the core directly`).not.toMatch(importOf("core"));
       }
     });
   });
@@ -128,10 +161,16 @@ describe("B0 · package boundaries", () => {
       }
     });
 
-    it("never assigns through `.input.`, which is what a mutator is for", () => {
+    it("never assigns a model field — on the input sub-model OR the outer model", () => {
+      // Guarding only `.input.` left the outer model open: a controller writing
+      // `this._model.todos = [...]` bypasses `replaceTodos`, fires no notify,
+      // and every subscriber keeps an empty list — with this suite green.
       for (const { file, code } of nonModels()) {
-        expect(code, `${file} must not assign a model field directly`).not.toMatch(
-          /\.input\.\w+\s*(=[^=]|\+\+|--)/,
+        expect(code, `${file} must not assign a model field directly; use a mutator`).not.toMatch(
+          MODEL_FIELD_WRITE,
+        );
+        expect(code, `${file} must not assign through \`.input.\`; use a mutator`).not.toMatch(
+          /\.input\.\w+\s*(=(?![=>])|\+\+|--)/,
         );
       }
     });
@@ -157,10 +196,22 @@ describe("B0 · package boundaries", () => {
     // Spec §4.6. TodoApi is a data-access port. The moment it names a command,
     // a model or the bus, the layering is nominal rather than real.
     it("keeps TodoApi and its adapters free of commands, models and the bus", () => {
-      for (const { file, code } of sources("todo-core")) {
-        if (!/types\.ts$|-api\.ts$/.test(file)) continue;
+      // NO word boundaries: `\bModel\b` does not match `TodoListModel`, and
+      // `\bCommand\b` matches neither `CommandDeclaration` nor `CommandError` —
+      // which left the check near-inert. A substring match costs nothing here,
+      // since a data-access port has no business spelling either. The imports
+      // are checked too: `todosAdd` from the sibling declarations names no
+      // "Command" and still makes the port know the bus.
+      const ports = sources("todo-core").filter(({ file }) => /types\.ts$|-api\.ts$/.test(file));
+      expect(ports.map((p) => p.file), "the port files this check covers").toEqual(
+        expect.arrayContaining(["todo-core/src/types.ts", "todo-core/src/mem-todo-api.ts"]),
+      );
+      for (const { file, code } of ports) {
         expect(code, `${file} must not name a command, model or bus`).not.toMatch(
-          /\b(Command|Commands|CommandsRegistry|BaseClass|Model)\b/,
+          /Command|Model|BaseClass/,
+        );
+        expect(code, `${file} must not import the bus, the model base, or the declarations`).not.toMatch(
+          /@statewalker\/shared-(commands|baseclass)|["']\.\/(declarations|todo-commands)(\.js)?["']/,
         );
       }
     });
