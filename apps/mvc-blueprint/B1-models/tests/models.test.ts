@@ -71,14 +71,30 @@ describe("B1 · todo models", () => {
     expect(changes).toBe(1);
   });
 
-  it("wakes onOutcomeChange only when the outcome actually changes", () => {
+  it("raises no notify when reportOutcome is handed the outcome it already holds", () => {
+    // Counted on the RAW notify channel, exactly as for setFilter above.
+    // Subscribing through onOutcomeChange would prove onChangeNotifier's own
+    // dedup, and pass with reportOutcome's compare-before-write guard deleted
+    // (which it did).
+    const m = new TodoListModel();
+    let notifies = 0;
+    m.onUpdate(() => { notifies++; });
+    m.reportOutcome("x");
+    m.reportOutcome("x");
+    m.reportOutcome("x");
+    expect(notifies, "three writes, one real change").toBe(1);
+    m.reportOutcome(undefined);
+    m.reportOutcome(undefined);
+    expect(notifies, "clearing twice is one change too").toBe(2);
+  });
+
+  it("wakes onOutcomeChange when the outcome changes", () => {
     const m = new TodoListModel();
     let changes = 0;
     m.onOutcomeChange(() => { changes++; });
     m.reportOutcome("x");
-    expect(changes).toBe(1);
-    m.reportOutcome("x");
-    expect(changes, "same outcome, no field change, no update").toBe(1);
+    m.reportOutcome("y");
+    expect(changes).toBe(2);
   });
 
   it("wakes onQueryChange from either half of the composite selector", () => {
@@ -87,6 +103,8 @@ describe("B1 · todo models", () => {
     m.input.onQueryChange(() => { queries++; });
     m.input.setShowDone(false);
     expect(queries, "showDone is half of the composite query").toBe(1);
+    m.input.setFilter("abc");
+    expect(queries, "filterDraft is the other half").toBe(2);
   });
 
   it("wakes a channel subscriber only for its own change", () => {
@@ -115,12 +133,20 @@ describe("B1 · todo models", () => {
     expect(changes).toBe(2);
   });
 
-  it("drops underscore-prefixed fields from toJSON, so a session snapshot is clean", () => {
+  it("keeps change channels out of toJSON, so a session snapshot stays data", () => {
+    // Spec §4.10 property 3: channels are function-valued fields, and toJSON
+    // skips functions. (No model here has an underscore field, so this test no
+    // longer claims to check one.)
     const m = new TodoListModel();
     m.replaceTodos([{ id: "1", title: "x", done: false }]);
     const json = JSON.parse(JSON.stringify(m.toJSON()));
     expect(json.todos).toHaveLength(1);
-    // Channels are function-valued, so toJSON skips them — a snapshot stays data.
-    expect(Object.keys(json)).not.toContain("onTodosChange");
+    for (const channel of ["onTodosChange", "onOutcomeChange", "onUpdate"]) {
+      expect(Object.keys(json), `${channel} is a function, not state`).not.toContain(channel);
+    }
+    const input = JSON.parse(JSON.stringify(m.input.toJSON()));
+    for (const channel of ["onRefresh", "onPendingChange", "onQueryChange"]) {
+      expect(Object.keys(input), `${channel} is a function, not state`).not.toContain(channel);
+    }
   });
 });
