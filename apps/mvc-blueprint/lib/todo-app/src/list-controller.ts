@@ -49,6 +49,15 @@ export class ListController {
    * lost) and never more than one (real coalescing, not N reloads).
    */
   private _reconciling = false;
+  private _activated = false;
+  /**
+   * Set first thing in `dispose()`. Checked after every await, so work that was
+   * already in flight when teardown began drops its write instead of landing
+   * on a model whose owner was told teardown is complete.
+   */
+  private _disposed = false;
+  /** Every `_reconcile()` run not yet settled, so `dispose()` can wait them out. */
+  private readonly _inFlight = new Set<Promise<void>>();
   readonly debug = { reactions: 0, reloads: 0 };
 
   constructor(
@@ -72,6 +81,12 @@ export class ListController {
           "ready token from bootstrap(), which mints it only after registerViews has run.",
       );
     }
+    // A second activate() — or one after dispose() — would subscribe every
+    // channel again, and each edge would then start two runs.
+    if (this._activated) {
+      throw new Error("controller already activated: activate() subscribes its channels, so it runs once.");
+    }
+    this._activated = true;
     const [register] = this._registry;
     // Subscribed to NAMED CHANNELS, never to bare `onUpdate` (spec §4.10): a
     // write to `filterDraft` must not wake the code that reloads from the api.
@@ -80,22 +95,40 @@ export class ListController {
     register(
       this._model.input.onRefresh(() => {
         this.debug.reactions++;
-        void this._reconcile();
+        this._start();
       }),
     );
     register(
       this._model.input.onPendingChange(() => {
         this.debug.reactions++;
-        void this._reconcile();
+        this._start();
       }),
     );
     // The initial load: `_handledRefresh` starts below any `refreshCount`.
-    void this._reconcile();
+    this._start();
   }
 
+  /**
+   * Quiescent, not merely unsubscribed: when this resolves, the controller will
+   * never write the model again. Unsubscribing stops NEW work; the run already
+   * awaiting the api is waited out, and `_disposed` makes it drop its write.
+   * `ViewAdapter.dispose()` is symmetric in the same way, for the same reason.
+   */
   async dispose(): Promise<void> {
+    this._disposed = true;
     const [, cleanup] = this._registry;
     await cleanup();
+    while (this._inFlight.size > 0) await Promise.all(this._inFlight);
+  }
+
+  /** Starts a run and tracks it until it settles. `_reconcile()` never rejects. */
+  private _start(): void {
+    const run = this._reconcile();
+    this._inFlight.add(run);
+    const settled = () => {
+      this._inFlight.delete(run);
+    };
+    void run.then(settled, settled);
   }
 
   /**
@@ -123,7 +156,7 @@ export class ListController {
     let refreshFailed = false;
     try {
       let again = true;
-      while (again) {
+      while (again && !this._disposed) {
         again = false;
         const input = this._model.input;
 
@@ -134,6 +167,9 @@ export class ListController {
         if (batch.length > 0) {
           didWork = true;
           for (const item of batch) {
+            // Disposed mid-batch: issue no further commands for a model
+            // nobody owns any more. The rest of the batch is abandoned with it.
+            if (this._disposed) break;
             try {
               await this._commands.call(todosAdd, { title: item.title }).promise;
             } catch (error) {
@@ -182,7 +218,7 @@ export class ListController {
     } finally {
       this._reconciling = false;
     }
-    if (didWork) this._model.reportOutcome(failure);
+    if (didWork && !this._disposed) this._model.reportOutcome(failure);
   }
 
   /** Never rejects: a failed list is a result, so the caller decides what it means. */
@@ -190,6 +226,9 @@ export class ListController {
     this.debug.reloads++;
     try {
       const todos = await this._api.list();
+      // Disposed while the api was answering: drop the write. The run checks
+      // `_disposed` too and stops, so nobody acts on this result.
+      if (this._disposed) return { ok: true };
       // One mutator, one notify. The controller does not know the field layout.
       this._model.replaceTodos(todos);
       return { ok: true };

@@ -1,9 +1,9 @@
 import { Commands } from "@statewalker/shared-commands";
 import { beforeEach, describe, expect, it } from "vitest";
-import { MemTodoApi, todosAdd } from "@todo/core";
+import { MemTodoApi, type Todo } from "@todo/core";
 import {
   type AppHandle,
-  type ListController,
+  ListController,
   TodoListModel,
   bootstrap,
   expectCoalescedEdge,
@@ -23,6 +23,28 @@ class FlakyTodoApi extends MemTodoApi {
       throw new Error("network down");
     }
     return super.list();
+  }
+}
+
+/** A `TodoApi` whose `list()` takes `ms` to answer — a real network, not a microtask. */
+class SlowTodoApi extends MemTodoApi {
+  /** Calls entered and not yet answered. */
+  outstanding = 0;
+  constructor(
+    rows: Todo[],
+    private readonly _ms: number,
+  ) {
+    super(rows);
+  }
+  override async list() {
+    this.outstanding++;
+    try {
+      const rows = await super.list();
+      await new Promise((r) => setTimeout(r, this._ms));
+      return rows;
+    } finally {
+      this.outstanding--;
+    }
   }
 }
 
@@ -207,6 +229,52 @@ describe("B3 · list controller", () => {
       ).toBe(2);
       await flakyApp.dispose();
     });
+  });
+
+  it("is quiescent: once dispose() resolves, the controller never writes the model again", async () => {
+    // `ViewAdapter.dispose()` was fixed for exactly this asymmetry; the
+    // controller never got it. Unsubscribing stops NEW work, but the reload
+    // already awaiting the api still lands ~60ms later, on a model whose owner
+    // has been told teardown is complete.
+    const slow = new SlowTodoApi([{ id: "1", title: "seed", done: false }], 60);
+    const slowApp = bootstrap({ commands: new Commands(), api: slow, registerViews: () => {} });
+    const m = new TodoListModel();
+    slowApp.createList(m); // the initial load is now in flight
+    let writes = 0;
+    m.onUpdate(() => {
+      writes++; // raw: ANY write counts — the list, or an outcome
+    });
+    expect(slow.outstanding, "precondition: the load is in flight").toBe(1);
+    await slowApp.dispose();
+    // Two separate properties, two assertions. Waiting the run out is what
+    // makes dispose() mean "done"; the disposed flag is what stops the waited-
+    // out run from writing. Either alone passes one of these and fails the other.
+    expect(slow.outstanding, "dispose() resolved with the controller's api call still in flight").toBe(0);
+    const atDispose = writes;
+    await new Promise((r) => setTimeout(r, 120));
+    expect(writes, "a write landed after dispose() resolved").toBe(atDispose);
+    expect(m.todos, "the in-flight load was dropped, not applied late").toEqual([]);
+  });
+
+  it("refuses a second activate(), which would double-subscribe every channel", async () => {
+    // Replays the GENUINE token bootstrap handed this controller — captured on
+    // its way in, never minted — because since B4's token fix no caller holds
+    // one otherwise. bootstrap re-uses one token for every controller by
+    // design, so replay is the realistic way a second activate() happens.
+    const original = ListController.prototype.activate;
+    let token: unknown;
+    ListController.prototype.activate = function (this: ListController, ready) {
+      token = ready;
+      return original.call(this, ready);
+    };
+    let again: ListController;
+    try {
+      again = app.createList(new TodoListModel());
+    } finally {
+      ListController.prototype.activate = original;
+    }
+    expect(token, "captured the real token").toBeDefined();
+    expect(() => again.activate(token as never)).toThrow(/already activated/);
   });
 
   it("stops reacting after dispose", async () => {
