@@ -49,8 +49,8 @@ const MODEL_FIELD_WRITE = new RegExp(
   `${MODEL_CHAIN}\\s*(?:${ASSIGN}|\\+\\+|--)|(?:\\+\\+|--)\\s*${MODEL_CHAIN}`,
 );
 
-/** A package's suites, found by what they import — alias or relative path — not by directory. */
-const suitesUsing = (pkg: string) =>
+/** Every rung's suites, found by walking `<rung>/tests` recursively. */
+const allSuites = () =>
   readdirSync(ROOT, { withFileTypes: true })
     .filter((d) => d.isDirectory() && !["lib", "node_modules", "src"].includes(d.name))
     .flatMap((d) => {
@@ -65,8 +65,10 @@ const suitesUsing = (pkg: string) =>
         file: `${d.name}/tests/${f}`,
         code: stripComments(readFileSync(`${dir}/${f}`, "utf8")),
       }));
-    })
-    .filter(({ code }) => importOf(pkg).test(code));
+    });
+
+/** A package's suites, found by what they import — alias or relative path — not by directory. */
+const suitesUsing = (pkg: string) => allSuites().filter(({ code }) => importOf(pkg).test(code));
 
 const DOM_GLOBALS = /\b(document|window|HTMLElement|navigator)\b/;
 
@@ -173,6 +175,30 @@ describe("B0 · package boundaries", () => {
           /\.input\.\w+\s*(=(?![=>])|\+\+|--)/,
         );
       }
+    });
+  });
+
+  describe("the bootstrap-order token cannot be forged", () => {
+    // Spec §4.12. `ViewsReady` has a private constructor, but `_mint()` is a
+    // public static — it has to be, since `bootstrap.ts` is another module. The
+    // barrel exports the type only; this grep is what closes the rest: a
+    // `todo-app` file, or a suite reaching in by relative path, that mints a
+    // token can activate a controller with no view layer registered.
+    const MINT = /\b_mint\b/;
+    const MINTERS = ["todo-app/src/views-ready.ts", "todo-app/src/bootstrap.ts"];
+
+    it("mints only in views-ready.ts and bootstrap.ts", () => {
+      const everything = [
+        ...sources("todo-core"),
+        ...sources("todo-app"),
+        ...sources("todo-ui"),
+        // B0 itself names the pattern; it is the grep, not a minter.
+        ...allSuites().filter(({ file }) => !file.startsWith("B0-boundaries/")),
+      ];
+      const minters = everything.filter(({ code }) => MINT.test(code)).map(({ file }) => file);
+      // Equality, not "is a subset": if bootstrap stopped minting, the pattern
+      // (or the file layout) has drifted and this check would be asserting nothing.
+      expect(minters.sort(), "only bootstrap may mint a ViewsReady").toEqual([...MINTERS].sort());
     });
   });
 

@@ -43,8 +43,9 @@ export class ListController {
 
   /**
    * `ready` is only ever real when it came from `bootstrap()`, minted after
-   * `registerViews` returned — the constructor on `ViewsReady` is private, so
-   * nothing outside that module can forge one. This is the enforcement for
+   * `registerViews` returned — the barrel exports `ViewsReady` as a type only
+   * and B0 confines `_mint` to two files, so no caller can forge one (see
+   * `views-ready.ts` for why a private constructor alone was not enough). This is the enforcement for
    * "a controller cannot be activated before the view layer is registered";
    * see `views-ready.ts` for why that has to live outside a comment.
    */
