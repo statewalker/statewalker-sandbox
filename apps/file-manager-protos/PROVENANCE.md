@@ -261,6 +261,27 @@ evidence of what the September ladder wrote, and reformatting it to quiet a tool
 would destroy exactly the property that makes it evidence. The same applies to the
 adopted test files. Only files this adoption authored are formatted.
 
+> ### A repo-wide `biome --write` will silently invalidate this document
+>
+> Not break it — *invalidate* it. Every recovered-code claim above asserts that a
+> file is byte-for-byte what came out of an archive. A formatter pass rewrites
+> those files, every test stays green, `biome check` goes quiet, and this document
+> becomes false with nothing anywhere reporting it.
+>
+> It nearly happened during C5: a `biome check --write` aimed at a directory
+> reformatted `model-kit.ts`, and the only thing that caught it was reading
+> `git status` rather than trusting a green suite. That is the quietest way an
+> evidence record rots, because the person running the formatter later will not be
+> thinking about provenance at all.
+>
+> If you need to format, scope it to the files this adoption authored:
+> `fm-core/src`, `fm-app/src` **excluding `model-kit.ts` and `panels-model.ts`**,
+> `test/boundaries.test.ts`, `test/c0-decisions.test.ts`, and
+> `fm-app/test/c3-*.ts`, `c4-*.ts`, `c5-*.ts`. Everything else under `test/` and
+> `fm-app/test/` is adopted and must not be touched. If a file above was
+> reformatted anyway, `git diff` against the commit that introduced it is the only
+> way back — the archives in the Drive mirror are the other.
+
 **TS 7 and Vite disagree about symlinks.** TypeScript 7.0.2 does not canonicalise
 a path inside a symlinked directory where Vite does, so `src/core/job-model.ts`
 and `fm-core/src/job-model.ts` were one class to `vitest` and two distinct
