@@ -513,6 +513,34 @@ export function defineRechecks({ makeFixture, factory }: RecheckOptions): void {
       expect(second.total).toBe(0);
       expect(await listPaths(targetStore.api, "/two")).toEqual([]);
 
+      // ── THE DESIGN QUESTION THIS PINS, FOR WHOEVER OWNS C3 ──────────────────
+      //
+      // A VANISHED SOURCE IS INDISTINGUISHABLE FROM AN EMPTY ONE, and the shape is
+      // FM-1's `enumerate()` bug arriving by a different route: there, a job
+      // "succeeded" having copied zero entries because every root was assumed to be
+      // a directory; here, because a root that no longer exists lists as though it
+      // were an empty one. `BrowserFilesApi.list` swallows the `NotFoundError` its
+      // dead handle raises (`catch { return; }`) and yields nothing.
+      //
+      // THE MECHANISM TO TELL THEM APART ALREADY EXISTS, and it is the same one C3
+      // uses to disambiguate an empty path from a missing one: `stats()`. On a
+      // vanished root it answers `undefined`; on a genuinely empty directory it
+      // answers the directory variant. Asserted here rather than described, so C3
+      // inherits a checked fact:
+      expect(await doomed.api.stats("/src")).toBeUndefined();
+      const empty = await fixture.storage("rc3-empty");
+      await empty.api.mkdir("/src");
+      expect(await empty.api.stats("/src")).toMatchObject({ kind: "directory" });
+      //
+      // And `enumerate()` ALREADY COMPUTES IT AND DISCARDS THE ANSWER — it calls
+      // `api.stats(root)`, tests only for `kind === "file"`, and lets `undefined`
+      // fall through to the `list()` branch alongside a real directory. So the fix
+      // is one line at a place that already has the information, not new plumbing.
+      // It is left to C3 rather than taken here because "a root that disappeared
+      // between selection and enqueue" is a job-outcome decision (fail the job, or
+      // report zero entries copied?) and that belongs with the listing lifecycle,
+      // not with the adapter port. FM-5 pins the behaviour; it does not choose.
+
       // The lane survived either way.
       const third = queue.enqueue({
         operation: "copy",

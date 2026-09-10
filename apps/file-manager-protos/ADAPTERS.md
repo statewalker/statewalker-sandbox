@@ -143,12 +143,26 @@ reference. The consequence, never observed until now:
   entries, because `BrowserFilesApi.list` swallows the `NotFoundError` its dead
   handle raises. The lane survives either way, which the next job proves.
 
-That second row is the one worth carrying forward: **a silently-revoked source
-reads as an empty source**, and nothing in the engine distinguishes them. Its
-target path is asserted empty and its `total` asserted `0`, so the behaviour is
-pinned rather than merely noticed. Telling the two apart is a design question, not
-a bug fix, and it belongs with whoever owns C3's listing lifecycle — an empty
-directory and a missing one are already disambiguated there by `stats()`.
+That second row is the one worth carrying forward, and it is **FM-1's
+`enumerate()` bug arriving by a different route**: there, a job "succeeded" having
+copied zero entries because every root was assumed to be a directory; here, because
+a root that no longer exists lists as though it were an empty one.
+`BrowserFilesApi.list` swallows the `NotFoundError` its dead handle raises and
+yields nothing.
+
+**For whoever owns C3.** The mechanism to tell the two apart already exists, and it
+is the same one C3 uses to disambiguate an empty path from a missing one: `stats()`
+answers `undefined` on a vanished root and the directory variant on a genuinely
+empty directory. Both are asserted in the re-check, so C3 inherits a checked fact
+rather than a paragraph. And `enumerate()` **already computes it and discards the
+answer** — it calls `api.stats(root)`, tests only for `kind === "file"`, and lets
+`undefined` fall through to the `list()` branch beside a real directory. The fix is
+one line at a place that already has the information.
+
+FM-5 pins the behaviour and does not choose it: "a root that disappeared between
+selection and enqueue" is a job-outcome decision — fail the job, or report zero
+entries copied — and that belongs with the listing lifecycle, not with an adapter
+port.
 
 ### 4 · Resume after a genuinely expired credential — NOT OBSERVED
 
