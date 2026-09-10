@@ -1,15 +1,15 @@
-import { Commands } from "@statewalker/shared-commands";
-import { beforeEach, describe, expect, it } from "vitest";
-import { MemTodoApi, type Todo } from "@todo/core";
+import { CommandError, Commands } from "@statewalker/shared-commands";
 import {
   type AppHandle,
-  ListController,
-  TodoListModel,
   bootstrap,
   expectCoalescedEdge,
   expectNoSelfWake,
+  ListController,
+  TodoListModel,
 } from "@todo/app";
-
+import { MemTodoApi, type Todo } from "@todo/core";
+import { beforeEach, describe, expect, it } from "vitest";
+import { claimListView } from "../../test-support/views.js";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
@@ -80,7 +80,7 @@ describe("B3 · list controller", () => {
     // controller — rather than `new ListController(...).activate()` directly,
     // which now refuses without the token bootstrap mints (see B4's
     // bootstrap.test.ts "refuses to activate").
-    app = bootstrap({ commands, api, registerViews: () => {} });
+    app = bootstrap({ commands, api, registerViews: (bus) => claimListView(bus) });
     model = new TodoListModel();
     controller = app.createList(model).controller;
   });
@@ -162,8 +162,12 @@ describe("B3 · list controller", () => {
         model.input.queueSubmit(""); // rejected by todosAdd's zod `min(1)`
         await tick();
         await tick();
-        expect(model.lastOutcome, "the rejection must reach the user").toMatch(/input-validation: todos:add/);
-        expect(model.input.pending, "the item was taken off the queue, not wedged in it").toEqual([]);
+        expect(model.lastOutcome, "the rejection must reach the user").toMatch(
+          /input-validation: todos:add/,
+        );
+        expect(model.input.pending, "the item was taken off the queue, not wedged in it").toEqual(
+          [],
+        );
         expect(unhandled, "a `void`ed reconcile must not leak its rejection").toEqual([]);
 
         // Alive: the next submission is handled, and a later successful pass
@@ -181,7 +185,11 @@ describe("B3 · list controller", () => {
       await collectingUnhandled(async (unhandled) => {
         const flaky = new FlakyTodoApi([{ id: "1", title: "seed", done: false }]);
         flaky.failing = true;
-        const flakyApp = bootstrap({ commands: new Commands(), api: flaky, registerViews: () => {} });
+        const flakyApp = bootstrap({
+          commands: new Commands(),
+          api: flaky,
+          registerViews: (bus) => claimListView(bus),
+        });
         const m = new TodoListModel();
         flakyApp.createList(m);
         await tick();
@@ -195,7 +203,10 @@ describe("B3 · list controller", () => {
         await tick();
         await tick();
         expect(m.todos.map((t) => t.id)).toEqual(["1"]);
-        expect(m.lastOutcome, "the retry succeeded, so the failure is no longer true").toBeUndefined();
+        expect(
+          m.lastOutcome,
+          "the retry succeeded, so the failure is no longer true",
+        ).toBeUndefined();
         await flakyApp.dispose();
       });
     });
@@ -205,7 +216,11 @@ describe("B3 · list controller", () => {
       // before the await, it claims a reload that threw was done: the refresh
       // is then owed but never repaid, until the user happens to bump again.
       const flaky = new FlakyTodoApi([{ id: "1", title: "seed", done: false }]);
-      const flakyApp = bootstrap({ commands: new Commands(), api: flaky, registerViews: () => {} });
+      const flakyApp = bootstrap({
+        commands: new Commands(),
+        api: flaky,
+        registerViews: (bus) => claimListView(bus),
+      });
       const m = new TodoListModel();
       const c = flakyApp.createList(m).controller;
       await tick();
@@ -241,7 +256,11 @@ describe("B3 · list controller", () => {
     // checked after every await, makes that run drop its write instead of
     // landing on a model whose owner was told teardown is complete.
     const slow = new SlowTodoApi([{ id: "1", title: "seed", done: false }], 60);
-    const slowApp = bootstrap({ commands: new Commands(), api: slow, registerViews: () => {} });
+    const slowApp = bootstrap({
+      commands: new Commands(),
+      api: slow,
+      registerViews: (bus) => claimListView(bus),
+    });
     const m = new TodoListModel();
     slowApp.createList(m); // the initial load is now in flight
     let writes = 0;
@@ -287,5 +306,71 @@ describe("B3 · list controller", () => {
     model.input.requestRefresh();
     await tick();
     expect(controller.debug.reactions).toBe(before);
+  });
+
+  describe("the panel command — Command.required's actual case", () => {
+    // Deliberately the ONE place in this file that does NOT use
+    // `claimListView`: this is what `Command.required` exists to catch, and
+    // it must fail loudly rather than vanish.
+    it("fails loudly with no-handlers when no uiShowList handler is registered, and leaks no unhandled rejection", async () => {
+      await collectingUnhandled(async (unhandled) => {
+        const bareApp = bootstrap({
+          commands: new Commands(),
+          api: new MemTodoApi([{ id: "1", title: "seed", done: false }]),
+          registerViews: () => {}, // no uiShowList handler — the wiring bug
+        });
+        const m = new TodoListModel();
+        const c = bareApp.createList(m).controller;
+
+        const result = await c.panelSettled;
+        expect(result.ok, "the panel command must reject, not hang or silently succeed").toBe(
+          false,
+        );
+        if (!result.ok) {
+          expect(result.error, "the same CommandError the bus itself produces").toBeInstanceOf(
+            CommandError,
+          );
+          expect((result.error as CommandError).kind).toBe("no-handlers");
+          expect((result.error as CommandError).commandKey).toBe("ui:show-list");
+        }
+
+        // Not folded into reportOutcome: a later successful load must NOT
+        // erase the record of the wiring bug the way it erases a transient
+        // failure. This is exactly why `reportOutcome` was the wrong channel.
+        await tick();
+        await tick();
+        expect(
+          m.todos.map((t) => t.id),
+          "the list itself still loads fine",
+        ).toEqual(["1"]);
+        const resultAfterSuccess = await c.panelSettled;
+        expect(
+          resultAfterSuccess.ok,
+          "the wiring bug does not go away because an unrelated load succeeded",
+        ).toBe(false);
+
+        expect(unhandled, "no unhandled rejection, whether or not panelSettled is read").toEqual(
+          [],
+        );
+        await bareApp.dispose();
+      });
+    });
+
+    it("never produces an unhandled rejection even when nobody reads panelSettled", async () => {
+      await collectingUnhandled(async (unhandled) => {
+        const bareApp = bootstrap({
+          commands: new Commands(),
+          api: new MemTodoApi(),
+          registerViews: () => {},
+        });
+        bareApp.createList(new TodoListModel());
+        // No one ever touches `.panelSettled` here — the guarantee must not
+        // depend on a caller opting in.
+        await tick();
+        await tick();
+        expect(unhandled).toEqual([]);
+        await bareApp.dispose();
+      });
+    });
   });
 });

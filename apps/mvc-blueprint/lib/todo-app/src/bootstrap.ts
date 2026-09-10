@@ -25,6 +25,12 @@ export interface ListHandle {
    * Disposes THIS controller and removes it from the app's registry, without
    * tearing down the app. It is the registry's own per-registration disposer,
    * so it is idempotent, and `dispose()` later does not touch it again.
+   *
+   * Since Task 12, this also unmounts the controller's own `ui:show-list`
+   * panel: `release()` is exactly `controller.dispose()` (see `createList`
+   * below), and `dispose()` is what settles that panel command closed. No
+   * separate view-teardown step is needed here — a sibling controller's
+   * panel is untouched, because each is its own command instance.
    */
   release(): Promise<void>;
 }

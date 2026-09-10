@@ -1,8 +1,9 @@
 import { Command, Commands } from "@statewalker/shared-commands";
+import { bootstrap, ConfirmModel, TodoListModel, uiConfirm } from "@todo/app";
+import { ViewAdapter } from "@todo/ui";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { ConfirmModel, TodoListModel, bootstrap, uiConfirm } from "@todo/app";
-import { ViewAdapter } from "@todo/ui";
+import { mountListView } from "../../test-support/views.js";
 
 /**
  * B0 bans a suite that imports `@todo/ui` from also importing `@todo/core`
@@ -68,6 +69,7 @@ describe("B3 · dispose() liveness — a controller stuck on a view-settled comm
       // `todos:add` route through the dialog.
       registerViews: (bus) => {
         const views = new ViewAdapter(bus);
+        mountListView(views);
         views.on(uiConfirm, () => {
           // Claims by returning a cleanup, and never calls `settle()` — the
           // dialog is left open, exactly as the scenario requires.

@@ -1,7 +1,8 @@
 import { Commands } from "@statewalker/shared-commands";
-import { describe, expect, it } from "vitest";
+import { bootstrap, ListController, TodoListModel } from "@todo/app";
 import { MemTodoApi } from "@todo/core";
-import { ListController, TodoListModel, bootstrap } from "@todo/app";
+import { describe, expect, it } from "vitest";
+import { claimListView } from "../../test-support/views.js";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
@@ -18,8 +19,9 @@ describe("B4 · bootstrap ordering", () => {
     const app = bootstrap({
       commands: new Commands(),
       api: new MemTodoApi(),
-      registerViews: () => {
+      registerViews: (bus) => {
         order.push("views");
+        return claimListView(bus);
       },
     });
     app.createList(new TodoListModel());
@@ -37,7 +39,7 @@ describe("B4 · bootstrap ordering", () => {
     const app = bootstrap({
       commands: new Commands(),
       api: new MemTodoApi(),
-      registerViews: () => {},
+      registerViews: (bus) => claimListView(bus),
     });
     await tick();
     const late = app.createList(new TodoListModel()).controller;
@@ -50,7 +52,7 @@ describe("B4 · bootstrap ordering", () => {
     const app = bootstrap({
       commands: new Commands(),
       api: new MemTodoApi(),
-      registerViews: () => {},
+      registerViews: (bus) => claimListView(bus),
     });
     const model = new TodoListModel();
     const controller = app.createList(model).controller;
@@ -67,8 +69,12 @@ describe("B4 · bootstrap ordering", () => {
     const app = bootstrap({
       commands: new Commands(),
       api: new MemTodoApi(),
-      registerViews: () => () => {
-        order.push("views");
+      registerViews: (bus) => {
+        const unclaim = claimListView(bus);
+        return () => {
+          order.push("views");
+          unclaim();
+        };
       },
     });
     const controller = app.createList(new TodoListModel()).controller;
@@ -93,7 +99,7 @@ describe("B4 · bootstrap ordering", () => {
     const app = bootstrap({
       commands: new Commands(),
       api: new MemTodoApi(),
-      registerViews: () => {},
+      registerViews: (bus) => claimListView(bus),
     });
     const modelA = new TodoListModel();
     const modelB = new TodoListModel();

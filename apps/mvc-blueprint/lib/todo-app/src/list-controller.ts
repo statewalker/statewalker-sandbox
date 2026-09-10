@@ -1,8 +1,16 @@
-import type { Commands } from "@statewalker/shared-commands";
+import type { Command, Commands } from "@statewalker/shared-commands";
 import { newRegistry } from "@statewalker/shared-registry";
 import { type TodoApi, todosAdd } from "@todo/core";
 import type { TodoListModel } from "./todo-model.js";
+import { uiShowList } from "./ui-declarations.js";
 import { ViewsReady } from "./views-ready.js";
+
+/**
+ * What `panelSettled` carries once the panel command settles. Never
+ * rejects — see the field's own doc for why a plain `Promise<void>` would
+ * be the wrong shape here.
+ */
+export type PanelOutcome = { ok: true } | { ok: false; error: unknown };
 
 /** What a failure says to the user. A `CommandError`'s message already names its kind and key. */
 const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -24,6 +32,11 @@ const reason = (error: unknown): string => (error instanceof Error ? error.messa
  * escapes: each failure is caught where it happens and reported through the
  * outer model's `reportOutcome` (the mutator that exists for exactly this), and
  * a watermark moves only once the work it stands for has actually landed.
+ *
+ * ONE exception: the panel command's own rejection (`activate()`'s
+ * `commands.call(uiShowList, ...)` finding no view layer) does NOT go through
+ * `reportOutcome` — see `panelSettled`'s doc for why that channel is the wrong
+ * fit for a wiring bug rather than a transient failure.
  */
 export class ListController {
   private readonly _registry = newRegistry();
@@ -57,6 +70,36 @@ export class ListController {
    */
   private _disposed = false;
   readonly debug = { reactions: 0, reloads: 0 };
+  /**
+   * The long-lived `ui:show-list` command `activate()` shows and `dispose()`
+   * settles. Held here (not fired-and-forgotten) for two reasons: `dispose()`
+   * needs a handle to resolve it closed, and nothing else in this class ever
+   * touches it, so there is no other honest owner.
+   */
+  private _panel?: Command<TodoListModel, { closed: boolean }>;
+  /**
+   * Settles once — when the panel command does, which in the healthy case is
+   * only at `dispose()`. NEVER rejects itself: the panel command's rejection
+   * (almost certainly `no-handlers` — no view layer registered) is carried as
+   * DATA (`{ ok: false, error }`), not as a rejection, so a caller who never
+   * reads this field can never turn its mere existence into an unhandled
+   * rejection. `panel.promise` itself, though, gets a rejection handler
+   * SYNCHRONOUSLY inside `activate()` — in the same tick `commands.call()`
+   * ran in — which is what keeps that one from ever going unhandled either.
+   *
+   * This exists because `activate()` is synchronous and cannot throw a
+   * rejection that arrives after it returns, and because the file's usual
+   * channel for a failure — `reportOutcome` — is the wrong fit here: it is
+   * cleared by the very next successful reconcile (by design, so a stale
+   * failure does not linger once the thing it described stopped being true),
+   * and the initial load succeeding is the common case even when NO view
+   * layer is registered. A `no-handlers` wiring bug does not go away because
+   * the list still loaded; folding it into `reportOutcome` would erase it
+   * within one tick almost every time. `panelSettled` is the honest,
+   * un-clobbered record instead — read by a test (and available to any real
+   * host that wants to know) via `await controller.panelSettled`.
+   */
+  panelSettled: Promise<PanelOutcome> = Promise.resolve({ ok: true });
 
   constructor(
     private readonly _model: TodoListModel,
@@ -81,7 +124,9 @@ export class ListController {
     // A second activate() — or one after dispose() — would subscribe every
     // channel again, and each edge would then start two runs.
     if (this._activated) {
-      throw new Error("controller already activated: activate() subscribes its channels, so it runs once.");
+      throw new Error(
+        "controller already activated: activate() subscribes its channels, so it runs once.",
+      );
     }
     this._activated = true;
     const [register] = this._registry;
@@ -101,6 +146,28 @@ export class ListController {
         void this._reconcile();
       }),
     );
+
+    // The design's central sentence, made true for the list: "a controller
+    // emits ui:show-*(model); the adapter claims it, renders, and unmounts
+    // when the command settles." Shown ONCE, held open — never settled here —
+    // because this is a panel, not a dialog: it has no answer to wait for, so
+    // the only thing that ever settles it is `dispose()`, on teardown.
+    //
+    // `uiShowList`'s input schema (`z.custom<TodoListModel>()`) validates
+    // synchronously, so `commands.call` dispatches to listeners — and, with
+    // none registered, rejects with `no-handlers` — before this line returns.
+    // The `.then` below is attached in that same synchronous turn, which is
+    // what keeps a `no-handlers` rejection (or, later, `ViewAdapter.dispose()`
+    // force-rejecting this same command) from ever being unhandled: Node/the
+    // browser only flags a rejection as unhandled if NOTHING is listening by
+    // the end of the current microtask turn, and by then this already is.
+    const panel = this._commands.call(uiShowList, this._model);
+    this._panel = panel;
+    this.panelSettled = panel.promise.then(
+      (): PanelOutcome => ({ ok: true }),
+      (error: unknown): PanelOutcome => ({ ok: false, error }),
+    );
+
     // The initial load: `_handledRefresh` starts below any `refreshCount`.
     void this._reconcile();
   }
@@ -129,9 +196,30 @@ export class ListController {
    * promises: `_disposed` alone already guarantees no write reaches the
    * model after teardown, which is the guarantee the earlier fix actually
    * needed.
+   *
+   * Settling the panel is deliberately SYNCHRONOUS and un-awaited, for the
+   * exact reason the paragraph above gives up the run-quiescent guarantee:
+   * awaiting anything here reintroduces the deadlock Task 10 removed. Calling
+   * `resolve()` is enough — the bus validates `{ closed: true }` against
+   * `uiShowList`'s output schema (`z.object({ closed: z.boolean() })`)
+   * synchronously (zod, no async refinement), so the command is fully settled
+   * before this line finishes, and `ViewAdapter`'s `cmd.promise.then(...)`
+   * reaction (which unmounts the view) is scheduled to run on the very next
+   * microtask turn — no wait needed for that either.
+   *
+   * Idempotent with `ViewAdapter.dispose()` also touching this command: read
+   * from `@statewalker/shared-commands`' `command.ts`, both `resolve()` and
+   * `reject()` start with `if (cmd.settled) return;` — a settled-guard on the
+   * bus itself, not an assumption made here. In the normal LIFO order this
+   * controller's `dispose()` always runs before the view layer's, so this
+   * `resolve()` is the one that wins and the adapter's later `reject()` (for
+   * whatever is still open at ITS dispose) is the no-op. Were the order ever
+   * reversed, the adapter's `reject()` would win instead and this `resolve()`
+   * would be the no-op — either way, no throw, no double-settle.
    */
   async dispose(): Promise<void> {
     this._disposed = true;
+    this._panel?.resolve({ closed: true });
     const [, cleanup] = this._registry;
     await cleanup();
   }

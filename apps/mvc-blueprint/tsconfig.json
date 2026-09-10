@@ -17,5 +17,5 @@
       "@todo/ui": ["./lib/todo-ui/src/index.ts"]
     }
   },
-  "include": ["lib/**/*", "*/tests/**/*", "vitest.config.ts"]
+  "include": ["lib/**/*", "*/tests/**/*", "test-support/**/*", "vitest.config.ts"]
 }

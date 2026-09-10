@@ -1,10 +1,11 @@
 import { Commands } from "@statewalker/shared-commands";
-import { describe, expect, it } from "vitest";
 // A suite that spans every layer on purpose. B0's "views know only models" rule
 // binds todo-ui SOURCES; a suite wiring bootstrap to the view layer needs both.
 // It may still not import @todo/core (B0 checks that), hence the local api.
-import { MenuController, TodoListModel, bootstrap, uiShowMenu } from "@todo/app";
+import { bootstrap, MenuController, TodoListModel, uiShowMenu } from "@todo/app";
 import { ViewAdapter } from "@todo/ui";
+import { describe, expect, it } from "vitest";
+import { claimListView } from "../../test-support/views.js";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
@@ -49,23 +50,37 @@ describe("B4 · end to end — bus, then views, then controllers, nothing faked 
       // so it joins bootstrap's registry.
       registerViews: (bus) => {
         const views = new ViewAdapter(bus);
+        // Claimed on the raw bus, NOT mounted on `views`: this test asserts
+        // on `views.openViews()` for the MENU, and the list panel — claimed,
+        // never settled until the controller's own dispose() — would sit in
+        // that same map forever if it were mounted on this adapter instead.
+        const unclaimList = claimListView(bus);
         views.on(uiShowMenu, (view) => {
           mounted.push(`menu:${view.model.items.map((i) => i.label).join("|")}`);
           const act = user;
           if (act !== "leaves-it-open") {
             // A click arrives after the menu has painted — later, not during render.
-            setTimeout(() => view.settle({ selectedKey: act(view.model.items.map((i) => i.key)) }), 0);
+            setTimeout(
+              () => view.settle({ selectedKey: act(view.model.items.map((i) => i.key)) }),
+              0,
+            );
           }
           return () => unmounted.push("menu");
         });
         adapter = views;
-        return () => views.dispose();
+        return async () => {
+          unclaimList();
+          await views.dispose();
+        };
       },
     });
     const model = new TodoListModel();
     app.createList(model);
     await tick();
-    expect(model.todos.map((t) => t.id), "the list controller came up through the same bootstrap").toEqual(["1"]);
+    expect(
+      model.todos.map((t) => t.id),
+      "the list controller came up through the same bootstrap",
+    ).toEqual(["1"]);
 
     // 1. The user settles it: the controller's command renders a view with the
     //    labels the controller copied in, the choice travels back, and the view
@@ -86,7 +101,10 @@ describe("B4 · end to end — bus, then views, then controllers, nothing faked 
       (e: Error) => e,
     );
     await tick();
-    expect(adapter?.openViews().map((v) => v.key), "identified by its command key").toEqual(["ui:show-menu"]);
+    expect(
+      adapter?.openViews().map((v) => v.key),
+      "identified by its command key",
+    ).toEqual(["ui:show-menu"]);
     expect(unmounted).toEqual(["menu"]);
 
     await app.dispose();
