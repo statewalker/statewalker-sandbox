@@ -32,13 +32,19 @@ One app package, three source roots, because the three-package boundary is what 
 promoted and what `test/boundaries.test.ts` enforces:
 
 ```
-fm-core/src/    registry, engine, checkpoints, conflicts, queue, stats, declarations
-fm-app/src/     models, controllers, bootstrap, model-kit, panels, notifier, commands
-fm-ui/src/      empty until D1
-src/{core,app,ui}   symlinks onto the three roots (see below)
-test/           P0-P6 suites, the C0 boundary grep, the C0 decisions
-fm-app/test/    C1, C2, C3, C4, C5 suites
+fm-core/src/      registry, engine, checkpoints, conflicts, queue, stats, declarations
+fm-app/src/       models, controllers, bootstrap, model-kit, panels, notifier, commands
+fm-ui/src/        empty until D1
+fm-adapters/src/  C0.5 — OPFS and Node storage adapters, the handle lease, capabilities
+src/{core,app,ui}   symlinks onto the first three roots (see below)
+test/             P0-P6 suites, the C0 boundary greps, the C0 decisions
+fm-app/test/      C1, C2, C3, C4, C5 suites
+fm-adapters/test/ the ported core suites and the C0.5 re-checks
 ```
+
+`fm-adapters` is the fourth root and the only one that may name a browser global —
+that is how C0.5 resolves §6.1's tension rather than loosening it. See
+[`ADAPTERS.md`](./ADAPTERS.md).
 
 `@fm/core`, `@fm/app` and `@fm/ui` resolve through `tsconfig.json` `paths` **and** a
 matching `resolve.alias` in `vitest.config.ts` — both, or `tsc --noEmit` and
@@ -57,11 +63,18 @@ never has two module identities.
 
 ```bash
 pnpm install --ignore-workspace   # the app is self-contained; see below
-pnpm test                         # all of it
+pnpm test                         # all of it, both projects
+pnpm vitest run --project node    # the node project
+pnpm vitest run --project opfs    # the ones that run in real Chromium
 pnpm test p4                      # one rung
 pnpm test c3                      # one Phase C rung
-pnpm typecheck                    # see the known defect below
+pnpm typecheck                    # two projects; see the known defect below
 ```
+
+**Two vitest projects, one `pnpm test`.** C0.5 runs the core suites against the
+real Origin Private File System, so 66 of the 329 execute inside a real Chromium
+under Vitest browser mode. A browser that cannot start is a failure, never a skip.
+`pnpm exec playwright install chromium` if it is missing.
 
 **Dependencies are pinned explicitly rather than through `catalog:`**, following
 `httpeers-shell-protos`: the app has to install and pass on its own. The versions are
@@ -100,6 +113,13 @@ Two further standing rules show up as machinery rather than prose:
 
 ## Mutation pass
 
+C0.5 adds its own: **29 mutations, 27 killed**, plus 9 over the boundary greps, all
+killed. Both survivors are diagnosed in [`ADAPTERS.md`](./ADAPTERS.md) §Mutation
+results — one is redundant-given-`acquire`'s-shape, the other unreachable on OPFS
+and kept for the picked-directory case that could not be tested. The FM-1 pass
+below is unchanged.
+
+
 65 mutations, **61 killed, 3 survive** (plus one mutation whose faithful two-site form
 is killed by 1 — the harness's single-site approximation is too weak to be evidence).
 Every mutation from every rung record's own table was re-run, plus the two shapes
@@ -125,16 +145,20 @@ They belong with the P1 and C2 suites, upstream.
 
 ## What is not here
 
-The real adapters: every rung here runs on `MemFilesApi`, which is
-synchronous-ish, never denies permission, never expires and never fails a write
-halfway — so partial target removal, re-acquisition failure on resume and lane
-serialisation under latency are **asserted but never observed**. That is a
-separate unit. `fm-ui` stays empty until D1, and the dialog contract, the
-conflict dialog and the React panel are Phase D.
+`fm-ui` stays empty until D1, and the dialog contract, the conflict dialog and the
+React panel are Phase D.
+
+**C0.5's real adapters ARE here** (FM-5), with two gaps stated rather than papered
+over: a user-picked File System Access directory, because `showDirectoryPicker()`
+cannot be driven from Playwright, and a remote adapter, because no credentials were
+available. [`ADAPTERS.md`](./ADAPTERS.md) says what each costs and what was measured
+before concluding it. Two of §2's three never-observed behaviours are now observed;
+the third — resume after a genuinely expired credential — is **not observed**, because
+neither a browser filesystem nor a local directory has a credential that expires.
 
 One known design gap, flagged rather than fixed: tier-one notification re-lists
 once per *engine batch*, so a 500-file copy re-lists the target directory ~63
 times at the default `batchSize` of 8. That satisfies the records ("must not call
 notify() 500 times") and it updates during the copy rather than only at the end,
 but it is O(batches × directory size). A debounce across batches is the obvious
-next step and the records do not specify one.
+next step and the records do not specify one — umbrella `#31`.

@@ -7,17 +7,21 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.adapters.json --noEmit"
   },
   "dependencies": {
     "@statewalker/shared-baseclass": "0.1.1",
     "@statewalker/shared-commands": "0.2.1",
     "@statewalker/webrun-files": "0.7.0",
+    "@statewalker/webrun-files-browser": "0.7.2",
     "@statewalker/webrun-files-mem": "0.7.2",
+    "@statewalker/webrun-files-node": "0.7.0",
     "zod": "4.5.4"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
+    "@vitest/browser-playwright": "4.1.11",
+    "playwright": "1.58.0",
     "typescript": "7.0.2",
     "vitest": "4.1.11"
   }

@@ -60,6 +60,43 @@ interface Conflicts {
 const yieldControl = () => new Promise<void>((r) => setTimeout(r, 0));
 
 /**
+ * C0.5 — the engine enforces cancellation on the source stream ITSELF, rather
+ * than trusting the adapter to honour `ReadOptions.signal`.
+ *
+ * `FilesApi.read`'s options have carried `signal?: AbortSignal` with the comment
+ * "AbortSignal for cancellation support" since `webrun-files@0.7.0`, and
+ * `transfer()` below passed it and relied on the adapter throwing. NO SHIPPED
+ * ADAPTER IMPLEMENTS IT: `MemFilesApi`, `NodeFilesApi` and `BrowserFilesApi` all
+ * accept `ReadOptions` and all three ignore `signal`. Two of them additionally
+ * swallow every read error (`catch { return; }`), so a read cannot signal failure
+ * by throwing either — it ends early and silently.
+ *
+ * The consequence, measured on real OPFS and on a real directory before this
+ * existed: cancelling a job mid-write did not interrupt anything. All 64 chunks
+ * of a 512 KiB file arrived after `cancel()`, the write completed, and the entry
+ * was reported written — so "leaves no partial file behind when a write is
+ * interrupted" was a promise about a code path that could not be reached.
+ * `MemFilesApi` hid it twice over, because it yields the whole file as ONE chunk
+ * and there is no mid-stream to interrupt.
+ *
+ * The signal is still passed down, deliberately: an adapter that does implement
+ * it can stop reading at the source instead of being unwound one chunk later.
+ * This is the floor, not a replacement.
+ */
+async function* abortableSource(
+  source: AsyncIterable<Uint8Array>,
+  signal: AbortSignal,
+): AsyncIterable<Uint8Array> {
+  // Checked BEFORE the first chunk as well as between chunks: a job cancelled
+  // while its batch was being assembled must not write a first byte.
+  if (signal.aborted) throw new Error("job cancelled");
+  for await (const chunk of source) {
+    if (signal.aborted) throw new Error("job cancelled");
+    yield chunk;
+  }
+}
+
+/**
  * P3 — the engine walks and transfers file by file, as the only path.
  *
  * `FilesApi.copy()` is recursive but returns a single boolean: no progress, no
@@ -203,8 +240,13 @@ async function transfer(
 
   try {
     // No AbortSignal on write(): interrupting means throwing from the source
-    // iterable, which leaves a partial target behind — so we remove it.
-    await target.api.write(to, source.api.read(entry.path, { signal: job.signal }));
+    // iterable, which leaves a partial target behind — so we remove it. The
+    // throw is `abortableSource`'s, not the adapter's; see its comment for why
+    // the adapter cannot be relied on to produce one.
+    await target.api.write(
+      to,
+      abortableSource(source.api.read(entry.path, { signal: job.signal }), job.signal),
+    );
   } catch (err) {
     await target.api.remove(to).catch(() => undefined);
     throw err;
