@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: the `from`/`to` fields below are
+// SOURCE TEXT TO MATCH against src/*.ts, not templates to interpolate. Several of those lines
+// legitimately contain `${...}` because the code being mutated does — e.g. dialAnyRelay's
+// `failures.join()` inside a real template literal. Interpolating them here would break every
+// pattern that contains one.
 /**
  * The mutation harness for this app — §5.3 of
  * `notes/2026/2026-09/2026-09-09/[umbrella-next].prototype-adoption.md`: "a suite that has
