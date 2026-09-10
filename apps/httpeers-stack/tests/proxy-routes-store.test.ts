@@ -31,6 +31,20 @@ describe("saveRoutes / loadRoutes", () => {
     expect(s.map.get(ROUTES_STORAGE_KEY)).not.toContain("sk-");
   });
 
+  // The test above cannot fail for ANY implementation: `StoredRoute` has no
+  // field a token could live in, so the guarantee is structural and the
+  // assertion is decoration. This one has teeth -- it pins the persisted
+  // SHAPE, so a future field carrying a value (a `token`, a merged `headers`
+  // that swallowed the secret) fails here instead of shipping.
+  it("persists exactly the four known fields and nothing else", () => {
+    const s = fakeStorage();
+    saveRoutes(s, [ROUTE]);
+    const parsed = JSON.parse(s.map.get(ROUTES_STORAGE_KEY) ?? "[]") as Record<string, unknown>[];
+    expect(Object.keys(parsed[0] ?? {}).sort()).toEqual(
+      ["headers", "prefix", "secretHeader", "upstream"],
+    );
+  });
+
   it("returns an empty list when nothing is stored", () => {
     expect(loadRoutes(fakeStorage())).toEqual([]);
   });
@@ -57,6 +71,14 @@ describe("withSecrets", () => {
 
   it("omits the secret header entirely when no value was entered", () => {
     const [merged] = withSecrets([ROUTE], new Map());
+    expect(merged?.headers).toEqual({ "content-type": "application/json" });
+  });
+
+  // A cleared token field yields "" , not an absent entry. Sending
+  // `authorization: ""` upstream would be worse than sending nothing: the
+  // upstream rejects it as malformed rather than as unauthenticated.
+  it("treats an empty secret as no secret", () => {
+    const [merged] = withSecrets([ROUTE], new Map([["/openai", ""]]));
     expect(merged?.headers).toEqual({ "content-type": "application/json" });
   });
 
