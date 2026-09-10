@@ -1,0 +1,61 @@
+/*
+ * Embedding a windowed grid: the whole contract.
+ *
+ * The grid's root declares `display:flex; flex:1; min-height:0`, so it fills
+ * and clips by itself GIVEN a flex parent whose own height is bounded. That
+ * bound may be a pixel value, a viewport unit, or inherited through a chain of
+ * flex parents — what matters is that no link in the chain is free to grow.
+ *
+ * `min-height: 0` is the load-bearing line. A flex item's min-height defaults
+ * to `auto`, which refuses to shrink below its content, so ONE missing
+ * `min-height: 0` anywhere between the sized ancestor and the grid restores
+ * the unbounded case exactly as if the host were a block element.
+ *
+ * Do not override the grid's height from outside. `!important` is a guess
+ * about internals that hashed CSS-module class names make unreadable, and an
+ * imperative post-mount write is too late: at large row counts the grid
+ * refuses to render at all, so there is no node left to style.
+ */
+.fm-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.fm-panel-breadcrumb,
+.fm-panel-error {
+  flex: none;
+}
+
+.fm-grid-host {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+/* Every flex ancestor between the sized element and the host needs this. */
+.fm-flex-fill {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+/*
+ * A floating panel is a normal, non-modal region: it can be dragged from and
+ * dropped onto like any other panel, and it does not trap focus.
+ */
+.fm-floating-panel {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: 420px;
+  height: 320px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--fm-floating-background, #fff);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
