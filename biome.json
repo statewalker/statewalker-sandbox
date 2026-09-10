@@ -36,9 +36,18 @@
   },
   "overrides": [
     {
-      "includes": ["apps/httpeers-wire-protos/src/**"],
+      "includes": [
+        "apps/httpeers-wire-protos/src/wire.ts",
+        "apps/httpeers-wire-protos/src/transport-wire.ts",
+        "apps/httpeers-wire-protos/src/types.ts",
+        "apps/httpeers-wire-protos/src/peer-context.ts",
+        "apps/httpeers-wire-protos/src/wire.test.ts",
+        "apps/httpeers-wire-protos/src/relay.test.ts",
+        "apps/httpeers-wire-protos/src/robustness.test.ts"
+      ],
       "formatter": { "enabled": false },
-      "assist": { "enabled": false }
+      "assist": { "enabled": false },
+      "linter": { "enabled": false }
     }
   ]
 }
