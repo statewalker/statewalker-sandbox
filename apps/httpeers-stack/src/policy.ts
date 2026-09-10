@@ -70,6 +70,7 @@ import { ruleSet } from "@statewalker/httpeers.core";
 export const APP_RULES: readonly string[] = [
   'capability("app:search.query") <- role("member");',
   'capability("app:images.read")  <- role("member");',
+  'capability("app:proxy.use")    <- role("member");',
   'capability("std:mesh.admin")   <- role("admin");',
   // Implication. Transitive for free, because that is what a rule does.
   'role("member") <- role("admin");',
