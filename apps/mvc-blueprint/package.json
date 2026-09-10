@@ -1,0 +1,28 @@
+{
+  "name": "@statewalker/mvc-blueprint",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The MVC blueprint — a TODO app whose purpose is to separate substrate from application.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "test:B0": "vitest run B0-boundaries",
+    "test:B1": "vitest run B1-models",
+    "test:B2": "vitest run B2-commands",
+    "test:B3": "vitest run B3-controller",
+    "test:B4": "vitest run B4-view-protocol"
+  },
+  "dependencies": {
+    "@statewalker/shared-baseclass": "0.1.1",
+    "@statewalker/shared-commands": "0.2.1",
+    "@statewalker/shared-registry": "catalog:",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "^5.0.0"
+  }
+}
