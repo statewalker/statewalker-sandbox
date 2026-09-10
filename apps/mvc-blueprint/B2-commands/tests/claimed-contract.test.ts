@@ -1,10 +1,9 @@
 import { Commands } from "@statewalker/shared-commands";
-import { beforeEach, describe, expect, it } from "vitest";
-import {
-  registerTodoCommands,
-  todosAdd,
-  MemTodoApi,
-} from "@todo/core";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { type Claimable, MemTodoApi, registerTodoCommands, todosAdd } from "@todo/core";
+
+/** The shape the core's fallback reads — the same type, not a re-declaration. */
+type AddCommand = Claimable<{ title: string }, { id: string }>;
 
 describe("B2 · claimed contract", () => {
   let commands: Commands;
@@ -17,11 +16,15 @@ describe("B2 · claimed contract", () => {
     off = registerTodoCommands(commands, api);
   });
 
+  afterEach(async () => {
+    await off();
+  });
+
   it("sets claimed=true when a listener claims by returning a Promise", async () => {
     const cmd = commands.call(todosAdd, { title: "test" });
 
     await cmd.promise;
-    expect((cmd as any).claimed).toEqual(true);
+    expect((cmd as AddCommand).claimed).toEqual(true);
   });
 
   it("makes claimed visible to lower-priority listeners when a higher-priority listener claims the command", async () => {
@@ -34,7 +37,7 @@ describe("B2 · claimed contract", () => {
     // Lower-priority listener (priority -1) that observes claimed state.
     // Like the core default handlers checking if a host has already claimed the command.
     commands.listen(todosAdd, (cmd) => {
-      claimedValues.push((cmd as any).claimed);
+      claimedValues.push((cmd as AddCommand).claimed);
       // Return void to be observe-only
     }, { priority: -1 });
 

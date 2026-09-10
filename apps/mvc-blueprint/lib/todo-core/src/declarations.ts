@@ -7,13 +7,15 @@ import { z } from "zod";
  * fallback convention — so a host can route add through an approval step, or
  * delete through a trash list, by listening at 0.
  *
- * `label` and `description` are not decoration: the controller copies them into
- * the menu model (spec §4.4), because the view may not read the registry.
+ * `label` and `icon` are not decoration: the controller copies them into the
+ * menu model (spec §4.4), because the view may not read the registry. Icon names
+ * are lucide's, which the shadcn layer (B5) renders.
  */
 export const todosAdd = Command.required("todos:add")
   .input(z.object({ title: z.string().min(1) }))
   .output(z.object({ id: z.string() }))
   .label("Add")
+  .icon("plus")
   .description("Add a new todo")
   .build();
 
@@ -21,6 +23,7 @@ export const todosToggle = Command.required("todos:toggle")
   .input(z.object({ id: z.string() }))
   .output(z.object({ done: z.boolean() }))
   .label("Toggle")
+  .icon("check")
   .description("Mark a todo done or not done")
   .build();
 
@@ -28,6 +31,7 @@ export const todosRemove = Command.required("todos:remove")
   .input(z.object({ id: z.string() }))
   .output(z.object({ removed: z.boolean() }))
   .label("Delete")
+  .icon("trash-2")
   .description("Delete a todo")
   .build();
 
@@ -35,6 +39,7 @@ export const todosClearCompleted = Command.required("todos:clear-completed")
   .input(z.object({}))
   .output(z.object({ cleared: z.number() }))
   .label("Clear completed")
+  .icon("eraser")
   .description("Remove every completed todo")
   .build();
 

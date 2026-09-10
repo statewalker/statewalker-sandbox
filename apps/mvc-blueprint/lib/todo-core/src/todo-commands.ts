@@ -14,9 +14,11 @@ import type { TodoApi } from "./types.js";
 /**
  * What a fallback listener actually receives. `claimed` is set by the bus on the
  * dispatched command but declared only on its internal type, so it is spelled
- * out rather than silently relied upon (spec §4.7).
+ * out rather than silently relied upon (spec §4.7). Exported so the B2 guard
+ * reads it through this same type: if the upstream field moves, the guard and
+ * the fallback fail to compile together, rather than one hiding behind `any`.
  */
-type Claimable<P, R> = Command<P, R> & { readonly claimed: boolean };
+export type Claimable<P, R> = Command<P, R> & { readonly claimed: boolean };
 
 /**
  * Negative priority ORDERS listeners; it does not STOP them. A fallback must

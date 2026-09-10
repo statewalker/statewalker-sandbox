@@ -26,9 +26,13 @@ describe("B3 · the menu is built from the declarations", () => {
     );
   });
 
-  it("carries the label from each declaration, so the view never hard-codes one", async () => {
+  it("carries the label and icon from each declaration, so the view never hard-codes one", async () => {
     await new MenuController(commands).openFor(["1"]);
     expect(shown?.items.map((i) => i.label)).toEqual(TODO_COMMANDS.map((c) => c.label));
+    // Guard first: were no declaration to set an icon, the next line would
+    // compare undefined to undefined and pass for a controller copying nothing.
+    expect(TODO_COMMANDS.every((c) => c.icon), "every declaration carries an icon").toBe(true);
+    expect(shown?.items.map((i) => i.icon)).toEqual(TODO_COMMANDS.map((c) => c.icon));
   });
 
   it("offers only what resolve-actions allows", async () => {
