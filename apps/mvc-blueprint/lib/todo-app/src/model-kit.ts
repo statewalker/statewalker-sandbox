@@ -1,4 +1,4 @@
-import type { BaseClass } from "@statewalker/shared-baseclass";
+import { type BaseClass, onChangeNotifier } from "@statewalker/shared-baseclass";
 
 /**
  * The controller's reaction must be subscribed to `input`, never to the outer
@@ -83,20 +83,30 @@ export function expectCoalescedEdge(steps: {
 }
 
 /**
- * A level field holding an array or object must be REPLACED, never mutated:
- * `useModel` compares by identity, so an in-place push renders nothing.
+ * A level field holding an array or object must be REPLACED, never mutated —
+ * and the replacement must be ANNOUNCED. Identity alone is too weak: a mutator
+ * that replaces the value but forgets to notify changes nothing anyone can see,
+ * and a watcher is what catches that. This is why `model` is a parameter.
  */
 export async function expectReplacedNotMutated<T>(
   model: BaseClass,
   read: () => T,
   mutate: () => void | Promise<void>,
 ): Promise<void> {
-  const before = read();
-  await mutate();
-  if (read() === before) {
+  let observed = 0;
+  const stop = onChangeNotifier(model.onUpdate, read as () => unknown)(() => {
+    observed++;
+  });
+  try {
+    await mutate();
+  } finally {
+    stop();
+  }
+  if (observed === 0) {
     throw new Error(
-      "level field was mutated in place: it must be replaced, or a selector " +
-        "comparing by identity will never see the change.",
+      "level field was not observably replaced: an in-place push/splice is " +
+        "invisible to an identity comparison, and a replacement that never " +
+        "notifies is invisible to every subscriber. Replace the value AND notify.",
     );
   }
 }

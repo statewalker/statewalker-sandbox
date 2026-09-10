@@ -14,6 +14,7 @@ class Outer extends BaseClass {
   readonly input = new Input();
   addItem(x: string) { this.items = [...this.items, x]; this.notify(); }
   mutateInPlace(x: string) { this.items.push(x); this.notify(); }
+  replaceSilently(x: string) { this.items = [...this.items, x]; }
 }
 
 describe("B1 · model kit", () => {
@@ -56,14 +57,6 @@ describe("B1 · model kit", () => {
   });
 
   describe("expectCoalescedEdge", () => {
-    const wire = (act: (input: Input, handled: { n: number }, hit: () => void) => void) => {
-      const input = new Input();
-      const handled = { n: 0 };
-      let actions = 0;
-      input.onUpdate(() => act(input, handled, () => { actions++; }));
-      return { input, actions: () => actions };
-    };
-
     it("passes when N bumps in one tick produce ONE action", () => {
       let actions = 0;
       let handled = 0;
@@ -82,7 +75,6 @@ describe("B1 · model kit", () => {
         actions: () => actions,
         label: "refreshCount",
       });
-      void wire;
     });
 
     it("REJECTS a controller that acts once per bump", () => {
@@ -126,10 +118,22 @@ describe("B1 · model kit", () => {
   });
 
   describe("expectReplacedNotMutated", () => {
+    it("passes a proper replace-and-notify", async () => {
+      const outer = new Outer();
+      await expectReplacedNotMutated(outer, () => outer.items, () => outer.addItem("x"));
+    });
+
     it("REJECTS an in-place push", async () => {
       const outer = new Outer();
       await expect(
         expectReplacedNotMutated(outer, () => outer.items, () => outer.mutateInPlace("x")),
+      ).rejects.toThrow(/replaced/);
+    });
+
+    it("REJECTS a replace that never notifies — invisible to every subscriber", async () => {
+      const outer = new Outer();
+      await expect(
+        expectReplacedNotMutated(outer, () => outer.items, () => outer.replaceSilently("x")),
       ).rejects.toThrow(/replaced/);
     });
   });
