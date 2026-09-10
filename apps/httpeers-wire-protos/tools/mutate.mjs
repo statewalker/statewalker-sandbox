@@ -271,7 +271,33 @@ for (const m of MUTANTS) {
 const restore = () => {
   for (const [f, text] of originals) writeFileSync(`${APP}/${f}`, text);
 };
+
+/**
+ * RESTORE ON EVERY WAY OUT, not only a clean exit. `process.on("exit")` alone is
+ * not enough, and that is not theoretical: piping this harness's output through
+ * `head` closes stdout, the next `console.log` raises EPIPE / SIGPIPE, the
+ * process dies WITHOUT running an exit handler, and whichever mutant was applied
+ * at that moment is left on disk. It happened, the mutated file was committed,
+ * and it was caught only by a byte-identity check against the mirror.
+ *
+ * So: the exit handler, every signal that can kill us, and `uncaughtException`.
+ * Writing the originals back is idempotent, so running more than one of these is
+ * harmless. `stdout` errors are swallowed for the same reason — a closed pipe
+ * must not be what stops the restore.
+ */
 process.on("exit", restore);
+process.stdout.on("error", () => {});
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGPIPE"]) {
+  process.on(signal, () => {
+    restore();
+    process.exit(1);
+  });
+}
+process.on("uncaughtException", (err) => {
+  restore();
+  console.error(err);
+  process.exit(1);
+});
 
 const results = [];
 {
@@ -348,3 +374,8 @@ console.log("\n===== SURVIVORS =====");
 for (const r of results.filter((r) => r.verdict !== "KILLED")) {
   console.log(`- ${r.verdict}  ${r.id}  (${r.note})`);
 }
+
+// A last word, because the restore above was not always enough: VERIFY. `git status`
+// (or a diff against the read-only mirror) after a mutation run is the only thing
+// that proves no mutant was left behind.
+console.log("\nRun `git status` / diff against the mirror before committing.");

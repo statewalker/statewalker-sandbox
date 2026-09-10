@@ -417,6 +417,31 @@ describe("the join blob", () => {
     expect(decodeJoinBlob(encodeJoinBlob(BLOB))).toEqual(BLOB);
   });
 
+  it("maps + and / to - and _, on an input that forces both", () => {
+    // A realistic invitationId is itself base64url, so plain base64 of a
+    // realistic blob happens to contain neither `+` nor `/` — and an alphabet
+    // assertion over such a blob tests nothing at all. That is not a
+    // hypothetical: the first version of the test below passed against a
+    // mutation that removed both substitutions.
+    //
+    // This invitationId is chosen so that plain base64 DOES emit both, and the
+    // PRECONDITION IS ASSERTED rather than assumed, so that if it ever stops
+    // holding this test fails loudly instead of quietly going vacuous.
+    const forcing: JoinBlob = { ...BLOB, invitationId: "ìïï–" };
+    const bytes = new TextEncoder().encode(JSON.stringify(forcing));
+    const plain = btoa(String.fromCharCode(...bytes));
+    expect(plain).toContain("+");
+    expect(plain).toContain("/");
+
+    const encoded = encodeJoinBlob(forcing);
+    expect(encoded).not.toContain("+");
+    expect(encoded).not.toContain("/");
+    expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
+    // And it still decodes, which is what makes the substitution a mapping
+    // rather than a deletion.
+    expect(decodeJoinBlob(encoded)).toEqual(forcing);
+  });
+
   it("uses only the URL-safe alphabet and carries no padding", () => {
     // The stated property, asserted rather than assumed: `+`, `/` and `=`
     // are what would break a copy-paste through an address bar, and `=` is

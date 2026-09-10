@@ -145,6 +145,7 @@ const WEBRTC = () => `/ip4/1.2.3.4/tcp/443/ws/p2p/${RELAY}/p2p-circuit/webrtc/p2
 const HUB_ADDRESS = () => `/ip4/1.2.3.4/tcp/443/ws/p2p/${RELAY}/p2p-circuit/p2p/${HUB}`;
 
 const noopHandler = async () => new Response("ok");
+const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -363,6 +364,28 @@ describe("finding two: address for first contact, peer id afterwards", () => {
     expect(String(dialedPeerArg())).toBe(bad);
   });
 
+  it("a malformed peer id is FIRST CONTACT, not a failed call — nothing is retried or dropped", async () => {
+    // `reusablePeer`'s own `catch` is MASKED by the retry: it runs inside
+    // `fetch`'s outer `try`, so a propagating throw would be caught there and
+    // the retry would dial the same multiaddr anyway. Removing the catch is
+    // therefore almost invisible — the assertion above passes either way, which
+    // is what the mutation pass found (M4 survived it).
+    //
+    // The difference that IS observable is the retry's side effect: it drops
+    // every limited connection first. A malformed address must not cost this
+    // peer its circuits, so the claim is "one dial, nothing closed".
+    const node = useNode([CIRCUIT()]);
+    node.connections.set(HUB.toString(), [fakeConnection(node, "limited", { data: 1n })]);
+    const peer = await startPeer({
+      relay: `/ip4/1.2.3.4/tcp/443/ws/p2p/${RELAY}`,
+      transports: [],
+      handler: noopHandler,
+    });
+    await peer.fetch("/ip4/1.2.3.4/tcp/443/ws/p2p/not-a-peer-id", new Request("http://hub/hello"));
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(node.closed).toEqual([]);
+  });
+
   it("only the TRAILING /p2p/ counts — a relay id mid-address is not the target", async () => {
     // The address shape is `/…/p2p/<relay>/p2p-circuit/p2p/<target>`, so a
     // match that was not anchored at the end would reuse a connection to the
@@ -489,16 +512,47 @@ describe("the response is buffered before the transport is released", () => {
   it("the body is readable after close(), and close() ran first", async () => {
     useNode([CIRCUIT()]);
     const order: string[] = [];
+    // THE DOUBLE ENFORCES WHAT THE RECORD SAYS, which is the only way this test
+    // means anything: "`close()` tears down the streams this call owns, and a
+    // streamed body still being read from one of them would be truncated." A
+    // body stream that keeps working after `close()` cannot distinguish a
+    // buffering implementation from one that hands the caller a live transport
+    // stream — the mutation pass found exactly that (M14 survived the first
+    // version of this test).
+    let torndown = false;
+    let delivered = 0;
     const close = vi.fn(async () => {
       order.push("close");
+      torndown = true;
     });
     connect.mockResolvedValue({ call: "duplex", close });
     fetchOverDuplex.mockImplementation(async () => {
       order.push("fetch");
       return new Response(
+        // TWO CHUNKS, not one, and the stream does not finish inside the first
+        // `pull`. A single-chunk stream is fully buffered inside the `Response`
+        // by the time anybody reads it, so `close()` cannot truncate it and the
+        // test cannot tell the two implementations apart — which is how the
+        // first version of this double let M14 through twice.
         new ReadableStream<Uint8Array>({
-          start(c) {
-            c.enqueue(new TextEncoder().encode('{"from":"hub-tab"}'));
+          async pull(c) {
+            if (torndown) {
+              c.error(new Error("stream torn down by close(): the body was not buffered in time"));
+              return;
+            }
+            if (delivered === 0) {
+              delivered++;
+              c.enqueue(new TextEncoder().encode('{"from":'));
+              return;
+            }
+            // A real transport yields here; `close()` lands in this window if
+            // the caller was handed the live stream instead of a buffer.
+            await tick(5);
+            if (torndown) {
+              c.error(new Error("stream torn down by close(): the body was not buffered in time"));
+              return;
+            }
+            c.enqueue(new TextEncoder().encode('"hub-tab"}'));
             c.close();
           },
         }),
