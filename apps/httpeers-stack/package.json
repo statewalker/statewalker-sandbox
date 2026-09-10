@@ -25,7 +25,8 @@
     "dev:image-peer": "vite --config vite.image-peer.config.ts",
     "build:image-peer": "vite build --config vite.image-peer.config.ts",
     "dev:hub-page": "vite --config vite.hub.config.ts",
-    "build:hub-page": "vite build --config vite.hub.config.ts"
+    "build:hub-page": "vite build --config vite.hub.config.ts",
+    "build:proxy": "vite build --config vite.proxy.config.ts"
   },
   "dependencies": {
     "@chainsafe/libp2p-noise": "17.0.0",
