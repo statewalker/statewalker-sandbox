@@ -2,6 +2,7 @@ import type { Commands } from "@statewalker/shared-commands";
 import { newRegistry } from "@statewalker/shared-registry";
 import { type TodoApi, todosAdd } from "@todo/core";
 import type { TodoListModel } from "./todo-model.js";
+import { ViewsReady } from "./views-ready.js";
 
 /**
  * Owns the external service and the bus; never sees a view.
@@ -40,7 +41,20 @@ export class ListController {
     private readonly _api: TodoApi,
   ) {}
 
-  activate(): void {
+  /**
+   * `ready` is only ever real when it came from `bootstrap()`, minted after
+   * `registerViews` returned — the constructor on `ViewsReady` is private, so
+   * nothing outside that module can forge one. This is the enforcement for
+   * "a controller cannot be activated before the view layer is registered";
+   * see `views-ready.ts` for why that has to live outside a comment.
+   */
+  activate(ready: ViewsReady): void {
+    if (!(ready instanceof ViewsReady)) {
+      throw new Error(
+        "controller activated before the view layer was registered: obtain the " +
+          "ready token from bootstrap(), which mints it only after registerViews has run.",
+      );
+    }
     const [register] = this._registry;
     // Subscribed to NAMED CHANNELS, never to bare `onUpdate` (spec §4.10): a
     // write to `filterDraft` must not wake the code that reloads from the api.

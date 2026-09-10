@@ -1,7 +1,14 @@
 import { Commands } from "@statewalker/shared-commands";
 import { beforeEach, describe, expect, it } from "vitest";
-import { MemTodoApi, registerTodoCommands, todosAdd } from "@todo/core";
-import { ListController, TodoListModel, expectCoalescedEdge, expectNoSelfWake } from "@todo/app";
+import { MemTodoApi, todosAdd } from "@todo/core";
+import {
+  type AppHandle,
+  type ListController,
+  TodoListModel,
+  bootstrap,
+  expectCoalescedEdge,
+  expectNoSelfWake,
+} from "@todo/app";
 
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -11,14 +18,18 @@ describe("B3 · list controller", () => {
   let api: MemTodoApi;
   let model: TodoListModel;
   let controller: ListController;
+  let app: AppHandle;
 
   beforeEach(() => {
     commands = new Commands();
     api = new MemTodoApi([{ id: "1", title: "seed", done: false }]);
-    registerTodoCommands(commands, api);
+    // Routed through bootstrap() — the honest way to obtain an activated
+    // controller — rather than `new ListController(...).activate()` directly,
+    // which now refuses without the token bootstrap mints (see B4's
+    // bootstrap.test.ts "refuses to activate").
+    app = bootstrap({ commands, api, registerViews: () => {} });
     model = new TodoListModel();
-    controller = new ListController(model, commands, api);
-    controller.activate();
+    controller = app.createList(model);
   });
 
   it("loads the api into the model on activate", async () => {
