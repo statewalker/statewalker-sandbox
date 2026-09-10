@@ -39,11 +39,20 @@ describe("B3 · the menu is built from the declarations", () => {
     expect(shown?.items.map((i) => i.key)).toEqual(["todos:toggle"]);
   });
 
-  it("never offers the ui:* vocabulary, even though it is in the same bus", async () => {
+  it("never offers a key outside its own catalog, even if resolve-actions returns one", async () => {
+    // A misbehaving or over-permissive host returns something from the ui:
+    // namespace. The menu is built by FILTERING the todos catalog by the resolved
+    // keys, never by looking the resolved keys up in the open bus — so a ui: key
+    // is not a candidate in the first place. Build-from-resolved-keys would fail here.
+    commands.listen(
+      todosResolveActions,
+      () => Promise.resolve({ keys: ["todos:toggle", "ui:show-menu"] }),
+      { priority: 0 },
+    );
     await new MenuController(commands).openFor(["1"]);
-    for (const item of shown?.items ?? []) {
-      expect(item.key.startsWith("ui:"), `${item.key} must not be offered`).toBe(false);
-    }
+    const keys = shown?.items.map((i) => i.key) ?? [];
+    expect(keys).toContain("todos:toggle");
+    expect(keys).not.toContain("ui:show-menu");
   });
 
   it("returns the selected key to the caller", async () => {
