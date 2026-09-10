@@ -37,9 +37,23 @@ carry the code. C1 and C2 are the only rungs whose archives carry `src/` too.
 | C0 packages and core decisions | fragments from the record, the rest reconstructed | **reconstructed** — no archive exists | 11 |
 | C1 model kit | **recovered** `model-kit.ts` (one signature widened) | **recovered**, unmodified | 11 |
 | C2 panel set algebra | **recovered** `panels-model.ts`, byte-for-byte | **recovered**, unmodified | 28 |
+| C3 listing lifecycle | **written**, red/green from files 11 §2, 08 and 16 §4.4 | **written**, red first | 42 |
+| C4 change notification | **written**, red/green from files 09, 11 §6/§8 and 14's P10 | **written**, red first | 36 |
 
-**124 tests, 12 files.** Of those, **113 are adopted verbatim** and **11 are
-reconstructed C0 cases**. No adopted test was edited, skipped or renamed.
+**Phase B and the promotion: 124 tests.** Of those, **113 are adopted verbatim**
+and **11 are reconstructed C0 cases**. No adopted test was edited, skipped or
+renamed, and the 124 has not moved since.
+
+**Phase C from C3 onward: 78 more tests, 202 in total.** These rungs had no
+archive and no exported draft, so they are neither recovered nor reconstructed —
+they are **written red/green from the records**, which is a third and weaker
+category. What they are evidence of is that the behaviour the records describe is
+achievable and is pinned; they are not evidence of what the September session
+built, because the September session did not build them.
+
+The distinction that matters for anyone reading this later: for P0–C2 a failing
+test means the transcription is wrong, and for C3 onward a failing test means the
+*design* is being changed. The first is a mistake; the second is a decision.
 
 ### The 11 reconstructed C0 cases, and why each exists
 
@@ -113,6 +127,25 @@ Both are C0's, both are fixed here, and both are now held by a test.
    "skip" wrote no `errors.json` and the resumed job asked about those entries again.
    Errors now ride the same barrier as the cursor, written per batch when the list
    grows. Reverting the fix fails 2 tests; confining it to non-final batches fails 1.
+
+## Two bugs the written rungs found in adopted code
+
+Neither was a transcription error, so neither contradicts the 124. Both were
+latent in code that had passed its own suite.
+
+1. **The prefix fan-out was wrong** (found at C4). P0's `invalidate()` used
+   `path.startsWith(this.model.path)`, which makes `/dst-old/a.txt` a change
+   inside `/dst` — so a panel re-lists on every change in an unrelated sibling.
+   P0 only ever tested the true-positive. Replaced by `covers()`, which puts the
+   separator in the test and keeps the exact-match case, with both sides pinned.
+
+2. **A claim does not stop dispatch** (found at C5). The bus stops dispatch when
+   a command *settles*, not when a listener claims, and a listener answering with
+   a promise settles a microtask later. So a core handler at negative priority
+   still ran after a host at priority 0 had won. P0's override test passed
+   anyway, because with the P0 fake the copy merely had not happened yet — a
+   `setTimeout` had not fired. The assertion was true and tested the wrong thing.
+   Every core handler now awaits `overridden(cmd)` as its first statement.
 
 ## Known defects in the adopted suites, carried unmodified
 
