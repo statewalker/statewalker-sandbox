@@ -124,3 +124,65 @@ failure mode the whole exercise exists to prevent, so it stands.
 
 **Three mutations survive the suite, all in adopted tests.** See `README.md` §Mutation
 pass. None is a bug in the code here; each is a test that asserts one side of a pair.
+C0.5 re-ran them against the real adapters and neither bit: see `ADAPTERS.md`
+§Mutation results for why a real adapter could not have caught them either.
+
+## C0.5 — the real adapters (FM-5)
+
+Added 2026-09-10. **Nothing in this section is recovered code**: C0.5 has no rung
+record and no archive — it is FM-5 of the work order, and everything here is new.
+The distinction that matters for it is a different one: which tests run against a
+REAL filesystem and which against a fake.
+
+| Added | Kind | Tests |
+|---|---|---|
+| `fm-adapters/src/` — a fourth source root: OPFS and Node storage adapters, the §6.6 handle lease, the capability table | new | — |
+| `fm-adapters/test/support/core-suite.ts` — the P2-P6 suites, ported once and run against three adapters | **ported** from the adopted suites | 50 mem + 51 node + 50 opfs |
+| `fm-adapters/test/support/recheck-suite.ts` — the five re-checks | new | 12 per adapter |
+| `fm-adapters/test/handle-lease.test.ts` | new, written because the mutation pass asked for it | 6 |
+| `fm-adapters/test/opfs-smoke.browser.test.ts` — the harness asserted before anything is built on it | new | 4 |
+| `test/boundaries-adapters.test.ts` — §6.1 extended to the fourth root | new | 8 |
+
+**329 tests. The adopted 124 are unchanged and still exactly 124.**
+
+### The ported suite is a port, not a rewrite — and `mem` is the proof
+
+`core-suite.ts` is ONE file run against `MemFilesApi`, real OPFS and a real
+directory. Every assertion has to hold on the adapter the adopted suites ran on,
+which is what makes "unchanged across adapters" checkable rather than a promise; a
+transcription per adapter is where a weakened assertion would hide.
+
+**Two assertions could not cross unchanged, and both were TIGHTENED.** Each pins a
+window the adopted form asserted one point of, plus a fact the adopted form derived
+for free and never checked. Neither is relaxed. `ADAPTERS.md` §"The two assertions
+that could not cross unchanged" gives both, with the mem-specific accident that
+made the original true.
+
+**Six adopted cases used `setTimeout(0)` as a precondition.** Exact on mem, a guess
+on a real adapter — 2 of 3 consecutive runs failed, in a different pair of cases
+each time. The port establishes the precondition instead. The adopted files are not
+touched; on mem their form is sound.
+
+### Two bugs in `fm-core`, both fixed here
+
+Both are held by tests on both real adapters, and reverting either fails exactly
+two of the 329.
+
+1. **Cancellation did not interrupt an in-flight write.** `copy-job.ts` passed
+   `{ signal: job.signal }` to `read()` and relied on the adapter throwing. No
+   shipped adapter implements `ReadOptions.signal`. `abortableSource` makes the
+   engine enforce it.
+2. **`reserve()`'s release-on-failure erased the `failed` status P2 promises is
+   reportable.** Reachable on mem too, but untested: P2's cases call `acquire()`
+   directly, which never releases.
+
+### Where the browser globals live, and why not in `fm-core`
+
+§6.1 forbids `fm-core` from touching a DOM global, and C0.5's subject is two
+browser filesystems. The resolution is the seam P2 already built —
+`AdapterFactory` makes every storage a `FilesApi`, so the core never names an
+adapter — and `fm-adapters/` is a root outside both `fm-core` and `fm-app`. The
+grep is EXTENDED to it rather than loosened, and `test/boundaries-adapters.test.ts`
+also closes a hole the original had: both it and the adopted P5 grep read
+`src/` non-recursively, so `fm-core/src/adapters/opfs.ts` would have satisfied
+every rule while touching `navigator`. That flatness is now asserted.

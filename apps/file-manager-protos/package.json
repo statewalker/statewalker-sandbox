@@ -7,7 +7,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.adapters.json --noEmit"
   },
   "dependencies": {
     "@statewalker/shared-baseclass": "0.1.1",

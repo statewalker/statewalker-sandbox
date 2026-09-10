@@ -18,12 +18,18 @@ describe("C0.5 · the OPFS harness is real", () => {
   });
 
   it("has the three File System Access capabilities the suites depend on", () => {
-    expect(typeof FileSystemFileHandle.prototype.createWritable).toBe("function");
-    expect(typeof FileSystemHandle.prototype.queryPermission).toBe("function");
+    // `queryPermission` and `move` are real and shipping but absent from
+    // TypeScript's `lib.dom.d.ts` — `webrun-files-browser` declares local
+    // interfaces for both for exactly this reason, and these mirror them rather
+    // than casting the checks away.
+    const fileProto = FileSystemFileHandle.prototype as unknown as Record<string, unknown>;
+    const handleProto = FileSystemHandle.prototype as unknown as Record<string, unknown>;
+    expect(typeof fileProto.createWritable).toBe("function");
+    expect(typeof handleProto.queryPermission).toBe("function");
     // Chrome 110+. `BrowserFilesApi.move()` takes the native path when present,
     // and the copy-then-delete fallback when not; which one ran is a real
     // difference and P3 asserts move() was used at all.
-    expect(typeof FileSystemFileHandle.prototype.move).toBe("function");
+    expect(typeof fileProto.move).toBe("function");
   });
 
   it("commits bytes written before close, which is what makes a partial write visible", async () => {

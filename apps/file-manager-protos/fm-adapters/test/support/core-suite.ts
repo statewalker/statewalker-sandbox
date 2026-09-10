@@ -19,7 +19,11 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { CheckpointStore } from "../../../fm-core/src/checkpoints.js";
-import { type ConflictResolution, type JobSpec, runCopyJob } from "../../../fm-core/src/copy-job.js";
+import {
+  type ConflictResolution,
+  type JobSpec,
+  runCopyJob,
+} from "../../../fm-core/src/copy-job.js";
 import { JobModel } from "../../../fm-core/src/job-model.js";
 import { JobQueue } from "../../../fm-core/src/job-queue.js";
 import {
@@ -33,9 +37,9 @@ import {
   CountingFiles,
   listPaths,
   readText,
-  seed,
   SpyFiles,
   type StorageFixture,
+  seed,
   writeText,
 } from "./adapter-fixture.js";
 
@@ -158,6 +162,13 @@ export function defineCoreSuite({ makeFixture, factory }: SuiteOptions): void {
 
         registry.release(left.uri, "job:j1");
         expect(registry.isLive(left.uri)).toBe(false);
+        // WIDENED for the mutation pass: `status()` after a full release was
+        // asserted nowhere, so a `release()` that never reset the status survived.
+        // This is the symmetric pair of C0.5's registry fix — a READY storage goes
+        // idle when the last holder leaves, a FAILED one keeps its record — and
+        // both halves are now checked, here and in the re-checks.
+        expect(registry.status(left.uri)).toBe("idle");
+        expect(registry.failure(left.uri)).toBeUndefined();
       });
 
       it("re-acquiring after full release constructs a fresh instance", async () => {
@@ -198,11 +209,15 @@ export function defineCoreSuite({ makeFixture, factory }: SuiteOptions): void {
           const configs: StorageConfig[] = [
             { uri: left.uri, adapter: "real", options: left.configOptions },
           ];
-          const registry = new StorageRegistry(configs, { real: factory }, {
-            async get() {
-              return undefined;
+          const registry = new StorageRegistry(
+            configs,
+            { real: factory },
+            {
+              async get() {
+                return undefined;
+              },
             },
-          });
+          );
           const result = await registry.acquire(left.uri, "panel:p1").then(
             () => null,
             (e) => e,
@@ -210,6 +225,41 @@ export function defineCoreSuite({ makeFixture, factory }: SuiteOptions): void {
           expect(result).toBeInstanceOf(Error);
           expect(registry.status(left.uri)).toBe("failed");
           expect(registry.failure(left.uri)).toMatch(/credential/i);
+        });
+
+        /**
+         * §6.6's third clause on the refcount: a failed `reserve()` releases the
+         * pin it took, so the storage is not left looking permanently held.
+         *
+         * WIDENED for the mutation pass: removing `reserve()`'s release-on-failure
+         * survived everything, because `isLive()` reads the INSTANCE and a leaked
+         * pin leaves no instance behind — so nothing could see it. A leaked pin is
+         * visible only one step later: the entry never reaches zero holders again,
+         * so the NEXT holder's release stops disposing anything.
+         */
+        it("a failed reserve releases its own pin, so a later holder can still dispose", async () => {
+          const left = await fixture.storage("left");
+          const configs: StorageConfig[] = [
+            { uri: left.uri, adapter: "real", options: left.configOptions },
+          ];
+          let serve = false;
+          const registry = new StorageRegistry(
+            configs,
+            { real: factory },
+            {
+              async get() {
+                return serve ? left.rootSecret() : undefined;
+              },
+            },
+          );
+
+          await registry.reserve(left.uri, "job:doomed").catch(() => undefined);
+          serve = true;
+          await registry.acquire(left.uri, "panel:p1");
+          expect(registry.isLive(left.uri)).toBe(true);
+          registry.release(left.uri, "panel:p1");
+          // False only if the failed reserve left nothing behind.
+          expect(registry.isLive(left.uri)).toBe(false);
         });
 
         it("a failed storage does not take the others down", async () => {
@@ -252,14 +302,17 @@ export function defineCoreSuite({ makeFixture, factory }: SuiteOptions): void {
 
         it("lets a pseudo-storage declare that most operations are unavailable", async () => {
           const left = await fixture.storage("left");
-          const { registry } = registryOver([left], [
-            {
-              uri: "zip://out",
-              adapter: "real",
-              options: {},
-              caps: { read: false, list: false, write: true },
-            },
-          ]);
+          const { registry } = registryOver(
+            [left],
+            [
+              {
+                uri: "zip://out",
+                adapter: "real",
+                options: {},
+                caps: { read: false, list: false, write: true },
+              },
+            ],
+          );
           const declared = registry.caps("zip://out");
           expect(declared.write).toBe(true);
           expect(declared.read).toBe(false);
@@ -268,14 +321,17 @@ export function defineCoreSuite({ makeFixture, factory }: SuiteOptions): void {
 
         it("degrades the UI per storage: no date sort when mtime is not reported", async () => {
           const left = await fixture.storage("left");
-          const { registry } = registryOver([left], [
-            {
-              uri: "s3://bucket",
-              adapter: "real",
-              options: {},
-              caps: { stat: { size: true, mtime: false } },
-            },
-          ]);
+          const { registry } = registryOver(
+            [left],
+            [
+              {
+                uri: "s3://bucket",
+                adapter: "real",
+                options: {},
+                caps: { stat: { size: true, mtime: false } },
+              },
+            ],
+          );
           expect(registry.sortColumns(left.uri)).toEqual(["name", "size", "date"]);
           expect(registry.sortColumns("s3://bucket")).toEqual(["name", "size"]);
         });
@@ -370,11 +426,7 @@ export function defineCoreSuite({ makeFixture, factory }: SuiteOptions): void {
             }),
           );
           expect(enumerated).toEqual(["/src/a.txt", "/src/m.txt", "/src/z.txt"]);
-          expect([...target.writes].sort()).toEqual([
-            "/dst/a.txt",
-            "/dst/m.txt",
-            "/dst/z.txt",
-          ]);
+          expect([...target.writes].sort()).toEqual(["/dst/a.txt", "/dst/m.txt", "/dst/z.txt"]);
         });
 
         it("walks whole directory trees, recreating structure", async () => {
@@ -583,7 +635,9 @@ export function defineCoreSuite({ makeFixture, factory }: SuiteOptions): void {
         const twenty = await fixture.storage("p4-20");
         await seed(twenty.api, 20);
         const job2 = new JobModel("big");
-        await runCopyJob(spec(job2, { batchSize: 1, source: { uri: twenty.uri, api: twenty.api } }));
+        await runCopyJob(
+          spec(job2, { batchSize: 1, source: { uri: twenty.uri, api: twenty.api } }),
+        );
         const twentyBatches = store.bytes;
 
         // A growing completed-list is O(n²); a cursor is O(n) with a bounded record.
@@ -594,11 +648,12 @@ export function defineCoreSuite({ makeFixture, factory }: SuiteOptions): void {
         const job = new JobModel("j2");
         await runCopyJob(spec(job, { onBatch: cancelOnBatch(job, 2) }));
 
-        const cursor = (await checkpoints.load("j2"))!;
-        expect(cursor.lastCompletedBatch).toBeGreaterThanOrEqual(0);
-        expect(cursor.cursorPath).toMatch(/^\/src\/f\d{4}\.txt$/);
-        expect(cursor.spec.target.path).toBe("/dst");
-        expect(cursor.spec.operation).toBe("copy");
+        const cursor = await checkpoints.load("j2");
+        expect(cursor).toBeDefined();
+        expect(cursor?.lastCompletedBatch).toBeGreaterThanOrEqual(0);
+        expect(cursor?.cursorPath).toMatch(/^\/src\/f\d{4}\.txt$/);
+        expect(cursor?.spec.target.path).toBe("/dst");
+        expect(cursor?.spec.operation).toBe("copy");
       });
 
       it("records skipped entries in errors.json, which a cursor cannot express", async () => {
@@ -608,6 +663,42 @@ export function defineCoreSuite({ makeFixture, factory }: SuiteOptions): void {
         expect(errors).toEqual([{ path: "/src/f0003.txt", reason: "skipped" }]);
         expect(await target.api.exists("/dst/f0003.txt")).toBe(false);
         expect(job.status).toBe("done");
+      });
+
+      /**
+       * `pruneCompleted` skips an abandoned record and KEEPS GOING.
+       *
+       * Found by the mutation pass: replacing its `continue` with a `break`
+       * survived everything. The reconstructed C0 case has exactly two records,
+       * finished then abandoned, so the loop ends after the abandoned one either
+       * way and the two are indistinguishable — one side of a boundary, asserted.
+       * That case belongs to the 124 and is not widened here; this covers the
+       * ordering instead, and on a real adapter it is a genuine question because
+       * `list()` order is the filesystem's business.
+       *
+       * Three records with the abandoned one in the middle: `break` prunes at most
+       * one, `continue` prunes both, whatever order they arrive in.
+       */
+      it("pruneCompleted skips an abandoned record without stopping at it", async () => {
+        const cursor = (remaining: number) => ({
+          lastCompletedBatch: 0,
+          cursorPath: "/src/f0000.txt",
+          remaining,
+          spec: {
+            operation: "copy" as const,
+            source: { uri: source.uri },
+            target: { uri: target.uri, path: "/dst" },
+            roots: ["/src"],
+            batchSize: 4,
+          },
+        });
+        await checkpoints.save("j-done-a", cursor(0));
+        await checkpoints.save("j-abandoned", cursor(97));
+        await checkpoints.save("j-done-b", cursor(0));
+
+        const pruned = (await checkpoints.pruneCompleted()).sort();
+        expect(pruned).toEqual(["j-done-a", "j-done-b"]);
+        expect(await checkpoints.load("j-abandoned")).toBeDefined();
       });
 
       describe("resume", () => {
@@ -883,9 +974,10 @@ export function defineCoreSuite({ makeFixture, factory }: SuiteOptions): void {
         b = await fixture.storage("p6-b");
         c = await fixture.storage("p6-c");
         await seed(a.api, 8);
-        registry = registryOver([a, b, c], [
-          { uri: "missing://nowhere", adapter: "real", options: {} },
-        ]).registry;
+        registry = registryOver(
+          [a, b, c],
+          [{ uri: "missing://nowhere", adapter: "real", options: {} }],
+        ).registry;
         timeline = [];
         queue = new JobQueue(registry, { batchSize: 2 });
       });

@@ -6,7 +6,8 @@
  * suite checks. Two of these cases assert that mem cannot do the thing, and that
  * is the finding rather than a skip.
  */
-import { defineRechecks } from "./support/recheck-suite.js";
+
 import { memFilesFactory, memFixture } from "./support/mem-fixture.js";
+import { defineRechecks } from "./support/recheck-suite.js";
 
 defineRechecks({ makeFixture: memFixture, factory: memFilesFactory });

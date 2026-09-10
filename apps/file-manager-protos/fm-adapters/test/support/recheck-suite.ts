@@ -18,8 +18,8 @@
  * honest.
  */
 
-import { expect, it } from "vitest";
 import type { FilesApi, ReadOptions } from "@statewalker/webrun-files";
+import { expect, it } from "vitest";
 import { CheckpointStore } from "../../../fm-core/src/checkpoints.js";
 import { type JobSpec, runCopyJob } from "../../../fm-core/src/copy-job.js";
 import { JobModel } from "../../../fm-core/src/job-model.js";
@@ -33,8 +33,8 @@ import { providerSecrets } from "../../src/secrets.js";
 import {
   type AdapterFixture,
   listPaths,
-  seed,
   type StorageFixture,
+  seed,
   writeText,
 } from "./adapter-fixture.js";
 
@@ -107,6 +107,13 @@ class RemovalWatchingTarget implements FilesApi {
   /** Size of the target when `remove()` was called; `undefined` if it did not exist. */
   sizeAtRemoval: number | undefined;
   removeCalls = 0;
+  /**
+   * Fires on the first `exists()` — the engine's conflict probe, which every
+   * transfer makes before it reads a byte. Cancelling there is how the abort is
+   * made to land BEFORE the first chunk rather than between two of them.
+   */
+  onFirstExists?: () => void;
+  private existsCalls = 0;
   constructor(private readonly inner: FilesApi) {}
   read(p: string, o?: ReadOptions) {
     return this.inner.read(p, o);
@@ -124,6 +131,7 @@ class RemovalWatchingTarget implements FilesApi {
     return this.inner.stats(p);
   }
   exists(p: string) {
+    if (++this.existsCalls === 1) this.onFirstExists?.();
     return this.inner.exists(p);
   }
   async remove(p: string) {
@@ -163,7 +171,7 @@ export function defineRechecks({ makeFixture, factory }: RecheckOptions): void {
     });
 
   /** A registry over real storages, with the real root-resolution path. */
-  function registryOver(fixture: AdapterFixture, storages: StorageFixture[], extra: StorageConfig[] = []) {
+  function registryOver(storages: StorageFixture[], extra: StorageConfig[] = []) {
     const configs: StorageConfig[] = [
       ...storages.map((s) => ({ uri: s.uri, adapter: "real", options: s.configOptions })),
       ...extra,
@@ -244,6 +252,14 @@ export function defineRechecks({ makeFixture, factory }: RecheckOptions): void {
       // a `finally`, so the bytes written before the throw are COMMITTED. This is
       // the first time in this app's record that the rollback has had anything to
       // roll back.
+      //
+      // The size is asserted EXACTLY, to the chunk, and that precision is the
+      // mutation pass's doing: `>0 and <BIG_BYTES` let a version of
+      // `abortableSource` that checked the signal AFTER yielding each chunk — one
+      // whole chunk of overrun past the cancellation — pass unnoticed. The
+      // observer fires on its `chunks`-th chunk and `abortableSource` throws on
+      // receiving that one, so exactly `chunks - 1` were written.
+      expect(target.sizeAtRemoval).toBe((watched.chunks - 1) * 8192);
       expect(target.sizeAtRemoval).toBeGreaterThan(0);
       expect(target.sizeAtRemoval).toBeLessThan(BIG_BYTES);
     } else {
@@ -252,6 +268,96 @@ export function defineRechecks({ makeFixture, factory }: RecheckOptions): void {
       // removal is a no-op over nothing. Documented, not skipped.
       expect(target.sizeAtRemoval).toBeUndefined();
     }
+  });
+
+  /**
+   * RE-CHECK 1, the other half — an abort landing BEFORE the first chunk.
+   *
+   * Added because the mutation pass asked for it: deleting `abortableSource`'s
+   * pre-loop check survived every other case, since all of them cancel while
+   * chunks are already flowing. §5.3's symmetric-pair rule reads as first/last
+   * here — the two sites the check exists at, and only one of them was exercised.
+   *
+   * The abort is made to land in that window by cancelling from the engine's
+   * conflict probe: every transfer calls `exists()` on its target before reading a
+   * byte, so a cancellation there precedes the first chunk of every entry in the
+   * batch.
+   */
+  group("an abort landing before the first chunk writes no bytes at all", async (fixture) => {
+    const source = await fixture.storage("rc1b-src");
+    const targetStore = await fixture.storage("rc1b-dst");
+    await source.api.write("/src/big.bin", [bigBody()]);
+
+    const job = new JobModel("rc1b");
+    const target = new RemovalWatchingTarget(targetStore.api);
+    target.onFirstExists = () => job.cancel();
+
+    await runCopyJob({
+      operation: "copy",
+      source: { uri: source.uri, api: source.api },
+      target: { uri: targetStore.uri, api: target, path: "/dst" },
+      roots: ["/src"],
+      batchSize: 1,
+      job,
+    } satisfies JobSpec);
+
+    expect(job.status).toBe("cancelled");
+    expect(job.completed).toBe(0);
+    expect(await targetStore.api.exists("/dst/big.bin")).toBe(false);
+
+    if (caps.commitsPartialWrites) {
+      // `BrowserFilesApi` creates the file and its writable stream BEFORE
+      // consuming the source, so an empty file is committed and then removed —
+      // and zero is the assertion that matters. One chunk here would mean the
+      // pre-loop check is gone and the abort was noticed one chunk too late.
+      expect(target.sizeAtRemoval).toBe(0);
+    } else {
+      expect(target.sizeAtRemoval).toBeUndefined();
+    }
+  });
+
+  /**
+   * RE-CHECK 1, the empty-stream path — and the one the mutation pass had to work
+   * for.
+   *
+   * Deleting `abortableSource`'s pre-loop check survived the case above, and the
+   * reason is worth writing down: the between-chunks check sits BEFORE `yield`, so
+   * it already catches an abort that landed before the first chunk — it pulls the
+   * chunk, sees the abort, and throws without passing it on. The pre-loop check's
+   * only distinct effect is on a source that yields NO chunks at all.
+   *
+   * Which is not a curiosity: a ZERO-BYTE FILE yields nothing on all three
+   * adapters (`MemFilesApi`, `NodeFilesApi` and `BrowserFilesApi` all return early
+   * when `start >= size`). Without the pre-loop check a cancelled job copying an
+   * empty file writes a COMPLETE empty target, reports the entry written, and
+   * rolls nothing back — the one case where cancellation silently commits.
+   */
+  group("an abort before a zero-byte source still rolls the target back", async (fixture) => {
+    const source = await fixture.storage("rc1c-src");
+    const targetStore = await fixture.storage("rc1c-dst");
+    await source.api.write("/src/empty.bin", []);
+    expect(await source.api.stats("/src/empty.bin")).toMatchObject({ kind: "file", size: 0 });
+
+    const job = new JobModel("rc1c");
+    const target = new RemovalWatchingTarget(targetStore.api);
+    target.onFirstExists = () => job.cancel();
+
+    const written: string[] = [];
+    await runCopyJob({
+      operation: "copy",
+      source: { uri: source.uri, api: source.api },
+      target: { uri: targetStore.uri, api: target, path: "/dst" },
+      roots: ["/src"],
+      batchSize: 1,
+      job,
+      onWritten: (p) => written.push(p),
+    } satisfies JobSpec);
+
+    expect(job.status).toBe("cancelled");
+    // Nothing was reported written, and nothing is on the target.
+    expect(written).toEqual([]);
+    expect(await targetStore.api.exists("/dst/empty.bin")).toBe(false);
+    expect(target.removeCalls).toBeGreaterThan(0);
   });
 
   // ------------------------------------------------- 2. permission denial ----
@@ -300,6 +406,42 @@ export function defineRechecks({ makeFixture, factory }: RecheckOptions): void {
     await fixture.allowWrites(targetStore);
   });
 
+  /**
+   * The same denial one level up: a root that is still READABLE but no longer
+   * WRITABLE must fail to acquire, not acquire and then fail at the first write.
+   *
+   * Added because the mutation pass asked for it: narrowing `nodeRootProvider`'s
+   * check from `R_OK | W_OK` to `R_OK` alone survived everything, because the only
+   * revocation any case produced was a root removed outright — which fails a read
+   * check too. A read-only root is the realistic form of "the grant narrowed",
+   * and it is the one a `chmod`-ed directory and a `read`-scoped File System
+   * Access handle have in common.
+   */
+  group("a root that is readable but not writable fails to acquire", async (fixture) => {
+    expect(Boolean(fixture.denyWrites)).toBe(caps.canDenyWriteMidJob);
+    if (!fixture.denyWrites || !fixture.allowWrites) return;
+
+    const storage = await fixture.storage("rc2b");
+    await writeText(storage.api, "/keep.txt", "still readable");
+    await fixture.denyWrites(storage);
+
+    // Still readable, so this is narrowing rather than removal.
+    const registry = registryOver([storage]);
+    const failure = await registry.acquire(storage.uri, "panel:p1").then(
+      () => undefined,
+      (e: Error) => e,
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect(registry.status(storage.uri)).toBe("failed");
+    expect(registry.failure(storage.uri)).toMatch(/EACCES|unavailable/i);
+
+    await fixture.allowWrites(storage);
+    // And once the grant is back, the same storage acquires and is no longer failed.
+    const handle = await registry.acquire(storage.uri, "panel:p2");
+    expect(handle.api).toBeDefined();
+    expect(registry.status(storage.uri)).toBe("ready");
+  });
+
   // --------------------------------------- 3. handle revoked before start ----
 
   /**
@@ -317,70 +459,73 @@ export function defineRechecks({ makeFixture, factory }: RecheckOptions): void {
    * Both halves of the pair are asserted — revoked BEFORE enqueue, which the
    * registry reports, and revoked AFTER, which it cannot. §5.3.
    */
-  group("a root revoked after enqueue fails that job and leaves the lane usable", async (fixture) => {
-    if (!caps.canRevokeRootMidFlight) {
-      // A `MemFilesApi` is a Map; there is no handle and nothing to revoke. The
-      // fixture's `revoke()` says so by throwing on the next resolution, and the
-      // absence is asserted here rather than the case being skipped.
-      const only = await fixture.storage("rc3-mem");
-      await only.revoke();
-      const failure = await only.rootSecret().then(
-        () => undefined,
-        (e: Error) => e,
-      );
-      expect(failure?.message).toMatch(/cannot be revoked/);
-      return;
-    }
+  group(
+    "a root revoked after enqueue fails that job and leaves the lane usable",
+    async (fixture) => {
+      if (!caps.canRevokeRootMidFlight) {
+        // A `MemFilesApi` is a Map; there is no handle and nothing to revoke. The
+        // fixture's `revoke()` says so by throwing on the next resolution, and the
+        // absence is asserted here rather than the case being skipped.
+        const only = await fixture.storage("rc3-mem");
+        await only.revoke();
+        const failure = await only.rootSecret().then(
+          () => undefined,
+          (e: Error) => e,
+        );
+        expect(failure?.message).toMatch(/cannot be revoked/);
+        return;
+      }
 
-    const a = await fixture.storage("rc3-a");
-    const doomed = await fixture.storage("rc3-doomed");
-    const targetStore = await fixture.storage("rc3-dst");
-    await seed(a.api, 8);
-    await seed(doomed.api, 8);
+      const a = await fixture.storage("rc3-a");
+      const doomed = await fixture.storage("rc3-doomed");
+      const targetStore = await fixture.storage("rc3-dst");
+      await seed(a.api, 8);
+      await seed(doomed.api, 8);
 
-    const registry = registryOver(fixture, [a, doomed, targetStore]);
-    const queue = new JobQueue(registry, { batchSize: 2 });
+      const registry = registryOver([a, doomed, targetStore]);
+      const queue = new JobQueue(registry, { batchSize: 2 });
 
-    const first = queue.enqueue({
-      operation: "copy",
-      sourceUri: a.uri,
-      targetUri: targetStore.uri,
-      roots: ["/src"],
-      targetPath: "/one",
-    });
-    const second = queue.enqueue({
-      operation: "copy",
-      sourceUri: doomed.uri,
-      targetUri: targetStore.uri, // same lane: it waits behind `first`
-      roots: ["/src"],
-      targetPath: "/two",
-    });
+      const first = queue.enqueue({
+        operation: "copy",
+        sourceUri: a.uri,
+        targetUri: targetStore.uri,
+        roots: ["/src"],
+        targetPath: "/one",
+      });
+      const second = queue.enqueue({
+        operation: "copy",
+        sourceUri: doomed.uri,
+        targetUri: targetStore.uri, // same lane: it waits behind `first`
+        roots: ["/src"],
+        targetPath: "/two",
+      });
 
-    // Revoked for real while `second` is still queued behind `first`.
-    await doomed.revoke();
+      // Revoked for real while `second` is still queued behind `first`.
+      await doomed.revoke();
 
-    await Promise.allSettled([first.done, second.done]);
+      await Promise.allSettled([first.done, second.done]);
 
-    expect(first.status).toBe("done");
-    // Its source is gone, so it enumerates to nothing and "succeeds" having
-    // copied zero entries — which is what a silently-revoked root looks like from
-    // inside the engine, and is why the registry-level report below matters.
-    expect(second.status).toBe("done");
-    expect(second.total).toBe(0);
-    expect(await listPaths(targetStore.api, "/two")).toEqual([]);
+      expect(first.status).toBe("done");
+      // Its source is gone, so it enumerates to nothing and "succeeds" having
+      // copied zero entries — which is what a silently-revoked root looks like from
+      // inside the engine, and is why the registry-level report below matters.
+      expect(second.status).toBe("done");
+      expect(second.total).toBe(0);
+      expect(await listPaths(targetStore.api, "/two")).toEqual([]);
 
-    // The lane survived either way.
-    const third = queue.enqueue({
-      operation: "copy",
-      sourceUri: a.uri,
-      targetUri: targetStore.uri,
-      roots: ["/src"],
-      targetPath: "/three",
-    });
-    await third.done;
-    expect(third.status).toBe("done");
-    expect((await listPaths(targetStore.api, "/three")).length).toBe(8);
-  });
+      // The lane survived either way.
+      const third = queue.enqueue({
+        operation: "copy",
+        sourceUri: a.uri,
+        targetUri: targetStore.uri,
+        roots: ["/src"],
+        targetPath: "/three",
+      });
+      await third.done;
+      expect(third.status).toBe("done");
+      expect((await listPaths(targetStore.api, "/three")).length).toBe(8);
+    },
+  );
 
   group("a root revoked before enqueue is reported by the registry", async (fixture) => {
     if (!caps.canRevokeRootMidFlight) {
@@ -391,7 +536,7 @@ export function defineRechecks({ makeFixture, factory }: RecheckOptions): void {
     const targetStore = await fixture.storage("rc3b-dst");
     await seed(doomed.api, 4);
 
-    const registry = registryOver(fixture, [doomed, targetStore]);
+    const registry = registryOver([doomed, targetStore]);
     // Revoked BEFORE anything acquires it, so the root resolution itself fails.
     await doomed.revoke();
 
@@ -431,55 +576,58 @@ export function defineRechecks({ makeFixture, factory }: RecheckOptions): void {
    * than a crash, and the cursor survives so the job can be resumed again once
    * the storage comes back.
    */
-  group("a resume whose source cannot be re-acquired is reportable, and the cursor survives", async (fixture) => {
-    const source = await fixture.storage("rc4-src");
-    const targetStore = await fixture.storage("rc4-dst");
-    const host = await fixture.storage("rc4-jobs");
-    await seed(source.api, 20);
-    const checkpoints = new CheckpointStore(host.api);
+  group(
+    "a resume whose source cannot be re-acquired is reportable, and the cursor survives",
+    async (fixture) => {
+      const source = await fixture.storage("rc4-src");
+      const targetStore = await fixture.storage("rc4-dst");
+      const host = await fixture.storage("rc4-jobs");
+      await seed(source.api, 20);
+      const checkpoints = new CheckpointStore(host.api);
 
-    const spec = (job: JobModel, over: Partial<JobSpec> = {}): JobSpec => ({
-      operation: "copy",
-      source: { uri: source.uri, api: source.api },
-      target: { uri: targetStore.uri, api: targetStore.api, path: "/dst" },
-      roots: ["/src"],
-      batchSize: 4,
-      job,
-      checkpoints,
-      ...over,
-    });
+      const spec = (job: JobModel, over: Partial<JobSpec> = {}): JobSpec => ({
+        operation: "copy",
+        source: { uri: source.uri, api: source.api },
+        target: { uri: targetStore.uri, api: targetStore.api, path: "/dst" },
+        roots: ["/src"],
+        batchSize: 4,
+        job,
+        checkpoints,
+        ...over,
+      });
 
-    // Leg 1: interrupt it with a cursor on disk.
-    const first = new JobModel("rc4");
-    let batches = 0;
-    await runCopyJob(
-      spec(first, {
-        onBatch: () => {
-          if (++batches === 2) first.cancel();
-        },
-      }),
-    );
-    expect(first.status).toBe("cancelled");
-    expect(await checkpoints.load("rc4")).toBeDefined();
+      // Leg 1: interrupt it with a cursor on disk.
+      const first = new JobModel("rc4");
+      let batches = 0;
+      await runCopyJob(
+        spec(first, {
+          onBatch: () => {
+            if (++batches === 2) first.cancel();
+          },
+        }),
+      );
+      expect(first.status).toBe("cancelled");
+      expect(await checkpoints.load("rc4")).toBeDefined();
 
-    // Leg 2: the source storage is genuinely gone, and the resume goes through
-    // the registry's real resolution path.
-    const registry = registryOver(fixture, [source, targetStore]);
-    await source.revoke();
+      // Leg 2: the source storage is genuinely gone, and the resume goes through
+      // the registry's real resolution path.
+      const registry = registryOver([source, targetStore]);
+      await source.revoke();
 
-    const resumedHandle = await registry.acquire(source.uri, "job:rc4-resume").then(
-      () => undefined,
-      (e: Error) => e,
-    );
-    expect(resumedHandle).toBeInstanceOf(Error);
-    expect(registry.status(source.uri)).toBe("failed");
+      const resumedHandle = await registry.acquire(source.uri, "job:rc4-resume").then(
+        () => undefined,
+        (e: Error) => e,
+      );
+      expect(resumedHandle).toBeInstanceOf(Error);
+      expect(registry.status(source.uri)).toBe("failed");
 
-    // The cursor survives a failed resume: the promise to the user is not revoked
-    // by the storage being briefly unreachable.
-    expect(await checkpoints.load("rc4")).toBeDefined();
-    const interrupted = await checkpoints.listInterrupted();
-    expect(interrupted.map((r) => r.jobId)).toEqual(["rc4"]);
-  });
+      // The cursor survives a failed resume: the promise to the user is not revoked
+      // by the storage being briefly unreachable.
+      expect(await checkpoints.load("rc4")).toBeDefined();
+      const interrupted = await checkpoints.listInterrupted();
+      expect(interrupted.map((r) => r.jobId)).toEqual(["rc4"]);
+    },
+  );
 
   // ------------------------------------------------ 5. lane serialisation ----
 
@@ -501,7 +649,7 @@ export function defineRechecks({ makeFixture, factory }: RecheckOptions): void {
     const targetStore = await fixture.storage("rc5-dst");
     await seed(source.api, 12);
 
-    const registry = registryOver(fixture, [source, targetStore]);
+    const registry = registryOver([source, targetStore]);
     const queue = new JobQueue(registry, { batchSize: 2 });
 
     /** Every completed write, labelled by the job that made it, in landing order. */
@@ -539,7 +687,7 @@ export function defineRechecks({ makeFixture, factory }: RecheckOptions): void {
     const right = await fixture.storage("rc5b-right");
     await seed(source.api, 12);
 
-    const registry = registryOver(fixture, [source, left, right]);
+    const registry = registryOver([source, left, right]);
     const queue = new JobQueue(registry, { batchSize: 2 });
 
     const landed: string[] = [];

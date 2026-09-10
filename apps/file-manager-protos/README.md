@@ -27,13 +27,19 @@ One app package, three source roots, because the three-package boundary is what 
 promoted and what `test/boundaries.test.ts` enforces:
 
 ```
-fm-core/src/    registry, engine, checkpoints, conflicts, queue, stats
-fm-app/src/     declarations, models, controllers, bootstrap, model-kit, panels
-fm-ui/src/      empty until D1
-src/{core,app,ui}   symlinks onto the three roots (see below)
-test/           P0-P6 suites, the C0 boundary grep, the C0 decisions
-fm-app/test/    C1 and C2 suites
+fm-core/src/      registry, engine, checkpoints, conflicts, queue, stats
+fm-app/src/       declarations, models, controllers, bootstrap, model-kit, panels
+fm-ui/src/        empty until D1
+fm-adapters/src/  C0.5 — OPFS and Node storage adapters, the handle lease, capabilities
+src/{core,app,ui}   symlinks onto the first three roots (see below)
+test/             P0-P6 suites, the C0 boundary greps, the C0 decisions
+fm-app/test/      C1 and C2 suites
+fm-adapters/test/ the ported core suites and the C0.5 re-checks
 ```
+
+`fm-adapters` is the fourth root and the only one that may name a browser global —
+that is how C0.5 resolves §6.1's tension rather than loosening it. See
+[`ADAPTERS.md`](./ADAPTERS.md).
 
 `@fm/core`, `@fm/app` and `@fm/ui` resolve through `tsconfig.json` `paths` **and** a
 matching `resolve.alias` in `vitest.config.ts` — both, or `tsc --noEmit` and
@@ -52,10 +58,17 @@ never has two module identities.
 
 ```bash
 pnpm install --ignore-workspace   # the app is self-contained; see below
-pnpm test                         # all 124
+pnpm test                         # all 329, both projects
+pnpm vitest run --project node    # the 263 that run in node
+pnpm vitest run --project opfs    # the 66 that run in real Chromium
 pnpm test p4                      # one rung
-pnpm typecheck                    # see the known defect below
+pnpm typecheck                    # two projects; see the known defect below
 ```
+
+**Two vitest projects, one `pnpm test`.** C0.5 runs the core suites against the
+real Origin Private File System, so 66 of the 329 execute inside a real Chromium
+under Vitest browser mode. A browser that cannot start is a failure, never a skip.
+`pnpm exec playwright install chromium` if it is missing.
 
 **Dependencies are pinned explicitly rather than through `catalog:`**, following
 `httpeers-shell-protos`: the app has to install and pass on its own. The versions are
@@ -70,6 +83,13 @@ is a defect in the adopted suite: its own `SpyFilesApi` types away `list`'s opti
 then passes them. An adopted test is not edited to make a tool quiet.
 
 ## Mutation pass
+
+C0.5 adds its own: **29 mutations, 27 killed**, plus 9 over the boundary greps, all
+killed. Both survivors are diagnosed in [`ADAPTERS.md`](./ADAPTERS.md) §Mutation
+results — one is redundant-given-`acquire`'s-shape, the other unreachable on OPFS
+and kept for the picked-directory case that could not be tested. The FM-1 pass
+below is unchanged.
+
 
 65 mutations, **61 killed, 3 survive** (plus one mutation whose faithful two-site form
 is killed by 1 — the harness's single-site approximation is too weak to be evidence).
@@ -96,5 +116,11 @@ They belong with the P1 and C2 suites, upstream.
 
 ## What is not here
 
-C3 onward (listing lifecycle, change notification, the command surface) and the real
-adapters are FM-2…FM-5 of the work order. `fm-ui` stays empty until D1.
+C3 onward (listing lifecycle, change notification, the command surface) is FM-2…FM-4
+of the work order. `fm-ui` stays empty until D1.
+
+**C0.5's real adapters ARE here** (FM-5), with two gaps stated rather than papered
+over: a user-picked File System Access directory, because
+`showDirectoryPicker()` cannot be driven from Playwright, and a remote adapter,
+because no credentials were available. [`ADAPTERS.md`](./ADAPTERS.md) says what each
+costs and what was measured before concluding it.

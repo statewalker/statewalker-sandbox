@@ -1,0 +1,37 @@
+{
+  // C0.5 — the ONLY project in this app whose `lib` includes DOM.
+  //
+  // `tsconfig.json` stays DOM-free on purpose, which gives the §6.1 boundary a
+  // PARTIAL second lock at the type level: in the root project, `fm-core` and
+  // `fm-app` cannot name `document`, `window`, `HTMLElement`, `customElements` or
+  // `FileSystemDirectoryHandle` and still compile.
+  //
+  // PARTIAL IS MEASURED, NOT ASSUMED. Two of the seven globals
+  // `test/boundaries.test.ts` greps for compile FINE in the root project, because
+  // `@types/node` declares them: `navigator` (Node 21+) and `localStorage`. So the
+  // grep is the only complete check and stays the one that matters — which is
+  // §6.1's point exactly. This file is a partial second lock, and claiming more
+  // for it than it does would be worse than not having it.
+  //
+  // `fm-core` sources are compiled here too, since the adapters import them. That
+  // is harmless: a DOM reference in `fm-core` would pass here and fail in the
+  // root project, which is the one that includes it for its own sake.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "verbatimModuleSyntax": false,
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@fm/core": ["./src/core/index.ts"],
+      "@fm/app": ["./src/app/index.ts"],
+      "@fm/ui": ["./src/ui/index.ts"]
+    }
+  },
+  "include": ["fm-adapters/src/**/*", "fm-adapters/test/**/*"]
+}
