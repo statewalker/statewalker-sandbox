@@ -1,1 +1,1 @@
-export {};
+export * from "./view-adapter.js";
