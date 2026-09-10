@@ -29,18 +29,18 @@ archive, not uploaded individually". Their code survives in `shell-core`; their
 |---|---|---|---|
 | `01-headless-host` | reconstructed — notes 10, 11, 03, 06, 07 | written fresh | 85 |
 | `02-a2ui-renderer` | `lib/` | recovered (1 assertion corrected) | 16 |
-| `03-a2ui-binding` | `lib/` | recovered + 4 reconstructed | 21 |
+| `03-a2ui-binding` | `lib/` | recovered + 4 reconstructed + 5 audit | 26 |
 | `04-manifest-generation` | **recovered**, byte-for-byte | **recovered**, assertions unmodified | 9 |
 | `05-activation-events` | reconstructed — note 16 §3 | written fresh | 15 |
 | `06-same-module-any-host` | `lib/mount.ts` | written fresh | 14 |
 | `06a-tailwind-build` | **recovered**, byte-identical (sha-verified) | none — a build-and-measure rung | — |
 | `06b-basecoat-mapping` | `lib/` | recovered (1 corrected) + reconstructed | 24 |
-| `07-dockview-hosting` | `lib/dock.ts`, `lib/theme-bridge.ts` | written fresh | 41 |
+| `07-dockview-hosting` | `lib/dock.ts`, `lib/theme-bridge.ts` | written fresh + 8 audit | 49 |
 | `08-biscuit-enablement` | **recovered**, one audited correction | **recovered**, all 23 unmodified, + 10 | 33 |
 | `09-apps-from-peers` | `lib/peer.ts` | written fresh | 22 |
 | `Z-static-schema` | reconstructed — note 29 | written fresh | 21 |
 
-**301 tests, 24 files.** `lib/` is `code/shell-core/` verbatim and was not edited.
+**314 tests, 26 files.** `lib/` is `code/shell-core/` verbatim and was not edited.
 
 Where a count differs from the September record, it is a **different suite, not a
 continuation**, and the rung README says so. Rung 01 replaces 40 tests with 85; rung
@@ -67,6 +67,28 @@ than what it replaced.
 
 Pinned by tests that assert the **current** behaviour, so each will turn red when
 fixed — deliberately, so a fix cannot land silently.
+
+> **Audit 2026-09-10: two of the recorded holes were NOT pinned.** The sentence above
+> was true of the eight defects below and false of `lib/ORIGIN.md`'s own "Known holes"
+> list. The first two entries there — *a binding bypasses enum validation*, and
+> *reconciliation is O(tree) per update* — existed only as prose in `ORIGIN.md`,
+> `03-a2ui-binding/README.md`, defect 5 below, and one `KNOWN HOLE:` comment in
+> `lib/renderer.ts`, with **no test of any kind**. Track SH's work order requires them
+> carried as failing or explicitly-pending tests rather than silently inherited, and
+> they had been silently inherited: a green run mentioned neither.
+> `03-a2ui-binding/tests/known-holes.test.ts` now pins both, in the style of this
+> section — current behaviour asserted, so closing either hole turns it red. Neither is
+> fixed. Verified mutation-sensitive: closing the enum bypass fails two of them,
+> adding a path-to-component dependency check fails another.
+>
+> The O(tree) hole is measured rather than timed — a counting catalogue records that
+> one `updateDataModel` re-validates 6 components in a 6-node tree and 51 in a
+> 51-node one, and that a write to a path **nothing is bound to** still re-validates
+> all 21 of a 21-node tree. Nothing races.
+>
+> The other four entries in `ORIGIN.md`'s list (`theme` accepted and ignored, no
+> `watchDataModel` modes, unnamespaced action names, unversioned layout format) remain
+> prose-only and are **not** covered by this pass.
 
 1. **`createAppHost` accepts `onAction` and ignores it.** Actions are wired at renderer
    construction, which only `mountStandalone` does; `lib/dock.ts` builds each pane's
@@ -215,3 +237,25 @@ not exist, and defect 2 fixed first. Note 39 records that the 7b theme bridge pa
 every unit test and did not work in a browser — and happy-dom resolves **no** CSS custom
 property from a stylesheet, so the assertion class that failure lived in is unavailable
 here. Rung 07's README says so, and a test enforces it.
+
+**Audit 2026-09-10 — this claim survives intact, and is now asserted rather than
+written down.** The harness was *copied*, not ported, and Track SH's work order asked
+for it ported in this unit. Five independent reasons it cannot run, each now a test in
+`07-dockview-hosting/tests/browser-harness.test.ts`: no `test:browser` script exists
+though the file's own header names one; `puppeteer-core` and `@sparticuz/chromium` are
+imported and declared nowhere; `dist/states.html` and `dist/` do not exist and no script
+builds them; `window.__dock` is read and assigned nowhere in the app; and the file is a
+`.mjs` outside `tests/`, which `vitest.config.ts`'s `include` cannot match by extension
+or by path. Every one of those assertions inverts when the harness is wired up, so the
+gap now has to be closed through that file rather than remembered.
+
+**It was not wired up, deliberately, and the scope is the reason.** Beyond the two
+dependencies and the Chromium download, `dist/states.html` needs a browser bundle of
+`lib/dock.ts` and `lib/theme-bridge.ts` — TypeScript, so a bundler this app does not
+configure; `06a` runs the Tailwind CLI and nothing else. And defect 2 must be fixed
+first: `lib/dock.ts` hard-codes `theme: themeLight`, which **is** the note-35 bug, so
+the harness's central assertion — that the drag overlay's colours flip between light and
+dark — cannot pass until `lib/` is repaired, and rung 07's tests deliberately pin that
+line. It is a unit of work coupled to a fix outside this one's scope, not a loose end.
+The honest consequence, unchanged by 314 green tests: **this app has no evidence about
+the theme bridge's behaviour in a browser.**

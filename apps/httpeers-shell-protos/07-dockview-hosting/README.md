@@ -415,6 +415,14 @@ applying (note 35), and a measurement can miss the element that applies it
 
 ### The browser harness
 
+> **Audit 2026-09-10: the cure is not administered.** `lib/browser-states.mjs` was
+> copied into this app, not wired into it — no `test:browser` script, two undeclared
+> dependencies, no `dist/states.html`, no `window.__dock`, and a `.mjs` the runner
+> cannot collect. `tests/browser-harness.test.ts` asserts all five, and
+> `PROVENANCE.md` scopes what wiring it would take (including fixing defect 2 first,
+> since the harness lands red until then). Read the paragraph below as a description
+> of the harness, not of this app's coverage.
+
 `lib/browser-states.mjs` is that cure — the note 35/36 harness. It runs light
 and dark passes in Chromium, drives a real drag through Chrome's drag
 interception, measures the drop-target selection and the floating group in

@@ -411,11 +411,11 @@ What else to distrust in the written record:
   controlling *when* the client reports changes are absent; this reports on
   every input event. No debouncing either — a real agent integration will
   chatter on every keystroke.
-- **Bindings bypass enum validation.** A binding may resolve to a value the
+- **Bindings bypass enum validation.** *(Pinned 2026-09-10 in `tests/known-holes.test.ts`; still open.)* A binding may resolve to a value the
   catalogue forbids. Deliberate — the value is unknown until render — and
   unresolved: either resolve-then-validate at render, or accept the hole
   explicitly.
-- **Reconciliation is O(tree) per update.** Every `updateDataModel` re-walks and
+- **Reconciliation is O(tree) per update.** *(Pinned 2026-09-10 in `tests/known-holes.test.ts`; still open.)* Every `updateDataModel` re-walks and
   re-validates the whole component tree. Fine for a dialog, wrong for a list. A
   path-to-component dependency map is the obvious fix and is not built.
 - **No list rendering.** Bound collections, repeated components and keyed list
