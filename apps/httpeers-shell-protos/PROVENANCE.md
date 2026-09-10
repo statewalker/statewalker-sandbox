@@ -151,10 +151,24 @@ which is the single place in this app where recovered source was corrected.
   faster absolutely, but the stub sped up more, so the ratio widened from ~8× to ~44×.
   The "caching is required" conclusion survives on the ratio, not on the 17.6 ms.
 
-  **Superseded 2026-09-10 by the Track SH audit — the correction above was itself
-  wrong in its last clause, and it cost a red test to find out.** The entry said the
-  rung's mitigation (one authorizer per query) was "unchanged and better justified".
-  It is not sufficient. `08-biscuit-enablement/tests/constraints.test.ts`'s cost test
+  **Superseded 2026-09-10 by the Track SH audit. THREE statements of this one
+  observation exist and TWO OF THEM ARE WRONG.** Both wrong ones are durable records
+  that a later reader will find first, so they are named here explicitly:
+
+  1. **WRONG** — note 18 §4.1, repeated verbatim as the work order's SH-3: *"the
+     Biscuit `Authorizer` is single-use — a second query fails with a timeout rather
+     than a misuse error."* Single-use implies rebuilding per query is a **complete**
+     fix. It is not one.
+  2. **WRONG** — the correction immediately above, this app's own first attempt: a
+     cold/warm timing artefact, with the per-query rebuild "unchanged and better
+     justified". The rebuild resets the budget and **cannot bound a single slow
+     query**, which is the case that actually fails.
+  3. **Correct, below** — a cumulative wall-clock budget across the instance.
+
+  That two different explanations of the same observation were both wrong is itself
+  the lesson: each was inferred from *when* the failure appeared rather than from what
+  the engine charges, and each looked sufficient because the machine that ran the
+  tests was never the machine under load. `08-biscuit-enablement/tests/constraints.test.ts`'s cost test
   went red with a bare `{RunLimit:"Timeout"}` thrown from `evaluate()` on a *fresh*
   authorizer, reproducible on a machine loaded to 3× its cores. What is actually true,
   all of it measured in that file:
@@ -194,9 +208,26 @@ which is the single place in this app where recovered source was corrected.
     the implementation it measures can throw. "Its assertions cannot race" is not the
     same claim as "this test cannot fail".
   - the README's "the test has never flaked" was true of the claim and false of the
-    harness. Two tests crashed rather than reported, both because a *first* query's
-    timeout escaped an un-caught call: 23/30 clean first queries under 3× load. Both
-    now count it and assert the bare-object shape on it; no assertion was weakened.
+    harness. **Three** tests in `constraints.test.ts` failed under 3× CPU
+    oversubscription, not one, and only one of them was the reported red. Named,
+    because a test that passes idle and fails under load is a CI time bomb:
+
+    | Test | Why it failed under load | State now |
+    |---|---|---|
+    | `the cost of substitution › records the per-evaluation and 30-entry menu cost` | the *implementation* threw mid-measurement — the reported red | **deterministic.** Fixed in the code, not the test. Its own assertions never raced: a finiteness check and an 80 ms tripwire (biscuit measured 1.949 ms/eval even under 3× load) |
+    | `reusing an Authorizer › stops failing once the engine is warm` | the **first** query sat outside the `try`, so its timeout escaped as a test error instead of being counted | **deterministic.** Counted now, and it asserts only the *shape* of whatever failures occur, never a rate |
+    | `reusing an Authorizer › fails in a cold process` | same escaping first query, in the child process — its *precondition*, never its claim. 23/30 clean first queries under 3× load | **bounded, not absolute.** A run whose first query timed out establishes nothing and is retried up to 4 times; the claim itself measured 30/30 idle and 30/30 under load. Residual ≈0.06% (5 consecutive precondition failures at the observed 23% rate) |
+
+    A fourth, added by this audit (`the run limit is a cumulative budget › is spent
+    across many queries`), flaked on its first draft — not on its assertion but on
+    vitest's 5 s timeout, because building six 8,000-fact worlds costs more than the
+    rest of the file. Rebuilt against a 20-fact world; 8/8 green under 3× load, counts
+    34–119, and it asserts the **maximum** over trials because falsifying "single-use"
+    needs one witness, not an average — a per-trial floor there would have been the
+    same wall-clock race the file warns about.
+
+    No assertion was weakened anywhere. The whole file is 8/8 green under the load
+    that produced the original red.
 - **Note 29's "counterintuitive result" is a mis-comparison.** Its 22 KB-built vs
   12 KB-prebuilt sets the full style pack against the *bare* pack, which has no
   `data-variant` selectors at all. Like for like: 22,158 vs 21,867 bytes — **1.3%, not
