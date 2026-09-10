@@ -10,7 +10,7 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { fact, factSetEnablement } from "../src/enablement.js";
-import { createBiscuitEnablement, loadBiscuit } from "../src/biscuit-enablement.js";
+import { RUN_LIMITS as LIMITS, createBiscuitEnablement, loadBiscuit } from "../src/biscuit-enablement.js";
 
 /** The 20-fact background the note measured against (§5). */
 const NOISE = Array.from({ length: 20 }, (_, i) => fact(`f${i}`, `v${i}`));
@@ -46,6 +46,12 @@ describe("reusing an Authorizer", () => {
    * hard rule, not better: reuse is code that passes its own tests on a warm
    * engine and fails on a user's first click. The mitigation the rung chose —
    * one authorizer per query — is unchanged and now better justified.
+   *
+   * AUDIT 2026-09-09: this correction is itself incomplete, and the last
+   * sentence above is wrong. The budget is CUMULATIVE PER INSTANCE, not a
+   * cold/warm artefact, and a fresh authorizer per query does NOT make
+   * evaluation total. Read the "the run limit is a cumulative budget"
+   * block below before relying on anything in this paragraph.
    */
 
   /**
@@ -59,7 +65,14 @@ describe("reusing an Authorizer", () => {
       b.addCode('selection("file");');
       b.addCode('mesh("connected");');
       const a = b.buildUnauthenticated();
-      const out = { first: a.query(bis.Rule.fromString('_m(true) <- selection("file")')).length };
+      const out = {};
+      // AUDIT 2026-09-09: the first query used to be un-caught here, so a
+      // first-query timeout crashed the child and failed this test on its
+      // PRECONDITION rather than on its claim. Measured 23/30 clean first
+      // queries on a machine loaded to 3x its cores. Reported now, so the
+      // caller can retry a run that established nothing.
+      try { out.first = { ok: a.query(bis.Rule.fromString('_m(true) <- selection("file")')).length }; }
+      catch (e) { out.first = { threw: true, json: JSON.parse(JSON.stringify(e)) }; }
       try {
         out.second = { ok: a.query(bis.Rule.fromString('_m(true) <- mesh("connected")')).length };
       } catch (e) {
@@ -68,17 +81,31 @@ describe("reusing an Authorizer", () => {
       }
       process.stdout.write("RESULT " + JSON.stringify(out));
     `;
-    const stdout = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const result = JSON.parse(stdout.slice(stdout.indexOf("RESULT ") + 7)) as {
-      first: number;
+    type Run = {
+      first: { ok?: number; threw?: boolean; json?: unknown };
       second: { threw?: boolean; isError?: boolean; message?: string | null; json?: unknown };
     };
+    const spawn = (): Run => {
+      const stdout = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      return JSON.parse(stdout.slice(stdout.indexOf("RESULT ") + 7)) as Run;
+    };
 
-    expect(result.first).toBe(1);
+    // A run whose FIRST query timed out never reused anything, so it is not
+    // evidence either way — retried rather than asserted on. The claim below
+    // is unweakened: on every run that got a clean first query, the second
+    // must still throw. Measured 30/30 idle and 30/30 under 3x load, so no
+    // tolerance is spent on the claim itself.
+    let result = spawn();
+    for (let i = 0; i < 4 && result.first.threw; i++) {
+      expect(JSON.parse(JSON.stringify(result.first.json))).toEqual({ RunLimit: "Timeout" });
+      result = spawn();
+    }
+
+    expect(result.first).toEqual({ ok: 1 });
     expect(result.second.threw).toBe(true);
     // The failure is nastier than the note records. It is not merely that the
     // message says "timeout" instead of "misuse": the thrown VALUE IS NOT AN
@@ -97,9 +124,20 @@ describe("reusing an Authorizer", () => {
       b.addCode('mesh("connected");');
       return b.buildUnauthenticated();
     };
+    // AUDIT 2026-09-09: the FIRST query used to sit outside this try, so a
+    // first-query timeout escaped as a test error instead of being counted.
+    // That is how this test went red on a machine loaded to 3x its cores —
+    // reporting nothing about the thing it exists to measure. Counted now;
+    // the assertions below are unchanged.
+    const firstQueryFailures: unknown[] = [];
     const reuse = (): unknown | undefined => {
       const a = build();
-      a.query(bis.Rule.fromString('_m(true) <- selection("file")'));
+      try {
+        a.query(bis.Rule.fromString('_m(true) <- selection("file")'));
+      } catch (err) {
+        firstQueryFailures.push(err);
+        return undefined; // no reuse happened, so this trial says nothing
+      }
       try {
         a.query(bis.Rule.fromString('_m(true) <- mesh("connected")'));
         return undefined;
@@ -110,6 +148,7 @@ describe("reusing an Authorizer", () => {
 
     for (let i = 0; i < 200; i++) reuse(); // warm the engine
 
+    firstQueryFailures.length = 0; // only the measured window is reported
     const TRIALS = 200;
     const failures: unknown[] = [];
     for (let i = 0; i < TRIALS; i++) {
@@ -119,8 +158,17 @@ describe("reusing an Authorizer", () => {
 
     process.stdout.write(
       `\n  reusing a WARM authorizer: ${failures.length}/${TRIALS} second queries failed ` +
-        `(cold, it is 10/10 — see the test above)\n`,
+        `(cold, it is 10/10 — see the test above)\n` +
+        `  and ${firstQueryFailures.length}/${TRIALS} FIRST queries failed on a fresh authorizer, ` +
+        `which no amount of rebuilding prevents\n`,
     );
+
+    // A first query on a fresh authorizer fails the same way when it does
+    // fail, which is the whole reason `RUN_LIMITS` exists.
+    for (const f of firstQueryFailures) {
+      expect(f).not.toBeInstanceOf(Error);
+      expect(JSON.parse(JSON.stringify(f))).toEqual({ RunLimit: "Timeout" });
+    }
 
     // Deliberately NOT asserting a rate: it is a wall-clock race, and any
     // threshold here would be a flaky test making a claim it cannot support.
@@ -154,6 +202,207 @@ describe("a rule head must carry at least one term", () => {
     const bis = await loadBiscuit();
     expect(() => bis.Rule.fromString('_m() <- selection("file")')).toThrow();
     expect(() => bis.Rule.fromString('_m(true) <- selection("file")')).not.toThrow();
+  });
+});
+
+describe("the run limit is a cumulative budget, and it is raisable", () => {
+  /**
+   * AUDIT 2026-09-09. The two claims above — note 18's "the Authorizer is
+   * single-use" and this file's correction "it is a cold/warm timing
+   * artefact" — are both incomplete, and the tests below say what the
+   * mechanism actually is.
+   *
+   * Measured: `max_time` is ONE budget SHARED BY EVERY QUERY on an
+   * Authorizer instance, spent as engine time accumulates. A warm instance
+   * over a 20-fact world answers a few hundred queries before it trips; over
+   * an 8,000-fact world, about two dozen. So reuse is bounded by WORK, not
+   * by a use count and not by engine temperature — cold merely spends the
+   * budget on the first query.
+   *
+   * Two consequences the record misses, and the reason this block exists:
+   *
+   *  1. The rung's mitigation — a fresh authorizer per query — does NOT make
+   *     `evaluate()` total. It resets the budget, but the budget is still
+   *     1 ms of WALL CLOCK, and a descheduled thread spends wall clock
+   *     without doing work. Measured on a machine loaded to 3x its cores, a
+   *     single fresh query whose median is 0.033 ms has a p99 of 12 ms and a
+   *     maximum of 53 ms. That is what turned "the cost of substitution"
+   *     below red: not reuse, but one ordinary query on its own fresh
+   *     authorizer, losing its slice to another process.
+   *
+   *  2. Nothing in the record found the remedy, which is in the API the rung
+   *     already used. `Authorizer` exposes `queryWithLimits(rule, limits)`
+   *     alongside `query(rule)`; the limits are biscuit's `RunLimits`
+   *     struct, `{ max_facts, max_iterations, max_time_micro }`. Supplying
+   *     one is the difference between a guard against a pathological rule
+   *     and a guard against an unlucky scheduler.
+   */
+
+  /**
+   * The same 20-fact world the rest of this file measures against.
+   *
+   * The effect is far starker with a bigger world — 8,000 background facts
+   * trips the budget in about two dozen queries against a few hundred here,
+   * which is the clearest single demonstration that the budget tracks WORK.
+   * It is not what the test builds, because 8,000 `addCode` calls per trial
+   * cost more than the whole rest of this file and the assertion does not
+   * need them.
+   */
+  const world = async () => {
+    const bis = await loadBiscuit();
+    const b = new bis.AuthorizerBuilder();
+    b.addCode('selection("file");');
+    for (let i = 0; i < 20; i++) b.addCode(`f${i}("v${i}");`);
+    return { bis, authorizer: b.buildUnauthenticated() };
+  };
+
+  it("is spent across many queries on one instance, which is not what 'single-use' means", async () => {
+    const { bis } = await world();
+    const rule = () => bis.Rule.fromString('_m(true) <- selection("file")');
+
+    /** Queries one instance until the shared budget trips. */
+    const runToExhaustion = async (): Promise<{ answered: number; thrown: unknown }> => {
+      const { authorizer } = await world();
+      let answered = 0;
+      try {
+        for (; answered < 20000; answered++) authorizer.query(rule());
+        return { answered, thrown: undefined };
+      } catch (err) {
+        return { answered, thrown: err };
+      }
+    };
+
+    const TRIALS = 3;
+    const runs = [];
+    for (let i = 0; i < TRIALS; i++) runs.push(await runToExhaustion());
+    const counts = runs.map((r) => r.answered);
+
+    process.stdout.write(
+      `\n  one reused authorizer over a 20-fact world answered ` +
+        `${counts.join(", ")} successive queries before the shared budget tripped\n`,
+    );
+
+    // The budget is real: an unbounded loop over one instance always ends here.
+    for (const r of runs) {
+      expect(r.thrown).toBeDefined();
+      expect(JSON.parse(JSON.stringify(r.thrown))).toEqual({ RunLimit: "Timeout" });
+    }
+
+    // And it is CUMULATIVE, not per-use. "Single-use" predicts every count is
+    // 1. ONE instance that answered more than one query falsifies that, so
+    // the maximum is what is asserted, not the mean — a busy machine can
+    // spend the whole budget inside a single query (that is finding 1 above,
+    // and asserting a per-trial floor here would be the very wall-clock race
+    // this file keeps warning about). Measured maxima: 290-541 warm, and
+    // never below 34 on a machine loaded to 3x its cores.
+    expect(Math.max(...counts)).toBeGreaterThan(1);
+
+    // Same rule, same world, fresh instance: answered at once. So the
+    // failure belongs to the INSTANCE's spent budget, not to the query.
+    const fresh = await world();
+    expect(fresh.authorizer.queryWithLimits(rule(), LIMITS)).toHaveLength(1);
+  });
+
+  it("is not consulted by queryWithLimits at all, which is what actually buys the fix", async () => {
+    // MUTATION GUARD, and the correction to this block's own first draft.
+    // It is tempting to read `RUN_LIMITS.max_time_micro: 1_000_000` as "the
+    // budget was raised to a second". It was not: in
+    // `@biscuit-auth/biscuit-wasm@0.6.0` the argument is INERT for queries.
+    // What `queryWithLimits` buys is a door that does not charge the
+    // instance's cumulative budget. Recording that here means the constant
+    // cannot be quietly trusted to do work it does not do — and it means a
+    // future biscuit-wasm that starts honouring the limits breaks this test
+    // rather than the menu.
+    const bis = await loadBiscuit();
+    const mk = () => {
+      const b = new bis.AuthorizerBuilder();
+      b.addCode('selection("file");');
+      return b.buildUnauthenticated();
+    };
+    const rule = () => bis.Rule.fromString('_m(true) <- selection("file")');
+
+    // Every limits value answers, including ones that forbid all work.
+    for (const limits of [LIMITS, {}, { nope: 1 }, { ...LIMITS, max_time_micro: 1 }, { ...LIMITS, max_facts: 1 }]) {
+      expect(mk().queryWithLimits(rule(), limits)).toHaveLength(1);
+    }
+    // ...but the argument must still be an object.
+    expect(() => mk().queryWithLimits(rule(), null)).toThrow();
+
+    // And it never trips, where `query()` on the same instance does. 3,000
+    // is an order of magnitude past the ~430 a warm `query()` instance
+    // survives, and 60,000 was clean by hand.
+    const a = mk();
+    for (let i = 0; i < 3000; i++) a.queryWithLimits(rule(), LIMITS);
+    expect(a.queryWithLimits(rule(), LIMITS)).toHaveLength(1);
+
+    // The trade this makes, asserted rather than asserted-away: there is now
+    // no engine-side bound on a query. Only the CLAUSE grammar stands
+    // between `evaluate()` and the engine, so it is what must reject.
+    const e = await createBiscuitEnablement(FACTS);
+    expect(() => e.evaluate("selection")).toThrow(/Malformed when clause/);
+    expect(() => e.evaluate('x($a), y($a)')).toThrow(/Malformed when clause/);
+  });
+
+  it("stops the cold reuse failure outright once queryWithLimits is used", () => {
+    // The cold child process of the first test in this file, run again with
+    // the one difference that matters. There, the second query throws. Here
+    // it returns — 10 cold processes out of 10 by hand — which is the proof
+    // that the constraint every caller has been coding around since note 18
+    // is a DEFAULT, not a property of the engine.
+    const script = `
+      const bis = await import("@biscuit-auth/biscuit-wasm");
+      const b = new bis.AuthorizerBuilder();
+      b.addCode('selection("file");');
+      b.addCode('mesh("connected");');
+      const a = b.buildUnauthenticated();
+      const L = ${JSON.stringify(LIMITS)};
+      const out = { first: a.queryWithLimits(bis.Rule.fromString('_m(true) <- selection("file")'), L).length };
+      try {
+        out.second = { ok: a.queryWithLimits(bis.Rule.fromString('_m(true) <- mesh("connected")'), L).length };
+      } catch (e) {
+        out.second = { threw: true, json: JSON.parse(JSON.stringify(e)) };
+      }
+      process.stdout.write("RESULT " + JSON.stringify(out));
+    `;
+    const stdout = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const result = JSON.parse(stdout.slice(stdout.indexOf("RESULT ") + 7)) as {
+      first: number;
+      second: { ok?: number; threw?: boolean; json?: unknown };
+    };
+
+    expect(result.first).toBe(1);
+    expect(result.second).toEqual({ ok: 1 });
+  });
+
+  it("is what every query the wrapper makes must carry, or a menu render can die on 1 ms", async () => {
+    // The assertion that pins the fix, and the one a mutation reverses.
+    // `Authorizer.prototype.query` is the default-budget door; the wrapper
+    // must not go through it. Patched to throw, so any call is loud.
+    //
+    // This is deliberately a stronger check than "evaluate() did not throw":
+    // that could pass by luck on an idle machine, which is exactly the
+    // failure mode this whole block is about.
+    const bis = await loadBiscuit();
+    const proto = bis.Authorizer.prototype as { query: unknown };
+    const original = proto.query;
+    proto.query = () => {
+      throw new Error("plain query() was called: this runs under biscuit's default 1 ms max_time");
+    };
+    try {
+      const e = await createBiscuitEnablement(FACTS);
+      expect(e.evaluate(TWO_CLAUSE)).toBe(true);
+      expect(e.evaluate('!focus("nothing")')).toBe(true);
+      expect(e.query('_m(true) <- selection("file")')).toEqual(["true"]);
+      expect(e.queryAny(['_m(true) <- selection("file")'])).toBe(true);
+      expect(e.matchesTerm("selection", "file")).toBe(true);
+      expect(e.matchesTerm("selection", 'file") or true or selection("')).toBe(false);
+    } finally {
+      proto.query = original;
+    }
   });
 });
 

@@ -1,6 +1,6 @@
 # 08 — Biscuit satisfied the interface unchanged
 
-`pnpm test 08-biscuit-enablement` — 29 tests.
+`pnpm test 08-biscuit-enablement` — 33 tests.
 
 `src/` is **recovered** from archive
 `17-prototype-08-biscuit-enablement.tar.gz`, along with the 23 tests in
@@ -92,9 +92,23 @@ behaviour either has in one and not the other fails the run.
 | 8 | A rule head must carry **at least one term** | `Rule.fromString('_m() <- selection("file")')` throws; `_m(true) <- …` does not | A zero-term head parses, and every generated rule can drop the `(true)` |
 | 9 | A **reused authorizer fails uncatchably**, in a cold process | A child `node` process builds one authorizer and queries twice: the second throws a bare `{ RunLimit: "Timeout" }` **object** — `instanceof Error` is `false` and `.message` is `undefined` | The second query succeeds, or throws something a caller could handle |
 | 10 | Rebuilding per query keeps `evaluate()` reliable | Four successive evaluations over one `Enablement`, including a two-clause `when` (two queries inside one call) | The authorizer is hoisted out of `ask()` — mutating that line fails this and three of the recovered contract tests |
-| 11 | The cost of substitution is **recorded, on the machine that ran it** | 20 facts, two-clause `when`, 200 iterations after warm-up; both implementations measured and printed with the note's figures beside them | Nothing — this test is not allowed to fail on a timing threshold. Its only assertions are a finite measurement and an 80 ms tripwire ≈135× the note's figure |
+| 11 | The cost of substitution is **recorded, on the machine that ran it** | 20 facts, two-clause `when`, 200 iterations after warm-up; both implementations measured and printed with the note's figures beside them | Its own assertions cannot race — a finite measurement and an 80 ms tripwire ≈135× the note's figure. The row used to say "nothing", which was wrong: the *implementation* it measures could throw, and on 2026-09-10 it did. See claim 12 |
+| 12 | `max_time` is a **cumulative per-instance budget**, and `queryWithLimits` is the door that does not charge it | One instance answers ~430 successive `query()` calls over a 20-fact world and ~24 over an 8,000-fact one, then trips permanently; `queryWithLimits` answers on that same exhausted instance and survived 60,000 calls. Both query sites in `src/` take the second door | The wrapper calls plain `query()` — which is a mutation that fails this, and the condition that made the cost test red under CPU contention |
+| 13 | The limits argument is **inert** in `biscuit-wasm@0.6.0`, so the constant is not what fixes anything | `{}`, `{nope:1}`, `max_time_micro: 1` and `max_facts: 1` all answer identically; `null` throws | A future biscuit-wasm honours the limits — in which case this fails rather than the menu |
 
 ### Two things the notes got wrong
+
+> **Superseded 2026-09-10 by the Track SH audit.** The two subsections below are
+> right that note 18 is wrong and wrong about why, and the paragraph claiming the
+> per-query rebuild is a sufficient mitigation cost a red test. The budget is
+> **cumulative per Authorizer instance** and tracks work, not engine temperature;
+> rebuilding per query resets it but cannot make `evaluate()` total, because the
+> budget is wall clock and a descheduled thread spends it. `src/` now queries
+> through `queryWithLimits`, whose limits argument is itself inert — it is the
+> *door*, not the numbers, that fixes this. Full measurement in `PROVENANCE.md`
+> under note 18, and in `tests/constraints.test.ts`. Also corrected: "the test has
+> never flaked" was true of the claim and false of the harness, where a first
+> query's timeout escaped an un-caught call in two tests.
 
 **The Authorizer is not single-use.** Note 18 §4.1 calls this the rung's most
 important discovery, and it half reproduces. In a **cold** process a second
@@ -112,6 +126,10 @@ throwing something that is not an `Error`, so the ordinary
 chose — one authorizer per query — is unchanged and better justified.
 `tests/constraints.test.ts` therefore pins the cold case in a child process
 and *records* the warm rate without asserting it.
+
+(Not sufficient, as the banner above says: the rebuild resets the budget, it does
+not bound a single query. A fresh authorizer's *first* query timed out 7 times in
+30 under 3x load.)
 
 **The performance figures do not reproduce.** Note 18 §5 measured 0.586 ms per
 evaluation, 17.6 ms for a 30-entry menu, ~8× the stub, and concluded that

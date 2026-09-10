@@ -1,6 +1,12 @@
 // RECOVERED-FROM-ARCHIVE: notes/drive/2026-09-02.Httpeers-Shell/
 //   17-prototype-08-biscuit-enablement.tar.gz -> proto8-biscuit/src/biscuit-enablement.ts
-// Verbatim apart from this header. Nothing in the body was rewritten.
+// Verbatim apart from this header and ONE correction, made 2026-09-09 by the
+// Track SH audit and marked in place: every query now goes through
+// `queryWithLimits(rule, RUN_LIMITS)` instead of `query(rule)`, because the
+// default 1 ms `max_time` made `evaluate()` throw an uncatchable bare object
+// under CPU contention. See `RUN_LIMITS` below, `tests/constraints.test.ts`,
+// and the "Corrections to the notes" entry in `PROVENANCE.md`. The archive's
+// own text for the two changed lines is quoted at each site.
 import type { Enablement, Fact } from "./enablement.js";
 
 /**
@@ -31,6 +37,55 @@ export function loadBiscuit(): Promise<BiscuitModule> {
   loading ??= import("@biscuit-auth/biscuit-wasm");
   return loading;
 }
+
+/**
+ * The `RunLimits` argument every query in this module passes.
+ *
+ * CORRECTION 2026-09-09 (audit) — see `tests/constraints.test.ts`, which
+ * measures all of the below. Two layers, and it matters which does the work.
+ *
+ * WHAT WAS WRONG. `query(rule)` charges its elapsed time against a budget
+ * that is CUMULATIVE ACROSS THE INSTANCE and trips permanently once spent.
+ * So:
+ *  - the Authorizer is not single-use. Warm, one instance answers ~430
+ *    successive queries over a 20-fact world and ~24 over an 8,000-fact one:
+ *    the budget tracks WORK. Cold merely spends it all on the first query,
+ *    which is what made it look structural to note 18.
+ *  - the budget is wall clock, and a descheduled thread spends wall clock
+ *    without doing work. On a machine loaded to 3x its cores, a query whose
+ *    median is 0.033 ms measured a p99 of 12 ms and a max of 53 ms. That is
+ *    what made `evaluate()` throw `{RunLimit:"Timeout"}` — a bare object
+ *    `catch (e) { log(e.message) }` reads as `undefined` — on a fresh
+ *    authorizer, which is why the rung's per-query rebuild never fixed it.
+ *
+ * WHY THE FIX WORKS, AND IT IS NOT THE NUMBERS BELOW. `queryWithLimits` does
+ * not consult that cumulative budget at all: measured, it answers on an
+ * already-exhausted instance, and 60,000 successive queries on one instance
+ * never trip it. Nor does it honour its own argument — `{}`, `{nope:1}` and
+ * `max_time_micro: 1` all behave identically to this struct, while `null` or
+ * a non-object throws. In `@biscuit-auth/biscuit-wasm@0.6.0` the limits are
+ * INERT for queries; what the call buys is the door that does not charge the
+ * shared budget.
+ *
+ * THE TRADE, stated because it is real: this removes an engine-side runaway
+ * guard from query evaluation and nothing replaces it. That is acceptable
+ * HERE and only here — `evaluate()` interpolates nothing that has not passed
+ * `CLAUSE` (ground literal patterns), `query`/`queryAny` take shell-authored
+ * source, and `matchesTerm` binds untrusted values as parameters. A caller
+ * that widens the `when` grammar, or admits foreign rule SOURCE, is taking
+ * that guard's absence on and must bound evaluation itself.
+ *
+ * The values are biscuit's own documented defaults with `max_time_micro`
+ * raised to one second. They are kept, inert, so that the intent is on the
+ * record and a biscuit-wasm that honours them needs no change here — not
+ * because they currently do anything. A test asserts the inertness, so this
+ * paragraph stops being true loudly rather than silently.
+ */
+export const RUN_LIMITS = Object.freeze({
+  max_facts: 1000,
+  max_iterations: 100,
+  max_time_micro: 1_000_000,
+});
 
 /** Canonical string form of a fact, matching the `when` clause syntax. */
 function factId(f: Fact): string {
@@ -86,11 +141,19 @@ export async function createBiscuitEnablement(
   /**
    * Build a fresh authorizer over the current fact set.
    *
-   * MEASURED CONSTRAINT: the WASM Authorizer is SINGLE-USE. A second
-   * `query()` on the same instance fails with RunLimit::Timeout rather than
-   * returning a result. So one authorizer is built per query, not per
-   * evaluation and certainly not once. This is the dominant performance
-   * cost of the substitution -- see the functional description.
+   * The archive's comment here read:
+   *
+   *   "MEASURED CONSTRAINT: the WASM Authorizer is SINGLE-USE. A second
+   *   query() on the same instance fails with RunLimit::Timeout rather than
+   *   returning a result."
+   *
+   * It is not single-use; `RUN_LIMITS` above has the measurement. One
+   * instance shares one time budget across every query it answers, so reuse
+   * is bounded by work rather than by count. The per-query rebuild STAYS,
+   * because resetting the budget per query is still the right shape and
+   * three of the recovered contract tests depend on it — but it is no longer
+   * the whole mitigation, since the budget is wall clock. Raising
+   * `max_time` is the other half.
    */
   const authorizer = () => {
     const builder = new bis.AuthorizerBuilder();
@@ -105,8 +168,8 @@ export async function createBiscuitEnablement(
    */
   const ask = (ruleSource: string): string[] =>
     authorizer()
-      .query(bis.Rule.fromString(ruleSource))
-      .map((f) => f.toString());
+      .queryWithLimits(bis.Rule.fromString(ruleSource), RUN_LIMITS)
+      .map((f) => String(f));
 
   return {
     setFacts(next) {
@@ -170,7 +233,7 @@ export async function createBiscuitEnablement(
       // source while the value becomes a bound PARAMETER. Biscuit escapes
       // it, so Datalog syntax inside it is data, never code.
       const r = bis.rule([`_m(true) <- ${predicate}(`, `)`] as never, value);
-      return authorizer().query(r).length > 0;
+      return authorizer().queryWithLimits(r, RUN_LIMITS).length > 0;
     },
   };
 }

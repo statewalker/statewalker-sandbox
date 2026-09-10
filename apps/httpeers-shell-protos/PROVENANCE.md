@@ -36,11 +36,11 @@ archive, not uploaded individually". Their code survives in `shell-core`; their
 | `06a-tailwind-build` | **recovered**, byte-identical (sha-verified) | none — a build-and-measure rung | — |
 | `06b-basecoat-mapping` | `lib/` | recovered (1 corrected) + reconstructed | 24 |
 | `07-dockview-hosting` | `lib/dock.ts`, `lib/theme-bridge.ts` | written fresh | 41 |
-| `08-biscuit-enablement` | **recovered** | **recovered**, all 23 unmodified, + 6 | 29 |
+| `08-biscuit-enablement` | **recovered**, one audited correction | **recovered**, all 23 unmodified, + 10 | 33 |
 | `09-apps-from-peers` | `lib/peer.ts` | written fresh | 22 |
 | `Z-static-schema` | reconstructed — note 29 | written fresh | 21 |
 
-**297 tests, 24 files.** `lib/` is `code/shell-core/` verbatim and was not edited.
+**301 tests, 24 files.** `lib/` is `code/shell-core/` verbatim and was not edited.
 
 Where a count differs from the September record, it is a **different suite, not a
 continuation**, and the rung README says so. Rung 01 replaces 40 tests with 85; rung
@@ -116,7 +116,9 @@ fixed — deliberately, so a fix cannot land silently.
 
 ## Corrections to the notes
 
-Found by implementing what they say. The code is right in every case; the prose is not.
+Found by implementing what they say. The prose is wrong in every case below; the code
+was right in every case **but one** — see the superseding 2026-09-10 entry under note 18,
+which is the single place in this app where recovered source was corrected.
 
 - **Note 18 §5's performance figures do not reproduce, and the finding is worse than
   recorded.** "The Biscuit Authorizer is single-use" is a *timing artefact*: cold, the
@@ -126,6 +128,53 @@ Found by implementing what they say. The code is right in every case; the prose 
   cost is ~0.28 ms/eval and 8.3 ms per 30-entry menu against the recorded 0.586/17.6 —
   faster absolutely, but the stub sped up more, so the ratio widened from ~8× to ~44×.
   The "caching is required" conclusion survives on the ratio, not on the 17.6 ms.
+
+  **Superseded 2026-09-10 by the Track SH audit — the correction above was itself
+  wrong in its last clause, and it cost a red test to find out.** The entry said the
+  rung's mitigation (one authorizer per query) was "unchanged and better justified".
+  It is not sufficient. `08-biscuit-enablement/tests/constraints.test.ts`'s cost test
+  went red with a bare `{RunLimit:"Timeout"}` thrown from `evaluate()` on a *fresh*
+  authorizer, reproducible on a machine loaded to 3× its cores. What is actually true,
+  all of it measured in that file:
+
+  - `query(rule)` charges elapsed time against a budget that is **cumulative across
+    the Authorizer instance** and trips permanently once spent. Warm, one instance
+    answers ~430 successive queries over a 20-fact world and ~24 over an 8,000-fact
+    one — the budget tracks **work**, so it is neither a use count nor a cold/warm
+    artefact. Cold simply spends the whole budget inside the first query, which is
+    what made note 18 read it as structural.
+  - the budget is **wall clock**, which a descheduled thread spends without doing
+    work. Under 3× load a query whose median is 0.033 ms measured a p99 of 12 ms and a
+    maximum of 53 ms. So rebuilding per query resets the budget but cannot make
+    `evaluate()` total, and the failure lands as an uncatchable bare object.
+  - the remedy is in the API the rung already used and no note found it:
+    `Authorizer.queryWithLimits(rule, limits)`. **But not for the obvious reason** —
+    the limits argument is *inert* for queries in `@biscuit-auth/biscuit-wasm@0.6.0`
+    (`{}`, `{nope:1}` and `max_time_micro: 1` all behave identically; `null` throws).
+    What the call buys is a door that does not charge the cumulative budget: it
+    answers on an already-exhausted instance and survived 60,000 successive queries.
+
+  `src/biscuit-enablement.ts` is therefore **recovered with one correction**, the only
+  edit to recovered source in this app: both query sites now go through
+  `queryWithLimits(…, RUN_LIMITS)`. The archive's own text for every changed line is
+  quoted in place. The per-query rebuild **stays** — three recovered contract tests
+  plus two of the new ones fail if it is hoisted. The trade is recorded rather than
+  hidden: query evaluation no longer has an engine-side runaway guard, which is
+  acceptable here only because `CLAUSE` validation stands in front of `evaluate()`,
+  `query`/`queryAny` take shell-authored source, and `matchesTerm` binds untrusted
+  values as parameters. Widening the `when` grammar, or admitting foreign rule
+  *source*, takes that absence on.
+
+  Two further corrections to this app's own record, from the same audit:
+
+  - rung 08's README says of the cost test "**Fails if**: Nothing — this test is not
+    allowed to fail on a timing threshold." It was not allowed to and it did, because
+    the implementation it measures can throw. "Its assertions cannot race" is not the
+    same claim as "this test cannot fail".
+  - the README's "the test has never flaked" was true of the claim and false of the
+    harness. Two tests crashed rather than reported, both because a *first* query's
+    timeout escaped an un-caught call: 23/30 clean first queries under 3× load. Both
+    now count it and assert the bare-object shape on it; no assertion was weakened.
 - **Note 29's "counterintuitive result" is a mis-comparison.** Its 22 KB-built vs
   12 KB-prebuilt sets the full style pack against the *bare* pack, which has no
   `data-variant` selectors at all. Like for like: 22,158 vs 21,867 bytes — **1.3%, not
