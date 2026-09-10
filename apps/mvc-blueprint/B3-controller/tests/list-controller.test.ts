@@ -82,7 +82,7 @@ describe("B3 · list controller", () => {
     // bootstrap.test.ts "refuses to activate").
     app = bootstrap({ commands, api, registerViews: () => {} });
     model = new TodoListModel();
-    controller = app.createList(model);
+    controller = app.createList(model).controller;
   });
 
   it("loads the api into the model on activate", async () => {
@@ -207,7 +207,7 @@ describe("B3 · list controller", () => {
       const flaky = new FlakyTodoApi([{ id: "1", title: "seed", done: false }]);
       const flakyApp = bootstrap({ commands: new Commands(), api: flaky, registerViews: () => {} });
       const m = new TodoListModel();
-      const c = flakyApp.createList(m);
+      const c = flakyApp.createList(m).controller;
       await tick();
 
       flaky.failing = true;
@@ -269,7 +269,7 @@ describe("B3 · list controller", () => {
     };
     let again: ListController;
     try {
-      again = app.createList(new TodoListModel());
+      again = app.createList(new TodoListModel()).controller;
     } finally {
       ListController.prototype.activate = original;
     }

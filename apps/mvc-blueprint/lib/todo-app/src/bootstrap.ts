@@ -18,8 +18,24 @@ export interface BootstrapOptions {
   registerViews(commands: Commands): void | (() => void | Promise<void>);
 }
 
+/** One controller created through the capability, and the way to let it go. */
+export interface ListHandle {
+  readonly controller: ListController;
+  /**
+   * Disposes THIS controller and removes it from the app's registry, without
+   * tearing down the app. It is the registry's own per-registration disposer,
+   * so it is idempotent, and `dispose()` later does not touch it again.
+   */
+  release(): Promise<void>;
+}
+
 export interface AppHandle {
-  createList(model: TodoListModel): ListController;
+  /**
+   * A shell opening and closing panels calls this once per panel and
+   * `release()`s each on close. Without a per-child release, every call would
+   * append a closure to the app registry that only `dispose()` ever drops.
+   */
+  createList(model: TodoListModel): ListHandle;
   /** The registry's cleanup: LIFO, idempotent, error-tolerant. */
   dispose(): Promise<void>;
 }
@@ -62,11 +78,14 @@ export function bootstrap(options: BootstrapOptions): AppHandle {
   const ready = ViewsReady._mint();
 
   return {
-    createList(model: TodoListModel): ListController {
+    createList(model: TodoListModel): ListHandle {
       const controller = new ListController(model, commands, api);
       controller.activate(ready);
-      register(() => controller.dispose());
-      return controller;
+      // `register()` already returns a per-registration disposer: running it
+      // disposes the controller AND drops it from the registry. Handing it back
+      // is all a per-child release needs.
+      const release = register(() => controller.dispose());
+      return { controller, release };
     },
     dispose: cleanup,
   };

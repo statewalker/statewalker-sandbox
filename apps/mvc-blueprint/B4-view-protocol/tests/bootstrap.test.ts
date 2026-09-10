@@ -40,7 +40,7 @@ describe("B4 · bootstrap ordering", () => {
       registerViews: () => {},
     });
     await tick();
-    const late = app.createList(new TodoListModel());
+    const late = app.createList(new TodoListModel()).controller;
     await tick();
     expect(late.debug.reloads).toBeGreaterThan(0);
     await app.dispose();
@@ -53,7 +53,7 @@ describe("B4 · bootstrap ordering", () => {
       registerViews: () => {},
     });
     const model = new TodoListModel();
-    const controller = app.createList(model);
+    const controller = app.createList(model).controller;
     await tick();
     const before = controller.debug.reactions;
     await app.dispose();
@@ -71,7 +71,7 @@ describe("B4 · bootstrap ordering", () => {
         order.push("views");
       },
     });
-    const controller = app.createList(new TodoListModel());
+    const controller = app.createList(new TodoListModel()).controller;
     await tick();
 
     // Observe the controller's own disposal in the same array. Bootstrap's
@@ -87,5 +87,36 @@ describe("B4 · bootstrap ordering", () => {
 
     await app.dispose();
     expect(order).toEqual(["controller", "views"]);
+  });
+
+  it("releases ONE controller without tearing down the app — the shell's panel case", async () => {
+    const app = bootstrap({
+      commands: new Commands(),
+      api: new MemTodoApi(),
+      registerViews: () => {},
+    });
+    const modelA = new TodoListModel();
+    const modelB = new TodoListModel();
+    const a = app.createList(modelA);
+    const b = app.createList(modelB);
+    await tick();
+
+    await a.release();
+    const reactionsA = a.controller.debug.reactions;
+    const reactionsB = b.controller.debug.reactions;
+    modelA.input.requestRefresh();
+    modelB.input.requestRefresh();
+    await tick();
+    expect(a.controller.debug.reactions, "the released controller is torn down").toBe(reactionsA);
+    expect(b.controller.debug.reactions, "its sibling is untouched").toBe(reactionsB + 1);
+
+    // Released means OUT of the app registry, not merely disposed: otherwise
+    // every panel ever opened still costs a closure until the app dies.
+    let disposedAgain = 0;
+    a.controller.dispose = async () => {
+      disposedAgain++;
+    };
+    await app.dispose();
+    expect(disposedAgain, "the app registry still held a released controller").toBe(0);
   });
 });
