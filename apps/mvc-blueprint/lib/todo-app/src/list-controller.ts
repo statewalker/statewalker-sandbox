@@ -56,8 +56,6 @@ export class ListController {
    * on a model whose owner was told teardown is complete.
    */
   private _disposed = false;
-  /** Every `_reconcile()` run not yet settled, so `dispose()` can wait them out. */
-  private readonly _inFlight = new Set<Promise<void>>();
   readonly debug = { reactions: 0, reloads: 0 };
 
   constructor(
@@ -94,40 +92,48 @@ export class ListController {
     register(
       this._model.input.onRefresh(() => {
         this.debug.reactions++;
-        this._start();
+        void this._reconcile();
       }),
     );
     register(
       this._model.input.onPendingChange(() => {
         this.debug.reactions++;
-        this._start();
+        void this._reconcile();
       }),
     );
     // The initial load: `_handledRefresh` starts below any `refreshCount`.
-    this._start();
+    void this._reconcile();
   }
 
   /**
-   * Quiescent, not merely unsubscribed: when this resolves, the controller will
-   * never write the model again. Unsubscribing stops NEW work; the run already
-   * awaiting the api is waited out, and `_disposed` makes it drop its write.
-   * `ViewAdapter.dispose()` is symmetric in the same way, for the same reason.
+   * WRITE-quiescent, not call-quiescent: once this resolves, the controller
+   * will never write the model again — but a run already in flight when
+   * teardown began may still be executing, and if the api it is awaiting
+   * answers later, that answer is dropped rather than applied. Unsubscribing
+   * stops NEW work; `_disposed` (set first, checked after every await) is
+   * what makes an in-flight run drop its write instead of landing on a model
+   * whose owner was told teardown is complete. `ViewAdapter.dispose()` is
+   * symmetric in the same way, for the same reason.
+   *
+   * This used to also wait for every in-flight run to settle before
+   * resolving — a stronger, CALL-quiescent guarantee. That guarantee was
+   * withdrawn because it deadlocks: `bootstrap`'s registry unwinds LIFO, so a
+   * controller (registered by `createList`, after `registerViews`) is
+   * disposed BEFORE the view layer that registered it. A run stuck awaiting a
+   * command only the view layer settles — the canonical case being a host
+   * routing `todos:add` through an approval dialog — then has no path to ever
+   * settle: the one thing that WOULD unstick it, the view layer's own
+   * `dispose()` (which force-rejects whatever is still open), does not run
+   * until this `dispose()` has already returned. Waiting for such a run
+   * waits forever. Dropping the wait costs nothing this method still
+   * promises: `_disposed` alone already guarantees no write reaches the
+   * model after teardown, which is the guarantee the earlier fix actually
+   * needed.
    */
   async dispose(): Promise<void> {
     this._disposed = true;
     const [, cleanup] = this._registry;
     await cleanup();
-    while (this._inFlight.size > 0) await Promise.all(this._inFlight);
-  }
-
-  /** Starts a run and tracks it until it settles. `_reconcile()` never rejects. */
-  private _start(): void {
-    const run = this._reconcile();
-    this._inFlight.add(run);
-    const settled = () => {
-      this._inFlight.delete(run);
-    };
-    void run.then(settled, settled);
   }
 
   /**

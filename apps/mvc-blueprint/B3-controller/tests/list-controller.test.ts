@@ -231,11 +231,15 @@ describe("B3 · list controller", () => {
     });
   });
 
-  it("is quiescent: once dispose() resolves, the controller never writes the model again", async () => {
-    // `ViewAdapter.dispose()` was fixed for exactly this asymmetry; the
-    // controller never got it. Unsubscribing stops NEW work, but the reload
-    // already awaiting the api still lands ~60ms later, on a model whose owner
-    // has been told teardown is complete.
+  it("is WRITE-quiescent: once dispose() resolves, no model write lands, even when the api answers later", async () => {
+    // dispose() no longer waits for the in-flight run to finish — waiting
+    // deadlocks whenever that run awaits something only the view layer
+    // settles, and bootstrap's LIFO teardown releases controllers before
+    // views (see dispose-liveness.test.ts). So dispose() may now resolve
+    // WHILE the controller's reload is still awaiting the slow api. What
+    // must still hold is the weaker guarantee: `_disposed`, set first and
+    // checked after every await, makes that run drop its write instead of
+    // landing on a model whose owner was told teardown is complete.
     const slow = new SlowTodoApi([{ id: "1", title: "seed", done: false }], 60);
     const slowApp = bootstrap({ commands: new Commands(), api: slow, registerViews: () => {} });
     const m = new TodoListModel();
@@ -246,14 +250,13 @@ describe("B3 · list controller", () => {
     });
     expect(slow.outstanding, "precondition: the load is in flight").toBe(1);
     await slowApp.dispose();
-    // Two separate properties, two assertions. Waiting the run out is what
-    // makes dispose() mean "done"; the disposed flag is what stops the waited-
-    // out run from writing. Either alone passes one of these and fails the other.
-    expect(slow.outstanding, "dispose() resolved with the controller's api call still in flight").toBe(0);
     const atDispose = writes;
+    // The slow api is still outstanding here: dispose() did not wait it out.
+    // It is left to answer on its own — and when it does, the write must not land.
     await new Promise((r) => setTimeout(r, 120));
+    expect(slow.outstanding, "the api call was allowed to finish on its own").toBe(0);
     expect(writes, "a write landed after dispose() resolved").toBe(atDispose);
-    expect(m.todos, "the in-flight load was dropped, not applied late").toEqual([]);
+    expect(m.todos, "the in-flight load's answer was dropped, not applied late").toEqual([]);
   });
 
   it("refuses a second activate(), which would double-subscribe every channel", async () => {
