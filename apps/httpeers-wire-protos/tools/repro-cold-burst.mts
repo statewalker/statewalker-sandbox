@@ -144,7 +144,7 @@
  * **The config hazard (inside #28).** `DEFAULT_MAX_CONCURRENT_OUTBOUND` is
  * defined as `DEFAULT_MAX_STREAMS`, and the doc comment explains why the two are
  * deliberately equal. It does not say they must be CHANGED together, and nothing
- * enforces it. Set `maxOutboundStreams` below `maxConcurrentOutbound` and the
+ * enforces it — so **lower one and the semaphore stops protecting anything.** Set `maxOutboundStreams` below `maxConcurrentOutbound` and the
  * semaphore admits more than libp2p's per-connection cap allows, so the cliff
  * `DEFAULT_MAX_CONCURRENT_OUTBOUND` exists to remove is back. Measured, dial-only
  * client, 100 concurrent:

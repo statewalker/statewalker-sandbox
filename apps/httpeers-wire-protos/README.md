@@ -86,7 +86,7 @@ was modified here**:
 
 | | |
 |---|---|
-| **umbrella #28** | A wide burst of concurrent calls on a connection where **no request has yet completed** fails wholesale — **0 of 100, in 5 runs out of 5**; one completed request on that connection first and the same burst is **100 of 100, 5 out of 5**. Includes the config hazard: `maxOutboundStreams` set below `maxConcurrentOutbound` brings back the cliff the semaphore exists to remove, and nothing enforces that the two move together. |
+| **umbrella #28** | A wide burst of concurrent calls on a connection where **no request has yet completed** fails wholesale — **0 of 100, in 5 runs out of 5**; one completed request on that connection first and the same burst is **100 of 100, 5 out of 5**. Includes the config hazard: `DEFAULT_MAX_CONCURRENT_OUTBOUND === DEFAULT_MAX_STREAMS` by definition and nothing enforces that they move together, so **lower one and the semaphore stops protecting anything** — the cliff it exists to remove is back. |
 | **umbrella #29** | `UnexpectedEOFError` reaches `kind: "unknown"` through `mapPeerCallError`, whose stated contract is "a `PeerCallError`, never a raw transport exception". `errors.ts` already has a narrowed branch for the adjacent `HttpParseError` condition. Filed separately from #28 on purpose: fixing the taxonomy does not fix the burst. |
 
 ```bash

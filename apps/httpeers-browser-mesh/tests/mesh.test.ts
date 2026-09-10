@@ -10,15 +10,31 @@
  * else, and it is a property of the file rather than an oversight in the
  * session.
  *
- * THE CHOICE MADE HERE, AND THE ONE REJECTED. Adding `export` to three
- * functions would have been one character each and would have let them be
- * called directly — but it edits recovered code to suit a test, and the
- * functions would then be tested somewhere other than where they are used.
- * Instead the three MODULE BOUNDARIES are mocked — `libp2p`,
+ * THE CHOICE MADE HERE, AND THE ONE REJECTED — READ THIS BEFORE "SIMPLIFYING"
+ * THE MOCKS. Adding `export` to those three functions would be one word each and
+ * would let them be called directly. Do not do it. Three reasons, in order of
+ * weight:
+ *
+ *  1. **It changes the thing under test.** Widening a module's public surface so
+ *     a test can reach inside makes the test about a different unit than the one
+ *     the design has. `startPeer` is the only way a caller can reach any of this,
+ *     so `startPeer` is what the tests must go through — otherwise they cover
+ *     three functions nobody calls that way, and the composition between them,
+ *     which is where `reusablePeer`'s interaction with the retry actually lives,
+ *     goes untested. The M4 result in PROVENANCE.md is exactly that interaction,
+ *     and a direct unit test of `reusablePeer` could not have found it.
+ *  2. **Those functions being private is WHY the session had integration
+ *     coverage and nothing else.** That is a fact about the file worth
+ *     preserving as a fact, not papering over. §4 of the work order asks for
+ *     unit tests here precisely because the shape of the module made them
+ *     awkward; making the module a different shape answers a different question.
+ *  3. It edits recovered code to suit a test. `src/mesh.ts` is byte-identical to
+ *     the export and that is checkable — see PROVENANCE.md's sha256 table.
+ *
+ * So the three MODULE BOUNDARIES are mocked instead — `libp2p`,
  * `@statewalker/webrun-streams-libp2p` and `@statewalker/webrun-http-streams` —
  * and every test drives the real `startPeer` through its real call sites.
- * `src/mesh.ts` is byte-identical to the export; nothing about it is adapted
- * for testability.
+ * Nothing about `src/mesh.ts` is adapted for testability.
  *
  * What is NOT mocked, deliberately: `@multiformats/multiaddr` and
  * `@libp2p/peer-id`. Address parsing and peer-id validation are exactly what
