@@ -37,7 +37,6 @@ export class ViewAdapter {
           model: cmd.payload,
         };
 
-        let claimed = false;
         const cleanup = renderer({
           model: cmd.payload,
           settle: (result: R) => {
@@ -47,12 +46,9 @@ export class ViewAdapter {
 
         // Returning nothing is observe-only: the renderer declined, so we must
         // not claim, and the caller sees `not-claimed` rather than a hang.
-        if (cleanup === undefined && cmd.settled === false && !claimed) {
-          // A renderer that settled synchronously HAS claimed; one that returned
-          // nothing without settling has not.
-          if (!cmd.settled) return undefined;
-        }
-        claimed = true;
+        // A renderer that settled synchronously HAS claimed; one that returned
+        // nothing without settling has not.
+        if (cleanup === undefined && cmd.settled === false) return undefined;
 
         entry.cleanup = typeof cleanup === "function" ? cleanup : undefined;
         this._open.set(cmd as Command<unknown, unknown>, entry);
@@ -80,7 +76,15 @@ export class ViewAdapter {
     this._disposed = true;
     const [, cleanup] = this._registry;
     await cleanup();
-    for (const cmd of [...this._open.keys()]) this._close(cmd);
+    // Settle what is still open. A cleanup alone would run the renderer's
+    // teardown but leave the caller's `cmd.promise` pending forever — the one
+    // path in this design where termination is NOT symmetric.
+    for (const cmd of [...this._open.keys()]) {
+      this._close(cmd);
+      if (!cmd.settled) {
+        cmd.reject(new Error("view layer disposed while the view was open"));
+      }
+    }
   }
 
   private _close(cmd: Command<unknown, unknown>): void {

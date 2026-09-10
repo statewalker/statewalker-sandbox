@@ -106,8 +106,18 @@ describe("B4 · view protocol", () => {
     );
     // and those keys are the declared command keys, not a renderer alias
     expect(uiShowList.key).toBe("ui:show-list");
-    await adapter.dispose();
   });
+
+  it("settles a view that is still open when the adapter is disposed", async () => {
+    adapter.on(uiShowList, () => () => cleaned.push("list"));
+    const cmd = commands.call(uiShowList, new TodoListModel());
+    expect(adapter.openViews()).toHaveLength(1);
+    await adapter.dispose();
+    expect(cleaned, "the renderer's cleanup must still run").toEqual(["list"]);
+    expect(adapter.openViews(), "and the view must be closed").toEqual([]);
+    // The caller must not be left awaiting forever.
+    await expect(cmd.promise).rejects.toThrow(/disposed/);
+  }, 3000);
 
   it("unbinds every renderer on dispose", async () => {
     adapter.on(uiShowList, () => undefined);
