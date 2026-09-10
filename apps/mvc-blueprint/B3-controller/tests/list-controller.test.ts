@@ -6,10 +6,11 @@ import {
   expectNoSelfWake,
   ListController,
   TodoListModel,
+  uiConfirm,
 } from "@todo/app";
 import { MemTodoApi, type Todo } from "@todo/core";
 import { beforeEach, describe, expect, it } from "vitest";
-import { claimListView } from "../../test-support/views.js";
+import { answerDialogs, claimListView, type Dialogs } from "../../test-support/views.js";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
@@ -370,6 +371,262 @@ describe("B3 · list controller", () => {
         await tick();
         expect(unhandled).toEqual([]);
         await bareApp.dispose();
+      });
+    });
+  });
+});
+
+/** A `TodoApi` whose `clearCompleted()` waits until the suite opens `gate`. */
+class GatedClearApi extends MemTodoApi {
+  private _open!: () => void;
+  readonly gate = new Promise<void>((r) => {
+    this._open = r;
+  });
+  release(): void {
+    this._open();
+  }
+  /** Clears entered and still waiting on the gate. */
+  waiting = 0;
+  override async clearCompleted(): Promise<number> {
+    this.waiting++;
+    await this.gate;
+    this.waiting--;
+    return super.clearCompleted();
+  }
+}
+
+/** A `TodoApi` whose `remove()` is refused by the backend. */
+class RefusingRemoveApi extends MemTodoApi {
+  override async remove(): Promise<boolean> {
+    this.calls.push("remove");
+    await Promise.resolve();
+    throw new Error("backend refused");
+  }
+}
+
+/**
+ * The row intents (Task 13a). Two EVENT edges — toggle and remove, each a
+ * replaced queue carrying the id — and one STATE-LATEST edge, clear-completed,
+ * which orchestrates the spec §5 chain: a short-lived view (confirm), a
+ * command, and a fire-and-forget view (notify).
+ */
+describe("B3 · list controller — row intents", () => {
+  const boot = (rows: Todo[], answer: Dialogs["answer"] = true, api = new MemTodoApi(rows)) => {
+    let dialogs!: Dialogs;
+    const app = bootstrap({
+      commands: new Commands(),
+      api,
+      registerViews: (bus) => {
+        const off = claimListView(bus);
+        dialogs = answerDialogs(bus, answer);
+        return () => {
+          dialogs.off();
+          off();
+        };
+      },
+    });
+    const model = new TodoListModel();
+    const controller = app.createList(model).controller;
+    return { api, app, model, controller, dialogs };
+  };
+  const row = (id: string, done = false): Todo => ({ id, title: `todo ${id}`, done });
+  const settle = async () => {
+    for (let i = 0; i < 4; i++) await tick();
+  };
+
+  describe("toggle and remove — EVENT edges: N presses are N actions", () => {
+    it("two requestToggle in one tick toggle BOTH todos", async () => {
+      const { api, app, model } = boot([row("1"), row("2")]);
+      await settle();
+      model.input.requestToggle("1");
+      model.input.requestToggle("2");
+      await settle();
+      expect(model.todos.map((t) => t.done), "neither toggle was lost").toEqual([true, true]);
+      expect(api.calls.filter((c) => c === "toggle")).toHaveLength(2);
+      expect(model.input.toggles, "the queue is drained by replacement").toEqual([]);
+      expect(model.lastOutcome).toBeUndefined();
+      await app.dispose();
+    });
+
+    it("two toggles on ONE row in one tick are a round trip, not one toggle", async () => {
+      // The sharpest proof the edge is an EVENT edge: a state-latest reading
+      // would coalesce these into one toggle and leave the row done.
+      const { api, app, model } = boot([row("1")]);
+      await settle();
+      model.input.requestToggle("1");
+      model.input.requestToggle("1");
+      await settle();
+      expect(api.calls.filter((c) => c === "toggle")).toHaveLength(2);
+      expect(model.todos.map((t) => t.done)).toEqual([false]);
+      await app.dispose();
+    });
+
+    it("two requestRemove in one tick delete BOTH todos", async () => {
+      const { api, app, model } = boot([row("1"), row("2"), row("3")]);
+      await settle();
+      model.input.requestRemove("1");
+      model.input.requestRemove("3");
+      await settle();
+      expect(model.todos.map((t) => t.id)).toEqual(["2"]);
+      expect(api.calls.filter((c) => c === "remove")).toHaveLength(2);
+      expect(model.input.removals).toEqual([]);
+      await app.dispose();
+    });
+
+    it("a failing todos:remove is reported via lastOutcome — no unhandled rejection, and the controller lives on", async () => {
+      await collectingUnhandled(async (unhandled) => {
+        const { app, model } = boot([row("1"), row("2")], true, new RefusingRemoveApi([row("1"), row("2")]));
+        await settle();
+        model.input.requestRemove("2");
+        await settle();
+        expect(model.lastOutcome, "the refusal must reach the user").toMatch(
+          /^remove "2" failed: listener-threw: todos:remove/,
+        );
+        expect(model.todos.map((t) => t.id), "nothing was removed").toEqual(["1", "2"]);
+        expect(model.input.removals, "taken off the queue, not wedged in it").toEqual([]);
+        expect(unhandled, "a `void`ed reconcile must not leak its rejection").toEqual([]);
+
+        model.input.requestToggle("1");
+        await settle();
+        expect(model.todos[0]?.done, "the next intent is still handled").toBe(true);
+        expect(model.lastOutcome, "and a clean pass clears the stale failure").toBeUndefined();
+        expect(unhandled).toEqual([]);
+        await app.dispose();
+      });
+    });
+  });
+
+  describe("clear-completed — a STATE-LATEST edge through confirm, command, notify", () => {
+    it("two requestClearCompleted in one tick open ONE confirm dialog", async () => {
+      const { api, app, model, dialogs } = boot([row("1", true), row("2")]);
+      await settle();
+      model.input.requestClearCompleted();
+      model.input.requestClearCompleted();
+      await settle();
+      // The COUNT of dialogs, not the end state: a controller that asked twice
+      // reaches the same list.
+      expect(dialogs.confirms, "two quick presses are one question").toEqual([
+        "Clear 1 completed todos?",
+      ]);
+      expect(api.calls.filter((c) => c === "clearCompleted")).toHaveLength(1);
+      expect(dialogs.notifies).toEqual(["1 cleared"]);
+      await app.dispose();
+    });
+
+    it("confirmed: clears, then notifies with the count the COMMAND returned, then reloads", async () => {
+      const api = new MemTodoApi([row("1", true), row("2"), row("3")]);
+      const { app, model, dialogs } = boot([], true, api);
+      await settle();
+      // The backend moves behind the model's back: the model still believes
+      // one todo is completed, the backend has two. The question can only
+      // quote the model; the notify must quote what was actually cleared.
+      await api.toggle("3");
+      model.input.requestClearCompleted();
+      await settle();
+      expect(dialogs.confirms).toEqual(["Clear 1 completed todos?"]);
+      expect(dialogs.notifies, "the count comes from the command's result").toEqual(["2 cleared"]);
+      expect(model.todos.map((t) => t.id), "and the list was reloaded").toEqual(["2"]);
+      expect(model.lastOutcome).toBeUndefined();
+      await app.dispose();
+    });
+
+    it("declined: nothing cleared, no notify — and the answer is final, not owed", async () => {
+      const { api, app, model, dialogs } = boot([row("1", true), row("2")], false);
+      await settle();
+      model.input.requestClearCompleted();
+      await settle();
+      expect(dialogs.confirms).toHaveLength(1);
+      expect(api.calls, "no clear was attempted").not.toContain("clearCompleted");
+      expect(dialogs.notifies).toEqual([]);
+      expect(model.todos.map((t) => t.id)).toEqual(["1", "2"]);
+
+      // The user answered, so the watermark moved: a pass woken by any other
+      // edge must not ask again.
+      model.input.requestRefresh();
+      await settle();
+      expect(dialogs.confirms, "a declined request is not re-asked").toHaveLength(1);
+      await app.dispose();
+    });
+
+    it("presses while the dialog is open fold into its answer; a press after the answer earns ONE follow-up", async () => {
+      const api = new GatedClearApi([row("1", true), row("2", true)]);
+      const { app, model, dialogs } = boot([], "hold", api);
+      await settle();
+      model.input.requestClearCompleted();
+      await settle();
+      expect(dialogs.held, "the dialog is open").toBe(1);
+      // Pressed again while it is open — not in the same tick, a real wait.
+      model.input.requestClearCompleted();
+      model.input.requestClearCompleted();
+      await settle();
+      expect(dialogs.confirms, "an open dialog already asks the newest question").toHaveLength(1);
+
+      dialogs.answer = true; // any follow-up answers at once
+      dialogs.answerHeld(true);
+      await tick();
+      expect(api.waiting, "precondition: the answer landed and the clear is in flight").toBe(1);
+      // Pressed after the answer, while the clear is in flight: that is a new
+      // request the open dialog never covered, so it must not be lost.
+      model.input.requestClearCompleted();
+      model.input.requestClearCompleted();
+      api.release();
+      await settle();
+      expect(dialogs.confirms, "leading + trailing: the first dialog, and ONE follow-up").toEqual([
+        "Clear 2 completed todos?",
+        "Clear 0 completed todos?",
+      ]);
+      expect(api.calls.filter((c) => c === "clearCompleted")).toHaveLength(2);
+      expect(dialogs.notifies).toEqual(["2 cleared", "0 cleared"]);
+      await app.dispose();
+    });
+
+    it("with no notify view registered: the clear still lands, the missing toast is reported, nothing unhandled", async () => {
+      // The notify is fire-and-forget — never awaited — yet a dispatch-time
+      // failure must not vanish: it rejects synchronously inside call(), and
+      // the run folds it into its outcome once the reload returns.
+      await collectingUnhandled(async (unhandled) => {
+        const api = new MemTodoApi([row("1", true), row("2")]);
+        const app = bootstrap({
+          commands: new Commands(),
+          api,
+          registerViews: (bus) => {
+            const offList = claimListView(bus);
+            const offConfirm = bus.listen(uiConfirm, () => Promise.resolve({ confirmed: true }));
+            return () => {
+              offConfirm();
+              offList();
+            };
+          },
+        });
+        const model = new TodoListModel();
+        app.createList(model);
+        await settle();
+        model.input.requestClearCompleted();
+        await settle();
+        expect(model.todos.map((t) => t.id), "the clear landed and the list reloaded").toEqual(["2"]);
+        expect(model.lastOutcome).toMatch(/^notify failed: .*no-handlers/);
+        expect(unhandled).toEqual([]);
+        await app.dispose();
+      });
+    });
+
+    it("with no confirm view registered: reported, nothing cleared, no unhandled rejection", async () => {
+      await collectingUnhandled(async (unhandled) => {
+        const api = new MemTodoApi([row("1", true)]);
+        const app = bootstrap({
+          commands: new Commands(),
+          api,
+          registerViews: (bus) => claimListView(bus), // the list, but no dialogs
+        });
+        const model = new TodoListModel();
+        app.createList(model);
+        await settle();
+        model.input.requestClearCompleted();
+        await settle();
+        expect(model.lastOutcome).toMatch(/^confirm failed: .*no-handlers/);
+        expect(api.calls).not.toContain("clearCompleted");
+        expect(unhandled).toEqual([]);
+        await app.dispose();
       });
     });
   });

@@ -1,8 +1,8 @@
-import type { Command, Commands } from "@statewalker/shared-commands";
+import type { Command, CommandDeclaration, Commands } from "@statewalker/shared-commands";
 import { newRegistry } from "@statewalker/shared-registry";
-import { type TodoApi, todosAdd } from "@todo/core";
+import { type TodoApi, todosAdd, todosClearCompleted, todosRemove, todosToggle } from "@todo/core";
 import type { TodoListModel } from "./todo-model.js";
-import { uiShowList } from "./ui-declarations.js";
+import { ConfirmModel, NotifyModel, uiConfirm, uiNotify, uiShowList } from "./ui-declarations.js";
 import { ViewsReady } from "./views-ready.js";
 
 /**
@@ -47,6 +47,14 @@ export class ListController {
    * and a failed initial load stays owed, exactly like a failed refresh.
    */
   private _handledRefresh = -1;
+  /**
+   * The `clearCompletedCount` the user has been answered for. Starts at 0 —
+   * unlike `_handledRefresh`, nothing is owed at startup. Moves only once the
+   * work has landed: a declined confirm (the answer IS the work), or a
+   * confirmed clear the command accepted. See `_clearCompleted()` for WHEN
+   * the target is read, which is what makes two quick presses one dialog.
+   */
+  private _handledClearCompleted = 0;
   /**
    * True while a `_reconcile()` run is in flight — what makes coalescing
    * leading + trailing rather than absent. `notify()` is synchronous (spec:
@@ -140,12 +148,22 @@ export class ListController {
         void this._reconcile();
       }),
     );
-    register(
-      this._model.input.onPendingChange(() => {
-        this.debug.reactions++;
-        void this._reconcile();
-      }),
-    );
+    // Every input edge wakes the SAME loop: one `_reconcile()`, one
+    // `_reconciling` guard, one error policy. A second loop per edge would
+    // race the first over the model it writes.
+    for (const channel of [
+      this._model.input.onPendingChange,
+      this._model.input.onTogglesChange,
+      this._model.input.onRemovalsChange,
+      this._model.input.onClearCompleted,
+    ]) {
+      register(
+        channel(() => {
+          this.debug.reactions++;
+          void this._reconcile();
+        }),
+      );
+    }
 
     // The design's central sentence, made true for the list: "a controller
     // emits ui:show-*(model); the adapter claims it, renders, and unmounts
@@ -228,9 +246,9 @@ export class ListController {
    * Idempotent: it may run on every notify and must do nothing when no field it
    * cares about has changed. Re-entrant-safe: a call that arrives while a run is
    * already in flight (the synchronous re-entry from a second `notify()` in the
-   * same tick, or from `takePending()`'s own notify) folds into that run instead
-   * of starting a second one — the running loop re-reads both edges after every
-   * await, so nothing it would have done is lost.
+   * same tick, or from a `take*()` drain's own notify) folds into that run
+   * instead of starting a second one — the running loop re-reads every edge
+   * after every await, so nothing it would have done is lost.
    *
    * Never rejects. Its callers `void` it, so a failure is reported through the
    * model instead: once, at the end of the run, as the outcome of the work the
@@ -247,34 +265,63 @@ export class ListController {
     // down, and looping on it would spin. It stays OWED (the watermark did not
     // move), so the next run — one bump, or any other edge — repays it.
     let refreshFailed = false;
+    // Same for a clear-completed that failed: it stays owed, but re-asking
+    // within this run would open the dialog again at once.
+    let clearFailed = false;
     try {
       let again = true;
       while (again && !this._disposed) {
         again = false;
         const input = this._model.input;
 
-        // EVENT edge: N queued items are N todos, and each carries its own
-        // payload. `takePending()` drains by replacement inside the model — the
-        // controller never assigns the field and never notifies (spec §4.8).
-        const batch = input.takePending();
-        if (batch.length > 0) {
+        // EVENT edges: N queued items are N commands, and each carries its own
+        // payload — adds a title, toggles and deletes a row id. `take*()`
+        // drains by replacement inside the model — the controller never
+        // assigns the field and never notifies (spec §4.8). All three queues
+        // are taken together and answered by ONE reload.
+        //
+        // Order across queues is adds, then toggles, then deletes — not press
+        // order, which three queues do not record. No gesture depends on it:
+        // an add has no id to toggle yet, and a toggle and a delete of one row
+        // end with the row gone either way.
+        const adds = input.takePending();
+        const toggles = input.takeToggles();
+        const removals = input.takeRemovals();
+        if (adds.length + toggles.length + removals.length > 0) {
           didWork = true;
-          for (const item of batch) {
-            // Disposed mid-batch: issue no further commands for a model
-            // nobody owns any more. The rest of the batch is abandoned with it.
-            if (this._disposed) break;
-            try {
-              await this._commands.call(todosAdd, { title: item.title }).promise;
-            } catch (error) {
-              // Not retried: a rejected payload (the schema, a host's veto) is
-              // rejected again. It is taken off the queue and the user is told
-              // which one — the title rides in the outcome, so it is not lost.
-              failure ??= `add "${item.title}" failed: ${reason(error)}`;
-            }
+          // Not retried: a rejected payload (the schema, a host's veto, a
+          // backend refusal) is rejected again. Each item is taken off its
+          // queue and the user is told which one — the title or id rides in
+          // the outcome, so it is not lost. Assigned through a local, never
+          // `failure ??= await …`: `??=` would SKIP the call once a failure
+          // is recorded, silently dropping every later item in the batch.
+          for (const { title } of adds) {
+            const failed = await this._send(todosAdd, { title }, `add "${title}"`);
+            failure ??= failed;
+          }
+          for (const { id } of toggles) {
+            const failed = await this._send(todosToggle, { id }, `toggle "${id}"`);
+            failure ??= failed;
+          }
+          for (const { id } of removals) {
+            const failed = await this._send(todosRemove, { id }, `remove "${id}"`);
+            failure ??= failed;
           }
           const reloaded = await this._reload();
           if (!reloaded.ok) failure ??= reloaded.failure;
           again = true; // more may have been queued while we were awaiting
+        }
+
+        // STATE-LATEST edge, through a dialog: confirm, clear, notify. Checked
+        // after the event edges, so a toggle pressed before "clear completed"
+        // has landed before the question counts what is completed.
+        if (!clearFailed && input.clearCompletedCount > this._handledClearCompleted) {
+          didWork = true;
+          const cleared = await this._clearCompleted();
+          if (cleared.answered !== undefined) this._handledClearCompleted = cleared.answered;
+          else clearFailed = true;
+          failure ??= cleared.failure;
+          again = true; // we awaited: anything may have arrived meanwhile
         }
 
         // STATE-LATEST edge, coalesced leading + trailing: compare against a
@@ -312,6 +359,92 @@ export class ListController {
       this._reconciling = false;
     }
     if (didWork && !this._disposed) this._model.reportOutcome(failure);
+  }
+
+  /**
+   * One command of an event batch. Never rejects: returns the failure to
+   * report, or `undefined`. Disposed mid-batch: issues nothing further for a
+   * model nobody owns any more — the rest of the batch is abandoned with it.
+   */
+  private async _send<P>(
+    decl: CommandDeclaration<P, unknown>,
+    payload: P,
+    what: string,
+  ): Promise<string | undefined> {
+    if (this._disposed) return undefined;
+    try {
+      await this._commands.call(decl, payload).promise;
+      return undefined;
+    } catch (error) {
+      return `${what} failed: ${reason(error)}`;
+    }
+  }
+
+  /**
+   * The spec §5 chain on a real feature: a short-lived view (confirm), a
+   * command, and a fire-and-forget view (notify). Never rejects.
+   *
+   * `answered` is the `clearCompletedCount` this pass has repaid, or
+   * `undefined` if it repaid nothing — the question failed, or the user said
+   * yes and the clear did not land — so the edge stays OWED, exactly like a
+   * failed refresh.
+   *
+   * WHY THE TARGET IS READ AFTER THE ANSWER, not before the question (where
+   * `refreshCount`'s is read). A state-latest edge captures its target at the
+   * moment the work observes the state: a reload observes the backend when it
+   * starts, so a bump after that start needs the trailing pass. Here the work
+   * observes the USER, and it does so when the answer arrives — so every
+   * press made while the dialog was open is already covered by that answer,
+   * and asking again would be the second dialog that two quick presses must
+   * not open. A press after the answer (while the clear is in flight) is
+   * above the target, and earns exactly one follow-up dialog: coalesced,
+   * never lost.
+   *
+   * No wait is added to `dispose()` for any of this: if teardown starts while
+   * the dialog is open, the view layer's own `dispose()` force-rejects it,
+   * that rejection is caught below, and `_disposed` stops the run.
+   */
+  private async _clearCompleted(): Promise<{ answered?: number; failure?: string }> {
+    const completed = this._model.todos.filter((t) => t.done).length;
+    let confirmed: boolean;
+    try {
+      const question = new ConfirmModel(`Clear ${completed} completed todos?`);
+      ({ confirmed } = await this._commands.call(uiConfirm, question).promise);
+    } catch (error) {
+      return { failure: `confirm failed: ${reason(error)}` };
+    }
+    const answered = this._model.input.clearCompletedCount;
+    if (this._disposed) return {};
+    // Declined: the answer is the work, and it has landed. Nothing to do.
+    if (!confirmed) return { answered };
+
+    let cleared: number;
+    try {
+      ({ cleared } = await this._commands.call(todosClearCompleted, {}).promise);
+    } catch (error) {
+      return { failure: `clear completed failed: ${reason(error)}` };
+    }
+    if (this._disposed) return {};
+
+    // Fire-and-forget: the toast settles itself, so it is not awaited — a
+    // controller waiting out a timeout would stall every other edge behind
+    // it. Its rejection still needs a handler, attached in this same turn so
+    // it can never go unhandled. A DISPATCH-time failure (`no-handlers`: no
+    // view layer for notify) rejects synchronously inside `call()`, so its
+    // handler is queued before the reload's continuation and has run by the
+    // time the reload returns — it is folded into this run's outcome there.
+    // A LATER rejection can only be the view layer force-closing an open
+    // toast at teardown; `_disposed` is already set by then (LIFO), and there
+    // is nobody left to tell.
+    let notifyFailed: string | undefined;
+    const note = this._commands.call(uiNotify, new NotifyModel(`${cleared} cleared`));
+    note.promise.then(undefined, (error: unknown) => {
+      notifyFailed = `notify failed: ${reason(error)}`;
+    });
+
+    const reloaded = await this._reload();
+    // The clear landed, so the edge is repaid whatever the reload did.
+    return { answered, failure: notifyFailed ?? (reloaded.ok ? undefined : reloaded.failure) };
   }
 
   /** Never rejects: a failed list is a result, so the caller decides what it means. */

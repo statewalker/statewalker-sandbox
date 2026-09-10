@@ -1,5 +1,5 @@
-import type { Commands } from "@statewalker/shared-commands";
-import { uiShowList } from "@todo/app/models";
+import type { Command, Commands } from "@statewalker/shared-commands";
+import { type ConfirmModel, uiConfirm, uiNotify, uiShowList } from "@todo/app/models";
 import type { ViewAdapter } from "@todo/ui";
 
 /**
@@ -47,4 +47,68 @@ export function claimListView(bus: Commands): () => void {
 /** See `claimListView`'s doc — the `ViewAdapter`-based counterpart. */
 export function mountListView(adapter: ViewAdapter): void {
   adapter.on(uiShowList, () => () => {});
+}
+
+/**
+ * A headless dialog layer: what `answerDialogs` hands back. It records every
+ * question and every notification by TEXT, so a suite can assert how many
+ * dialogs the controller opened — not merely the end state, which a
+ * controller asking twice and a controller asking once both reach.
+ */
+export interface Dialogs {
+  /** Every `uiConfirm` question, in the order the controller asked. */
+  readonly confirms: string[];
+  /** Every `uiNotify` text, in the order the controller emitted. */
+  readonly notifies: string[];
+  /**
+   * How the NEXT confirm is answered. `true`/`false` answer on a microtask,
+   * like a user who clicks at once; `"hold"` claims and leaves the dialog
+   * open until the suite calls `answerHeld()`. Mutable mid-test.
+   */
+  answer: boolean | "hold";
+  /** Confirms claimed under `"hold"` and not yet answered. */
+  readonly held: number;
+  /** Answers every held confirm, oldest first. */
+  answerHeld(confirmed: boolean): void;
+  /** Unsubscribes both handlers. */
+  off(): void;
+}
+
+/**
+ * Claims `ui:show-dialog:confirm` and `ui:notify` on the raw bus — the same
+ * shape and the same reason as `claimListView`: a suite that boots a
+ * controller with a bare `Commands` and no `ViewAdapter`. The notify settles
+ * itself at once (a toast that timed out instantly); the confirm answers per
+ * `answer`. Imports `@todo/app/models` only, so a `@todo/ui` suite may use it.
+ */
+export function answerDialogs(bus: Commands, answer: Dialogs["answer"] = true): Dialogs {
+  const held: Command<ConfirmModel, { confirmed: boolean }>[] = [];
+  const offConfirm = bus.listen(uiConfirm, (cmd) => {
+    dialogs.confirms.push(cmd.payload.question);
+    if (dialogs.answer === "hold") {
+      held.push(cmd);
+      return true; // claimed, left open
+    }
+    return Promise.resolve({ confirmed: dialogs.answer });
+  });
+  const offNotify = bus.listen(uiNotify, (cmd) => {
+    dialogs.notifies.push(cmd.payload.text);
+    return Promise.resolve();
+  });
+  const dialogs: Dialogs = {
+    confirms: [],
+    notifies: [],
+    answer,
+    get held() {
+      return held.length;
+    },
+    answerHeld(confirmed) {
+      for (const cmd of held.splice(0)) cmd.resolve({ confirmed });
+    },
+    off() {
+      offConfirm();
+      offNotify();
+    },
+  };
+  return dialogs;
 }

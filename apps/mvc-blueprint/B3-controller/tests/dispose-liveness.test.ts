@@ -114,4 +114,65 @@ describe("B3 · dispose() liveness — a controller stuck on a view-settled comm
       "the still-open confirm view must be torn down by the view layer's OWN dispose, once teardown reaches it",
     ).toBe(true);
   });
+
+  it("app.dispose() resolves while the controller's OWN clear-completed confirm is open", async () => {
+    // Task 13a: the controller itself now awaits a view-settled command —
+    // `uiConfirm`, from `requestClearCompleted()` — with no host override
+    // involved. Same deadlock shape as above, reached by an ordinary button:
+    // if dispose() ever waits on in-flight work again, this hangs.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const commands = new Commands();
+      let views!: ViewAdapter;
+      let confirmCleanupRan = false;
+      let clearCalls = 0;
+      const api = { ...seededApi(), clearCompleted: async () => ++clearCalls };
+      const app = bootstrap({
+        commands,
+        api,
+        registerViews: (bus) => {
+          views = new ViewAdapter(bus);
+          mountListView(views);
+          views.on(uiConfirm, () => () => {
+            confirmCleanupRan = true; // claims; never settles
+          });
+          return () => views.dispose();
+        },
+      });
+
+      const model = new TodoListModel();
+      app.createList(model);
+      await new Promise((r) => setTimeout(r, 0)); // the initial load lands
+      model.input.requestClearCompleted();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(
+        views.openViews().map((v) => v.key),
+        "precondition: the confirm is open and the run is awaiting it",
+      ).toContain("ui:show-dialog:confirm");
+
+      let writes = 0;
+      model.onUpdate(() => {
+        writes++; // raw: ANY model write after teardown began
+      });
+      const timeout = new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 500);
+      });
+      const disposed = app.dispose().then(() => "disposed" as const);
+      expect(await Promise.race([disposed, timeout]), "dispose must not wait on the open confirm").toBe(
+        "disposed",
+      );
+      await new Promise((r) => setTimeout(r, 0)); // let the rejected confirm unwind the run
+      expect(confirmCleanupRan, "the view layer's own dispose closed the dialog").toBe(true);
+      expect(views.openViews()).toEqual([]);
+      expect(clearCalls, "the open question was never answered, so nothing was cleared").toBe(0);
+      expect(writes, "the force-rejected confirm must not land a write (e.g. an outcome)").toBe(0);
+      expect(unhandled, "the force-rejected confirm is caught inside the run").toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });
