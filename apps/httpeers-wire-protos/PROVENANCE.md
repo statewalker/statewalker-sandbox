@@ -1,5 +1,14 @@
 # Provenance
 
+> **⚠ The code this file documents is retired.** `wire.ts` and `transport-wire.ts` were
+> deleted by the session that wrote them — note 28, "T-1 DECIDED: Adopt the Shared Stack",
+> nine rungs later in the same Drive folder — in favour of what became
+> `packages/httpeers.core/src/transport-duplex.ts`. This app is a **historical rung kept for
+> its suite**, not a candidate implementation, and nothing should import from it. The
+> recovered-vs-reconstruction accounting below is about the provenance of *evidence*; see
+> README.md's header and "How this relates to `transport-duplex.ts`" before acting on any of
+> it.
+
 What in this app is **recovered code**, what is a **reconstruction**, and what is neither —
 adopted 2026-09-09 from the Drive folder
 `notes/drive/2026-08-16.Httpeers-Plan/16-httpeers-prototype-v2 (envelope transport)/`,

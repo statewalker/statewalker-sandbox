@@ -1,7 +1,33 @@
 # httpeers-wire-protos
 
-The **envelope-transport rung** restored as runnable code: HTTP over a raw libp2p protocol,
-with `@libp2p/http` removed entirely.
+> ## ⚠ This is a historical rung, not a candidate implementation.
+>
+> **The code in `src/wire.ts` and `src/transport-wire.ts` is retired, and it was retired by
+> the session that wrote it.** Note 28 of the same Drive folder ("T-1 DECIDED: Adopt the
+> Shared Stack") opens: *"**Decision: adopt.** `transport-wire.ts` + `wire.ts` are deleted.
+> The mesh now runs on `webrun-http-streams` over a libp2p 3.x adapter of our own."* That
+> adapter became **`packages/httpeers.core/src/transport-duplex.ts`**, which is the transport
+> this repo actually ships — same `/httpeers/1.0.0` protocol id, same 512-stream cap, and
+> ~630 lines of contract this rung does not have.
+>
+> **Do not import anything from this app. Do not copy `wire.ts` into a package. If you are
+> looking for the httpeers transport, it is `packages/httpeers.core/src/transport-duplex.ts`.**
+>
+> What is kept here is **evidence, not code**: 18 recovered tests that passed against a real
+> transport, and what a mutation pass over them revealed. Thirteen of those 18 are also the
+> acceptance suite for `transport-duplex.ts` (folder 29 carried them forward "changed by one
+> import line only") and `httpeers.core` does not have them — see
+> [How this relates to `transport-duplex.ts`](#how-this-relates-to-packageshttpeerscoresrctransport-duplexts),
+> which is the one part of this README with a live consequence.
+>
+> The work order that produced this app (MESH-1) stops one generation short of note 28 and
+> does not know any of the above. `PROVENANCE.md` and
+> [What §4 of the work order gets wrong](#what-4-of-the-work-order-gets-wrong) record that.
+
+---
+
+With that said, what the rung *was*: HTTP over a raw libp2p protocol, with `@libp2p/http`
+removed entirely.
 
 One rung, one question: *can a transport of our own carry ordinary HTTP semantics over
 libp2p without the two defects that made `@libp2p/http` unusable?* The wire format is one
@@ -45,6 +71,33 @@ by a real transport; each says so in place.
 
 `PROVENANCE.md` is the index: which files are recovered byte-for-byte (with sha256s), the
 single documented delta, what was deliberately not adopted, and the full mutation table.
+
+## Re-running the mutation pass
+
+```bash
+node tools/mutate.mjs              # all 27 mutants
+ONLY="M4a,M6b" node tools/mutate.mjs
+```
+
+`tools/mutate.mjs` is the §5.3 harness: it applies one mutation at a time by exact string
+replacement, runs the suite, records KILLED / SURVIVED, and restores the file — including on
+`process.exit`, so an interrupted run leaves no mutated tree. **Copy it for the next unit
+rather than writing a new one, and keep its two guards.** It runs an **unmutated control
+first** and refuses to proceed unless that is green with a parsable tally, and it reports any
+run whose tally line did not parse as **HARNESS-ERROR rather than KILLED**.
+
+Both guards exist because the first version of this harness reported 27 mutants out of 27
+killed and the suite looked perfect. The cause was `--reporter=basic`, which does not exist
+in Vitest 4: every run died loading the reporter, exited non-zero, and scored as a kill.
+§5.4's "treat a first-run pass as suspicious rather than reassuring" is what caught it, on
+the first clean sweep. A harness that cannot distinguish "the suite failed" from "the suite
+never ran" will tell you your tests are perfect, which is the one answer a mutation pass
+should never be able to give.
+
+One operational note: a mutant that *hangs* rather than failing is killed by test timeout,
+but several hanging files together can exceed the per-run budget and land as HARNESS-ERROR.
+M7 (half-close removed) does exactly that — re-run it alone with `ONLY=` before concluding
+anything about it. It is a kill: 4 failures, all by timeout.
 
 ## Where this came from
 
