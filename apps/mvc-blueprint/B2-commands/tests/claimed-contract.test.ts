@@ -27,21 +27,22 @@ describe("B2 · claimed contract", () => {
   it("makes claimed visible to lower-priority listeners when a higher-priority listener claims the command", async () => {
     const claimedValues: boolean[] = [];
 
-    // Higher-priority listener (priority 0) that claims the command
+    // Higher-priority listener (priority 0) that claims the command.
+    // Like a host handler overriding the core default.
     commands.listen(todosAdd, () => Promise.resolve({ id: "host" }), { priority: 0 });
 
-    // Lower-priority listener (default priority -1) that observes claimed state
+    // Lower-priority listener (priority -1) that observes claimed state.
+    // Like the core default handlers checking if a host has already claimed the command.
     commands.listen(todosAdd, (cmd) => {
       claimedValues.push((cmd as any).claimed);
       // Return void to be observe-only
-    });
+    }, { priority: -1 });
 
     const { id } = await commands.call(todosAdd, { title: "test" }).promise;
 
     // The higher-priority listener claimed the command
     expect(id).toBe("host");
-    // The lower-priority listener should have seen claimed=true when it ran
-    // (after the higher-priority listener claimed it)
+    // The lower-priority listener ran and saw claimed=true
     expect(claimedValues).toEqual([true]);
   });
 });
