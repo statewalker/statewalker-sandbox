@@ -2,7 +2,14 @@ import { compareEntries, narrowStats } from "@fm/core";
 import type { Commands } from "@statewalker/shared-commands";
 import type { FileInfo, FilesApi } from "@statewalker/webrun-files";
 import type { ChangeObserver, Invalidation } from "./change-notifier.js";
-import { panelsNavigate, uiShowPanel } from "./declarations.js";
+import {
+  panelsClose,
+  panelsNavigate,
+  panelsRefresh,
+  panelsSelect,
+  panelsSetSort,
+  uiShowPanel,
+} from "./declarations.js";
 import type { I18nRef } from "./i18n.js";
 import type { PanelModel, PanelRow, RowMark, SortColumn } from "./panel-model.js";
 
@@ -13,11 +20,17 @@ export interface PanelControllerOptions {
    */
   sortColumns?: SortColumn[];
   /**
-   * Releases the panel's storage. Runs BEFORE `ui:show-panel` settles, so
-   * "the panel is gone" implies "its storage is released" — otherwise an
-   * observer that acts on completion races the cleanup.
+   * Releases the panel's storage and its observer registration. Runs BEFORE
+   * `ui:show-panel` settles, so "the panel is gone" implies "its resources are
+   * released" — otherwise an observer that acts on completion races the cleanup.
    */
   release?: () => void;
+  /**
+   * Removes this panel from whoever owns the set. `panels:close` is panel-scoped
+   * like every other one, so the controller claims it and delegates rather than
+   * a central router guessing which panel was meant.
+   */
+  close?: () => Promise<void>;
 }
 
 /** How many entries a listing accumulates before it notifies progress. */
@@ -53,12 +66,40 @@ export class PanelController implements ChangeObserver {
   async activate(): Promise<void> {
     // Reacting to `input` only — never to the outer model this controller writes.
     this._disposers.push(this.model.input.onUpdate(() => this._reconcile()));
+    // Every panel-scoped listener opens with the panelId guard as its FIRST
+    // statement. A listener that throws short-circuits dispatch, so if panel A
+    // touches a disposed model before checking the id, the command meant for
+    // panel C dies with it.
     this._disposers.push(
       this._commands.listen(panelsNavigate, (cmd) => {
-        // The panelId guard is the FIRST statement: a listener that throws
-        // before checking would kill a command meant for another panel.
         if (cmd.payload.panelId !== this.model.id) return;
         return this.navigate(cmd.payload.path).then(() => ({ path: this.model.path }));
+      }),
+      this._commands.listen(panelsSetSort, (cmd) => {
+        if (cmd.payload.panelId !== this.model.id) return;
+        // Written into `input`, because a command is the view's voice and the
+        // view writes only there. The controller reacts as it would to a click.
+        this.model.input.sortBy = cmd.payload.sortBy;
+        this.model.input.notify();
+        return this.settled().then(() => ({ sortBy: cmd.payload.sortBy }));
+      }),
+      this._commands.listen(panelsSelect, (cmd) => {
+        if (cmd.payload.panelId !== this.model.id) return;
+        this.model.input.selection = [...cmd.payload.paths];
+        this.model.input.notify();
+        return Promise.resolve({ selected: cmd.payload.paths.length });
+      }),
+      this._commands.listen(panelsRefresh, (cmd) => {
+        if (cmd.payload.panelId !== this.model.id) return;
+        this.model.input.refreshCount++;
+        this.model.input.notify();
+        return this.settled().then(() => ({ path: this.model.path }));
+      }),
+      this._commands.listen(panelsClose, (cmd) => {
+        if (cmd.payload.panelId !== this.model.id) return;
+        const close = this._options.close;
+        if (!close) throw new Error(`panel ${this.model.id} has no owner to close it`);
+        return close().then(() => ({ closed: true }));
       }),
     );
     // Release is pushed BEFORE the view resolver, so dispose runs it first.

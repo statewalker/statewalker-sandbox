@@ -2,6 +2,7 @@ import type { JobModel } from "@fm/core";
 import type { Commands } from "@statewalker/shared-commands";
 import type { FilesApi } from "@statewalker/webrun-files";
 import { ChangeNotifier, type ChangeNotifierOptions } from "./change-notifier.js";
+import { FilesController } from "./files-controller.js";
 import { JobsController } from "./jobs-controller.js";
 import { PanelController } from "./panel-controller.js";
 import { PanelModel } from "./panel-model.js";
@@ -53,6 +54,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<App> {
 
   const jobs = new JobsController(commands, resolve, (change) => changes.invalidate(change));
   jobs.activate();
+  // The operations that settle immediately. Same negative priority, same
+  // producer-agnostic invalidation path.
+  const files = new FilesController(commands, resolve, (change) => changes.invalidate(change));
+  files.activate();
 
   for (const spec of options.panels) {
     const model = new PanelModel(spec.id, spec.slot, spec.storage, spec.path);
@@ -66,7 +71,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<App> {
       () => {
         debug.panelReactions++;
       },
-      { release: () => unobserve() },
+      {
+        release: () => unobserve(),
+        close: () => removePanel(spec.id),
+      },
     );
     controllers.set(spec.id, controller);
     await controller.activate();
@@ -79,15 +87,17 @@ export async function bootstrap(options: BootstrapOptions): Promise<App> {
     return c;
   };
 
+  async function removePanel(id: string): Promise<void> {
+    const controller = require(id);
+    controllers.delete(id);
+    controller.dispose(); // releases, then settles ui:show-panel
+    await controller.settled();
+  }
+
   return {
     panels: {
       get: (id) => require(id).model,
-      async remove(id) {
-        const controller = require(id);
-        controllers.delete(id);
-        controller.dispose(); // settles ui:show-panel → the view is removed
-        await controller.settled();
-      },
+      remove: removePanel,
     },
     jobs: { get: (id) => jobs.get(id), lastJobId: () => jobs.lastJobId() },
     changes,
@@ -102,6 +112,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<App> {
       for (const c of controllers.values()) c.dispose();
       controllers.clear();
       jobs.dispose();
+      files.dispose();
       changes.dispose();
     },
     debug,

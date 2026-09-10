@@ -2,7 +2,8 @@ import { type FileRef, JobModel, runCopyJob } from "@fm/core";
 import type { Command, Commands } from "@statewalker/shared-commands";
 import type { FilesApi } from "@statewalker/webrun-files";
 import type { Invalidation } from "./change-notifier.js";
-import { filesCopy, uiShowJob } from "./declarations.js";
+import { CORE_PRIORITY, overridden } from "./commands.js";
+import { filesCopy, filesMove, uiShowJob } from "./declarations.js";
 
 type CopyCommand = Command<
   { files: FileRef[]; target: { storage: string; path: string } },
@@ -23,26 +24,32 @@ export class JobsController {
   ) {}
 
   activate(): void {
-    // The core registers its own handler at NEGATIVE priority: a host
-    // overrides it simply by listening at priority 0.
-    this._disposers.push(
-      this._commands.listen(
-        filesCopy,
-        (cmd) => {
-          const job = new JobModel(`job-${++seq}`);
-          this._jobs.set(job.id, job);
-          this._lastJobId = job.id;
-          this._start(cmd, job);
-          // Answered with an ALREADY-RESOLVED promise, so which listener's
-          // answer reaches the caller is decided by dispatch order — which is
-          // what priority means. Deferring the answer instead would make the
-          // core win from any priority, and the override would stop being
-          // observable at all.
-          return Promise.resolve({ jobId: job.id });
-        },
-        { priority: -1 },
-      ),
-    );
+    // The core registers its own handlers at NEGATIVE priority: a host
+    // overrides any of them simply by listening at priority 0.
+    for (const [decl, operation] of [
+      [filesCopy, "copy"],
+      [filesMove, "move"],
+    ] as const) {
+      this._disposers.push(
+        this._commands.listen(
+          decl,
+          (cmd) => {
+            const job = new JobModel(`job-${++seq}`);
+            job.operation = operation;
+            this._jobs.set(job.id, job);
+            this._lastJobId = job.id;
+            this._start(cmd, job, operation);
+            // Answered with an ALREADY-RESOLVED promise, so which listener's
+            // answer reaches the caller is decided by dispatch order — which is
+            // what priority means. Deferring the answer instead would make the
+            // core win from any priority, and the override would stop being
+            // observable at all.
+            return Promise.resolve({ jobId: job.id });
+          },
+          { priority: CORE_PRIORITY },
+        ),
+      );
+    }
   }
 
   /**
@@ -53,9 +60,8 @@ export class JobsController {
    * makes "a host handler at priority 0 overrides the core's at -1" mean *the
    * core did no work* rather than *the core lost the race to answer*.
    */
-  private async _start(cmd: CopyCommand, job: JobModel): Promise<void> {
-    await Promise.resolve();
-    if (cmd.settled) {
+  private async _start(cmd: CopyCommand, job: JobModel, operation: "copy" | "move"): Promise<void> {
+    if (await overridden(cmd)) {
       // Somebody else answered. Settling the stillborn job keeps `done`
       // resolvable for anyone holding it.
       job.settle("cancelled");
@@ -68,7 +74,7 @@ export class JobsController {
     this._commands.call(uiShowJob, job);
 
     void runCopyJob({
-      operation: "copy",
+      operation,
       source: { uri: sourceStorage, api: this._resolve(sourceStorage) },
       target: { uri: target.storage, api: this._resolve(target.storage), path: target.path },
       // A selection is whatever the user highlighted: the roots are file paths
@@ -86,6 +92,14 @@ export class JobsController {
           kind: "created",
           jobId: job.id,
         }),
+      // A move removes its sources as it goes, and the panel showing them is
+      // the one that needs to know: that is the confusing case the per-row
+      // marking exists for. Only a move reports a "removed" phase at all, so no
+      // operation check is needed here — and one would be untestable.
+      onEntry: (path, phase) => {
+        if (phase !== "removed") return;
+        this._onChange({ storage: sourceStorage, path, kind: "removed", jobId: job.id });
+      },
     });
   }
 

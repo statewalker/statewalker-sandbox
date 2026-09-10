@@ -10,7 +10,18 @@ export {
   type JobSpec,
   runCopyJob,
 } from "./copy-job.js";
-export { type FileRef, fileRef, filesCopy } from "./declarations.js";
+export {
+  ACTION_KEYS,
+  type ActionKey,
+  type FileRef,
+  fileRef,
+  filesCopy,
+  filesDelete,
+  filesMkdir,
+  filesMove,
+  filesRename,
+  filesResolveActions,
+} from "./declarations.js";
 export { compareEntries, narrowStats, type Stats, sizeCell } from "./file-stats.js";
 export { JobModel, type JobStatus } from "./job-model.js";
 export { JobQueue, type JobQueueOptions, type JobRequest } from "./job-queue.js";
