@@ -15,8 +15,14 @@
  *    `@todo/app` barrel exports the TYPE only. No caller outside `todo-app`
  *    holds the class value, so none can call `_mint()` or reach its prototype.
  * 3. Inside `todo-app`, and from any suite reaching in by relative path, the
- *    only guard left is B0: it fails if `_mint` appears anywhere but this file
- *    and `bootstrap.ts`.
+ *    guard is B0: it fails if `_mint` appears anywhere but this file and
+ *    `bootstrap.ts`, and if any file but `bootstrap.ts` and
+ *    `list-controller.ts` imports this module — because the class value alone
+ *    is a forge (`Object.create(ViewsReady.prototype)` passes `instanceof`).
+ *
+ * A grep polices mistakes, not adversaries: `ViewsReady["_m" + "int"]()` from
+ * an allowed file walks past it. The type-only barrel is what stops callers
+ * outside this layer, and it does not depend on anyone's spelling.
  *
  * `private` is a compile-time fiction: (1) alone is what the first version of
  * this comment claimed, and a public static next to it made the claim false.

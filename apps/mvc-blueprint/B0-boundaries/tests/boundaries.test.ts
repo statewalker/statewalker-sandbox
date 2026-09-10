@@ -227,6 +227,31 @@ describe("B0 · package boundaries", () => {
       // (or the file layout) has drifted and this check would be asserting nothing.
       expect(minters.sort(), "only bootstrap may mint a ViewsReady").toEqual([...MINTERS].sort());
     });
+
+    it("holds the ViewsReady CLASS only in bootstrap.ts and list-controller.ts", () => {
+      // Confining `_mint` is not enough on its own: anyone holding the class
+      // value can build a look-alike with `Object.create(ViewsReady.prototype)`,
+      // which passes `instanceof` and never names `_mint`. So confine who can
+      // import the module at all — the barrel only as `export type`.
+      const importsIt = new RegExp(`${QUOTE}${NOT_QUOTE}*\\bviews-ready(\\.js)?${QUOTE}`);
+      const everything = [
+        ...sources("todo-core"),
+        ...sources("todo-app"),
+        ...sources("todo-ui"),
+        ...allSuites().filter(({ file }) => !file.startsWith("B0-boundaries/")),
+      ];
+      const holders = everything.filter(({ code }) => importsIt.test(code)).map(({ file }) => file);
+      expect(holders.sort(), "only bootstrap and the controller may import views-ready").toEqual([
+        "todo-app/src/bootstrap.ts",
+        "todo-app/src/index.ts",
+        "todo-app/src/list-controller.ts",
+      ]);
+      const barrel = everything.find(({ file }) => file === "todo-app/src/index.ts")?.code ?? "";
+      const lines = barrel.split("\n").filter((line) => importsIt.test(line));
+      expect(lines, "the barrel may re-export ViewsReady as a type, and only as a type").toEqual([
+        'export type { ViewsReady } from "./views-ready.js";',
+      ]);
+    });
   });
 
   describe("subscribers use named channels, not bare onUpdate", () => {
