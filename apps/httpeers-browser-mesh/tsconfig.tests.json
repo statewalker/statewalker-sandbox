@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "vitest/globals"],
+    "rootDir": "."
+  },
+  "include": ["./src", "./tests"],
+  // tests/browser.spec.ts is EXCLUDED, and not for convenience. It declares
+  // `Window.__mesh` with its own `MeshState`, and src/app.ts declares the same
+  // global with a structurally different type, so putting both in one program
+  // is TS2717 ("Subsequent property declarations must have the same type").
+  // Neither file is editable here — the spec is adopted verbatim and app.ts is
+  // recovered — and the conflict is a real finding about the export rather than
+  // something this config should paper over: see PROVENANCE.md, "The two
+  // `Window.__mesh` declarations disagree". The spec is typechecked on its own
+  // by `tsconfig.browser.json`.
+  "exclude": ["node_modules", "dist-node", "dist-web", "tests/browser.spec.ts"]
+}

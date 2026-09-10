@@ -10,14 +10,17 @@
     "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
   },
   "scripts": {
-    "test": "pnpm run verify:node",
+    "test": "pnpm run test:unit && pnpm run verify:node",
     "verify:node": "pnpm run build:node && node tests/node-verify.mjs",
     "test:browser": "playwright test",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 4173 --outDir dist-web",
     "typecheck": "tsc --noEmit",
-    "build:node": "esbuild src/mesh.ts src/hub.ts src/relay-discovery.ts --bundle --platform=neutral --format=esm --outdir=dist-node --external:libp2p --external:@libp2p/* --external:@chainsafe/* --external:@multiformats/*"
+    "build:node": "esbuild src/mesh.ts src/hub.ts src/relay-discovery.ts --bundle --platform=neutral --format=esm --outdir=dist-node --external:libp2p --external:@libp2p/* --external:@chainsafe/* --external:@multiformats/*",
+    "test:unit": "pnpm run typecheck:tests && vitest run",
+    "test:watch": "vitest",
+    "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit && tsc -p tsconfig.browser.json --noEmit"
   },
   "dependencies": {
     "@chainsafe/libp2p-noise": "17.0.0",
@@ -35,10 +38,12 @@
     "libp2p": "3.3.8"
   },
   "devDependencies": {
+    "@libp2p/crypto": "5.1.22",
     "@playwright/test": "1.58.0",
     "@types/node": "catalog:",
     "esbuild": "0.28.2",
     "typescript": "catalog:",
-    "vite": "catalog:"
+    "vite": "catalog:",
+    "vitest": "catalog:"
   }
 }

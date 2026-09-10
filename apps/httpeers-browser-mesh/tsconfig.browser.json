@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "rootDir": "."
+  },
+  // The Playwright spec alone, WITHOUT src/app.ts — the two declare
+  // `Window.__mesh` incompatibly and cannot share a program. This is how the
+  // export's own "written and typechecked" claim was true: its tsconfig
+  // included only `src/**/*.ts`, so the spec and the app were never compiled
+  // together and the clash stayed latent.
+  "include": ["./tests/browser.spec.ts"]
+}
