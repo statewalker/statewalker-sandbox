@@ -22,8 +22,8 @@ record's prose and mutation table; everything through C2 is otherwise adopted
 verbatim.
 
 **C3 onward never ran at all.** The September session stopped after C2, so the
-listing lifecycle and change notification here are written red/green from the
-design records — a weaker kind of evidence, and `PROVENANCE.md` keeps the three
+listing lifecycle, change notification and command surface here are written
+red/green from the design records — a weaker kind of evidence, and `PROVENANCE.md` keeps the three
 categories apart rather than blurring them.
 
 ## Layout
@@ -37,7 +37,7 @@ fm-app/src/     models, controllers, bootstrap, model-kit, panels, notifier, com
 fm-ui/src/      empty until D1
 src/{core,app,ui}   symlinks onto the three roots (see below)
 test/           P0-P6 suites, the C0 boundary grep, the C0 decisions
-fm-app/test/    C1, C2, C3, C4 suites
+fm-app/test/    C1, C2, C3, C4, C5 suites
 ```
 
 `@fm/core`, `@fm/app` and `@fm/ui` resolve through `tsconfig.json` `paths` **and** a
@@ -71,9 +71,12 @@ TypeScript 7.0.2. **`vitest` is `4.1.11`, not the 5.x the rung records name** �
 workspace catalog is on 4.1.x and the sibling protos app pins 4.1.11. All 124 tests
 pass on 4.1.11; no suite depends on a Vitest 5 feature.
 
-`pnpm typecheck` reports exactly one error, at `test/p3-job-engine.test.ts:169`, and it
-is a defect in the adopted suite: its own `SpyFilesApi` types away `list`'s options and
-then passes them. An adopted test is not edited to make a tool quiet.
+`pnpm typecheck` is clean. One adopted file is excluded from it —
+`test/p3-job-engine.test.ts`, whose own `SpyFilesApi` types away `list`'s options
+and then passes them. The test is byte-identical and the defect belongs upstream;
+`tsconfig.json` says so at the exclusion and `PROVENANCE.md` has the detail. An
+adopted test is not edited to make a tool quiet, and a permanently red `typecheck`
+is not left to train everyone to ignore it.
 
 ## What each Phase C rung is held to
 
