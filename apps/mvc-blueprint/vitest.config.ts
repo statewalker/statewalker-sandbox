@@ -23,6 +23,11 @@ export default defineConfig({
     name: "node",
     environment: "node",
     include: ["*/tests/**/*.test.ts"],
-    exclude: ["**/node_modules/**", "**/dist/**"],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "B5-*/tests/**/*.test.tsx",
+      "B6-*/tests/**/*.test.tsx",
+    ],
   },
 });

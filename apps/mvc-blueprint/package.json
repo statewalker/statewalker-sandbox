@@ -7,21 +7,30 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
     "typecheck": "tsc --noEmit",
     "test:B0": "vitest run B0-boundaries",
     "test:B1": "vitest run B1-models",
     "test:B2": "vitest run B2-commands",
     "test:B3": "vitest run B3-controller",
-    "test:B4": "vitest run B4-view-protocol"
+    "test:B4": "vitest run B4-view-protocol",
+    "test:B5": "vitest run --config vitest.browser.config.ts B5-views"
   },
   "dependencies": {
     "@statewalker/shared-baseclass": "0.1.1",
     "@statewalker/shared-commands": "0.2.1",
     "@statewalker/shared-registry": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
     "zod": "4.5.4"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "@vitest/browser-playwright": "^5.0.0",
+    "playwright": "1.58.0",
     "typescript": "catalog:",
     "vitest": "^5.0.0"
   }
