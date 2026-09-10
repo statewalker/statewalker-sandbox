@@ -107,6 +107,7 @@ export class TodoListModel extends BaseClass {
 
   /** One intention, one notify — the list and its outcome never disagree on screen. */
   reportOutcome(outcome: string | undefined): void {
+    if (this.lastOutcome === outcome) return; // no field change, no update
     this.lastOutcome = outcome;
     this.notify();
   }

@@ -40,16 +40,53 @@ describe("B1 · todo models", () => {
   });
 
   it("raises no notify when a mutator is handed the value it already holds", () => {
-    // Spec §4.11: this is what kills a self-wake cycle at SOURCE — no notify is
-    // raised, so nothing anywhere needs suppressing, and it survives an await
-    // because it is a property of the write, not of the call stack.
+    // Counted on the RAW notify channel, deliberately: subscribing through a
+    // named channel would prove onChangeNotifier's dedup instead of the
+    // mutator's guard, and would pass with the guard deleted.
+    const m = new TodoListModel();
+    let notifies = 0;
+    m.input.onUpdate(() => { notifies++; });
+    m.input.setFilter("abc");
+    m.input.setFilter("abc");
+    m.input.setFilter("abc");
+    expect(notifies, "three writes, one real change").toBe(1);
+  });
+
+  it("does not notify when takePending drains an already-empty queue", () => {
+    const m = new TodoListModel();
+    m.input.queueSubmit("a");
+    expect(m.input.takePending()).toEqual([{ title: "a" }]);
+
+    let notifies = 0;
+    m.input.onUpdate(() => { notifies++; });
+    expect(m.input.takePending()).toEqual([]);
+    expect(notifies, "draining an empty queue is not a field change").toBe(0);
+  });
+
+  it("wakes onPendingChange when a submission is queued", () => {
+    const m = new TodoListModel();
+    let changes = 0;
+    m.input.onPendingChange(() => { changes++; });
+    m.input.queueSubmit("a");
+    expect(changes).toBe(1);
+  });
+
+  it("wakes onOutcomeChange only when the outcome actually changes", () => {
+    const m = new TodoListModel();
+    let changes = 0;
+    m.onOutcomeChange(() => { changes++; });
+    m.reportOutcome("x");
+    expect(changes).toBe(1);
+    m.reportOutcome("x");
+    expect(changes, "same outcome, no field change, no update").toBe(1);
+  });
+
+  it("wakes onQueryChange from either half of the composite selector", () => {
     const m = new TodoListModel();
     let queries = 0;
     m.input.onQueryChange(() => { queries++; });
-    m.input.setFilter("abc");
-    m.input.setFilter("abc");
-    m.input.setFilter("abc");
-    expect(queries, "three writes, one real change").toBe(1);
+    m.input.setShowDone(false);
+    expect(queries, "showDone is half of the composite query").toBe(1);
   });
 
   it("wakes a channel subscriber only for its own change", () => {
@@ -83,7 +120,6 @@ describe("B1 · todo models", () => {
     m.replaceTodos([{ id: "1", title: "x", done: false }]);
     const json = JSON.parse(JSON.stringify(m.toJSON()));
     expect(json.todos).toHaveLength(1);
-    expect(Object.keys(json)).not.toContain("_handled");
     // Channels are function-valued, so toJSON skips them — a snapshot stays data.
     expect(Object.keys(json)).not.toContain("onTodosChange");
   });
