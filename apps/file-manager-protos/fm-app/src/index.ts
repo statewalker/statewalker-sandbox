@@ -7,6 +7,7 @@ export {
   uiShowJob,
   uiShowPanel,
 } from "./declarations.js";
+export type { I18nRef } from "./i18n.js";
 export { JobsController } from "./jobs-controller.js";
 export {
   expectEdgeCounter,
@@ -15,6 +16,13 @@ export {
   type Probe,
   probe,
 } from "./model-kit.js";
-export { PanelController } from "./panel-controller.js";
-export { PanelInputModel, PanelModel } from "./panel-model.js";
+export { PanelController, type PanelControllerOptions } from "./panel-controller.js";
+export {
+  type Breadcrumb,
+  PanelInputModel,
+  PanelModel,
+  type PanelOutcome,
+  type PanelRow,
+  type SortColumn,
+} from "./panel-model.js";
 export { type PanelSpec as PanelAddSpec, PanelsModel, type TargetChoice } from "./panels-model.js";
