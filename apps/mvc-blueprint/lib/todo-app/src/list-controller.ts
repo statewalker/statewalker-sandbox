@@ -18,14 +18,18 @@ export class ListController {
   private readonly _registry = newRegistry();
   private _handledRefresh = 0;
   /**
-   * True while a `_reconcile()` run is in flight. `notify()` is synchronous
-   * (spec: `@statewalker/shared-baseclass`), so two `requestRefresh()` calls in
-   * one tick fire `onRefresh` twice before either await suspends. Without this
-   * guard, the second synchronous re-entry would see the watermark already
-   * bumped by the first and race off a second reload — coalescing would only
-   * work when the caller happened to await between bumps, which is not what
-   * "one tick" means. The in-flight run re-checks both edges in a loop after
-   * every await, so it still picks up whatever changed while it was awaiting.
+   * True while a `_reconcile()` run is in flight — what makes coalescing
+   * leading + trailing rather than absent. `notify()` is synchronous (spec:
+   * `@statewalker/shared-baseclass`), so N `requestRefresh()` calls with no
+   * gap fire `onRefresh` N times before the first run's `await` ever
+   * suspends; a watermark alone cannot help, because all N calls clear it
+   * before any of them awaits. This flag turns every one of those synchronous
+   * re-entries (including the nested one from `takePending()`'s own notify)
+   * into a no-op, so only the FIRST pulse reloads immediately (leading edge).
+   * The in-flight run then loops, re-reading both edges after every await, so
+   * whatever arrived while it was busy is folded into exactly ONE follow-up
+   * pass carrying the newest state (trailing edge) — never zero (nothing
+   * lost) and never more than one (real coalescing, not N reloads).
    */
   private _reconciling = false;
   readonly debug = { reactions: 0, reloads: 0 };
@@ -91,9 +95,15 @@ export class ListController {
           again = true; // more may have been queued while we were awaiting
         }
 
-        // STATE-LATEST edge: compare against a watermark, not a boolean, and
-        // jump to the newest value — two presses in one tick are one reload of
-        // the newest state.
+        // STATE-LATEST edge, coalesced leading + trailing: compare against a
+        // watermark, not a boolean, and jump to the newest value. The first
+        // pulse reloads immediately; every pulse arriving while that reload is
+        // in flight folds into ONE follow-up pass that re-reads the counter, so
+        // the newest state always wins and no bump is lost. Five bumps in a
+        // tick are two reloads, not five and not one. A watermark alone cannot
+        // do this: notify() is synchronous, so all five pulses clear the
+        // watermark before any of them awaits — the `_reconciling` guard above
+        // is what turns the extra synchronous calls into the single follow-up.
         if (input.refreshCount > this._handledRefresh) {
           this._handledRefresh = input.refreshCount;
           await this._reload();

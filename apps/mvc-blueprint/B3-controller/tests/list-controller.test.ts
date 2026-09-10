@@ -46,6 +46,18 @@ describe("B3 · list controller", () => {
     });
   });
 
+  it("folds every bump arriving mid-flight into ONE follow-up carrying the newest state", async () => {
+    await tick();
+    const before = controller.debug.reloads;
+    // Five bumps with no gap. Without coalescing this is five reloads; with
+    // leading+trailing coalescing it is exactly two — the one already running,
+    // and one follow-up that sees the newest count.
+    for (let i = 0; i < 5; i++) model.input.requestRefresh();
+    await tick();
+    await tick();
+    expect(controller.debug.reloads - before).toBe(2);
+  });
+
   it("does not wake itself when it writes the outer model", async () => {
     await tick();
     await expectNoSelfWake({
