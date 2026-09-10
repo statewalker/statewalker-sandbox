@@ -3,3 +3,4 @@ export * from "./todo-model.js";
 export * from "./ui-declarations.js";
 export * from "./list-controller.js";
 export * from "./menu-controller.js";
+export * from "./bootstrap.js";
