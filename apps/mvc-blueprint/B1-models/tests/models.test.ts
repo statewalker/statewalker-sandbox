@@ -150,3 +150,164 @@ describe("B1 · todo models", () => {
     }
   });
 });
+
+/**
+ * The row intents a view needs (Task 13a): every button a view can press must
+ * exist as a mutator on the INPUT sub-model, because a view knows only models.
+ * Two are EVENT edges carrying their payload (a replaced queue, like
+ * `pending`); one is a STATE-LATEST edge (a counter, like `refreshCount`).
+ *
+ * Notifies are counted on the RAW `onUpdate`, never through the named channel:
+ * a channel's own `!==` dedup would hide a missing compare-before-write guard,
+ * which is the mistake this codebase has already made and fixed three times.
+ */
+describe("B1 · row intents on the input sub-model", () => {
+  const rawNotifies = (m: TodoListModel) => {
+    const counter = { n: 0 };
+    m.input.onUpdate(() => {
+      counter.n++;
+    });
+    return counter;
+  };
+
+  // The two queues share one shape; each is tested through the same table so a
+  // guard missing from ONE of them cannot hide behind the other's test.
+  const queues = [
+    {
+      name: "toggle",
+      raise: (m: TodoListModel, id: string) => m.input.requestToggle(id),
+      take: (m: TodoListModel) => m.input.takeToggles(),
+      read: (m: TodoListModel) => m.input.toggles,
+    },
+    {
+      name: "remove",
+      raise: (m: TodoListModel, id: string) => m.input.requestRemove(id),
+      take: (m: TodoListModel) => m.input.takeRemovals(),
+      read: (m: TodoListModel) => m.input.removals,
+    },
+  ] as const;
+
+  for (const q of queues) {
+    describe(`the ${q.name} queue — an EVENT edge`, () => {
+      it("queues the id with ONE raw notify per request", () => {
+        const m = new TodoListModel();
+        const raw = rawNotifies(m);
+        q.raise(m, "1");
+        q.raise(m, "2");
+        expect(q.read(m)).toEqual([{ id: "1" }, { id: "2" }]);
+        expect(raw.n, "one intention, one notify").toBe(2);
+      });
+
+      it("honours a repeated id — two presses on one row are two actions, not one", () => {
+        // An event edge is never deduplicated: toggling a row twice is a
+        // round trip the user asked for, and a queue that collapsed it would
+        // silently drop one of them.
+        const m = new TodoListModel();
+        const raw = rawNotifies(m);
+        q.raise(m, "1");
+        q.raise(m, "1");
+        expect(q.read(m)).toEqual([{ id: "1" }, { id: "1" }]);
+        expect(raw.n).toBe(2);
+      });
+
+      it("is replaced on request, never mutated — so its channel can see it", async () => {
+        const m = new TodoListModel();
+        await expectReplacedNotMutated(m.input, () => q.read(m), () => {
+          q.raise(m, "1");
+        });
+      });
+
+      it("drains by replacement and hands the batch back", async () => {
+        const m = new TodoListModel();
+        q.raise(m, "1");
+        q.raise(m, "2");
+        const before = q.read(m);
+        let batch: readonly { id: string }[] = [];
+        await expectReplacedNotMutated(m.input, () => q.read(m), () => {
+          batch = q.take(m);
+        });
+        expect(batch).toEqual([{ id: "1" }, { id: "2" }]);
+        expect(q.read(m)).toEqual([]);
+        expect(before, "the drained batch was handed back, not emptied in place").toEqual([
+          { id: "1" },
+          { id: "2" },
+        ]);
+      });
+
+      it("is silent when drained empty — counted on the RAW notify", () => {
+        const m = new TodoListModel();
+        q.raise(m, "1");
+        q.take(m);
+        const raw = rawNotifies(m);
+        expect(q.take(m)).toEqual([]);
+        expect(q.take(m)).toEqual([]);
+        expect(raw.n, "draining an empty queue is not a field change").toBe(0);
+      });
+    });
+  }
+
+  describe("clear-completed — a STATE-LATEST edge", () => {
+    it("raises a monotonic counter, one raw notify per request", () => {
+      const m = new TodoListModel();
+      const raw = rawNotifies(m);
+      expect(m.input.clearCompletedCount).toBe(0);
+      m.input.requestClearCompleted();
+      m.input.requestClearCompleted();
+      expect(m.input.clearCompletedCount, "every press is counted; coalescing is the controller's job").toBe(2);
+      expect(raw.n).toBe(2);
+    });
+  });
+
+  it("wakes each channel only for its own change", () => {
+    // Every intent against every channel. A channel woken by a neighbour's
+    // mutator would wake a controller for work it does not own.
+    const m = new TodoListModel();
+    const woken: Record<string, number> = {};
+    const channels = {
+      onTogglesChange: m.input.onTogglesChange,
+      onRemovalsChange: m.input.onRemovalsChange,
+      onClearCompleted: m.input.onClearCompleted,
+      onPendingChange: m.input.onPendingChange,
+      onRefresh: m.input.onRefresh,
+      onQueryChange: m.input.onQueryChange,
+    };
+    for (const [name, channel] of Object.entries(channels)) {
+      woken[name] = 0;
+      channel(() => {
+        woken[name]++;
+      });
+    }
+    const expectOnly = (owner: string, label: string) => {
+      const expected = Object.fromEntries(Object.keys(channels).map((k) => [k, k === owner ? 1 : 0]));
+      expect(woken, label).toEqual(expected);
+      for (const k of Object.keys(woken)) woken[k] = 0;
+    };
+
+    m.input.requestToggle("1");
+    expectOnly("onTogglesChange", "requestToggle");
+    m.input.takeToggles();
+    expectOnly("onTogglesChange", "takeToggles");
+    m.input.requestRemove("1");
+    expectOnly("onRemovalsChange", "requestRemove");
+    m.input.takeRemovals();
+    expectOnly("onRemovalsChange", "takeRemovals");
+    m.input.requestClearCompleted();
+    expectOnly("onClearCompleted", "requestClearCompleted");
+    m.input.queueSubmit("a");
+    expectOnly("onPendingChange", "queueSubmit");
+    m.input.requestRefresh();
+    expectOnly("onRefresh", "requestRefresh");
+    m.input.setFilter("x");
+    expectOnly("onQueryChange", "setFilter");
+  });
+
+  it("keeps the new channels out of toJSON", () => {
+    const m = new TodoListModel();
+    m.input.requestToggle("1");
+    const input = JSON.parse(JSON.stringify(m.input.toJSON()));
+    expect(input.toggles).toEqual([{ id: "1" }]);
+    for (const channel of ["onTogglesChange", "onRemovalsChange", "onClearCompleted"]) {
+      expect(Object.keys(input), `${channel} is a function, not state`).not.toContain(channel);
+    }
+  });
+});

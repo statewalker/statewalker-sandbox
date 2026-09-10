@@ -29,6 +29,24 @@ export class TodoListInput extends BaseClass {
    * the second title (spec §4.2). Replaced on drain, never spliced.
    */
   pending: { title: string }[] = [];
+  /**
+   * Event edge — a toggle is an action on ONE row, so the id rides with it:
+   * two toggles on two rows are two actions, and a counter beside a
+   * "selected id" level field would keep only the second (spec §4.2).
+   * Two toggles on the SAME row are two actions too — never deduplicated.
+   * Replaced on request and on drain, never spliced (spec §4.10 property 2).
+   */
+  toggles: { id: string }[] = [];
+  /** Event edge — same reasoning as `toggles`: every delete is honoured. */
+  removals: { id: string }[] = [];
+  /**
+   * State-latest edge — "clear completed" names no row; it asks for a STATE
+   * (no completed todos). Two quick presses must open ONE confirm dialog, not
+   * two, so this is a counter the controller coalesces against a watermark,
+   * not a queue it honours item by item. The counter still rises on every
+   * press: coalescing is the controller's job, never the model's.
+   */
+  clearCompletedCount = 0;
 
   // --- Mutators. The view calls these; it never assigns a field and never
   // notifies (spec §4.8). Each says what happened, not which fields moved.
@@ -70,6 +88,49 @@ export class TodoListInput extends BaseClass {
     return batch;
   }
 
+  /**
+   * Raises an EVENT edge carrying the row id. No compare-before-write: every
+   * call IS a change (a new queue entry), so there is nothing to skip.
+   */
+  requestToggle(id: string): void {
+    this.toggles = [...this.toggles, { id }];
+    this.notify();
+  }
+
+  /** Drains `toggles` exactly as `takePending` drains `pending`. */
+  takeToggles(): { id: string }[] {
+    if (this.toggles.length === 0) return []; // no field change, no update
+    const batch = this.toggles;
+    this.toggles = [];
+    this.notify();
+    return batch;
+  }
+
+  /** Raises an EVENT edge carrying the row id — see `requestToggle`. */
+  requestRemove(id: string): void {
+    this.removals = [...this.removals, { id }];
+    this.notify();
+  }
+
+  /** Drains `removals` exactly as `takePending` drains `pending`. */
+  takeRemovals(): { id: string }[] {
+    if (this.removals.length === 0) return []; // no field change, no update
+    const batch = this.removals;
+    this.removals = [];
+    this.notify();
+    return batch;
+  }
+
+  /**
+   * Raises the state-latest edge. Like `requestRefresh`, no compare-before-
+   * write: the counter moves on every call by definition. Two calls in one
+   * tick are one confirm dialog — the controller's watermark sees to that.
+   */
+  requestClearCompleted(): void {
+    this.clearCompletedCount++;
+    this.notify();
+  }
+
   // --- Named change channels (spec §4.10). A subscriber is woken only by the
   // change it asked for, so a controller writing `filterDraft` cannot wake a
   // controller watching for submissions. Declared as fields, because
@@ -83,6 +144,12 @@ export class TodoListInput extends BaseClass {
   onRefresh = onChangeNotifier(this.onUpdate, () => this.refreshCount);
   /** The event-edge queue. Identity comparison — which is why it is REPLACED. */
   onPendingChange = onChangeNotifier(this.onUpdate, () => this.pending);
+  /** The toggle queue — identity comparison, so it is REPLACED. */
+  onTogglesChange = onChangeNotifier(this.onUpdate, () => this.toggles);
+  /** The delete queue — identity comparison, so it is REPLACED. */
+  onRemovalsChange = onChangeNotifier(this.onUpdate, () => this.removals);
+  /** The clear-completed state-latest edge. */
+  onClearCompleted = onChangeNotifier(this.onUpdate, () => this.clearCompletedCount);
   /** Both level fields that change the visible set, as one channel. */
   onQueryChange = onChangeNotifier(
     this.onUpdate,
