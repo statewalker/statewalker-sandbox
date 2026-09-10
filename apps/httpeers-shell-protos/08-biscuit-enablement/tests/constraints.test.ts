@@ -99,6 +99,30 @@ describe("reusing an Authorizer", () => {
     // is unweakened: on every run that got a clean first query, the second
     // must still throw. Measured 30/30 idle and 30/30 under 3x load, so no
     // tolerance is spent on the claim itself.
+    //
+    // IF THIS TEST EVER FAILS, READ THE ASSERTION BEFORE BLAMING THE MACHINE.
+    // It is bounded, not absolute: ~0.06% of runs (five consecutive
+    // first-query timeouts at the 23%-per-spawn rate measured under 3x CPU
+    // oversubscription). The two outcomes are told apart by WHICH assertion
+    // fires, and they mean opposite things:
+    //
+    //   `expect(result.first).toEqual({ ok: 1 })` failed, with
+    //   `{ threw: true, json: { RunLimit: "Timeout" } }`
+    //       -> UNLUCKY MACHINE. Five spawns in a row lost their slice. Not a
+    //          regression. Re-run; if it repeats on an idle machine, the
+    //          per-spawn rate has moved and THAT is the finding.
+    //
+    //   `expect(result.second.threw).toBe(true)` failed (second query
+    //   returned), or the isError/message/json shape assertions failed
+    //       -> REAL REGRESSION. Either biscuit-wasm stopped charging the
+    //          cumulative budget on `query()` — in which case this whole
+    //          block's mechanism is stale and `RUN_LIMITS` may be
+    //          unnecessary — or the thrown value became a real `Error`,
+    //          which would be an improvement worth recording. Measure before
+    //          editing, as the superseded explanations in PROVENANCE.md were
+    //          both produced by inferring the mechanism instead.
+    //
+    // Do not "fix" this by widening the retry count or deleting the test.
     let result = spawn();
     for (let i = 0; i < 4 && result.first.threw; i++) {
       expect(JSON.parse(JSON.stringify(result.first.json))).toEqual({ RunLimit: "Timeout" });

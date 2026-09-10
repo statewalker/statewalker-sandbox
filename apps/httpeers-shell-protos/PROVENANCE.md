@@ -288,5 +288,23 @@ first: `lib/dock.ts` hard-codes `theme: themeLight`, which **is** the note-35 bu
 the harness's central assertion — that the drag overlay's colours flip between light and
 dark — cannot pass until `lib/` is repaired, and rung 07's tests deliberately pin that
 line. It is a unit of work coupled to a fix outside this one's scope, not a loose end.
-The honest consequence, unchanged by 314 green tests: **this app has no evidence about
-the theme bridge's behaviour in a browser.**
+
+**READ THIS BEFORE READING THE GREEN NUMBER.** This suite is green *and* structurally
+unable to catch the class of defect notes 35 and 36 recorded. Those are not in tension
+and the second does not follow from the first being wrong — it follows from what a unit
+test can reach. Note 35's bug escaped **61 unit tests**; this app has **314** and
+cannot catch that class either, for the same reason, which note 35 states better than
+a summary can: *a test that builds its own DOM tests the stylesheet, not the
+integration.* Concretely, happy-dom resolves no CSS custom property from a stylesheet
+(asserted in `07-dockview-hosting/tests/limitations.test.ts`), Dockview's drag-and-drop
+cannot be driven without Chrome's drag interception (asserted in the same file), and
+`colorScheme` is never read by dockview-core 8.2.0 at all. So every `--dv-dnd-*`,
+`--dv-drag-over-*`, `--dv-smart-guides-*` and `--dv-edge-dock-indicator-*` entry in the
+bridge is **unexercised**, and the one assertion that would have caught the original
+bug — does the bridge's class reach the element Dockview actually reads — is not
+expressible here at all.
+
+A reader who takes 314 green as coverage of the theme bridge will conclude the exact
+opposite of the truth. **This app has no evidence about the theme bridge's behaviour in
+a browser**, and acquiring that evidence means the browser harness, not more unit
+tests.
