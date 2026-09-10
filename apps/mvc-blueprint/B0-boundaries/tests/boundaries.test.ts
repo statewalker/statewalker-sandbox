@@ -44,9 +44,12 @@ const DOM_GLOBALS = /\b(document|window|HTMLElement|navigator)\b/;
 
 describe("B0 · package boundaries", () => {
   it("finds sources recursively, including subdirectories", () => {
-    // Guards the suite itself: a non-recursive readdir returns only top-level
-    // files, and every assertion below would then pass vacuously for nested code.
-    expect(sources("todo-ui").length).toBeGreaterThan(0);
+    // Not `length > 0`: `index.ts` is top-level, so that passes even with a
+    // non-recursive readdir. Naming the nested file is what actually proves it,
+    // and it is what fails first if `{ recursive: true }` is ever dropped.
+    expect(sources("todo-ui").map((s) => s.file)).toContain(
+      "todo-ui/src/components/placeholder.ts",
+    );
   });
 
   describe("todo-core is the UI-free layer", () => {
