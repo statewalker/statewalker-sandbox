@@ -1,0 +1,7 @@
+# The two build outputs the README explains must not share a directory:
+# esbuild writes dist-node/ for the Node harness, Vite writes dist-web/ for the
+# page, and Vite empties its outDir on every build.
+dist-node/
+dist-web/
+playwright-report/
+test-results/

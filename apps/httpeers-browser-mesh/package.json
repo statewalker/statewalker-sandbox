@@ -1,0 +1,44 @@
+{
+  "name": "@statewalker/httpeers-browser-mesh",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Two in-browser peers over a relay: one declares a hub, the other joins, and each consumes the other's resource.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+  },
+  "scripts": {
+    "test": "pnpm run verify:node",
+    "verify:node": "pnpm run build:node && node tests/node-verify.mjs",
+    "test:browser": "playwright test",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173 --outDir dist-web",
+    "typecheck": "tsc --noEmit",
+    "build:node": "esbuild src/mesh.ts src/hub.ts src/relay-discovery.ts --bundle --platform=neutral --format=esm --outdir=dist-node --external:libp2p --external:@libp2p/* --external:@chainsafe/* --external:@multiformats/*"
+  },
+  "dependencies": {
+    "@chainsafe/libp2p-noise": "17.0.0",
+    "@chainsafe/libp2p-yamux": "8.0.1",
+    "@libp2p/circuit-relay-v2": "4.2.11",
+    "@libp2p/identify": "4.1.12",
+    "@libp2p/interface": "3.2.5",
+    "@libp2p/peer-id": "6.0.14",
+    "@libp2p/webrtc": "6.0.29",
+    "@libp2p/websockets": "10.1.19",
+    "@multiformats/multiaddr": "13.0.3",
+    "@statewalker/webrun-http-streams": "0.2.1",
+    "@statewalker/webrun-streams": "0.1.1",
+    "@statewalker/webrun-streams-libp2p": "0.1.1",
+    "libp2p": "3.3.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.0",
+    "@types/node": "catalog:",
+    "esbuild": "0.28.2",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}

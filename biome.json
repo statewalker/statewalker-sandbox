@@ -37,6 +37,19 @@
   "overrides": [
     {
       "includes": [
+        "apps/httpeers-browser-mesh/src/mesh.ts",
+        "apps/httpeers-browser-mesh/src/hub.ts",
+        "apps/httpeers-browser-mesh/src/relay-discovery.ts",
+        "apps/httpeers-browser-mesh/src/app.ts",
+        "apps/httpeers-browser-mesh/tests/browser.spec.ts",
+        "apps/httpeers-browser-mesh/tests/node-verify.mjs"
+      ],
+      "formatter": { "enabled": false },
+      "assist": { "enabled": false },
+      "linter": { "enabled": false }
+    },
+    {
+      "includes": [
         "apps/httpeers-wire-protos/src/wire.ts",
         "apps/httpeers-wire-protos/src/transport-wire.ts",
         "apps/httpeers-wire-protos/src/types.ts",
