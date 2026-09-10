@@ -11,7 +11,7 @@ export {
   runCopyJob,
 } from "./copy-job.js";
 export { type FileRef, fileRef, filesCopy } from "./declarations.js";
-export { compareEntries, narrowStats, sizeCell, type Stats } from "./file-stats.js";
+export { compareEntries, narrowStats, type Stats, sizeCell } from "./file-stats.js";
 export { JobModel, type JobStatus } from "./job-model.js";
 export { JobQueue, type JobQueueOptions, type JobRequest } from "./job-queue.js";
 export {

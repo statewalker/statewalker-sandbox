@@ -1,4 +1,4 @@
-export { type App, bootstrap, type BootstrapOptions, type PanelSpec } from "./bootstrap.js";
+export { type App, type BootstrapOptions, bootstrap, type PanelSpec } from "./bootstrap.js";
 export {
   type FileRef,
   fileRef,
@@ -12,9 +12,9 @@ export {
   expectEdgeCounter,
   expectNoSelfWake,
   expectReplacedNotMutated,
-  probe,
   type Probe,
+  probe,
 } from "./model-kit.js";
 export { PanelController } from "./panel-controller.js";
 export { PanelInputModel, PanelModel } from "./panel-model.js";
-export { PanelsModel, type PanelSpec as PanelAddSpec, type TargetChoice } from "./panels-model.js";
+export { type PanelSpec as PanelAddSpec, PanelsModel, type TargetChoice } from "./panels-model.js";

@@ -1,9 +1,9 @@
+import type { JobModel } from "@fm/core";
 import { Command } from "@statewalker/shared-commands";
 import { z } from "zod";
-import type { JobModel } from "@fm/core";
 import type { PanelModel } from "./panel-model.js";
 
-export { fileRef, filesCopy, type FileRef } from "@fm/core";
+export { type FileRef, fileRef, filesCopy } from "@fm/core";
 
 export const panelsNavigate = Command.required("panels:navigate")
   .input(z.object({ panelId: z.string(), path: z.string() }))

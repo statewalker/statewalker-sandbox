@@ -252,5 +252,7 @@ async function resolveConflict(
 
 function rename(path: string): string {
   const dot = path.lastIndexOf(".");
-  return dot > path.lastIndexOf("/") ? `${path.slice(0, dot)} (2)${path.slice(dot)}` : `${path} (2)`;
+  return dot > path.lastIndexOf("/")
+    ? `${path.slice(0, dot)} (2)${path.slice(dot)}`
+    : `${path} (2)`;
 }
