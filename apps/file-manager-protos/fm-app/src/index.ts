@@ -1,5 +1,13 @@
 export { type App, type BootstrapOptions, bootstrap, type PanelSpec } from "./bootstrap.js";
 export {
+  type ChangeKind,
+  ChangeNotifier,
+  type ChangeNotifierOptions,
+  type ChangeObserver,
+  covers,
+  type Invalidation,
+} from "./change-notifier.js";
+export {
   type FileRef,
   fileRef,
   filesCopy,
@@ -23,6 +31,7 @@ export {
   PanelModel,
   type PanelOutcome,
   type PanelRow,
+  type RowMark,
   type SortColumn,
 } from "./panel-model.js";
 export { type PanelSpec as PanelAddSpec, PanelsModel, type TargetChoice } from "./panels-model.js";

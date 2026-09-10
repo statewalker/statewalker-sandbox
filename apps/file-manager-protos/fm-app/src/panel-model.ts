@@ -12,6 +12,19 @@ export interface PanelRow {
   stats: Stats;
 }
 
+/**
+ * A per-row decoration derived from job state, keyed by path.
+ *
+ * v1 marks only rows that ALREADY EXIST — it synthesises none. Phantom rows for
+ * files a job is about to write introduce a second source of truth in `entries`,
+ * and one that never settles because a job failed is a stale lie in the listing.
+ * A decoration can be wrong without corrupting anything; a row cannot.
+ */
+export interface RowMark {
+  jobId: string;
+  kind: "pending-delete";
+}
+
 export interface Breadcrumb {
   name: string;
   path: string;
@@ -86,6 +99,8 @@ export class PanelModel extends BaseClass {
    */
   stale = false;
   error?: I18nRef;
+  /** Rows a running job is about to change, keyed by path. Cleared by a listing. */
+  marks: Record<string, RowMark> = {};
   /** Per-field validation, replaced wholesale per pass so nothing goes stale. */
   errors: Record<string, I18nRef> = {};
   lastOutcome?: PanelOutcome;

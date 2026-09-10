@@ -1,6 +1,7 @@
 import { type FileRef, JobModel, runCopyJob } from "@fm/core";
 import type { Command, Commands } from "@statewalker/shared-commands";
 import type { FilesApi } from "@statewalker/webrun-files";
+import type { Invalidation } from "./change-notifier.js";
 import { filesCopy, uiShowJob } from "./declarations.js";
 
 type CopyCommand = Command<
@@ -18,7 +19,7 @@ export class JobsController {
   constructor(
     private readonly _commands: Commands,
     private readonly _resolve: (storage: string) => FilesApi,
-    private readonly _onChange: (storage: string, path: string) => void,
+    private readonly _onChange: (change: Invalidation) => void,
   ) {}
 
   activate(): void {
@@ -75,8 +76,16 @@ export class JobsController {
       roots: files.map((ref) => ref.path),
       batchSize: 8,
       job,
-      // The TARGET path — change notification needs the end that was written.
-      onWritten: (targetPath) => this._onChange(target.storage, targetPath),
+      // The TARGET path — change notification needs the end that was written —
+      // and the originating job id, which is what lets the panel re-pair a
+      // move's two ends and decorate the rows a job is working on.
+      onWritten: (targetPath) =>
+        this._onChange({
+          storage: target.storage,
+          path: targetPath,
+          kind: "created",
+          jobId: job.id,
+        }),
     });
   }
 

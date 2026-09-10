@@ -1,9 +1,10 @@
 import { compareEntries, narrowStats } from "@fm/core";
 import type { Commands } from "@statewalker/shared-commands";
 import type { FileInfo, FilesApi } from "@statewalker/webrun-files";
+import type { ChangeObserver, Invalidation } from "./change-notifier.js";
 import { panelsNavigate, uiShowPanel } from "./declarations.js";
 import type { I18nRef } from "./i18n.js";
-import type { PanelModel, PanelRow, SortColumn } from "./panel-model.js";
+import type { PanelModel, PanelRow, RowMark, SortColumn } from "./panel-model.js";
 
 export interface PanelControllerOptions {
   /**
@@ -25,7 +26,7 @@ const NOTIFY_BATCH = 256;
 /** A listing is either a move to a new path or a re-read of the current one. */
 type FetchMode = "navigate" | "refresh";
 
-export class PanelController {
+export class PanelController implements ChangeObserver {
   private readonly _disposers: (() => void)[] = [];
   private _handledNavigate = 0;
   private _handledRefresh = 0;
@@ -189,6 +190,8 @@ export class PanelController {
     // throwing, so an empty result is disambiguated with `stats()`.
     this.model.error = missing ? { key: "fm.listing.missing", params: { path } } : undefined;
     this.model.breadcrumbs = breadcrumbs(path);
+    // The listing is what settles the truth, so the job decorations go with it.
+    if (Object.keys(this.model.marks).length > 0) this.model.marks = {};
     this._derive();
     this.model.loading = false;
     this.model.notify();
@@ -261,10 +264,37 @@ export class PanelController {
     this.model.canGoForward = this._historyIndex < this.model.history.length - 1;
   }
 
-  /** Invalidation by path prefix — the ten lines that fan out over panels. */
-  invalidate(storage: string, path: string): void {
-    if (storage !== this.model.storage) return;
-    if (!path.startsWith(this.model.path)) return;
+  /** Read live by the notifier: a panel that navigates observes a different directory. */
+  get storage(): string {
+    return this.model.storage;
+  }
+
+  get path(): string {
+    return this.model.path;
+  }
+
+  /**
+   * One batch of changes that already matched this panel's storage and cwd. The
+   * notifier does the prefix fan-out, so this only decides what a change MEANS:
+   * mark the rows a running job is about to remove, and re-list once for the
+   * whole batch.
+   */
+  applyChanges(changes: Invalidation[]): void {
+    const known = new Set(this.model.entries.map((entry) => entry.path));
+    const marks: Record<string, RowMark> = { ...this.model.marks };
+    let marked = false;
+    for (const change of changes) {
+      // Only a job-sourced removal of a row that EXISTS: a move is the confusing
+      // case, because it appears to do nothing until it finishes.
+      if (change.kind !== "removed" || !change.jobId) continue;
+      if (!known.has(change.path)) continue;
+      marks[change.path] = { jobId: change.jobId, kind: "pending-delete" };
+      marked = true;
+    }
+    if (marked) {
+      this.model.marks = marks; // replaced, never mutated in place
+      this.model.notify();
+    }
     this._track(this.refresh());
   }
 
