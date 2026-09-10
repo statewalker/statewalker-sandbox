@@ -35,8 +35,11 @@ describe("B2 · command surface", () => {
   });
 
   it("still runs the default when nothing overrides", async () => {
-    await commands.call(todosToggle, { id: "missing" }).promise.catch(() => {});
-    expect(await api.list()).toEqual([]);
+    const { done } = await commands.call(todosToggle, { id: "missing" }).promise;
+    // Witnessed on the api, not inferred from the store: toggling a missing id is
+    // a no-op there, so the store looks identical whether the default ran or not.
+    expect(api.calls).toContain("toggle");
+    expect(done).toBe(false);
   });
 
   it("reports an unregistered command as no-handlers, not a hanging promise", async () => {
@@ -73,7 +76,7 @@ describe("B2 · command surface", () => {
     expect((await api.list()).map((t) => t.id)).toEqual(["2"]);
   });
 
-  it("carries a label and an icon on every declaration, so a menu need not be hand-written", () => {
+  it("carries a label on every declaration, so a menu need not be hand-written", () => {
     for (const decl of TODO_COMMANDS) {
       expect(decl.label, `${decl.key} needs a label`).toBeTruthy();
     }
