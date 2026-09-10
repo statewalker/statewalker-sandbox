@@ -70,6 +70,17 @@ export interface AdapterCapabilities {
   readonly canRevokeRootMidFlight: boolean;
 
   /**
+   * Does `read()` deliver a file as MORE THAN ONE chunk?
+   *
+   * `MemFilesApi` yields the whole file in a single `yield`, at any size. There
+   * is therefore no "mid-stream" in it at all, and an interruption can only land
+   * before the first chunk or after the last — which is the second, quieter
+   * reason seven rungs never observed a partial write. `NodeFilesApi` and
+   * `BrowserFilesApi` both read in 8 KiB chunks.
+   */
+  readonly readsInChunks: boolean;
+
+  /**
    * Does a transfer suspend on a macrotask, so that an abort can land INSIDE a
    * batch rather than only at a batch boundary?
    *
@@ -90,6 +101,7 @@ const CAPABILITIES: Record<AdapterId, AdapterCapabilities> = {
     honoursReadSignal: false,
     canDenyWriteMidJob: false,
     canRevokeRootMidFlight: false,
+    readsInChunks: false,
     suspendsMidBatch: false,
   },
   opfs: {
@@ -99,6 +111,7 @@ const CAPABILITIES: Record<AdapterId, AdapterCapabilities> = {
     honoursReadSignal: false,
     canDenyWriteMidJob: false,
     canRevokeRootMidFlight: true,
+    readsInChunks: true,
     suspendsMidBatch: true,
   },
   node: {
@@ -108,6 +121,7 @@ const CAPABILITIES: Record<AdapterId, AdapterCapabilities> = {
     honoursReadSignal: false,
     canDenyWriteMidJob: true,
     canRevokeRootMidFlight: true,
+    readsInChunks: true,
     suspendsMidBatch: true,
   },
 };

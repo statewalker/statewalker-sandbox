@@ -136,7 +136,20 @@ export class StorageRegistry {
     if (!entry.holders.delete(holder)) return; // unknown holder: no-op, not a decrement
     if (entry.holders.size === 0) {
       entry.api = undefined;
-      entry.status = "idle";
+      // C0.5 — A FAILED STORAGE STAYS FAILED AND REPORTABLE.
+      //
+      // `reserve()` releases its own pin when the acquisition it wrapped rejects,
+      // and that release used to reset the status to "idle", erasing the very
+      // failure P2 promises is reportable: "a failed storage is REGISTERED as
+      // failed and reportable". Reached only through `reserve()` — P2's own
+      // cases call `acquire()` directly, which never releases — so the one path
+      // that loses the report is the one the job queue takes for every job.
+      //
+      // Observed on a storage whose root was genuinely revoked: the job failed
+      // with the right reason, and `status()` then said "idle" as though nothing
+      // had happened. A later successful `acquire()` still clears it, so this
+      // holds the record exactly as long as the failure is the last thing known.
+      if (entry.status !== "failed") entry.status = "idle";
     }
   }
 
