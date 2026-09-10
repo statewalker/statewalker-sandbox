@@ -73,9 +73,12 @@ reader of that file needs.
 | `tests/browser.spec.ts` | 1 test, 6 named claims | **never executed** — see below |
 
 ```
-pnpm test         → 108 unit tests pass, then 13 claims all PASS
+pnpm test         → 108 passed | 1 skipped, then 13 claims all PASS
 pnpm typecheck    → clean (src, tests, and the browser spec in its own program)
 ```
+
+The one skipped test is deliberate and is **part of the finding**, not an exclusion: see
+"The TOFU finding" below. `tests/relay-discovery.test.ts` is 28 passing + 1 pending.
 
 **13, not 9.** Notes 08 §3 and 09 §2 both say "9/9"; note 10 §5 adds the four
 relay-discovery claims and supersedes them, and `node-verify.mjs`'s own header says
@@ -96,6 +99,14 @@ download, and neither was available here. **Nothing in this app is evidence abou
 — which is, per `mesh.ts`'s own module comment, exactly what the Node harness exists to make
 true: it removes the browser, the public relay and ICE from the picture so that a browser
 failure can be localised later.
+
+**The same trap exists in the sibling app, and the two are worth reading together.**
+`apps/httpeers-shell-protos/PROVENANCE.md` records `lib/browser-states.mjs` as **not
+runnable** — undeclared Puppeteer, a Chromium download, a `dist/states.html` fixture that does
+not exist, and a defect that must be fixed first. Two harnesses, two sessions, the same shape:
+a file that reads as browser evidence to anyone who does not open it. Note 39 of the shell
+session is the reason it matters — the 7b theme bridge passed every unit test and did not work
+in a browser.
 
 The six claims it would check, none of which is established:
 
@@ -191,7 +202,7 @@ awaiting it after the dial — 3 tests fail, including "serves BEFORE reserving,
 stream can arrive unhandled" by name. `src/mesh.ts` was restored and re-verified
 byte-identical afterwards.
 
-## The TOFU finding: ADR-0023's pin-on-first-use has no implementation
+## The TOFU finding: ADR-0023's pin-on-first-use has no implementation — umbrella #27
 
 §4 of the work order names this as mandatory before `relay-discovery.ts` moves anywhere:
 
@@ -228,27 +239,55 @@ never checked; and it is a different mechanism entirely — `httpeers-stack` rea
 `httpeers.json` from the **page's own origin**, naming both relay and hub, whereas ADR-0023's
 document is served from the **relay's** origin and names only the relay.
 
-### How the test is written, and why it is green
+### How the tests are written: two parts, because a permanently-red suite gets deleted
 
-The five tests in `tests/relay-discovery.test.ts`'s TOFU section **assert the current
-behaviour**, following the pattern `apps/httpeers-shell-protos/PROVENANCE.md` uses for the
-defects it found: "Pinned by tests that assert the current behaviour, so each will turn red
-when fixed — deliberately, so a fix cannot land silently." Each is named for the ADR
-requirement it stands in for, and the section header says in full what it does and does not
-mean.
+**Part 1 — characterisation, 5 tests, passing.** They pin what the code does today, following
+the pattern `apps/httpeers-shell-protos/PROVENANCE.md` uses for the defects it found: "Pinned
+by tests that assert the current behaviour, so each will turn red when fixed — deliberately,
+so a fix cannot land silently." Each is named for the ADR requirement it stands in for.
 
 The inversion scenario is run for real: first contact serves the attacker's peer id, the
-legitimate relay then serves its own, and the second call **resolves** where ADR-0023
-requires it to fail loud. A second test shows the identity changing back and forth with no
-complaint. A third shows two relays resolved in sequence not interfering, because neither
-writes anything down. A fourth asserts the module exports no pin store and no re-pin
-accessor — it passes by demonstrating an absence, **so a green run there must not be read as
-covering the requirement**. A fifth shows `assertPinnable` accepts the attacker's address as
-readily as the legitimate one.
+legitimate relay then serves its own, and the second call **resolves** where ADR-0023 requires
+it to fail loud. A second test shows the identity changing back and forth with no complaint. A
+third shows two relays resolved in sequence not interfering, because neither writes anything
+down. A fourth asserts the module exports no pin store and no re-pin accessor — it passes by
+demonstrating an absence, **so a green run there must not be read as covering the
+requirement**. A fifth shows `assertPinnable` accepts the attacker's address as readily as the
+legitimate one.
 
-**What was deliberately not done:** inventing a pin store to make a green test. That would
-be designing the security mechanism under cover of a test adoption, and the re-pin path
-ADR-0023 constrains is a UX decision belonging in an ADR, not in a prototype app.
+**Which of them are actually tripwires was measured, not assumed.** A throwaway pin store was
+applied to `relay-discovery.ts` and the suite re-run (then reverted, and byte-identity
+re-verified):
+
+| Test | Under an implementation that pins |
+|---|---|
+| "there is no first use…" | **RED** |
+| "trust-on-EVERY-use…" | **RED** |
+| "exports no pin store…" | RED once a re-pin accessor joins the export surface |
+| "resolveRelayAddrs is pure…" | stays green — it is not about storage |
+| "assertPinnable checks SHAPE…" | stays green — it is not about storage |
+
+So **two of the five are the tripwire**, and a third fires on an API change. The remaining two
+are characterisations that stay true under pinning; they exist to make the mechanism's absence
+legible, not to raise an alarm. The test file states this distinction in place, so nobody reads
+"5 characterisation tests" as "5 alarms".
+
+**Part 2 — one explicitly-pending test, skipped and visible in the runner output.** It quotes
+ADR-0023's Consequences clause verbatim, says in its own name that the requirement is ratified
+and **unimplemented**, cites #27, and writes out the assertions the ratified design requires —
+including that the inversion must fail loud *against the legitimate relay*. §3 of the work
+order sanctions exactly this shape: carry a known hole forward "as failing or
+explicitly-pending tests rather than silently inheriting them".
+
+`pnpm test` therefore reports `108 passed | 1 skipped` and is both green and honest: neither
+the gap nor its status is inferable-only. **The pending test must not be deleted to tidy the
+output**, and must not be made to pass by writing a pin store in this app.
+
+**What was deliberately not done:** inventing a pin store to make a green test. That would be
+designing a security mechanism under cover of a test adoption, and ADR-0023 deliberately
+constrains the re-pin path as a human-initiated decision — so it is ADR territory, which is
+why #27 is filed `ready-for-human`. Reconciling the ADR with the shipped code is routed
+separately; nothing under `docs/httpeers/` was touched here.
 
 ## A finding from the typecheck
 

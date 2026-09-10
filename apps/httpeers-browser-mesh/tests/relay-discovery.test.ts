@@ -263,44 +263,73 @@ describe("a path in the configured relay URL is silently ignored", () => {
 // ===========================================================================
 // THE TOFU INVERSION — §4 of the work order names this as mandatory before
 // `relay-discovery.ts` moves anywhere, and ADR-0023 is where the property comes
-// from.
+// from. Tracked as **umbrella #27** (`ready-for-human`).
 //
-// ADR-0023 § Consequences:
+// THE FINDING: `relay-discovery.ts` implements NO PINNING. `resolveRelayAddrs`
+// fetches the document, checks `assertPinnable`, and returns. There is no stored
+// peer id, no comparison against a previously-seen one, and no re-pin path — and
+// ADR-0023 calls "a deliberate, human-initiated re-pin path" MANDATORY.
 //
-//   "Trust becomes pin-on-first-use, and its failure mode inverts. Before the
-//    first fetch, trust rests on DNS and the certificate authority. After
-//    pinning, it equals a configured peerId. But a compromised first contact
-//    pins the *attacker's* identity permanently — and the fail-loud rule then
-//    fires against the **legitimate** relay. That is not 'degraded to no
-//    pinning'; it is locked to the attacker while loudly rejecting the real
-//    one. A deliberate, human-initiated re-pin path is therefore mandatory, and
-//    it must never be triggered by the relay, the document, or a field inside
-//    it."
+// So the inversion ADR-0023 describes cannot be demonstrated against this code,
+// for the plain reason that **there is nothing to invert**. Three consequences,
+// and the second is the one that matters:
 //
-// READ THIS BEFORE CHANGING ANY TEST BELOW.
+//   1. There is no first use to pin on, so this is trust-on-EVERY-use. An
+//      attacker who controls the document at ANY moment substitutes the relay's
+//      identity, not only one who controls first contact — so the exposure is
+//      WIDER than the ADR's own worst case, not narrower.
+//   2. The fail-loud rule CANNOT FIRE, because there is no stored value to
+//      compare against. The failure mode is not "the inversion happens"; it is
+//      that there is nothing to invert.
+//   3. The mandatory re-pin path does not exist, because nothing is pinned. The
+//      module's export surface has nowhere to put one.
 //
-// `relay-discovery.ts` implements NO PINNING. `resolveRelayAddrs` fetches,
-// checks `assertPinnable`, and returns. There is no stored peer id, no
-// comparison against a previously-seen one, and no re-pin path. So the
-// inversion ADR-0023 describes **cannot be demonstrated against this code**,
-// for the plain reason that there is nothing to invert — and writing a test
-// that appeared to demonstrate it would mean mocking a pin store that does not
-// exist, which is how a suite comes to assert a design instead of a program.
+// `assertPinnable` IS NOT THE PIN, and this is the whole finding. It makes an
+// address *pinnable* — exactly one peer id, so Noise can verify it on that dial.
+// That is PER-DIAL AUTHENTICATION and says nothing across time. Note 10 §2's
+// "that peer id is … what the client pins" is true of Noise and NOT of storage,
+// and someone will re-read that sentence and conclude the property is covered.
 //
-// What the tests below do instead, following the pattern
-// `apps/httpeers-shell-protos/PROVENANCE.md` uses for the open defects it
-// found: they assert the CURRENT behaviour, so that **each one turns red the
-// moment pinning is implemented** — deliberately, so the fix cannot land
-// silently and whoever lands it is made to come back here and state the new
-// contract. Each is named for the ADR requirement it is standing in for.
+// ---------------------------------------------------------------------------
+// THE FORM, IN TWO PARTS, and why it is not one permanently-red test.
 //
-// `assertPinnable` is not pinning. It makes an address *pinnable* — exactly one
-// peer id, so Noise can verify it on that dial. That is per-dial
-// authentication, and it says nothing across time. Note 10 §2's "it is what the
-// client pins" is true of Noise, not of storage.
+// A permanently-red suite gets ignored and then deleted, so the gap is split:
+//
+//   PART 1 — CHARACTERISATION. Tests that pin what the code actually does
+//     today, so a change of contract cannot land silently. Same pattern
+//     `apps/httpeers-shell-protos/PROVENANCE.md` uses for the defects it found.
+//
+//     WHICH OF THEM ARE ACTUALLY TRIPWIRES — measured, not assumed, by applying
+//     a throwaway pin store and watching the suite (see PROVENANCE.md):
+//       * "there is no first use…"        → RED. Any implementation that pins an
+//       * "trust-on-EVERY-use…"             identity and refuses a change fails
+//                                           both of these. These two are THE
+//                                           tripwire.
+//       * "exports no pin store…"         → RED only once a re-pin accessor is
+//                                           added to the module surface.
+//       * "resolveRelayAddrs is pure…"    → stays green under pinning, because
+//       * "assertPinnable checks SHAPE…"    neither is about storage. They are
+//                                           characterisations, not tripwires,
+//                                           and are here to make the mechanism's
+//                                           absence legible.
+//
+//   PART 2 — ONE EXPLICITLY-PENDING TEST naming the ratified requirement, so it
+//     is visible in the runner output rather than silently absent. The work
+//     order sanctions this shape directly: §3's SH-1 says to "carry the two
+//     known holes forward as failing or explicitly-pending tests rather than
+//     silently inheriting them".
+//
+// `pnpm test` therefore stays green and honest, and neither the gap nor its
+// status is inferable-only.
+//
+// WHAT WAS DELIBERATELY NOT DONE: inventing a pin store to make a green test.
+// That would be designing a security mechanism under cover of a test adoption,
+// and ADR-0023 deliberately constrains the re-pin path as a human-initiated
+// decision — so it is ADR territory, and not a thing a test adoption gets to
+// settle. Hence #27 is `ready-for-human`.
 // ===========================================================================
 
-describe("TOFU: ADR-0023's pin-on-first-use is NOT implemented (pinned, so a fix cannot land silently)", () => {
+describe("TOFU part 1 — CHARACTERISATION: what the code does today (red when pinning lands)", () => {
   it("there is no first use: a changed peer id is accepted on the second call, not refused", async () => {
     // THE INVERSION SCENARIO, run for real. First contact is compromised and
     // serves the attacker's peer id; the legitimate relay then answers with its
@@ -378,5 +407,60 @@ describe("TOFU: ADR-0023's pin-on-first-use is NOT implemented (pinned, so a fix
     expect(() => assertPinnable(ATTACKER, "src")).not.toThrow();
     // It takes no expected identity, and there is no overload that does.
     expect(assertPinnable.length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PART 2 — the explicitly-pending test. One test, skipped, naming the ratified
+// requirement so it appears in the runner output as pending rather than being
+// absent and therefore inferable only from prose.
+//
+// DO NOT DELETE THIS TO TIDY THE OUTPUT, and do not make it pass by writing a
+// pin store here. It is skipped because the mechanism it asserts DOES NOT EXIST
+// — see umbrella #27 — not because it is flaky, slow, or superseded.
+//
+// WHEN PINNING IS IMPLEMENTED: remove `.skip`, and expect every test in part 1
+// above to go red at the same time. That is deliberate. Their redness is the
+// signal that this file's contract changed.
+// ---------------------------------------------------------------------------
+
+describe("TOFU part 2 — PENDING: the requirement ADR-0023 ratified", () => {
+  it.skip("PENDING (umbrella #27, ratified but UNIMPLEMENTED): a compromised first contact pins the attacker permanently, and the fail-loud rule then fires against the legitimate relay", async () => {
+    // ADR-0023 § Consequences, verbatim:
+    //
+    //   "Trust becomes pin-on-first-use, and its failure mode inverts. Before
+    //    the first fetch, trust rests on DNS and the certificate authority.
+    //    After pinning, it equals a configured peerId. But a compromised first
+    //    contact pins the *attacker's* identity permanently — and the fail-loud
+    //    rule then fires against the **legitimate** relay. That is not
+    //    'degraded to no pinning'; it is locked to the attacker while loudly
+    //    rejecting the real one. A deliberate, human-initiated re-pin path is
+    //    therefore mandatory, and it must never be triggered by the relay, the
+    //    document, or a field inside it."
+    //
+    // `src/relay-discovery.ts` implements none of this. The assertions below
+    // are what the ratified design requires, written out so that the
+    // requirement is executable the day the mechanism exists — and so that
+    // what is missing is legible here rather than only in prose.
+    let current = ATTACKER;
+    const url = await serveDocument(() => ({ relayAddrs: [current] }));
+
+    // First contact, compromised. Under pin-on-first-use this is the moment
+    // the attacker's identity is pinned, permanently.
+    expect(await resolveRelayAddrs(url)).toEqual([ATTACKER]);
+
+    // The legitimate relay now answers with its own, correct identity.
+    current = LEGIT;
+
+    // THE INVERSION: this must FAIL LOUD, and it must fail against the
+    // LEGITIMATE relay, naming the pinned peer id it was expecting. Anything
+    // quieter — resolving, or falling back to "no pinning" — is the failure
+    // ADR-0023 says this is "not".
+    await expect(resolveRelayAddrs(url)).rejects.toThrow(/pinned/i);
+
+    // And the only way back is a deliberate, human-initiated re-pin. There is
+    // no such export today, which is why this test is pending and not merely
+    // failing — the assertion cannot even be written against the current
+    // module surface without inventing the API it is meant to check.
   });
 });

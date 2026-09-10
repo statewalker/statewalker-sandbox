@@ -1,13 +1,30 @@
 # httpeers-browser-mesh
 
-> **What is evidence here, and what is not.** The 13 adopted claims run two real libp2p peers
-> over a circuit relay on loopback, and they pass. **`pnpm test:browser` has never been run —
-> not by the session that wrote it, and not here** — so nothing in this app is evidence about
-> a browser, which is the thing it is named after. `src/hub.ts` duplicates
-> `packages/httpeers.core` and `apps/httpeers-stack/src/hub/` deliberately and must not be
-> promoted. `src/relay-discovery.ts` is the exception to all of this: it is **live, deployed
-> code**, and the TOFU section below is about a ratified security requirement it does not
-> implement.
+> ## ⚠ `tests/browser.spec.ts` HAS NEVER BEEN RUN. There is no browser coverage here.
+>
+> Not by the session that wrote it, and not by this adoption. Its own header, unchanged:
+>
+> > **STATUS 7 September 2026: WRITTEN AND TYPECHECKED, NEVER RUN.** The machine it was
+> > authored on reaches only npm and GitHub, so relay.httpeers.net was unreachable from it.
+> > Treat the first run as the real test.
+>
+> **An unexecuted Playwright spec sitting in a repo reads as browser coverage to everyone who
+> does not open it.** That is the same trap as `apps/httpeers-shell-protos`'s
+> `lib/browser-states.mjs`, which that app's `PROVENANCE.md` records as **not runnable** —
+> undeclared Puppeteer, a Chromium download, a `dist/states.html` fixture that does not exist,
+> and a defect that has to be fixed first. Two harnesses, two repos, the same shape: a file
+> that looks like evidence and is not. Cross-referenced deliberately.
+>
+> What IS evidence: the **13 adopted claims**, which run two real libp2p peers over a circuit
+> relay this repo starts on loopback, and pass. `mesh.ts`'s own module comment says that is the
+> point — the Node harness removes the browser, the public relay and ICE from the picture, so
+> that a browser failure can later be localised rather than guessed at. The isomorphism claim
+> itself remains unasserted.
+>
+> Two more things before you read further. **`src/hub.ts` must never be promoted** — it
+> duplicates `packages/httpeers.core` and `apps/httpeers-stack/src/hub/` on purpose; see
+> "What this duplicates". And **`src/relay-discovery.ts` is live, deployed code**, whose
+> ratified pin-on-first-use requirement it does not implement — **umbrella #27**.
 
 Two in-browser peers meeting over a relay: one tab declares itself a hub, the other joins by
 invitation, and **each consumes a resource the other provides**. Neither tab installs
@@ -81,7 +98,7 @@ Note 08 §7 also re-encounters the libp2p 2.x/3.x trap that MESH-1 met: 3.x hand
 handlers `(stream, connection)`, and destructuring the 2.x `{ stream }` produces a silent
 timeout at the *dialer*. Here it is `serveConnections` that absorbs it.
 
-## The TOFU inversion: a ratified requirement with no implementation
+## The TOFU inversion: a ratified requirement with no implementation (umbrella #27)
 
 §4 of the work order names one test as mandatory before `relay-discovery.ts` moves anywhere —
 the TOFU inversion from [ADR-0023](../../../../docs/httpeers/adr/0023-the-relay-describes-itself-and-nothing-else.md):
@@ -105,17 +122,39 @@ consequences are not milder than the ADR describes but **worse**:
 Noise can verify it on that dial). That is per-dial authentication and says nothing across
 time.
 
-The five tests in the TOFU section of `tests/relay-discovery.test.ts` therefore **assert the
-current behaviour**, each named for the requirement it stands in for, so that **every one of
-them turns red the moment pinning is implemented** — deliberately, so the fix cannot land
-silently and whoever lands it has to come back and state the new contract. The inversion
-scenario is run for real: the attacker's document first, the legitimate relay's second, and
-the second call resolves where the ADR requires it to fail loud. Read that section's comment
-before changing anything in it.
+`tests/relay-discovery.test.ts` carries this in **two parts**, because a permanently-red suite
+gets ignored and then deleted:
 
-A pin store was **not** invented to make the test green. That would be designing the security
-mechanism under cover of a test adoption, and the re-pin path ADR-0023 constrains is an ADR
-decision.
+**Part 1 — characterisation (5 tests, passing).** They pin what the code does today, so a
+change of contract cannot land silently. The inversion scenario is run for real: the
+attacker's document first, the legitimate relay's second, and the second call **resolves**
+where the ADR requires it to fail loud. Which of them are actually tripwires was *measured*,
+by applying a throwaway pin store and watching the suite — not assumed:
+
+| Test | Under an implementation that pins |
+|---|---|
+| "there is no first use…" | **red** |
+| "trust-on-EVERY-use…" | **red** |
+| "exports no pin store…" | red once a re-pin accessor is added |
+| "resolveRelayAddrs is pure…" | stays green — not about storage |
+| "assertPinnable checks SHAPE…" | stays green — not about storage |
+
+So the tripwire is the first two. The other three make the absence legible; they are
+characterisations, not alarms, and the file says so in place.
+
+**Part 2 — one explicitly-pending test (skipped, visible in the runner).** It quotes
+ADR-0023's Consequences clause in full, states that the requirement is ratified and
+unimplemented, cites #27, and spells out the assertions the ratified design requires — so the
+gap appears in `pnpm test`'s output rather than being inferable only from prose. §3 of the
+work order sanctions exactly this shape: carry a known hole forward "as failing or
+explicitly-pending tests rather than silently inheriting them".
+
+`pnpm test` therefore stays green and honest. **Do not delete the pending test to tidy the
+output**, and do not make it pass by writing a pin store here.
+
+A pin store was **not** invented to make a green test. That would be designing a security
+mechanism under cover of a test adoption, and ADR-0023 deliberately constrains the re-pin path
+as a human-initiated decision — so it is ADR territory, which is why #27 is `ready-for-human`.
 
 ## What this duplicates, and what it does not
 

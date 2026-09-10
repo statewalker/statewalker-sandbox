@@ -72,6 +72,47 @@ by a real transport; each says so in place.
 `PROVENANCE.md` is the index: which files are recovered byte-for-byte (with sha256s), the
 single documented delta, what was deliberately not adopted, and the full mutation table.
 
+## Findings about `packages/httpeers.core`, filed and reproducible
+
+The M6b result below — that a node dialling without registering the protocol is capped at
+libp2p's default 64 outbound streams — prompted a check of whether the same blind spot is in
+the shipped descendant. **It is not**: `createRemote` passes `maxOutboundStreams` as a
+per-dial option into `node.dialProtocol` via `connect()`, rather than relying on a
+`node.handle` registration, and `concurrency.test.ts` already covers a dial-only client that
+never calls `serveTransport`. That question is closed.
+
+The check turned up three other things, all about `packages/httpeers.core`, **none of which
+was modified here**:
+
+| | |
+|---|---|
+| **umbrella #28** | A wide burst of concurrent calls on a connection where **no request has yet completed** fails wholesale — **0 of 100, in 5 runs out of 5**; one completed request on that connection first and the same burst is **100 of 100, 5 out of 5**. Includes the config hazard: `maxOutboundStreams` set below `maxConcurrentOutbound` brings back the cliff the semaphore exists to remove, and nothing enforces that the two move together. |
+| **umbrella #29** | `UnexpectedEOFError` reaches `kind: "unknown"` through `mapPeerCallError`, whose stated contract is "a `PeerCallError`, never a raw transport exception". `errors.ts` already has a narrowed branch for the adjacent `HttpParseError` condition. Filed separately from #28 on purpose: fixing the taxonomy does not fix the burst. |
+
+```bash
+pnpm install --filter @statewalker/httpeers.core...
+pnpm --filter @statewalker/httpeers.core exec tsx \
+  ../../apps/httpeers-wire-protos/tools/repro-cold-burst.mts
+```
+
+`tools/repro-cold-burst.mts` is the #28 reproduction. It is **not a test** and is in no suite:
+it runs against the shipped `transport-duplex.ts`, prints the four probes, and exits 0 only if
+the failure reproduces — so a later clean run registers as a change rather than a quiet pass.
+Its header carries the exact versions, why the suite does not catch it (nothing in those 11
+test files fires more than 9 concurrent calls), and both other observations.
+
+**The mechanism is not established and the repro does not guess at one.** Three things hold
+across all five runs — the first cold burst fails, the second cold burst fails, a warm burst
+passes — and one thing explicitly does not: a cold burst that follows a *successful* burst in
+the same process is **variable** (0/100 in 2 runs, 100/100 in 3; roughly even over ten). So the
+precondition is not purely per-connection and something process-wide participates. What that is
+has not been determined, and no cause is offered.
+
+The script's exit status gates on the deterministic three **only**. Gating on the variable
+fourth would have produced a reproduction that "fails" about half the time for a reason that is
+not the bug — the row is printed every run and never asserted. That correction came from
+running it: the first version gated on all three cold bursts and exited 1 on its second run.
+
 ## Re-running the mutation pass
 
 ```bash

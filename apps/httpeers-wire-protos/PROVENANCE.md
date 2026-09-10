@@ -165,6 +165,20 @@ bytes. A transport that silently reverted to buffering would be caught.
 
 ### The M6b finding, stated separately because it is not just a surviving mutation
 
+**Checked against the shipped descendant, and CLOSED there.** `transport-duplex.ts`'s
+`createRemote` passes `maxOutboundStreams` as a **per-dial option** into
+`node.dialProtocol(peer, [proto], dialOptions)` by way of `connect()`
+(`webrun-streams-libp2p@0.1.1`, `dist/index.js:270`), instead of relying on a `node.handle`
+registration the way `serveWire` does below — and `packages/httpeers.core/tests/concurrency.test.ts`
+already exercises exactly the configuration at issue, since its `clientA` is `node(false)` and
+never calls `serveTransport`. Measured, dial-only client, 100 concurrent: the default 512 is in
+force (100/100), and lowering the cap to 64 reproduces libp2p's own ceiling (64/100,
+`stream-reset`). So this prototype's blind spot did not survive into the shipped code.
+
+The same check found three *other* things in that package, filed as **umbrella #28** and
+**#29** and reproducible via `tools/repro-cold-burst.mts` — see README.md, "Findings about
+`packages/httpeers.core`". Nothing in that package was modified.
+
 Measured on libp2p 3.3.8 while closing it: a node that **dials** `/httpeers/1.0.0` without
 having **registered** it is capped at libp2p's own default of **64** concurrent outbound
 streams — the 65th rejects with `TooManyOutboundProtocolStreamsError`. A node that has
