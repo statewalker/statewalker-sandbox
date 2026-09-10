@@ -105,7 +105,13 @@ export class TodoListModel extends BaseClass {
     this.notify();
   }
 
-  /** One intention, one notify — the list and its outcome never disagree on screen. */
+  /**
+   * The outcome of the controller's latest piece of work: a failure's message,
+   * or `undefined` once work has succeeded since. Written by the controller at
+   * the END of a run, after the list — so a subscriber can see the new list
+   * beside the previous outcome for one synchronous notify. A combined mutator
+   * would close that; it is not needed until a view renders both from one read.
+   */
   reportOutcome(outcome: string | undefined): void {
     if (this.lastOutcome === outcome) return; // no field change, no update
     this.lastOutcome = outcome;

@@ -4,6 +4,9 @@ import { type TodoApi, todosAdd } from "@todo/core";
 import type { TodoListModel } from "./todo-model.js";
 import { ViewsReady } from "./views-ready.js";
 
+/** What a failure says to the user. A `CommandError`'s message already names its kind and key. */
+const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
 /**
  * Owns the external service and the bus; never sees a view.
  *
@@ -14,10 +17,23 @@ import { ViewsReady } from "./views-ready.js";
  * It subscribes to `model.input` and writes `model` — never the reverse — so
  * its own writes cannot wake it. That is the whole reason the input sub-model
  * exists, and `expectNoSelfWake` asserts both halves of it.
+ *
+ * ERROR POLICY. Every piece of work runs inside `_reconcile()`, which is fired
+ * with `void` from a channel callback — so a rejection escaping it has nowhere
+ * to go but the process, and nothing reaches the user. Therefore nothing
+ * escapes: each failure is caught where it happens and reported through the
+ * outer model's `reportOutcome` (the mutator that exists for exactly this), and
+ * a watermark moves only once the work it stands for has actually landed.
  */
 export class ListController {
   private readonly _registry = newRegistry();
-  private _handledRefresh = 0;
+  /**
+   * The `refreshCount` the model's list last reflects. Starts at -1, "nothing
+   * loaded yet", so the initial load is not a special path: it is the first
+   * refresh owed, reconciled by the same loop, under the same error policy —
+   * and a failed initial load stays owed, exactly like a failed refresh.
+   */
+  private _handledRefresh = -1;
   /**
    * True while a `_reconcile()` run is in flight — what makes coalescing
    * leading + trailing rather than absent. `notify()` is synchronous (spec:
@@ -73,7 +89,8 @@ export class ListController {
         void this._reconcile();
       }),
     );
-    void this._reload();
+    // The initial load: `_handledRefresh` starts below any `refreshCount`.
+    void this._reconcile();
   }
 
   async dispose(): Promise<void> {
@@ -88,10 +105,22 @@ export class ListController {
    * same tick, or from `takePending()`'s own notify) folds into that run instead
    * of starting a second one — the running loop re-reads both edges after every
    * await, so nothing it would have done is lost.
+   *
+   * Never rejects. Its callers `void` it, so a failure is reported through the
+   * model instead: once, at the end of the run, as the outcome of the work the
+   * run did. A run that did work and hit no failure clears the outcome, because
+   * the failure it described is no longer the latest word; a run that did
+   * nothing leaves it alone.
    */
   private async _reconcile(): Promise<void> {
     if (this._reconciling) return;
     this._reconciling = true;
+    let failure: string | undefined;
+    let didWork = false;
+    // A reload that failed is not retried within the same run: the backend is
+    // down, and looping on it would spin. It stays OWED (the watermark did not
+    // move), so the next run — one bump, or any other edge — repays it.
+    let refreshFailed = false;
     try {
       let again = true;
       while (again) {
@@ -103,10 +132,19 @@ export class ListController {
         // controller never assigns the field and never notifies (spec §4.8).
         const batch = input.takePending();
         if (batch.length > 0) {
+          didWork = true;
           for (const item of batch) {
-            await this._commands.call(todosAdd, { title: item.title }).promise;
+            try {
+              await this._commands.call(todosAdd, { title: item.title }).promise;
+            } catch (error) {
+              // Not retried: a rejected payload (the schema, a host's veto) is
+              // rejected again. It is taken off the queue and the user is told
+              // which one — the title rides in the outcome, so it is not lost.
+              failure ??= `add "${item.title}" failed: ${reason(error)}`;
+            }
           }
-          await this._reload();
+          const reloaded = await this._reload();
+          if (!reloaded.ok) failure ??= reloaded.failure;
           again = true; // more may have been queued while we were awaiting
         }
 
@@ -119,20 +157,44 @@ export class ListController {
         // do this: notify() is synchronous, so all five pulses clear the
         // watermark before any of them awaits — the `_reconciling` guard above
         // is what turns the extra synchronous calls into the single follow-up.
-        if (input.refreshCount > this._handledRefresh) {
-          this._handledRefresh = input.refreshCount;
-          await this._reload();
-          again = true;
+        if (!refreshFailed && input.refreshCount > this._handledRefresh) {
+          didWork = true;
+          // Captured BEFORE the await, committed only AFTER it succeeds. Bumps
+          // arriving mid-flight stay above `target`, so they earn the trailing
+          // pass; and a reload that throws leaves the watermark where it was,
+          // so the refresh is still owed rather than falsely marked as done.
+          const target = input.refreshCount;
+          const reloaded = await this._reload();
+          if (reloaded.ok) {
+            this._handledRefresh = target;
+          } else {
+            refreshFailed = true;
+            failure ??= reloaded.failure;
+          }
+          again = true; // we awaited: anything may have arrived meanwhile
         }
       }
+    } catch (error) {
+      // Nothing above should throw — every await is guarded — but the policy
+      // is "nothing escapes a `void`", not "nothing escapes that we foresaw".
+      failure ??= `reconcile failed: ${reason(error)}`;
+      didWork = true;
     } finally {
       this._reconciling = false;
     }
+    if (didWork) this._model.reportOutcome(failure);
   }
 
-  private async _reload(): Promise<void> {
+  /** Never rejects: a failed list is a result, so the caller decides what it means. */
+  private async _reload(): Promise<{ ok: true } | { ok: false; failure: string }> {
     this.debug.reloads++;
-    // One mutator, one notify. The controller does not know the field layout.
-    this._model.replaceTodos(await this._api.list());
+    try {
+      const todos = await this._api.list();
+      // One mutator, one notify. The controller does not know the field layout.
+      this._model.replaceTodos(todos);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, failure: `reload failed: ${reason(error)}` };
+    }
   }
 }
