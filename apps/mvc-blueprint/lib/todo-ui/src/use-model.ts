@@ -36,8 +36,26 @@ export function useModel<M extends BaseClass, T>(
   // A ref, not state: writing it is a caching side effect of computing the
   // snapshot, not a change this component should ever render for. Wrapped in
   // an object so "no snapshot cached yet" is distinguishable from "the cached
-  // value is `undefined`".
-  const cache = useRef<{ value: T } | undefined>(undefined);
+  // value is `undefined`", and keyed by MODEL, not just value: a component
+  // instance can be re-pointed at a different model (the dock shell's
+  // central case — a panel re-pointed at a new model as it comes and goes)
+  // without unmounting, and two different models can legitimately produce
+  // `isEqual` values (two empty lists, under `shallowEqual`, is the obvious
+  // case). Comparing only `cached.value` against `next` would then return
+  // the OLD model's cached reference and never sample the new model at all
+  // — a stale read that self-corrects only once the new model changes for
+  // real, which is exactly what made it easy to miss.
+  //
+  // `selector` is deliberately NOT part of the cache key. Every call site
+  // passes an inline arrow (that is the whole reason this hook exists — see
+  // the module doc), so keying on selector identity would make every render
+  // a cache miss and reintroduce the fresh-array-every-call loop this hook
+  // exists to prevent. The contract this relies on: `selector` must be
+  // semantically stable for a given model (the same projection of the same
+  // model), which holds for every selector in this codebase (`m =>
+  // m.lastOutcome`, `m => m.visible()`, …) — none of them close over
+  // anything besides their parameter.
+  const cache = useRef<{ model: M; value: T } | undefined>(undefined);
 
   // Only `model` in the dependency list: `onUpdate` is a bound arrow field
   // (base-class.ts), stable for the model's lifetime, so this need not — and
@@ -47,10 +65,10 @@ export function useModel<M extends BaseClass, T>(
   const getSnapshot = useCallback((): T => {
     const next = selector(model);
     const cached = cache.current;
-    if (cached !== undefined && isEqual(cached.value, next)) {
+    if (cached !== undefined && cached.model === model && isEqual(cached.value, next)) {
       return cached.value;
     }
-    cache.current = { value: next };
+    cache.current = { model, value: next };
     return next;
   }, [model, selector, isEqual]);
 

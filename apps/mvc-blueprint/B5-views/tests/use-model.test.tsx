@@ -143,6 +143,41 @@ describe("useModel", () => {
     expect(values[1]).toEqual([a, b, c]);
   });
 
+  it("REGRESSION: samples the new model immediately after a model swap, even when the new value satisfies isEqual against the old cached value", async () => {
+    // Two DIFFERENT model instances, both with an empty visible list. Under
+    // shallowEqual, [] and [] are "equal" — which is exactly the trap: a
+    // cache keyed only on the VALUE (not the model) would happily hand back
+    // modelA's cached empty array after the component is re-pointed at
+    // modelB, and nothing would ever notice, because an empty array looks
+    // the same regardless of which model produced it.
+    const modelA = new TodoListModel();
+    const modelB = new TodoListModel();
+    const selector = (m: TodoListModel) => m.visible();
+
+    const values: Todo[][] = [];
+    await mount(createElement(Probe, { model: modelA, selector, isEqual: shallowEqual, values }), values);
+    expect(values).toHaveLength(1);
+    const cachedFromA = values[0];
+
+    // Re-render the SAME component instance — same hook state, same
+    // `cache` ref — but pointed at modelB. This is the dock-shell case: a
+    // panel is re-pointed at a different model without unmounting.
+    root!.render(createElement(Probe, { model: modelB, selector, isEqual: shallowEqual, values }));
+    await waitFor(() => values.length >= 2);
+
+    // The value used for THIS render must be a fresh sample of modelB, not
+    // modelA's stale cached reference — even though shallowEqual([], [])
+    // is true, so a model-blind cache would (wrongly) call it a "hit".
+    expect(values[1]).not.toBe(cachedFromA);
+    expect(values[1]).toEqual(modelB.visible());
+
+    // It also self-corrects on the next real change to B, which is the
+    // part that made this bug easy to miss in the first place.
+    modelB.replaceTodos([todo("1", "buy milk")]);
+    await waitFor(() => values.length >= 3);
+    expect(values[2]).toEqual([todo("1", "buy milk")]);
+  });
+
   it("PROVES the comparator is load-bearing: the same derived selector with the default Object.is either throws React's getSnapshot-loop guard or warns about it", async () => {
     const model = new TodoListModel();
     model.replaceTodos([todo("1", "buy milk"), todo("2", "walk dog")]);
