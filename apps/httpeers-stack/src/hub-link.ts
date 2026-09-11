@@ -78,6 +78,20 @@ export async function reserveOnHub(node: Libp2p, hubPeerId: string): Promise<str
   return reserved;
 }
 
+/**
+ * Close this member's connection to the public relay, once its hub link is
+ * up. A member holds no reservation there any more, and other members reach
+ * it through the hub, so the socket would only spend the relay's capacity.
+ * It is reopened on demand: `reachHub` dials through the relay whenever the
+ * hub has to be reached again.
+ */
+export async function leaveRelay(node: Libp2p, relayAddr: string): Promise<void> {
+  const relayPeerId = multiaddr(relayAddr)
+    .getComponents()
+    .findLast((c) => c.name === "p2p")?.value;
+  if (relayPeerId != null) await node.hangUp(peerIdFromString(relayPeerId));
+}
+
 export interface SuperviseHubReservationInit {
   node: Libp2p;
   /** The public relay the hub is reached through -- `reachHub`'s. */

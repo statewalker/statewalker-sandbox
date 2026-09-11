@@ -21,10 +21,17 @@ import { generateKeyPair } from "@libp2p/crypto/keys";
 import { multiaddr } from "@multiformats/multiaddr";
 import type { Libp2p } from "@statewalker/httpeers.core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createRouteEnsurer } from "../../src/browser/join.js";
 import { createBrowserNode } from "../../src/browser/node-profile.js";
 import { startHub } from "../../src/hub/main.js";
 import { createHubNode } from "../../src/hub/node-profile.js";
-import { hubRoute, reachHub, reserveOnHub, superviseHubReservation } from "../../src/hub-link.js";
+import {
+  hubRoute,
+  leaveRelay,
+  reachHub,
+  reserveOnHub,
+  superviseHubReservation,
+} from "../../src/hub-link.js";
 import { type Relay, startRelay } from "../../src/relay/main.js";
 import {
   dialRelay,
@@ -199,4 +206,71 @@ describe("startHub", () => {
       await running.stop();
     }
   }, 40_000);
+});
+
+describe("a member page's side", () => {
+  /** A and B, both members, both reserved on the hub. */
+  async function twoMembers(): Promise<[Libp2p, Libp2p]> {
+    const a = await member();
+    const b = await member();
+    for (const node of [a, b]) {
+      members.add(node.peerId.toString());
+      await reachHub(node, relayAddr, hubId);
+      await reserveOnHub(node, hubId);
+    }
+    return [a, b];
+  }
+
+  it("does not reserve on the public relay", async () => {
+    // Members are reached through their hub now, so a reservation on the
+    // public relay would only spend the relay's capacity. Connected to the
+    // relay (reaching the hub goes through it), a member must still hold
+    // no circuit address of its own.
+    const a = await member();
+    members.add(a.peerId.toString());
+    await reachHub(a, relayAddr, hubId);
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+    expect(a.getMultiaddrs().filter((addr) => addr.toString().includes("/p2p-circuit"))).toEqual(
+      [],
+    );
+  }, 30_000);
+
+  it("routes a call to another member through the hub, whatever that member advertises", async () => {
+    // What the mesh view carries for B is B's own getMultiaddrs() -- and
+    // with a reservation on the hub, that is an undialable double-circuit
+    // address. The route must be composed through the hub instead.
+    const [a, b] = await twoMembers();
+    const B = b.peerId.toString();
+    const ensureRoute = createRouteEnsurer({
+      node: a,
+      relayAddr,
+      selfPeerId: a.peerId.toString(),
+      hubPeerId: hubId,
+      meshView: () => ({
+        version: 1,
+        self: a.peerId.toString(),
+        members: [
+          { peerId: B, roles: ["member"], online: true, addrs: b.getMultiaddrs().map(String) },
+        ],
+        advertisements: [],
+      }),
+    });
+
+    await ensureRoute(B);
+
+    const direct = a.getConnections(b.peerId).find((conn) => conn.limits == null);
+    expect(direct?.remoteAddr.toString()).toContain("/webrtc");
+  }, 30_000);
+
+  it("stays reachable through its hub after leaving the public relay", async () => {
+    const [a, b] = await twoMembers();
+    const relayPeer = relay.node.peerId;
+
+    await leaveRelay(b, relayAddr);
+
+    expect(b.getConnections(relayPeer).length).toBe(0);
+    const conn = await a.dial(multiaddr(hubRoute(hubId, b.peerId.toString())));
+    expect(conn.limits).toBeUndefined();
+  }, 30_000);
 });

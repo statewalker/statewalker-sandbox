@@ -137,7 +137,11 @@ export async function createBrowserNode(init: CreateBrowserNodeInit): Promise<Li
 
   return createLibp2p({
     privateKey,
-    addresses: { listen: ["/p2p-circuit", "/webrtc"] },
+    // ONLY A HUB RESERVES ON THE PUBLIC RELAY. A member is reached through
+    // its hub (`../hub-link.ts`), so it listens for WebRTC upgrades and
+    // nothing else; a `/p2p-circuit` entry here would make libp2p reserve on
+    // the first relay it meets -- the public one -- and spend its capacity.
+    addresses: { listen: init.isMember != null ? ["/p2p-circuit", "/webrtc"] : ["/webrtc"] },
     transports: [webSockets(), webRTC(), circuitRelayTransport()],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],
