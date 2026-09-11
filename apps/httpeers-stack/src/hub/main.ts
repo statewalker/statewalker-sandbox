@@ -281,7 +281,16 @@ export async function startHub(init: StartHubInit = {}) {
   // "THE HUB IS REACHED THROUGH THE RELAY" note. `ownsNode` mirrors
   // `httpeers.core`'s own rule for the same word: whoever built it stops it.
   const suppliedNode = init.node;
-  const node = suppliedNode ?? (await createHubNode({ privateKey, listen: init.listen ?? [] }));
+  // THE HUB RELAYS FOR ITS OWN MEMBERS -- signalling only, gated on the
+  // member store read live, so a revoked member loses the relay on its next
+  // request. See `../hub-relay.ts`.
+  const node =
+    suppliedNode ??
+    (await createHubNode({
+      privateKey,
+      listen: init.listen ?? [],
+      isMember: (peerId) => persistent.memberStore.get(peerId) != null,
+    }));
   const ownsNode = suppliedNode == null;
 
   /** Stop the node if and only if this function built it. Used by both `startFailed` and `stop()`. */

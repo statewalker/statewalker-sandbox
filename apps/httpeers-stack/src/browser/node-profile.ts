@@ -37,7 +37,8 @@ import { identify } from "@libp2p/identify";
 import { webRTC } from "@libp2p/webrtc";
 import { webSockets } from "@libp2p/websockets";
 import type { Ed25519PrivateKey, Libp2p } from "@statewalker/httpeers.core";
-import { createLibp2p } from "libp2p";
+import { createLibp2p, type ServiceFactoryMap } from "libp2p";
+import { hubRelayServer, type IsMember, membershipGater } from "../hub-relay.js";
 import { loadOrCreateIdentity } from "./identity.js";
 
 /**
@@ -115,6 +116,12 @@ export interface CreateBrowserNodeInit {
    * are the same key rather than two reads that happen to agree.
    */
   privateKey?: Ed25519PrivateKey;
+  /**
+   * Makes this node a HUB: it relays signalling for the peers this answers
+   * true for, and for nobody else. See `../hub-relay.ts`. Only the hub page
+   * passes it.
+   */
+  isMember?: IsMember;
 }
 
 /**
@@ -134,9 +141,19 @@ export async function createBrowserNode(init: CreateBrowserNodeInit): Promise<Li
     transports: [webSockets(), webRTC(), circuitRelayTransport()],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],
-    connectionGater: init.dev ? { denyDialMultiaddr: async () => false } : undefined,
-    services: { identify: identify() },
+    connectionGater: {
+      ...(init.dev ? { denyDialMultiaddr: async () => false } : {}),
+      ...(init.isMember != null ? membershipGater(init.isMember) : {}),
+    },
+    services: nodeServices(init.isMember),
   });
+}
+
+/** The relay service only on a hub, and only behind its membership test. */
+function nodeServices(isMember: IsMember | undefined): ServiceFactoryMap {
+  return isMember != null
+    ? { identify: identify(), relay: hubRelayServer() }
+    : { identify: identify() };
 }
 
 /**

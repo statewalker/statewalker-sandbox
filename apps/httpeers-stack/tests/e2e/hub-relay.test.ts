@@ -22,6 +22,7 @@ import { multiaddr } from "@multiformats/multiaddr";
 import type { Libp2p } from "@statewalker/httpeers.core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBrowserNode } from "../../src/browser/node-profile.js";
+import { startHub } from "../../src/hub/main.js";
 import { createHubNode } from "../../src/hub/node-profile.js";
 import { hubRoute, reachHub, reserveOnHub, superviseHubReservation } from "../../src/hub-link.js";
 import { type Relay, startRelay } from "../../src/relay/main.js";
@@ -169,5 +170,33 @@ describe("superviseHubReservation", () => {
     expect(await eventually(() => !onHub(a), 5_000)).toBe(true);
 
     expect(await eventually(() => onHub(a), 15_000)).toBe(true);
+  }, 40_000);
+});
+
+describe("startHub", () => {
+  it("relays for the members of its own member store, and for nobody else", async () => {
+    // The wiring, not the mechanism: the Node hub must hand its member store
+    // to the relay's gater. A member added to the store may reserve; a peer
+    // the store does not know may not.
+    const hubKeyPath = join(dir, "hub.key");
+    await loadOrGenerateKey({ keyPath: hubKeyPath, seed: "httpeers-stack/e2e/hub-relay-hub" });
+    const running = await startHub({
+      stateFilePath: join(dir, "hub-state.json"),
+      keyPath: hubKeyPath,
+      relayAddr,
+    });
+    try {
+      const id = running.node.peerId.toString();
+      const a = await member();
+      const c = await member();
+      running.memberStore.add(a.peerId.toString(), ["member"]);
+      await reachHub(a, relayAddr, id);
+      await reachHub(c, relayAddr, id);
+
+      expect(await reserveOnHub(a, id)).toContain(`/p2p/${id}/p2p-circuit`);
+      await expect(reserveOnHub(c, id)).rejects.toThrow(/did not grant a reservation/);
+    } finally {
+      await running.stop();
+    }
   }, 40_000);
 });

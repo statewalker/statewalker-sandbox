@@ -62,8 +62,9 @@ export async function reserveOnHub(node: Libp2p, hubPeerId: string): Promise<str
     // libp2p reports a refused reservation as "Some configured addresses
     // failed to be listened on", which names neither the hub nor the reason.
     throw new Error(
-      `hub-link: the hub (${hubPeerId}) did not grant a reservation -- it grants one only to ` +
-        `members, so this peer may not be one (yet). Cause: ${String(err)}`,
+      `hub-link: the hub (${hubPeerId}) did not grant a reservation. A hub grants one only to ` +
+        "its members (PERMISSION_DENIED: this peer is not one, or not yet), and only if it " +
+        `relays at all (UnsupportedProtocolError: it does not). Cause: ${String(err)}`,
       { cause: err },
     );
   }

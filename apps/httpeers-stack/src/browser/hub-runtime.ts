@@ -67,6 +67,7 @@ import {
 import type { InvitationStore, SnapshotStore } from "../hub/hub-state.js";
 import { createHubState } from "../hub/hub-state.js";
 import type { MeshView } from "../hub/mesh-view.js";
+import type { IsMember } from "../hub-relay.js";
 import { HUB_RULES } from "../policy.js";
 import { dialRelay, superviseRelay, waitForCircuitReservation } from "../reservation.js";
 import { describeError } from "./describe-error.js";
@@ -222,9 +223,15 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
   // claim named a peer nobody was talking to.
   // See `dialNeedsPermissiveGater`: what the gater objects to is the address
   // being dialled, not where this page was served from.
+  //
+  // THIS HUB RELAYS FOR ITS OWN MEMBERS (`../hub-relay.ts`). The member
+  // store does not exist yet -- it is built below, after the node -- so the
+  // gater reads it through `isMember`, which answers no until then.
+  let isMember: IsMember = () => false;
   const node = await createBrowserNode({
     dev: init.dev || dialNeedsPermissiveGater(relayAddr),
     privateKey: init.privateKey,
+    isMember: (peerId) => isMember(peerId),
   });
 
   // EVERY RESOURCE THIS FUNCTION ACQUIRES IS UNWOUND IF A LATER STEP THROWS.
@@ -284,6 +291,7 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
     rules: HUB_RULES,
     createMemberStore,
   });
+  isMember = (peerId) => state.memberStore.get(peerId) != null;
 
   let sweep: (() => void) | undefined;
   let meshView: (() => MeshView) | undefined;
