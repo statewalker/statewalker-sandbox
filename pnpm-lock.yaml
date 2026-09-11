@@ -579,6 +579,9 @@ importers:
 
   apps/mvc-blueprint-signals:
     dependencies:
+      '@preact/signals-core':
+        specifier: 1.14.4
+        version: 1.14.4
       '@statewalker/shared-baseclass':
         specifier: 0.1.1
         version: 0.1.1
@@ -591,6 +594,9 @@ importers:
       '@statewalker/ui.view.shadcn':
         specifier: 'catalog:'
         version: 0.1.1(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      alien-signals:
+        specifier: 3.2.1
+        version: 3.2.1
       react:
         specifier: 'catalog:'
         version: 19.2.8
@@ -2003,6 +2009,9 @@ packages:
 
   '@polka/url@1.0.0-next.29':
     resolution: {integrity: sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==}
+
+  '@preact/signals-core@1.14.4':
+    resolution: {integrity: sha512-HNB6HYeYKhQbJ1aKl+YRjrS4+QWHLKX6qKoUsfS/m0vqzsVaEBiZiaKbG/e+NKk2ch5ALQr/ihWaMHxiCuuWHA==}
 
   '@protobufjs/aspromise@1.1.2':
     resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
@@ -3491,6 +3500,9 @@ packages:
 
   ajv@8.20.0:
     resolution: {integrity: sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==}
+
+  alien-signals@3.2.1:
+    resolution: {integrity: sha512-I8FjmltrfnDFoZedi5CG8DghVYNhzb/Ijluz7tCSJH0xpd0484Kowhbb1XDYOxfJpU1p5wnM2X54dA+IfGyD1g==}
 
   anser@1.4.10:
     resolution: {integrity: sha512-hCv9AqTQ8ycjpSd3upOJd7vFwW1JaoYQ7tpham03GJ1ca8/65rqn0RpaWpItOAd6ylW9wAw6luXYPJIyPFVOww==}
@@ -7879,6 +7891,8 @@ snapshots:
 
   '@polka/url@1.0.0-next.29': {}
 
+  '@preact/signals-core@1.14.4': {}
+
   '@protobufjs/aspromise@1.1.2': {}
 
   '@protobufjs/base64@1.1.2': {}
@@ -9441,6 +9455,8 @@ snapshots:
       fast-uri: 3.1.6
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
+
+  alien-signals@3.2.1: {}
 
   anser@1.4.10: {}
 

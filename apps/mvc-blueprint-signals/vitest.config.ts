@@ -1,6 +1,6 @@
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
-import { alias } from "./aliases.js";
+import { aliasFor, type SignalsImpl } from "./aliases.js";
 
 /**
  * What a node suite may never load: React, React DOM, and the kit that renders
@@ -34,18 +34,37 @@ const headless = (): Plugin => ({
   },
 });
 
-export default defineConfig({
+const NODE_SUITES = "*/tests/**/*.test.ts";
+const BROWSER_SUITES = ["B5-*/tests/**/*.test.tsx", "B6-*/tests/**/*.test.tsx"];
+
+/**
+ * One node project per signals implementation. `node:alien` runs every node
+ * suite; `node:preact` runs the rungs whose behaviour depends on the library
+ * (B1–B4). B0 reads files, the contract suite imports both implementations
+ * itself, and B6's node half builds the app through `deps.ts` — each runs once.
+ * `provide` is what `signals-binding` checks, proving the alias took effect.
+ */
+const nodeProject = (signals: SignalsImpl, exclude: string[]) => ({
   plugins: [headless()],
-  resolve: { alias },
+  resolve: { alias: aliasFor(signals) },
   test: {
-    name: "node",
-    environment: "node",
-    include: ["*/tests/**/*.test.ts"],
-    exclude: [
-      "**/node_modules/**",
-      "**/dist/**",
-      "B5-*/tests/**/*.test.tsx",
-      "B6-*/tests/**/*.test.tsx",
+    name: `node:${signals}`,
+    environment: "node" as const,
+    include: [NODE_SUITES],
+    exclude: ["**/node_modules/**", "**/dist/**", ...BROWSER_SUITES, ...exclude],
+    provide: { signals },
+  },
+});
+
+export default defineConfig({
+  test: {
+    projects: [
+      nodeProject("alien", []),
+      nodeProject("preact", [
+        "B0-boundaries/**",
+        "B1-models/tests/signals-contract.test.ts",
+        "B6-app/**",
+      ]),
     ],
   },
 });

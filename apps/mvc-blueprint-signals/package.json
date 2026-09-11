@@ -21,10 +21,12 @@
     "test:B6": "vitest run B6-app && vitest run --config vitest.browser.config.ts B6-app"
   },
   "dependencies": {
+    "@preact/signals-core": "1.14.4",
     "@statewalker/shared-baseclass": "0.1.1",
     "@statewalker/shared-commands": "0.2.1",
     "@statewalker/shared-registry": "catalog:",
     "@statewalker/ui.view.shadcn": "catalog:",
+    "alien-signals": "3.2.1",
     "react": "catalog:",
     "react-dom": "catalog:",
     "zod": "4.5.4"
