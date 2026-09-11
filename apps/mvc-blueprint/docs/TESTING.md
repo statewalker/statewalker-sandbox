@@ -1,7 +1,7 @@
 # Testing
 
 How this app is tested, and the one lesson it kept relearning: **a test you have never watched
-fail proves nothing.** While it was being built, roughly a dozen tests passed every review, read
+fail proves nothing.** While it was being built, well over a dozen tests passed every review, read
 as correct, and could not fail. The catalogue below is the most reusable thing in this document.
 
 ## Principles
@@ -65,10 +65,20 @@ The reference adapter every headless suite runs against. Two properties make it 
 
 ### `test-support/`
 
-Shared view-layer stand-ins suites boot with. Since the list controller shows its own panel on
-`activate()`, any suite that activates one must register a `ui:show-list` renderer — the honest
-precondition of any real app. `answerDialogs` answers `ui:show-dialog:confirm` and records
-`ui:notify` so controller suites can drive the clear-completed chain without React.
+- **`views.ts`** — view-layer stand-ins suites boot with. Since the list controller shows its own
+  panel on `activate()`, any suite that activates one must register a `ui:show-list` renderer — the
+  honest precondition of any real app. `answerDialogs` answers `ui:show-dialog:confirm` and records
+  `ui:notify` so controller suites can drive the clear-completed chain without React.
+- **`api.ts`** — `seededApi()`: the real `MemTodoApi` holding one todo, for the protocol suites. They
+  used to hand-roll a look-alike, because a B0 rule meant for view suites bound them too.
+- **`react.ts`** — DOM plumbing for the browser suites: `render`, `waitFor`, `flush`, `button`. Use
+  these rather than a local copy.
+
+### The node project cannot load React
+
+`vitest.config.ts` refuses to resolve `react`, `react-dom` and `@statewalker/ui.view.shadcn`. A node
+suite that reaches them — directly, or by importing `src/app.ts` — fails at import with a message
+naming the rule. Take the view layer as `@todo/ui/adapter`, or write a `.test.tsx` browser suite.
 
 ## Tests that could not fail
 
@@ -82,7 +92,14 @@ The most common shape by far.
 - **"Raises no notify when handed the value it already holds"** subscribed through a named channel.
   `onChangeNotifier` already skips unchanged values, so deleting the mutator's compare-before-write
   guard left the test green — it proved the channel's dedup, not the mutator's. **Found three
-  times**, on three different mutators. Fix: count **raw** `onUpdate` calls.
+  times**, on three different mutators. Fix: count **raw** `onUpdate` calls. And a fourth time
+  with no test at all: `setShowDone`'s only coverage went through the outer model, which hears it
+  via `onQueryChange` — a channel, with its own dedup — so deleting its guard left every suite green.
+- **A snapshot cannot see a write that stores equal data.** Each gesture test asserts the model's
+  `toJSON()` is unchanged after the stubbed mutator. A view that also called
+  `model.replaceTodos(model.todos)` — a controller-side write, and a notify — changed nothing a
+  snapshot compares, and passed all forty browser tests. Fix: a static rule on *who may call which
+  method* (B0), because no snapshot can tell equal data from untouched data.
 - **"Still runs the default when nothing overrides"** toggled a missing id and asserted the store was
   empty — true whether the default handler ran, threw, or was never registered. Fix: witness it on
   `MemTodoApi.calls`.
@@ -99,6 +116,19 @@ The input could not produce the failure the test is named for.
 - **"Never offers the `ui:*` vocabulary"** — the menu's catalog contained no `ui:` key at all, so no
   filter bug could put one in the menu. Fix: have a host override return a `ui:` key, and assert it
   is **not** offered.
+- **"A healthy app logs nothing — including across dispose"** was the only test near the
+  composition root's `disposed` guard. A healthy app never has a failed panel, so the guard had
+  nothing to suppress, and deleting it left the test green. Fix: create the condition — a broken
+  view layer, disposed in the same turn, while its failure is still pending.
+- **A stated failure path with no test.** `bootstrap`'s unwind was described as a saga; nothing ever
+  made `registerViews` throw, and when it did, the command defaults stayed on the bus. Fix: make the
+  step fail, then call the command it should have released.
+
+### 2b. A release nobody counts
+
+- **`useModel`'s unsubscribe.** A version that never unsubscribed passed every browser test: a
+  leaked listener re-renders nothing that is still on screen. Fix: count live subscriptions at the
+  source (wrap `model.onUpdate`) and assert they return to zero on unmount.
 
 ### 3. One change masks another
 
@@ -120,6 +150,10 @@ The input could not produce the failure the test is named for.
   shorter than the default.
 - **Coalescing measured synchronously** sees only the first reload. The deferred follow-up happens a
   microtask later. Fix: bump five times, **await**, and assert the settled total — two, not five.
+- **A precondition raced its own subject.** The unsubscribe test checked "subscribed" as soon as the
+  component's layout effect had run — but `useSyncExternalStore` subscribes in a *passive* effect,
+  later. It passed by luck of scheduling until a plant in a neighbouring test changed the timing.
+  Fix: wait for the subscription itself.
 
 ### 5. The spy calls through
 
@@ -136,6 +170,21 @@ The input could not produce the failure the test is named for.
   `CommandDeclaration` into the port passed. Fix: match the substring.
 - **Every layering grep matched `@todo/app` aliases only.** A relative import —
   `"../../todo-app/src/todo-model.js"` — walked past all of them. Fix: normalise both forms.
+- **The grep reads names; the runtime loads modules.** "A node suite takes `@todo/ui` only as
+  `@todo/ui/adapter`" checked what a suite *names*. A node suite importing `../../src/app.js` named
+  no `@todo/ui` and loaded React, react-dom and every view — green. Fix: refuse the React stack at
+  resolution in the node project, and prove the refusal is on with a live import in B0.
+
+### 6b. The exemption is too wide
+
+The mirror image of a narrow grep: the rule is right, and the list of files it skips is not.
+
+- **`endsWith("-model.ts")`** was meant to exempt model modules from "only models notify / write
+  fields / subscribe to bare `onUpdate`". It also matched `use-model.ts` — the React binding — and
+  would have matched any `todo-ui/src/views/selection-model.ts`. Fix: exempt by **location**
+  (`todo-app/src/`), and assert the exact list of exempt files, so a widened exemption fails.
+- **`endsWith("view-adapter.ts")`** exempted any file with that suffix from "only the adapter names
+  the bus". Fix: the exact path.
 
 ### 7. The helper ignores its argument
 
@@ -154,6 +203,12 @@ Inherited from the sibling app this blueprint descends from:
 When you write a test, ask **"what change to the code would leave this green?"** If the honest
 answer is "the bug I'm testing for", the test is not testing it. Then break the code and find out.
 
+And plant the **regression the test exists for**, not a nearby change. Checking the dispose-liveness
+suite, a first plant moved the host's `todos:add` override below the core's default — and stayed
+green, because every listener runs whatever its priority, so the dialog opened anyway. That proved
+nothing about the test. The regression it guards is a `dispose()` that waits for in-flight work;
+planting that failed both tests at once.
+
 ## Specific traps
 
 - **Radix renders dialogs into `document.body`**, not into your mount element. Assert removal where
@@ -165,6 +220,12 @@ answer is "the bug I'm testing for", the test is not testing it. Then break the 
 - **Watch for unhandled rejections.** Controller work is fired with `void`; a rejection that escapes
   it reaches the process, not the user. Suites that exercise failure paths collect
   `unhandledRejection` events and assert none arrived.
-- **Headless suites must not load React.** Import the adapter as `@todo/ui/adapter`. B0 enforces it,
-  because the day a view touches `document` at module scope, every suite importing `@todo/ui` would
-  break at import for reasons unrelated to what it tests.
+- **Headless suites must not load React.** Import the adapter as `@todo/ui/adapter`. B0 checks the
+  names, and the node project refuses to resolve React, react-dom and the kit at all — because the
+  day a view touches `document` at module scope, every node suite loading a view would break at
+  import for reasons unrelated to what it tests.
+- **A literal dynamic `import("react")` is resolved when the file is transformed**, not when the line
+  runs. To assert that an import is refused, import through a variable
+  (`import(/* @vite-ignore */ spec)`), or the refusal fails the whole file instead of one assertion.
+- **Focus after a Radix dialog moves on a timer.** Radix restores focus in a `setTimeout` after
+  unmount; wait a few turns before asserting where focus is.

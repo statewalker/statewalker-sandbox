@@ -40,7 +40,9 @@ a grep for it. Packages would have bought build steps and stale-`dist` hazards f
 ### D5 — Models are changed only through mutators · adopted
 
 No caller assigns a field or calls `notify()`. One intention, one notify, owned by the model.
-Enforced by B0. See ARCHITECTURE §3.
+Checked by B0 as far as its patterns reach — a `.notify(` outside a model module, an assignment
+through a receiver named `…model…` or `.input.`, a view naming a controller-side method — and not
+through an alias. See ARCHITECTURE §3 and §5, and D20.
 
 ### D6 — Input fields come in three classes · adopted
 
@@ -52,7 +54,8 @@ there was state-latest, so the difference never showed. See ARCHITECTURE §5.
 ### D7 — Models expose named change channels · adopted
 
 `onChangeNotifier` per meaningful change. A subscriber is woken only by the change it asked for.
-Bare `onUpdate` is allowed only inside a model and in `use-model.ts`. See ARCHITECTURE §4.
+Bare `onUpdate` is allowed only in a model module (`todo-app/src/*-model.ts`) and in
+`todo-ui/src/use-model.ts`. See ARCHITECTURE §4.
 
 ### D8 — An update latch · **rejected**
 
@@ -108,8 +111,10 @@ refuses to run without one.
   `Object.create(ViewsReady.prototype)` passes `instanceof`, and a public static `_mint()` is callable
   by anyone holding the class.
 - What holds is **module confinement**: the barrel exports the token as a type only, and B0 fails the
-  build if any other file mints or imports it. It stops mistakes, not deliberate evasion — no
-  in-realm mechanism can.
+  run if `_mint` appears outside `views-ready.ts` and `bootstrap.ts`, or if any file but
+  `bootstrap.ts`, `list-controller.ts` and the barrel imports `views-ready`. It stops mistakes, not
+  deliberate evasion — no in-realm mechanism can. It is also shaped around one controller (see
+  Deferred).
 
 ### D12 — `bootstrap` returns a capability, not a controller set · adopted
 
@@ -117,7 +122,8 @@ refuses to run without one.
 `bootstrap` cannot serve either later consumer: the Files Manager opens and closes panels at run time,
 the dock shell loads mini-apps after bootstrap returned. `release()` frees one controller without
 tearing the app down — without it, a shell opening and closing panels would accumulate a closure per
-panel until app teardown.
+panel until app teardown. `createList` after `dispose()` throws; it used to activate a controller on
+a dead app without a word.
 
 ### D13 — `dispose()` is write-quiescent, not call-quiescent · adopted, after a deadlock
 
@@ -131,13 +137,14 @@ and its result is dropped.
 ### D14 — Nothing escapes a `void` · adopted
 
 Controller work is fired with `void`, so every failure is caught where it happens and reported
-through `reportOutcome`. A watermark moves only when its work landed. The first version had no error
+through `reportOutcome`. A watermark moves once the intent is consumed — for work with no question in
+it, when the work landed (D15 covers the question). The first version had no error
 policy at all: a rejected add was an unhandled rejection and a dropped item, and a failed reload left
 the model permanently stale while its watermark claimed the work was done.
 
 ### D15 — A question answered is an intent consumed · adopted
 
-A clear-completed that fails *after* the user confirmed is reported and **not** retried. The general
+A clear-completed that fails *after* the user confirmed is reported and **not** retried. The first
 rule ("a watermark moves only when the work landed") was built for invisible, idempotent work;
 applied to a modal question it re-prompts a user who already said yes, triggered by whatever
 unrelated action woke the controller next. And with nothing to clear, no question is asked at all —
@@ -162,6 +169,53 @@ and the whole kit by accident, and would have broken the day any view touched `d
 neighbouring prototype hand-wrote a glob to a path that does not exist; a dead glob emits nothing and
 reports nothing. A build-level test asserts a kit-only class reaches the CSS.
 
+### D19 — Headless is enforced at resolution, not only by grep · adopted, found in review
+
+B0 checked that a node suite *names* the view layer only as `@todo/ui/adapter`. A node suite that
+imported `src/app.ts` — or `react-dom/client` directly — named nothing forbidden, loaded React, and
+ran green. The node vitest project now refuses to resolve `react`, `react-dom` and
+`@statewalker/ui.view.shadcn`, naming the rule; B0 imports each through a variable on every run and
+asserts the refusal, so removing the plugin fails B0. The Vite build a node test runs
+(`emitted-css.test.ts`) is unaffected: `build()` uses `vite.config.ts`'s plugins, not the test
+project's.
+
+### D20 — A view calls only view-side mutators; the split is derived, default-deny · adopted, found in review
+
+"The view writes only `input`" was a convention: a view holds the outer model and can call
+`replaceTodos`. A reviewer's `model.replaceTodos(model.todos)` in the list view passed B0, the type
+checker and every browser test — a `toJSON()` snapshot cannot see a write of equal data. B0 now fails
+a `todo-ui` source that names any model method outside an explicit list of what a view may call. The
+forbidden set is not listed: it is read at run time from the model classes `@todo/app/models`
+exports, so a method added to a model later is forbidden to views until someone adds it to the list.
+The object split between `model` and `model.input` is what makes this checkable, not what enforces
+it.
+
+The same review found B0's model-rule exemptions keyed by **suffix** (`-model.ts`, `view-adapter.ts`)
+in any layer — which exempted `use-model.ts` from the notify and field-write rules, and would have
+exempted any `todo-ui` file named `*-model.ts`. They are now keyed by location.
+
+### D21 — `bootstrap` is a saga on failure too · adopted, found in review
+
+A `registerViews` that threw left the command defaults registered, with no handle for the caller to
+release them — `todos:add` was still answered by the orphan. `bootstrap` now starts the registry's
+cleanup and rethrows. The unwind is asynchronous, so it completes within the turn rather than before
+the throw; `bootstrap` stays synchronous because every caller relies on it returning a handle at once.
+
+### D22 — Focus returns to where it was when a view that held it closes · adopted, found in review
+
+A command-opened dialog has no trigger, and Radix returns focus to the trigger — so every answered
+confirm left focus on `<body>`. `show()` restores the element focused at mount, but only when the
+unmount is what lost focus; a view closing while the user is elsewhere leaves focus alone.
+
+### D23 — B0's view-suite and composition-root rules bind the React entry · adopted, narrows an earlier rule
+
+"A suite importing `@todo/ui` may not import `@todo/core`" also bound protocol suites taking only
+`@todo/ui/adapter`, and the composition-root rule counted the adapter as the ui layer. Together they
+forced a hand-rolled `seededApi()` into three suites and a copy of the `todos:add` declaration into
+one. Both rules now bind the view layer's **React entry** (`@todo/ui`, or a view by path): a suite that
+renders views still may not import the core, and nothing but `src/app.ts` may wire the core to the
+React views. A headless harness over the adapter uses the real `MemTodoApi` and `todosAdd`.
+
 ---
 
 ## Deferred
@@ -170,9 +224,13 @@ reports nothing. A build-level test asserts a kit-only class reaches the CSS.
 | --- | --- |
 | **B7** — a persistent `TodoApi` | the seam exists; persistence is a separate rung |
 | **B8–B9** — extracting `app-kit` | gated on the Files Manager being ported onto it as a *second* caller, so the substrate is not extracted from one app |
+| **One reconcile loop per controller blocks behind an open dialog** | while the clear-completed confirm is open, a queued add, a toggle and a refresh sit undrained until it is answered. The modal hides it here; a host routing `todos:add` through an approval dialog, or the Files Manager's conflict dialogs, would freeze the whole controller. Likely direction: await view-settled commands **outside** the reconcile loop and feed each answer back in as an edge. Recorded in `list-controller.ts` and ARCHITECTURE §6 |
+| **The token and bootstrap are shaped around `ListController`** | B0 hardcodes `list-controller.ts` as the one controller allowed to import `views-ready`; `AppHandle` has only `createList`; `MenuController` takes no token and emits `ui:show-menu` with no proof the view layer exists. A second controller must edit B0's list (DEVELOPING, *Add a controller*). Generalise when the Files Manager brings a second controller |
 | `expectEveryEdgeHonoured` helper | specified, not built: no view here can produce two distinct payloads in one tick, so it has no honest caller until the dock shell |
 | a right-click menu gesture | `MenuView` renders and is tested, but no list gesture opens it yet |
-| aliased field writes | the static grep cannot see `const i = model.input; i.x = …`; closed for views by the browser snapshot tests, not for controllers |
+| aliased field writes | the static grep cannot see `const i = model.input; i.x = …`. In views, a browser snapshot test catches such a write only when it stores *different* data; in controllers nothing catches it |
+| computed method names | B0's view-side rule matches `.replaceTodos` and `["replaceTodos"]`, not `model["replace" + "Todos"]` |
+| **M8** — toasts overlap; the menu is not at the pointer | every `ui:notify` renders at one fixed position (bottom right), so two toasts at once overlap; `MenuView` sits at a fixed spot — centred horizontally, a third of the way down — not at the pointer. Cosmetic, and the menu has no gesture opening it yet |
 | the upstream `claimed` issue | must be filed on `@statewalker/shared-commands` before this substrate is published |
 | bundle size (624 kB) | the kit is imported through one barrel that pulls five Radix packages; not relevant to a blueprint yet |
 | the model list can lag the backend | the clear-completed skip reads the loaded list, so completed items not yet loaded are not offered |

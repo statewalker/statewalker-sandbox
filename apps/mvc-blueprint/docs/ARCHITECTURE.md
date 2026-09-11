@@ -33,9 +33,13 @@ The rules that make this real:
 - **Views know only models. Nothing else. Never.**
 - **The only way across a layer boundary is a command.**
 
-Every one of these is enforced by `B0-boundaries/tests/boundaries.test.ts`, which reads the source
-tree and fails the build on a violation. See [DEVELOPING.md](DEVELOPING.md#the-rules-and-what-enforces-them)
-for the rule-by-rule list.
+`B0-boundaries/tests/boundaries.test.ts` enforces the parts of these that are facts about the
+files — who imports what, who names the bus, who notifies, which model methods a view names — and
+fails the run on a violation, as far as its patterns reach. Two are design rules kept by review, not
+by a test: nothing checks that a model "performs no action", and reads cross from a controller to the
+core through `TodoApi`, not through a command (§6). See
+[DEVELOPING.md](DEVELOPING.md#the-rules-and-what-enforces-them) for each rule, its test, and what walks
+past it.
 
 The layers are directories behind aliases (`@todo/core`, `@todo/app`, `@todo/ui`), not packages.
 That was a deliberate reversal: an earlier design used three packages "because that is the split a
@@ -119,7 +123,10 @@ function-valued fields.
 ### Rule: models are changed only through mutators
 
 A controller or a view **never** assigns a model field and **never** calls `notify()`. The model
-exposes named methods that change its fields and notify once, at the end:
+exposes named methods that change its fields and notify once, at the end. B0 greps the libraries for
+both — a `.notify(` outside `todo-app/src/*-model.ts`, and an assignment through a receiver named
+`…model…` or through `.input.` — which catches the ordinary spelling and not an alias
+(`const i = model.input; i.x = …`):
 
 ```ts
 // WRONG — the caller knows the field layout and owns the notify
@@ -136,9 +143,9 @@ Why this matters more than it looks:
 
 1. **One notify per intention.** A caller who forgets to notify leaves a model that disagrees with
    the screen. A caller who notifies *between* two writes shows every subscriber a half-applied state.
-2. **It makes the input classes of §5 enforceable.** `submitCount++` at a call site looks like any
-   other integer write; `queueSubmit(title)` is the only way to raise that edge, so the model — not
-   every caller — guarantees the payload travels with it.
+2. **It makes the input classes of §5 checkable.** `submitCount++` at a call site looks like any
+   other integer write; `queueSubmit(title)` is the one method that raises that edge, so the model —
+   not every caller — makes the payload travel with it.
 3. **`toJSON()` stays a true snapshot**, because the writes are an auditable list.
 
 ### Rule: a mutator compares before it writes
@@ -214,15 +221,32 @@ Four things to know before relying on one:
    loses the change **permanently**: no later notify re-fires it. Never wrap a channel callback.
 4. **Channels are invisible to `toJSON()`** (they are functions), so snapshots stay data.
 
-Subscribing to bare `onUpdate` is allowed in exactly two places: inside a model, and in
-`use-model.ts`, which supplies its own selector. B0 enforces it.
+Subscribing to bare `onUpdate` is allowed in exactly two places: inside a model module
+(`todo-app/src/*-model.ts`), and in `todo-ui/src/use-model.ts`, which supplies its own selector. B0
+greps the libraries for `.onUpdate(` elsewhere — by exact location: an earlier version exempted any
+file ending in `-model.ts`, which quietly included `use-model.ts` in every *other* model rule too.
 
 ## 5. Input: three classes of field
 
 User input lives in a **sub-model** — `model.input` — separate from the data the controller owns.
-The view writes only `input`; the controller writes only the outer model. Ownership is an object
-boundary rather than a comment, and it is why a controller's own writes cannot wake it: it
-subscribes to `input`, and writes elsewhere.
+Intent flows **in** through `input`; results flow **out** through the outer model:
+
+- The view writes `input`, through its view-side mutators (`set*`, `request*`, `queueSubmit`).
+- The controller writes the outer model through *its* mutators (`replaceTodos`, `reportOutcome`), and
+  writes `input` only to **drain** it: each `take*()` replaces a queue and notifies, which does wake
+  the controller's own channel — inside a run, where the in-flight guard (§6) turns it into a no-op.
+
+That direction is why a controller's results cannot wake it: it subscribes to `input` and writes
+them elsewhere.
+
+The object split does not *enforce* this on its own — a view holds the outer model, and nothing in
+JavaScript stops it calling `replaceTodos`. What the split does is make it **checkable**: "who may
+call what" is a list of method names. B0 checks it: a `todo-ui` source may not name any model method
+except the view-side mutators, `visible` and `toJSON`, and the forbidden set is derived at run time
+from the model classes, so a method added later is forbidden to views until someone says otherwise.
+A computed name (`model["replace" + "Todos"]`) walks past it. This rule exists because the browser
+suites' `toJSON()` snapshots cannot see a view writing *equal* data — `model.replaceTodos(model.todos)`
+passed all of them.
 
 Every input field belongs to one of three classes, and the class decides what the controller must do:
 
@@ -299,6 +323,19 @@ The fix is the `_reconciling` guard: re-entrant calls return immediately, and th
 arriving mid-flight folds into one follow-up carrying the newest state. **Five bumps are two
 reloads — not five, and never one with a bump lost.**
 
+### One loop — so everything waits behind an open dialog
+
+The same guard has a cost, and it is not solved here. Every edge is drained by the one loop, step
+after step, and a step may await a command that only a **view** settles. While the clear-completed
+confirm is open, a queued add, a toggle and a refresh all sit undrained until the user answers:
+their wakes fold into a run that is parked on the dialog.
+
+In this app the modal hides it — nothing behind it can be pressed. It would not hide it for a host
+that routes `todos:add` through an approval dialog, or for the Files Manager's conflict dialogs: one
+open question would freeze the whole controller. The likely direction is to await view-settled
+commands **outside** the reconcile loop and feed each answer back in as an edge. It is recorded as
+deferred in [DECISIONS.md](DECISIONS.md#deferred).
+
 ### Reads go through the api; writes go through commands
 
 The controller calls `api.list()` directly but writes via `commands.call(todosAdd, …)`. Writing
@@ -373,10 +410,18 @@ export function ListView({ model }: { model: TodoListModel }) {
 }
 ```
 
-Every gesture is a mutator call on `model.input`. The view never assigns a field, never notifies,
-and never guesses an outcome: a ticked row stays unticked until the controller's `replaceTodos`
-says otherwise. Its one piece of local state is the add form's half-typed title, which is not model
-state until it is submitted.
+Every gesture is a view-side mutator call on `model.input`. The view never assigns a field, never
+notifies, never calls a controller-side mutator (B0, §5), and never guesses an outcome: a ticked row
+stays unticked until the controller's `replaceTodos` says otherwise. Its one piece of local state is
+the add form's half-typed title, which is not model state until it is submitted.
+
+### Focus goes back where it was
+
+A command-opened dialog has no trigger, and Radix returns focus only to a trigger — so every
+answered confirm used to leave the keyboard on `<body>`. `show()` in `register-views.tsx` records
+the focused element when a view mounts, and when the view closes, puts focus back there **if**
+closing this view is what lost it (the focused element was one the unmount removed). A view that
+closes while the user is elsewhere — a toast expiring as they type — leaves focus alone.
 
 ### `useModel` is the whole React binding
 
@@ -391,7 +436,9 @@ reproduces exactly that failure without the comparator, which is how we know the
 load-bearing. Pass `shallowEqual` for any derived array or object.
 
 The cache is keyed by **model identity** as well, so a component re-pointed at a different model
-never returns the previous model's cached value.
+never returns the previous model's cached reference. It is **not** keyed by selector: the current
+selector runs on every `getSnapshot`, and the cache answers only when `isEqual` says the fresh value
+is equivalent — so a selector may close over props.
 
 ### The adapter is headless
 
@@ -399,6 +446,11 @@ never returns the previous model's cached value.
 `@todo/ui/adapter`, so the headless suites that test the view *protocol* never load React DOM. They
 used to, by accident, until a review planted a `document` access in a view and four headless suites
 broke at import.
+
+Naming the adapter is not the same as not loading React, and a grep can only check the naming: a
+node suite that imported `src/app.ts` named no `@todo/ui` and loaded every view. So the node vitest
+project refuses to **resolve** `react`, `react-dom` or `@statewalker/ui.view.shadcn` at all — the
+import fails, naming the rule — and B0 proves on every run that the refusal is in place.
 
 ## 8. Bootstrap, and why the order is a token
 
@@ -415,7 +467,13 @@ So the order is a **token**:
 ```ts
 // lib/todo-app/src/bootstrap.ts
 register(registerTodoCommands(commands, api));
-const viewsCleanup = registerViews(commands);
+let viewsCleanup;
+try {
+  viewsCleanup = registerViews(commands);
+} catch (error) {
+  void cleanup();                          // unwind what already succeeded (§9)
+  throw error;
+}
 if (viewsCleanup) register(viewsCleanup);
 const ready = ViewsReady._mint();          // minted only now
 
@@ -429,17 +487,25 @@ activate(ready: ViewsReady): void {
 `bootstrap` returns a **capability**, not a fixed set of controllers — `createList(model)` hands
 back `{ controller, release }`. The Files Manager opens and closes panels at run time, and the dock
 shell loads mini-apps long after bootstrap returned; both need controllers created later, and both
-still need the order.
+still need the order. Once `dispose()` has been called, `createList` throws: there is no view layer
+and no command default left for a controller to use.
 
 **What makes the token unforgeable is module confinement, not the private constructor.** A private
 constructor is a compile-time fiction: `Object.create(ViewsReady.prototype)` passes `instanceof`
 without calling it, and a public static `_mint()` is callable by anyone who holds the class. So the
-`@todo/app` barrel exports `ViewsReady` as a **type only**, and B0 fails the build if any file but
-`bootstrap.ts` mints it or any file but `bootstrap.ts` and `list-controller.ts` imports it.
+`@todo/app` barrel exports `ViewsReady` as a **type only**, and B0 fails the run if `_mint` appears
+in any file but `views-ready.ts` and `bootstrap.ts`, or if any file but `bootstrap.ts`,
+`list-controller.ts` and the barrel (type-only) imports `views-ready` at all.
 
 Be precise about the strength of this. It stops **mistakes** — the honest caller reaching for a
 controller directly, which is what actually happens. It does not stop deliberate evasion from inside
 an allowed file. No mechanism in one JavaScript realm can.
+
+And be precise about its reach: it is shaped around **one** controller. B0's list of files that may
+import the token names `list-controller.ts`, so a second controller fails B0 until that list is
+edited (DEVELOPING.md, *Add a controller*); `AppHandle` has only `createList`; and `MenuController`
+takes no token at all, so nothing proves the view layer was registered before it emits
+`ui:show-menu`. Generalising it is deferred ([DECISIONS.md](DECISIONS.md#deferred)).
 
 ## 9. Lifetimes: the registry
 
@@ -463,6 +529,15 @@ await cleanup();
 `register()` also returns a per-registration disposer, which is how `createList` hands back a
 `release()` that frees one controller without tearing the app down.
 
+### A step that fails unwinds the steps that succeeded
+
+This is the **saga** shape, and it covers failure as well as teardown. If `registerViews` throws,
+`bootstrap` has already registered the command defaults — and the caller gets no handle to release
+them. So `bootstrap` starts the registry's cleanup and rethrows. The unwind is asynchronous (the
+core's disposer is itself a registry's cleanup), so it is under way when the error reaches the
+caller and done within the turn; after that, `todos:add` finds no handler. The dock shell needs
+exactly this for a mini-app that fails halfway through loading.
+
 ### `dispose()` is write-quiescent, not call-quiescent
 
 When `ListController.dispose()` resolves, the controller will **never write the model again** —
@@ -485,11 +560,12 @@ if (didWork && !this._disposed) this._model.reportOutcome(failure);
 
 `lastOutcome` is what the list view shows as its error line.
 
-Two refinements, each learned from a defect:
+The watermark rule, stated once: **a watermark moves once the user's intent is consumed.** Two
+refinements of what "consumed" means, each learned from a defect:
 
-- **A watermark moves only when the work landed.** A failed reload leaves `_handledRefresh` where it
-  was, so the refresh is still owed and one later bump repays it. (It used to advance *before* the
-  await, which left the model stale forever while claiming the work was done.)
+- **For work with no question in it, that is when the work landed.** A failed reload leaves
+  `_handledRefresh` where it was, so the refresh is still owed and one later bump repays it. (It used
+  to advance *before* the await, which left the model stale forever while claiming the work was done.)
 - **For an intent that asks the user a question, the answer is what consumes it.** A clear-completed
   that fails *after* the user confirmed is reported, and **not** retried — retrying would re-open a
   dialog the user already answered, triggered by whatever unrelated edge woke the loop next. An
@@ -501,7 +577,10 @@ composition root turns into a visible error and a `console.error` (§11).
 
 ## 11. The composition root
 
-`src/app.ts` is the **only** module that imports all three layers. B0 enforces it.
+`src/app.ts` is the **only** module that imports the core, the app and the view layer's React entry
+together. B0 enforces it. A headless suite that boots `bootstrap` over a real `MemTodoApi` and a
+`ViewAdapter` from `@todo/ui/adapter` is not counted: it is a protocol harness that can render
+nothing, and counting it made such suites hand-roll copies of the core.
 
 ```ts
 export function startApp(root: HTMLElement, options: StartOptions = {}): RunningApp {

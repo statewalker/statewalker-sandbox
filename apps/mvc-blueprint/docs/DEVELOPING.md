@@ -6,7 +6,8 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) first for *why* the rules exist.
 ## Principles
 
 1. **If a rule matters, a test fails when it is broken.** A rule in a comment is a wish; a rule in
-   `B0-boundaries` is a fact. Before you add a rule to this list, add the test.
+   `B0-boundaries` is a fact — exactly as far as its patterns reach, and no further. Before you add
+   a rule to this list, add the test, and write down what walks past it.
 2. **Headless first.** Prove it in Node if you can. The browser is for what only a browser can prove.
 3. **Test first, and watch it fail.** A test you have never seen fail is not evidence — this codebase
    has shipped roughly a dozen tests that looked right and could not fail. See [TESTING.md](TESTING.md).
@@ -22,48 +23,73 @@ the source tree **recursively** (a guard test fails if it ever stops), strips co
 It also carries **negative controls**: fixtures of known-bad code that each rule must reject, so a
 rule weakened by a careless edit fails loudly rather than passing everything.
 
+A grep checks spelling, not meaning. Each row says what the pattern is; where something walks past
+it, the row or the note under the table says what.
+
 ### Layering
 
 | Rule | Enforced by |
 | --- | --- |
-| `todo-core` names no `ui:` command | B0 · *names no ui:\* command* |
+| `todo-core` names no `ui:` command in a string literal | B0 · *names no ui:\* command* |
 | `todo-core` imports neither `todo-app` nor `todo-ui` — by alias **or** relative path | B0 · *imports nothing from todo-app or todo-ui* |
-| `todo-core` and `todo-app` touch no DOM global | B0 · *touches no DOM global* |
+| `todo-core` and `todo-app` never name `document`, `window`, `HTMLElement` or `navigator` | B0 · *touches no DOM global* |
 | `todo-app` imports no `todo-ui` | B0 · *imports nothing from todo-ui* |
 | `todo-ui` reaches `todo-app` **only** through `@todo/app/models` — never a controller, `bootstrap` or the token | B0 · *reaches todo-app only through @todo/app/models* |
 | `@todo/app/models` exports no controller, no `bootstrap`, no token — checked at run time, not by grep | B0 · *keeps @todo/app/models free of controllers…* |
 | `todo-ui` never imports `todo-core` | B0 · *never imports todo-core* |
-| only `view-adapter.ts` names the bus (`Commands`, `CommandsRegistry`) | B0 · *touches the bus only in the adapter* |
-| a suite importing `@todo/ui` may not import `@todo/core` | B0 · *holds for todo-ui SUITES too* |
-| `view-adapter.ts` imports no React | B0 · *view-adapter.ts imports the bus and the registry — no React* |
-| a **node** suite takes `@todo/ui` only as `@todo/ui/adapter`, so headless stays headless | B0 · *a node suite… takes @todo/ui only as @todo/ui/adapter* |
-| only `src/app.ts` imports all three layers | B0 · *only src/app.ts imports todo-core, todo-app and todo-ui together* |
+| only `todo-ui/src/view-adapter.ts` (that exact path) names `Commands` or `CommandsRegistry` | B0 · *touches the bus only in the adapter* |
+| a suite that renders views — imports `@todo/ui` or a view, by alias or path — imports no `@todo/core`. A suite taking only `@todo/ui/adapter` tests the bus protocol and may use the real core | B0 · *holds for VIEW suites too* |
+| `view-adapter.ts` imports `@statewalker/shared-commands` and `@statewalker/shared-registry`, and nothing else | B0 · *view-adapter.ts imports the bus and the registry — no React* |
+| a **node** suite, and the test support it loads, names `@todo/ui` only as `@todo/ui/adapter` | B0 · *a node suite… takes @todo/ui only as @todo/ui/adapter* |
+| a node suite cannot **load** `react`, `react-dom` or `@statewalker/ui.view.shadcn` — by name or through any module that imports them, `src/app.ts` included: resolution fails, naming the rule | the `mvc-blueprint:headless` plugin in `vitest.config.ts`; B0 · *the node project refuses to LOAD React…* proves it is on, every run |
+| only `src/app.ts` imports the core, the app and the view layer's **React entry** together | B0 · *only src/app.ts imports todo-core, todo-app and todo-ui's React entry together* |
+| `vite.config.ts` reaches no `vitest` module, directly or through a local import | B0 · *vite.config.ts reaches no vitest module…* |
+
+The headless plugin sees what Vite resolves — this app's sources and the specifiers they name. A
+package under `node_modules` that imported React by itself would be loaded by Node and not caught;
+none of the headless suites' dependencies does.
 
 ### Models and events
 
+The greps in this table read the three libraries under `lib/` — not `src/`, and not the suites,
+which set models up directly on purpose.
+
 | Rule | Enforced by |
 | --- | --- |
-| only a `*-model.ts` file calls `notify()` | B0 · *calls notify() only from a model* |
-| nothing outside a model assigns a model field — outer model **or** input | B0 · *never assigns a model field* (see the limit below) |
-| nothing outside a model or `use-model.ts` subscribes to bare `onUpdate` | B0 · *never calls onUpdate outside a model or the React binding* |
-| a mutator compares before it writes | tests per mutator in `B1-models`, counting **raw** notifies |
-| arrays and objects are replaced, never mutated | `expectReplacedNotMutated` in `B1-models` |
-| a model's `onUpdate` covers every derived getter | `B1-models` · *an input query change fires the outer model's onUpdate* |
+| only a model module — `todo-app/src/*-model.ts` — contains `.notify(` | B0 · *calls notify() only from a model* |
+| the exemption above reaches exactly `todo-app/src/todo-model.ts` — not `use-model.ts`, not a `*-model.ts` in another layer | B0 · *the exemption reaches the model modules, and nothing else* |
+| no source outside a model module assigns (`=`, compound, `??=`, `++`, `--`) through a receiver whose name contains `model`, or through `.input.` | B0 · *never assigns a model field* (see the limits below) |
+| a `todo-ui` source names no controller-side model method — `replaceTodos`, `reportOutcome`, the `take*()` drains, `fromJSON`, `notify` — as `.name` or `["name"]`. The set is **derived at run time** from the model classes `@todo/app/models` exports, minus the list of what a view may call (`VIEW_MAY_CALL` in B0): a method added to a model is off-limits to views until it is added there | B0 · *todo-ui never names a controller-side model method*, and *the split is derived from the model classes…* |
+| only a model module or `todo-ui/src/use-model.ts` (exact path) contains `.onUpdate(` | B0 · *never calls onUpdate outside a model or the React binding* |
+| a comparing mutator (`setFilter`, `setShowDone`, `reportOutcome`, the `take*()` drains on an empty queue) raises no notify for an unchanged value | a `B1-models` test per mutator, counting **raw** `onUpdate` calls |
+| `todos` and each input queue are replaced, never mutated | `expectReplacedNotMutated` and the per-queue *is replaced on request* tests in `B1-models` |
+| the outer model's `onUpdate` covers `visible()`, its one derived getter | `B1-models` · *an input QUERY change fires the outer model's onUpdate* |
 
-**The limit, stated honestly:** the field-assignment grep catches `model.input.x = …` and
-`this._model.x = …`. It does **not** catch an aliased write — `const i = model.input; i.x = …`. For
-views, the browser suites close the gap: every gesture test stubs the mutator to do nothing and then
-asserts the model's `toJSON()` is unchanged, so a view that writes a field itself fails. For
-controllers, there is no static guard. Do not alias a model to write through it.
+**The limits, stated honestly.**
+
+- The field-assignment grep needs the receiver's name to contain `model`, or the write to go through
+  `.input.`: `model.input.x = …` and `this._model.x = …` are caught; `const i = model.input; i.x = …`
+  and `props.m.todos = …` are not.
+- The controller-side-method rule matches `.replaceTodos` and `["replaceTodos"]`. A computed name
+  (`model["replace" + "Todos"]`) or a destructured method walks past it.
+- For views, the browser suites add a check at run time: each gesture test stubs its mutator to do
+  nothing and asserts the model's `toJSON()` is unchanged — which catches a view writing *different*
+  data, and **cannot** see a write that stores equal data (`model.replaceTodos(model.todos)`). That
+  is why the controller-side-method rule exists.
+- For controllers, nothing catches an aliased write. Do not alias a model to write through it.
 
 ### Wiring and lifetimes
 
 | Rule | Enforced by |
 | --- | --- |
-| every registration is owned by `newRegistry` — no hand-rolled `offs` arrays | B0 · *uses newRegistry rather than a hand-rolled disposer array* |
-| a controller cannot be activated before views are registered | `ViewsReady` token + B0 · *mints only in views-ready.ts and bootstrap.ts* and *holds the ViewsReady CLASS only in…* |
-| `TodoApi` and its adapters name no command, model or bus | B0 · *keeps TodoApi and its adapters free of commands, models and the bus* |
-| `dispose()` writes nothing after it resolves, and never deadlocks | `B3-controller/tests/dispose-liveness.test.ts` |
+| no disposer array named `offs` or `_offs` — the pattern checks that name only; that every registration goes through `newRegistry` is kept by review | B0 · *uses newRegistry rather than a hand-rolled disposer array* |
+| `ListController.activate()` refuses a token `bootstrap` did not mint | `ViewsReady` + B4 · *refuses to activate a controller that did not come through the capability*; B0 · *mints only in views-ready.ts and bootstrap.ts* and *holds the ViewsReady CLASS only in bootstrap.ts and list-controller.ts*. `MenuController` takes no token (see [DECISIONS.md](DECISIONS.md#deferred)) |
+| a `registerViews` that throws unwinds the command defaults bootstrap already registered, then rethrows | B4 · *unwinds what already succeeded when registerViews throws* |
+| `createList()` after `dispose()` throws | B4 · *refuses createList() once the app is disposed* |
+| `TodoApi`'s port files (`types.ts`, `*-api.ts`) spell no `Command`, `Model` or `BaseClass`, and import neither the bus, the model base nor the declarations | B0 · *keeps TodoApi and its adapters free of commands, models and the bus* |
+| `ListController.dispose()` lands no model write after it resolves | B3 · *is WRITE-quiescent…* in `list-controller.test.ts`, and `dispose-liveness.test.ts` |
+| `app.dispose()` resolves while a controller's run awaits a view-settled command — a host's approval dialog, or the controller's own confirm | `B3-controller/tests/dispose-liveness.test.ts` |
+| when a view that held the focus closes, focus returns to where it was when the view opened | B5 · *an answered dialog returns focus…* and *a view that did not hold focus leaves it where it is*; B6 end to end |
 | the shadcn kit's styles actually reach the built CSS | `B6-app/tests/emitted-css.test.ts` |
 
 ## Recipes
@@ -91,6 +117,9 @@ A view can only reach a controller through the model, so every new gesture is a 
    - must every press be honoured, each with its own data? → **Event edge** (a replaced queue plus a
      `take*()` that drains by replacement and is silent when empty)
 2. Add the field and its mutator to `TodoListInput`, with a comment naming its class.
+   **Then add the mutator's name to `VIEW_MAY_CALL` in `B0-boundaries/tests/boundaries.test.ts`** —
+   until you do, B0 counts it as controller-side and fails the view that calls it. An event edge's
+   `take*()` drain is the controller's: leave it off that list.
 3. Add a named channel: `onXChange = onChangeNotifier(this.onUpdate, () => this.x)`.
 4. If an outer-model getter derives from it, forward the relevant channel to the outer `notify()`
    (see §3 of ARCHITECTURE.md), or a view bound to that getter goes stale.
@@ -99,12 +128,14 @@ A view can only reach a controller through the model, so every new gesture is a 
 
 ### Handle an intent in the controller
 
-1. Subscribe to its **channel** in `activate()`, through the registry: `register(model.input.onX(() => this._start()))`.
+1. Subscribe to its **channel** in `activate()`, through the registry:
+   `register(model.input.onX(() => void this._reconcile()))`.
 2. Drain or read it inside `_reconcile()` — the existing loop, not a second one. That is what keeps
-   coalescing and re-entrancy correct.
+   coalescing and re-entrancy correct. The price: if the intent awaits a command a **view** settles
+   (a dialog), every other edge waits with it until the user answers — see ARCHITECTURE §6.
 3. Catch every failure where it happens and fold it into the run's `failure`; never let a rejection
-   escape. Move a watermark only when the work landed — or, for an intent that asked the user a
-   question, when the user answered.
+   escape. Move a watermark once the intent is consumed: for work with no question in it, when the
+   work landed; for an intent that asked the user a question, when the user answered.
 4. After every `await`, check `_disposed` before writing the model.
 5. Test in `B3-controller`: the class's obligation (coalesced? all honoured?), the failure path
    reported through `lastOutcome`, and no "Unhandled" anywhere in the output.
@@ -116,9 +147,11 @@ A view can only reach a controller through the model, so every new gesture is a 
    `models.ts`.
 2. Write the component in `lib/todo-ui/src/views/`. Import from `@todo/app/models` and nothing else
    in `todo-app`. Take `{ model, settle }`. Bind with `useModel` — and pass `shallowEqual` for any
-   selector returning an array or object. Turn every gesture into a mutator call; settle from the
-   explicit gesture handlers (not from a derived "the dialog closed" event, which fires twice).
-3. Register it in `register-views.tsx` with `show(adapter, mount, decl, render)`.
+   selector returning an array or object. Turn every gesture into a call to a view-side mutator
+   (one in B0's `VIEW_MAY_CALL`); settle from the explicit gesture handlers (not from a derived "the
+   dialog closed" event, which fires twice).
+3. Register it in `register-views.tsx` with `show(adapter, mount, decl, render)`. `show` gives it its
+   own container and root, and returns focus to where it was if the view held it when it closed.
 4. Test it in `B5-views` (browser): it renders from its model; each gesture calls the right mutator —
    with the mutator **stubbed to do nothing** and the model's `toJSON()` asserted unchanged; settling
    removes it from the DOM, checked where it actually lives (Radix dialogs render into
@@ -131,6 +164,19 @@ checks the token and subscribes to channels through a `newRegistry`; and an `asy
 sets `_disposed` first and runs the registry's cleanup **without awaiting in-flight work**. Expose
 its creation as a capability from `bootstrap` returning `{ controller, release }` — do not export a
 way to construct and activate it without the token.
+
+**This recipe fails B0 as written, until you edit B0.** The token and bootstrap were shaped around
+one controller (deferred — see [DECISIONS.md](DECISIONS.md#deferred)):
+
+- B0 · *holds the ViewsReady CLASS only in bootstrap.ts and list-controller.ts* expects the files
+  importing `views-ready` to be **exactly** `bootstrap.ts`, `index.ts` and `list-controller.ts`. A new
+  controller that types `activate(ready: ViewsReady)` imports it too — even `import type` matches —
+  so add its file to that test's expected list (and to its title). Keep it to controllers: every
+  file on that list holds the class value, which is a forge.
+- `AppHandle` has only `createList`. Add a `createX(model)` beside it in `bootstrap.ts`, built the same
+  way — including its `disposed` check.
+- `MenuController` is the other shape: it takes no token, so nothing proves the view layer was
+  registered before it emits `ui:show-menu`. Do not copy that part.
 
 ## Commands you will use
 
