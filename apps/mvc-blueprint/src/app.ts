@@ -6,7 +6,9 @@ import { registerViews } from "@todo/ui";
 /**
  * The composition root: the one module that knows every layer — the core's
  * api, the app's bootstrap and models, the ui's React views — and wires them.
- * Nothing else in this app may import all three (B0 enforces it). `main.tsx`
+ * Nothing else in this app may import the core, the app and the React views
+ * together (B0 enforces it; a headless suite over `@todo/ui/adapter` is a
+ * protocol harness, not a second root, and is not counted). `main.tsx`
  * is only the page's entry: styles, the `#root` element, and a call to this.
  * It is split out so the B6 suite can boot exactly what `pnpm dev` serves.
  */
