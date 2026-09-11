@@ -42,6 +42,9 @@ export const SEARCH_KIND = "search";
 /** The kind the image peer page advertises (`pages/image-peer/main.ts`). Same reasoning as `SEARCH_KIND`. */
 export const IMAGES_KIND = "images";
 
+/** What a proxy page advertises -- see `../proxy/main.ts`. */
+export const PROXY_KIND = "proxy";
+
 export type ProviderState =
   /** No mesh view yet -- before the first heartbeat. Not an absence. */
   | { status: "unknown" }
