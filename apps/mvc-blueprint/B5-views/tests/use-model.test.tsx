@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createElement, useLayoutEffect } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { TodoListModel, type Todo } from "@todo/app/models";
 import { shallowEqual, useModel } from "@todo/ui";
+import { flush, render, waitFor } from "../../test-support/react.js";
 
 /**
  * B5 — the whole React binding, over a real Chromium (spec §4.3).
@@ -17,38 +17,15 @@ import { shallowEqual, useModel } from "@todo/ui";
  * changed — that is the whole point of the `isEqual` parameter.
  */
 
-let root: Root | undefined;
-let host: HTMLElement | undefined;
+let view: ReturnType<typeof render> | undefined;
 
 afterEach(() => {
-  root?.unmount();
-  host?.remove();
-  root = host = undefined;
+  view?.unmount();
+  view = undefined;
 });
 
-/** A real event-loop turn — React's initial commit and store updates both land asynchronously. */
-const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-/**
- * Polls rather than counting fixed ticks: how many event-loop turns React
- * needs to settle a commit is an implementation detail (and jittery on a
- * cold Chromium worker), not something this suite should hard-code.
- */
-const waitFor = async (predicate: () => boolean, timeoutMs = 1000): Promise<void> => {
-  const start = Date.now();
-  while (!predicate()) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`waitFor timed out after ${timeoutMs}ms`);
-    }
-    await flush();
-  }
-};
-
 const mount = async (element: ReturnType<typeof createElement>, values: unknown[]) => {
-  host = document.createElement("div");
-  document.body.appendChild(host);
-  root = createRoot(host);
-  root.render(element);
+  view = render(element);
   await waitFor(() => values.length >= 1);
 };
 
@@ -162,7 +139,7 @@ describe("useModel", () => {
     // Re-render the SAME component instance — same hook state, same
     // `cache` ref — but pointed at modelB. This is the dock-shell case: a
     // panel is re-pointed at a different model without unmounting.
-    root!.render(createElement(Probe, { model: modelB, selector, isEqual: shallowEqual, values }));
+    view!.root.render(createElement(Probe, { model: modelB, selector, isEqual: shallowEqual, values }));
     await waitFor(() => values.length >= 2);
 
     // The value used for THIS render must be a fresh sample of modelB, not
@@ -205,11 +182,7 @@ describe("useModel", () => {
       // No isEqual: the default is Object.is, and `m.visible()` returns a
       // fresh array on every call — the exact shape spec §4.3 calls out.
       const values: Todo[][] = [];
-      const element = createElement(Probe, { model, selector: (m) => m.visible(), values });
-      host = document.createElement("div");
-      document.body.appendChild(host);
-      root = createRoot(host);
-      root.render(element);
+      view = render(createElement(Probe, { model, selector: (m) => m.visible(), values }));
       // Give React's initial commit, its post-commit "did the store change
       // again" check, and any runaway loop it triggers, several turns to
       // surface — this render is expected to misbehave, so it cannot use the
@@ -242,5 +215,31 @@ describe("useModel", () => {
       sawLoopGuard,
       `expected React to surface its getSnapshot-loop guard; captured instead:\n${haystack || "(nothing)"}`,
     ).toBe(true);
+  });
+
+  it("unsubscribes on unmount — the model keeps no listener for a component that is gone", async () => {
+    // Every render test passes whether or not the subscription is released: a
+    // leaked listener re-renders nothing that is still on screen. Counted at
+    // the source instead — `useModel` subscribes through `model.onUpdate`.
+    const model = new TodoListModel();
+    const subscribe = model.onUpdate;
+    let live = 0;
+    model.onUpdate = (callback) => {
+      live++;
+      const off = subscribe(callback);
+      return () => {
+        live--;
+        off();
+      };
+    };
+
+    const values: (string | undefined)[] = [];
+    await mount(createElement(Probe, { model, selector: (m) => m.lastOutcome, values }), values);
+    expect(live, "precondition: the mounted component is subscribed").toBeGreaterThan(0);
+
+    view!.unmount();
+    view = undefined;
+    await flush();
+    expect(live, "every subscription the component made was released").toBe(0);
   });
 });
