@@ -25,3 +25,5 @@ export const APP_PORT = 5175;
 export const IMAGE_PEER_PORT = 5176;
 /** The hub page's port (Task 24) -- the next one along from the image peer's, for the same reasons and with the same fixedness. */
 export const HUB_PAGE_PORT = 5177;
+/** The proxy page's dev port. See the note on `APP_PORT` for why these are fixed. */
+export const PROXY_PAGE_PORT = 5178;

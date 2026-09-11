@@ -74,7 +74,8 @@ import type { ImageInfo } from "../../services/images.js";
 // has no such constraint.)
 import type { SearchResult } from "../../services/search.js";
 import type { ProviderState } from "./discovery.js";
-import { createProviderResolver, describeProvider, IMAGES_KIND, SEARCH_KIND } from "./discovery.js";
+import { createProviderResolver, describeProvider, IMAGES_KIND, PROXY_KIND, SEARCH_KIND } from "./discovery.js";
+import { describeStatus, parseHeaders, streamInto } from "../../browser/request-console.js";
 import type { CallOutcome } from "./outcome.js";
 import { describeOutcome, readOutcome } from "./outcome.js";
 import { type ConnectionKind, describeConnection } from "../../browser/connection-kind.js";
@@ -105,6 +106,7 @@ const reconnectButton = el<HTMLButtonElement>("reconnect");
 const resetButton = el<HTMLButtonElement>("reset-identity");
 const searchProviderEl = el("search-provider");
 const imagesProviderEl = el("images-provider");
+const proxyProviderEl = el("proxy-provider");
 const searchForm = el<HTMLFormElement>("search-form");
 const queryInput = el<HTMLInputElement>("q");
 const searchStatusEl = el("search-status");
@@ -121,8 +123,10 @@ let renderedMeshVersion: number | null = null;
 
 const resolveSearch = createProviderResolver(SEARCH_KIND);
 const resolveImages = createProviderResolver(IMAGES_KIND);
+const resolveProxy = createProviderResolver(PROXY_KIND);
 let searchState: ProviderState = { status: "unknown" };
 let imagesState: ProviderState = { status: "unknown" };
+let proxyState: ProviderState = { status: "unknown" };
 
 // --- rendering ------------------------------------------------------------
 
@@ -169,9 +173,11 @@ function renderProviders(view: MeshView | null): void {
   const previousImages = imagesState;
   searchState = resolveSearch(view);
   imagesState = resolveImages(view);
+  proxyState = resolveProxy(view);
 
   renderProvider(searchProviderEl, "search", searchState);
   renderProvider(imagesProviderEl, "images", imagesState);
+  renderProvider(proxyProviderEl, "proxy", proxyState);
 
   // Step 5: SAY SO, at the moment it happens, rather than waiting for the
   // user to click something and get a failure. The advertisement leaving
@@ -575,4 +581,87 @@ wireQrJoin({
   status: (message) => {
     qrUi.status.textContent = message;
   },
+});
+
+// --- proxied resources -------------------------------------------------------
+
+const proxyRouteEl = el<HTMLSelectElement>("proxy-route");
+const proxyMethodEl = el<HTMLSelectElement>("proxy-method");
+const proxyPathEl = el<HTMLInputElement>("proxy-path");
+const proxyHeadersEl = el<HTMLTextAreaElement>("proxy-headers");
+const proxySendEl = el<HTMLButtonElement>("proxy-send");
+const proxyStatusEl = el("proxy-status");
+const proxyOutputEl = el("proxy-output");
+
+/**
+ * Ask the proxy what it serves. A provider is discovered as `{ peerId, id,
+ * title }` and nothing more, so without this listing a person would have to
+ * guess prefixes. `callMesh` is right HERE and only here: the listing is a
+ * small JSON document the page has to parse. The console below must not use
+ * it, because it collects the body.
+ */
+async function loadRoutes(): Promise<void> {
+  if (handle == null) return setStatus(proxyStatusEl, "failed", "join the mesh first.");
+  if (proxyState.status !== "present") {
+    return setStatus(proxyStatusEl, "neutral", describeProvider("proxy", proxyState));
+  }
+  const peerId = proxyState.peerId;
+  const outcome = await callMesh(`${handle.baseUrl}${peerId}/proxy/`);
+  if (outcome.status !== "ok") return setStatus(proxyStatusEl, outcome.status, describeOutcome(outcome));
+
+  const routes = (outcome.body as { routes?: { prefix: string; upstream: string }[] } | null)?.routes ?? [];
+  proxyRouteEl.replaceChildren(
+    ...routes.map((r) => {
+      const option = document.createElement("option");
+      option.value = r.prefix;
+      option.textContent = `${r.prefix}  →  ${r.upstream}`;
+      return option;
+    }),
+  );
+  setStatus(proxyStatusEl, "ok", `${routes.length} route(s) offered by ${peerId}.`);
+}
+
+/**
+ * Send one request THROUGH THE MESH and render the answer as it arrives.
+ *
+ * This is the path the proxy page's own console deliberately skips, so it is
+ * the one that proves the mesh delivers a proxied response -- and, via the
+ * timing line, that it delivers it streamed rather than collected somewhere on
+ * the way.
+ */
+async function sendProxied(): Promise<void> {
+  if (handle == null) return setStatus(proxyStatusEl, "failed", "join the mesh first.");
+  if (proxyState.status !== "present") {
+    return setStatus(proxyStatusEl, "neutral", describeProvider("proxy", proxyState));
+  }
+  const prefix = proxyRouteEl.value;
+  if (prefix === "") return setStatus(proxyStatusEl, "neutral", "load the routes and pick one first.");
+  const typed = proxyPathEl.value.trim();
+  const rest = typed === "" ? "" : typed.startsWith("/") ? typed : `/${typed}`;
+  const url = `${handle.baseUrl}${proxyState.peerId}/proxy${prefix}${rest}`;
+
+  proxyOutputEl.textContent = "";
+  setStatus(proxyStatusEl, "neutral", `${proxyMethodEl.value} ${prefix}${rest}…`);
+  proxySendEl.disabled = true;
+  try {
+    const res = await fetch(url, { method: proxyMethodEl.value, headers: parseHeaders(proxyHeadersEl.value) });
+    setStatus(proxyStatusEl, res.ok ? "ok" : "failed", describeStatus(res));
+    const stats = await streamInto(res, (text) => {
+      proxyOutputEl.textContent += text;
+    });
+    if (stats.firstChunkMs !== null) {
+      proxyStatusEl.textContent +=
+        ` · ${stats.chunks} chunk(s), first at ${Math.round(stats.firstChunkMs)} ms of ${Math.round(stats.totalMs)} ms`;
+    }
+  } catch (err) {
+    setStatus(proxyStatusEl, "unreachable", `the request never completed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    proxySendEl.disabled = false;
+  }
+}
+
+el<HTMLButtonElement>("load-routes").addEventListener("click", () => void loadRoutes());
+el<HTMLFormElement>("proxy-console-form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  void sendProxied();
 });
