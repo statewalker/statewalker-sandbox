@@ -76,9 +76,11 @@ describe("B0 · package boundaries", () => {
   it("finds sources recursively, including subdirectories", () => {
     // Not `length > 0`: `index.ts` is top-level, so that passes even with a
     // non-recursive readdir. Naming the nested file is what actually proves it,
-    // and it is what fails first if `{ recursive: true }` is ever dropped.
+    // and it is what fails first if `{ recursive: true }` is ever dropped. A
+    // real view, not a placeholder kept only to be found — and a `.tsx`, so
+    // the `isSource` filter is proven to admit the extension every view uses.
     expect(sources("todo-ui").map((s) => s.file)).toContain(
-      "todo-ui/src/components/placeholder.ts",
+      "todo-ui/src/views/list-view.tsx",
     );
   });
 
