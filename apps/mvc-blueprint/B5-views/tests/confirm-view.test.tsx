@@ -33,7 +33,7 @@ describe("ConfirmView", () => {
     expect(dialog.textContent).toContain("Remove 2 completed todos?");
   });
 
-  it("Confirm settles { confirmed: true } — once, though Radix closes the dialog as well", async () => {
+  it("Confirm settles { confirmed: true } — once, though Radix fires its own close after the click", async () => {
     const { settle, dialog } = await mountConfirm("Remove?");
     await userEvent.click(button(dialog, "Confirm")!);
     expect(settle).toHaveBeenCalledExactlyOnceWith({ confirmed: true });

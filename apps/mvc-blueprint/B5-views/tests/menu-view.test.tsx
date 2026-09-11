@@ -38,10 +38,9 @@ describe("MenuView", () => {
     expect(labels).toEqual(["Toggle", "Delete", "todos:unlabelled"]);
   });
 
-  it("clicking an item settles { selectedKey } — once", async () => {
+  it("clicking an item settles { selectedKey }", async () => {
     const { settle, host } = await mountMenu();
     await userEvent.click(button(host, "Delete")!);
-    await userEvent.keyboard("{Escape}");
     expect(settle).toHaveBeenCalledExactlyOnceWith({ selectedKey: "todos:remove" });
   });
 
@@ -49,6 +48,19 @@ describe("MenuView", () => {
     const { settle } = await mountMenu();
     await userEvent.keyboard("{Escape}");
     expect(settle).toHaveBeenCalledExactlyOnceWith({});
+  });
+
+  it("Escape pressed OUTSIDE the menu answers nothing — one Escape must not close every open view", async () => {
+    const { settle } = await mountMenu();
+    const outside = document.createElement("button");
+    outside.textContent = "elsewhere";
+    document.body.appendChild(outside);
+    teardown.push(() => outside.remove());
+    outside.focus();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(settle).not.toHaveBeenCalled();
   });
 
   it("through the bus: choosing resolves the command, and the settle unmounts the menu", async () => {
