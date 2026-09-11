@@ -7,7 +7,7 @@ failure is usually the most useful part.
 - [1. Three layers, one bus](#1-three-layers-one-bus)
 - [2. Commands](#2-commands)
 - [3. Models](#3-models)
-- [4. Events: change channels](#4-events-change-channels)
+- [4. Change: dependencies instead of channels](#4-change-dependencies-instead-of-channels)
 - [5. Input: three classes of field](#5-input-three-classes-of-field)
 - [6. Controllers](#6-controllers)
 - [7. Views are command handlers](#7-views-are-command-handlers)
@@ -15,6 +15,7 @@ failure is usually the most useful part.
 - [9. Lifetimes: the registry](#9-lifetimes-the-registry)
 - [10. Failure](#10-failure)
 - [11. The composition root](#11-the-composition-root)
+- [12. The signals contract](#12-the-signals-contract)
 
 ---
 
@@ -24,7 +25,7 @@ failure is usually the most useful part.
 | --- | --- | --- | --- |
 | **core** | `lib/todo-core` | the domain record, the `TodoApi` port, the `todos:*` declarations and their default handlers | any `ui:` command, the app, the DOM |
 | **app** | `lib/todo-app` | models, controllers, `bootstrap`, the `ui:*` declarations | React, the DOM, any view |
-| **ui** | `lib/todo-ui` | React views, `useModel`, the view adapter | a controller, `bootstrap`, `todo-core` |
+| **ui** | `lib/todo-ui` | React views, `useValue`, the view adapter | a controller, `bootstrap`, `todo-core` |
 
 The rules that make this real:
 
@@ -34,8 +35,8 @@ The rules that make this real:
 - **The only way across a layer boundary is a command.**
 
 `B0-boundaries/tests/boundaries.test.ts` enforces the parts of these that are facts about the
-files — who imports what, who names the bus, who notifies, which model methods a view names — and
-fails the run on a violation, as far as its patterns reach. Two are design rules kept by review, not
+files — who imports what, who names the bus, who creates signals and effects, which facet a view is
+handed — and fails the run on a violation, as far as its patterns reach. Two are design rules kept by review, not
 by a test: nothing checks that a model "performs no action", and reads cross from a controller to the
 core through `TodoApi`, not through a command (§6). See
 [DEVELOPING.md](DEVELOPING.md#the-rules-and-what-enforces-them) for each rule, its test, and what walks
@@ -116,138 +117,76 @@ there is a command for exactly that — `todos:resolve-actions` — whose defaul
 
 ## 3. Models
 
-Every model extends `BaseClass` from `@statewalker/shared-baseclass`: a synchronous
-`notify()` / `onUpdate(cb)` channel, and `toJSON()` that drops underscore-prefixed and
-function-valued fields.
-
-### Rule: models are changed only through mutators
-
-A controller or a view **never** assigns a model field and **never** calls `notify()`. The model
-exposes named methods that change its fields and notify once, at the end. B0 greps the libraries for
-both — a `.notify(` outside `todo-app/src/*-model.ts`, and an assignment through a receiver named
-`…model…` or through `.input.` — which catches the ordinary spelling and not an alias
-(`const i = model.input; i.x = …`):
-
-```ts
-// WRONG — the caller knows the field layout and owns the notify
-form.firstName = "John";
-form.lastName = "Smith";
-form.submitCount++;
-form.notify();
-
-// RIGHT — one intention, one notify, owned by the model
-form.submitUserInfo({ firstName: "John", lastName: "Smith" });
-```
-
-Why this matters more than it looks:
-
-1. **One notify per intention.** A caller who forgets to notify leaves a model that disagrees with
-   the screen. A caller who notifies *between* two writes shows every subscriber a half-applied state.
-2. **It makes the input classes of §5 checkable.** `submitCount++` at a call site looks like any
-   other integer write; `queueSubmit(title)` is the one method that raises that edge, so the model —
-   not every caller — makes the payload travel with it.
-3. **`toJSON()` stays a true snapshot**, because the writes are an auditable list.
-
-### Rule: a mutator compares before it writes
-
-```ts
-setFilter(draft: string): void {
-  if (this.filterDraft === draft) return;   // no field change, no update
-  this.filterDraft = draft;
-  this.notify();
-}
-```
-
-Writing the value a model already holds raises **no** notify. That single line is what kills a
-self-wake cycle at its source — see [DECISIONS.md](DECISIONS.md) for the update-latch that was
-proposed instead and why it was rejected.
-
-### Rule: arrays and objects are replaced, never mutated
-
-```ts
-replaceTodos(todos: Todo[]): void {
-  this.todos = [...todos];   // a new array, always
-  this.notify();
-}
-```
-
-Change detection everywhere in this app is by identity. An in-place `push` changes nothing anyone
-can see.
-
-### Rule: a model's `onUpdate` must cover every derived getter it exposes
-
-`TodoListModel.visible()` is derived from the todo list **and** the filter fields, which live on
-the input sub-model (§5). A view binding `visible()` subscribes to the outer model — so the outer
-model must notify when those input fields change. It does, by forwarding exactly the query changes:
-
-```ts
-constructor() {
-  super();
-  this.input.onQueryChange(() => this.notify());
-}
-```
-
-This was found, not designed: the first list view subscribed to the filter fields directly to work
-around it, and the review proved that dropping one of those subscriptions left every test green
-while "Show completed" silently stopped filtering in the running app. The defect was in the model's
-contract, so that is where it was fixed — not in every view that would otherwise rediscover it.
-
-## 4. Events: change channels
-
-A model does not hand subscribers one undifferentiated `onUpdate` and leave them to work out what
-moved. It declares a **channel per meaningful change**, with `onChangeNotifier`:
+A model is a **factory returning two frozen facets** over signals it keeps in its closure:
 
 ```ts
 // lib/todo-app/src/todo-model.ts
-onRefresh       = onChangeNotifier(this.onUpdate, () => this.refreshCount);
-onPendingChange = onChangeNotifier(this.onUpdate, () => this.pending);
-onQueryChange   = onChangeNotifier(this.onUpdate,
-                    () => `${this.showDone ? "1" : "0"}\u0000${this.filterDraft}`);
+export function createTodoListModel(): TodoListModel   // { view, control }
 ```
 
-A channel fires only when its value changes by `!==`. A channel over **two** fields folds them
-into one comparable value, and the separator is load-bearing: the fixed one-character prefix
-plus a character no title can contain is what stops two different states colliding into the
-same key. A controller subscribed to `onRefresh` is
-**not woken at all** when someone types in the filter.
+| Facet | Holds |
+| --- | --- |
+| `view: TodoListView` | reads — `visible`, `filterDraft`, `showDone`, `lastOutcome`; the view-side mutators — `setFilter`, `setShowDone`, `requestRefresh`, `requestClearCompleted`, `queueSubmit`, `requestToggle`, `requestRemove` |
+| `control: TodoListControl` | `edges` — the reads the controller reacts to; `todos`; the drains `takePending`, `takeToggles`, `takeRemovals`; the result writers `replaceTodos`, `reportOutcome` |
 
-Four things to know before relying on one:
+Every read handed out is a `Read<T>` — a function with no write half. Both facets, and
+`control.edges`, are frozen: a facet is shared, and unfrozen, `view.setFilter = …` would replace a
+function for every holder.
 
-1. **It does not coalesce.** Two bumps in one tick fire twice. It narrows *which* changes wake you,
-   not *how often* — coalescing is the controller's job (§6).
-2. **It compares by identity**, which is why arrays are replaced (§3).
-3. **It advances before it tells you.** `onChangeNotifier` sets `prev = next` *before* calling your
-   callback. Anything that can drop the callback — a throttle, a filter, a suppressor — therefore
-   loses the change **permanently**: no later notify re-fires it. Never wrap a channel callback.
-4. **Channels are invisible to `toJSON()`** (they are functions), so snapshots stay data.
+### What the substrate makes a fact
 
-Subscribing to bare `onUpdate` is allowed in exactly two places: inside a model module
-(`todo-app/src/*-model.ts`), and in `todo-ui/src/use-model.ts`, which supplies its own selector. B0
-greps the libraries for `.onUpdate(` elsewhere — by exact location: an earlier version exempted any
-file ending in `-model.ts`, which quietly included `use-model.ts` in every *other* model rule too.
+- **Nothing outside a model can write a field.** The signals are in the factory's closure; no
+  caller holds a writable one. (The parent enforced this with a grep over assignments.)
+- **A view cannot reach the controller's side.** It is handed `view` — `ui:show-list` is declared
+  over `TodoListView` — so `replaceTodos` is not something it can name. (The parent grepped the view
+  layer for a derived list of forbidden method names.)
+- **A write of the value already held notifies nobody** — contract guarantee 1.
+- **`visible` is covered by construction.** It is a `computed` over `todos`, `filterDraft` and
+  `showDone`; whatever reads it depends on all three. (The parent forwarded the input's query changes
+  to the outer model by hand, and found the omission only in review.)
+
+### What stays a rule
+
+- **Arrays and objects are replaced, never mutated.** Change detection is by identity; an in-place
+  `push` reaches no signal.
+- **A mutator that writes two signals does so inside `batch`** — one notification per intention.
+  None does today.
+- **A mutator reads its own signals `untracked`,** so calling it from inside any reaction adds no
+  dependency.
+
+## 4. Change: dependencies instead of channels
+
+The parent declared a **channel per meaningful change** (`onChangeNotifier`), so a subscriber was
+woken only by the change it asked for. Signals do this by construction: an effect depends on exactly
+what its last run read. The controller's effect reads its five edges and nothing else, so typing in
+the filter does not wake it.
+
+Three things to know before relying on it:
+
+1. **It does not coalesce.** Two writes outside a `batch` wake an effect twice. Coalescing is the
+   controller's job (§6).
+2. **It compares by identity** (`===`), which is why arrays are replaced (§3).
+3. **A read is a subscription only on the run that made it.** An effect — or a `computed` — depends
+   on exactly what its last run read; a run that returns, or branches, before reading has no
+   dependency on what it skipped, and a later change to that value never wakes it. `visible` used to
+   read `showDone()` only inside the `.filter()` callback: with an empty `todos()` list `.filter()`
+   never called the predicate, so `showDone` was never read and never became a dependency, and
+   toggling "Show completed" against an empty list would stop filtering for good once items arrived.
+   The fix (§3) reads every input — `filterDraft()`, `showDone()`, `todos()` — unconditionally,
+   before any data-dependent branch.
+
+What the parent's channels gave that tracking does not: a subscription you can grep. B0 cannot see
+what an effect reads, so the controller's effect reads a declared `edges` object, and B1's
+*each intent wakes only its own edge* pins which read each mutator moves.
 
 ## 5. Input: three classes of field
 
-User input lives in a **sub-model** — `model.input` — separate from the data the controller owns.
-Intent flows **in** through `input`; results flow **out** through the outer model:
-
-- The view writes `input`, through its view-side mutators (`set*`, `request*`, `queueSubmit`).
-- The controller writes the outer model through *its* mutators (`replaceTodos`, `reportOutcome`), and
-  writes `input` only to **drain** it: each `take*()` replaces a queue and notifies, which does wake
-  the controller's own channel — inside a run, where the in-flight guard (§6) turns it into a no-op.
-
-That direction is why a controller's results cannot wake it: it subscribes to `input` and writes
-them elsewhere.
-
-The object split does not *enforce* this on its own — a view holds the outer model, and nothing in
-JavaScript stops it calling `replaceTodos`. What the split does is make it **checkable**: "who may
-call what" is a list of method names. B0 checks it: a `todo-ui` source may not name any model method
-except the view-side mutators, `visible` and `toJSON`, and the forbidden set is derived at run time
-from the model classes, so a *prototype* method added later is forbidden to views until someone says
-otherwise. A function-valued instance field or a getter is not collected, and is allowed.
-A computed name (`model["replace" + "Todos"]`) walks past it. This rule exists because the browser
-suites' `toJSON()` snapshots cannot see a view writing *equal* data — `model.replaceTodos(model.todos)`
-passed all of them.
+User input lives on the `view` facet's mutators and the `control.edges` reads — the same signals,
+seen from two sides. Intent flows **in** through the view's mutators; results flow **out** through
+`control.replaceTodos` and `control.reportOutcome`. The controller's effect reads the edges and
+writes the results, so its results cannot wake it. It writes an edge only to **drain** it — each
+`take*()` replaces a queue, inside a run, where the in-flight guard (§6) turns any re-run into a
+no-op.
 
 Every input field belongs to one of three classes, and the class decides what the controller must do:
 
@@ -265,19 +204,8 @@ from never drew it — every edge there was state-latest, so the difference neve
 the model has destroyed the first title. So an event edge is a **replaced queue**:
 
 ```ts
-queueSubmit(title: string): void {
-  this.pending = [...this.pending, { title }];
-  this.notify();
-}
-
-/** Drains by replacement and returns the batch. Silent when already empty. */
-takePending(): { title: string }[] {
-  if (this.pending.length === 0) return [];
-  const batch = this.pending;
-  this.pending = [];
-  this.notify();
-  return batch;
-}
+queueSubmit: (title: string) => append(pending, { title }),   // a new array, always
+takePending: drain(pending),                                  // replaced, silent when empty
 ```
 
 **Clear-completed is state-latest on purpose.** Two quick presses must open one confirm dialog, not
@@ -286,38 +214,32 @@ losing one is a bug.
 
 ## 6. Controllers
 
-`ListController` owns the api and the bus, and never sees a view. Its whole job is one idempotent,
-re-entrant loop:
+`ListController` owns the api and the bus, and never sees a view. It subscribes with **one effect**
+over the model's `control.edges` and nothing else, and its whole job from there is one idempotent,
+re-entrant loop, `_reconcile()`:
 
 ```ts
-private async _reconcile(): Promise<void> {
-  if (this._reconciling) return;            // fold into the run already in flight
-  this._reconciling = true;
-  try {
-    let again = true;
-    while (again && !this._disposed) {
-      again = false;
-      const batch = this._model.input.takePending();   // EVENT edge: drain every item
-      // ... toggles, removals, clear-completed ...
-      if (input.refreshCount > this._handledRefresh) { // STATE-LATEST edge: jump to newest
-        const target = input.refreshCount;
-        const reloaded = await this._reload();
-        if (reloaded.ok) this._handledRefresh = target;
-        again = true;
-      }
-    }
-  } finally {
-    this._reconciling = false;
-  }
-}
+// lib/todo-app/src/list-controller.ts
+const { edges } = this._model.control;
+register(
+  effect(() => {
+    // These reads ARE the subscription: every edge, read first and unconditionally.
+    edges.refreshCount();
+    edges.clearCompletedCount();
+    edges.pending();
+    edges.toggles();
+    edges.removals();
+    untracked(() => void this._reconcile());
+  }),
+);
 ```
 
 ### Coalescing is leading + trailing
 
-A watermark alone **cannot** coalesce. `notify()` is synchronous, so five `requestRefresh()` calls
-in one tick fire the channel five times before the first reload's `await` suspends — all five pass
-the watermark check and five reloads start. The first controller written for this app did exactly
-that and failed its own test.
+A watermark alone **cannot** coalesce. A signal write wakes the effect synchronously, so five
+`requestRefresh()` calls in one tick run it five times before the first reload's `await` suspends —
+all five pass the watermark check and five reloads start. The first controller written for this app
+did exactly that and failed its own test.
 
 The fix is the `_reconciling` guard: re-entrant calls return immediately, and the running pass
 **loops**, re-reading the counters after every await. The first pulse reloads at once; everything
@@ -403,18 +325,18 @@ diagnosis for a wiring bug.
 
 ```tsx
 // lib/todo-ui/src/views/list-view.tsx
-export function ListView({ model }: { model: TodoListModel }) {
-  const rows = useModel(model, (m) => m.visible(), shallowEqual);
+export function ListView({ model }: { model: TodoListView }) {
+  const rows = useValue(model.visible, shallowEqual);
   // ...
-  <Input onChange={(e) => model.input.setFilter(e.target.value)} />
-  <Checkbox onChange={() => model.input.requestToggle(todo.id)} />
+  <Input onChange={(e) => model.setFilter(e.target.value)} />
+  <Checkbox onChange={() => model.requestToggle(todo.id)} />
 }
 ```
 
-Every gesture is a view-side mutator call on `model.input`. The view never assigns a field, never
-notifies, never calls a controller-side mutator (B0, §5), and never guesses an outcome: a ticked row
-stays unticked until the controller's `replaceTodos` says otherwise. Its one piece of local state is
-the add form's half-typed title, which is not model state until it is submitted.
+Every gesture is a view-side mutator call on the `view` facet. The view never assigns a field, and
+cannot call a controller-side mutator — it was never handed one — and never guesses an outcome: a
+ticked row stays unticked until the controller's `replaceTodos` says otherwise. Its one piece of
+local state is the add form's half-typed title, which is not model state until it is submitted.
 
 ### Focus goes back where it was
 
@@ -424,22 +346,21 @@ the focused element when a view mounts, and when the view closes, puts focus bac
 closing this view is what lost it (the focused element was one the unmount removed). A view that
 closes while the user is elsewhere — a toast expiring as they type — leaves focus alone.
 
-### `useModel` is the whole React binding
+### `useValue` is the whole React binding
 
 ```ts
-useModel(model, selector, isEqual = Object.is)
+useValue(read, isEqual = Object.is)
 ```
 
-It wraps `useSyncExternalStore` and caches the last snapshot, returning the **cached reference**
-whenever `isEqual(prev, next)` holds. Without that, a selector returning a fresh array — every
-`m => m.visible()` — makes React loop with *"The result of getSnapshot should be cached"*. A test
-reproduces exactly that failure without the comparator, which is how we know the comparator is
-load-bearing. Pass `shallowEqual` for any derived array or object.
+It wraps `useSyncExternalStore` using the signals contract alone. The subscription is an effect that
+calls `read()` — so the component depends on exactly what `read` reads — and tells React inside
+`untracked`, because React calls `getSnapshot` synchronously from its change callback. The snapshot
+is `untracked(read)`, cached: for the same `read`, while `isEqual` holds, the previous reference is
+returned, which is what keeps an inline derivation returning a fresh array from looping React. A
+`read` that throws is caught in the effect — it would otherwise throw out of whoever wrote the
+signal — and rethrown from `getSnapshot` into React's error boundary.
 
-The cache is keyed by **model identity** as well, so a component re-pointed at a different model
-never returns the previous model's cached reference. It is **not** keyed by selector: the current
-selector runs on every `getSnapshot`, and the cache answers only when `isEqual` says the fresh value
-is equivalent — so a selector may close over props.
+Pass facet reads (`model.visible`): they are stable functions, so the component subscribes once.
 
 ### The adapter is headless
 
@@ -630,3 +551,33 @@ Two traps, both of which cost time:
    only in the kit's source reached the CSS; it fails for a missing import **and** for byok's glob.
 2. **A `@theme` block must live in the CSS file Tailwind processes** — the one that
    `@import "tailwindcss"`. It does not merge from a separately-processed entry.
+
+## 12. The signals contract
+
+The app imports its signals from `@todo/signals` — `lib/signals/deps.ts`, one line:
+`export * from "./alien.js"`. What it imports is a contract of five functions, alien-signals' own
+shape:
+
+```ts
+signal<T>(initial: T): Signal<T>          // s() reads, s(v) writes
+computed<T>(fn: () => T): Read<T>
+effect(fn: () => void): () => void        // runs now; returns stop; owned by nobody
+batch<T>(fn: () => T): T
+untracked<T>(fn: () => T): T
+```
+
+`alien.ts` is nearly a re-export; `preact.ts` wraps `.value` into call syntax. Swapping libraries is
+editing that one line. B1's contract suite runs both against the eight guarantees the app relies on,
+and records, per library, the five behaviours the contract leaves open:
+
+| Behaviour | alien-signals | preact |
+| --- | --- | --- |
+| an effect writes a signal it tracks (a drain) | not re-run | re-run once |
+| an effect that never settles | runs once, silent | throws `Cycle detected` |
+| an effect created inside another effect's run | normalized: survives | survives |
+| one effect throws during a flush | the rest is skipped | the rest runs, then it rethrows |
+| a write inside effect A that effect B tracks | B runs during the write | B runs after A |
+
+The app relies on none of them, and two rules follow: **no effect throws** (each catches what it can
+raise), and **a reaction must converge** — alien will not tell you when one does not. The ladder runs
+on both libraries, so the preact run is the cycle detector.

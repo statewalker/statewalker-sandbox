@@ -1,16 +1,19 @@
-# @statewalker/mvc-blueprint
+# @statewalker/mvc-blueprint-signals
 
-A TODO application whose purpose is not todos.
+The MVC blueprint, on signals. The same TODO app, the same three layers, the same command bus and
+view protocol, and the same test ladder as `apps/mvc-blueprint` — with every model built on signals
+behind one small contract, so the question it answers is: **which of the blueprint's rules were
+about the architecture, and which only about its `BaseClass`?** The answer is in
+[docs/DECISIONS.md](docs/DECISIONS.md): three rules disappeared (named channels, forwarding derived
+getters, the view-side method grep), and none of the architecture did.
 
-It is the **blueprint** for an architecture — commands as the channel between layers, controllers
-that never see a view, models that only hold data, views that are nothing but command handlers —
-built small enough to read end to end, and tested hard enough to trust. A Files Manager and a
-DockPanel shell hosting loadable mini-apps are meant to be cut from it next.
+The signals library is a one-line choice (`lib/signals/deps.ts`): alien-signals by default,
+`@preact/signals-core` as the other implementation. The ladder runs on both.
 
 ```
 pnpm dev          # the app, in a browser
-pnpm test         # 144 headless tests, no DOM, ~2 s
-pnpm test:browser # 45 tests in real Chromium
+pnpm test         # 285 headless tests, run on both signals libraries
+pnpm test:browser # 90 tests in real Chromium
 pnpm typecheck
 pnpm build        # production bundle in dist/
 ```
@@ -45,7 +48,7 @@ pnpm build        # production bundle in dist/
    │  todo-ui        │ ────────────► │  todo-app        │ ───────────┘    │  todo-core    │
    │  React views    │               │  models          │                 │  declarations │
    │  (renderers)    │ ◄──────────── │  controllers     │ ──────────────► │  TodoApi      │
-   └─────────────────┘  useModel     └──────────────────┘   api.list()    └───────────────┘
+   └─────────────────┘  useValue     └──────────────────┘   api.list()    └───────────────┘
         knows only models              owns I/O, never sees a view            knows no UI
 ```
 
@@ -53,7 +56,8 @@ pnpm build        # production bundle in dist/
   `ui:*` commands carrying a model.
 - A **view** is a renderer registered on a `ui:*` command. It receives `{ model, settle }` and
   nothing else, and turns every user gesture into a call to one of the model's view-side mutators.
-- A **model** holds data and notifies. It is changed only through its own mutators.
+- A **model** is a factory returning two frozen facets over private signals: `view` for the view
+  layer, `control` for the controller.
 - **`src/app.ts`** is the one place that wires the core, the app and the React views together.
 
 ## Documentation
@@ -65,18 +69,19 @@ pnpm build        # production bundle in dist/
 | [docs/TESTING.md](docs/TESTING.md) | How it is tested, why, and the catalogue of tests that looked right and could not fail |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | What was decided, what was rejected, and why — including the ideas that were tried and removed |
 
-The authoritative design is `docs/superpowers/specs/2026-09-10-mvc-blueprint-design.md` in the
-`statewalker/umbrella` repository (not linked: it lives in a different repo from this one). These
-documents describe what was actually built from it, including where building it proved the design
-wrong.
+The authoritative design is `docs/superpowers/specs/2026-09-11-mvc-blueprint-signals-design.md` in
+the `statewalker/umbrella` repository (not linked: it lives in a different repo from this one).
+These documents describe what was actually built from it, including where building it proved the
+design wrong.
 
 ## Layout
 
 ```
+lib/signals          contract.ts, alien.ts, preact.ts, and deps.ts — the one import point
 lib/todo-core/src    declarations, TodoApi (the port), MemTodoApi, the command defaults
 lib/todo-app/src     models, controllers, bootstrap, the model kit
                      models.ts is the ONLY entry the view layer may use
-lib/todo-ui/src      view-adapter.ts (headless — no React), use-model.ts,
+lib/todo-ui/src      view-adapter.ts (headless — no React), use-value.ts,
                      views/*.tsx, register-views.tsx
 src/                 app.ts (composition root), main.tsx (page entry), index.css
 B0-…B6-*/tests       the ladder — one directory per rung, each a proven property
@@ -113,15 +118,17 @@ The app starts with three seeded todos in memory. There is no persistence yet �
 
 | Rung | Settles | Where | Tests |
 | --- | --- | --- | --- |
-| B0 | the layering, as a fact about the files — and that node suites cannot load React | node | 34 |
-| B1 | models, the three classes of input field, the model kit | node | 39 |
-| B2 | the command surface, its defaults, the override, the `claimed` contract | node | 10 |
-| B3 | the controllers: reconciliation, coalescing, errors, disposal | node | 35 |
-| B4 | the view protocol, bootstrap order and its failure unwind, the panel lifecycle | node | 24 |
-| B5 | the React views, `useModel`, focus on close | Chromium | 41 |
+| B0 | the layering, as a fact about the files — and that node suites cannot load React | node | 35 |
+| B1 | models, the three classes of input field, the model kit, **the signals contract on both libraries** | node | 108 |
+| B2 | the command surface, its defaults, the override, the `claimed` contract | node | 20 |
+| B3 | the controllers: reconciliation, coalescing, errors, disposal | node | 72 |
+| B4 | the view protocol, bootstrap order and its failure unwind, the panel lifecycle | node | 48 |
+| B5 | the React views, `useValue`, focus on close | Chromium | 86 |
 | B6 | the running app, end to end, and that Tailwind emitted the kit's styles | Chromium + node | 4 + 2 |
 
-144 node tests and 45 browser tests in all.
+285 node tests and 90 browser tests in all — B1 through B5 run once per signals library
+(`node:alien`/`node:preact`, `browser:alien`/`browser:preact`); the contract suite (counted in B1)
+and B0/B6 run once.
 
 **Not done:** B7 (a persistent `TodoApi`), and B8–B9 (extracting the substrate into `app-kit` —
 which the spec gates on the Files Manager being ported onto it as a second caller).

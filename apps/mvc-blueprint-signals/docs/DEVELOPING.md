@@ -49,34 +49,24 @@ The headless plugin sees what Vite resolves — this app's sources and the speci
 package under `node_modules` that imported React by itself would be loaded by Node and not caught;
 none of the headless suites' dependencies does.
 
-### Models and events
-
-The greps in this table read the three libraries under `lib/` — not `src/`, and not the suites,
-which set models up directly on purpose.
+### Models and signals
 
 | Rule | Enforced by |
 | --- | --- |
-| only a model module — `todo-app/src/*-model.ts` — contains `.notify(` | B0 · *calls notify() only from a model* |
-| the exemption above reaches exactly `todo-app/src/todo-model.ts` — not `use-model.ts`, not a `*-model.ts` in another layer | B0 · *the exemption reaches the model modules, and nothing else* |
-| no source outside a model module assigns (`=`, compound, `??=`, `++`, `--`) through a receiver whose name contains `model`, or through `.input.` | B0 · *never assigns a model field* (see the limits below) |
-| a `todo-ui` source names no controller-side model method — `replaceTodos`, `reportOutcome`, the `take*()` drains, `fromJSON`, `notify` — as `.name` or `["name"]`. The set is **derived at run time** from the model classes `@todo/app/models` exports, minus the list of what a view may call (`VIEW_MAY_CALL` in B0): a **prototype** method added to a model is off-limits to views until it is added there. A function-valued instance field (e.g. `wipe = () => …`), a getter/setter, or a method of a model class the entry does not export is not collected, and passes | B0 · *todo-ui never names a controller-side model method*, and *the split is derived from the model classes…* |
-| only a model module or `todo-ui/src/use-model.ts` (exact path) contains `.onUpdate(` | B0 · *never calls onUpdate outside a model or the React binding* |
-| a comparing mutator (`setFilter`, `setShowDone`, `reportOutcome`, the `take*()` drains on an empty queue) raises no notify for an unchanged value | a `B1-models` test per mutator, counting **raw** `onUpdate` calls |
-| `todos` and each input queue are replaced, never mutated | `expectReplacedNotMutated` and the per-queue *is replaced on request* tests in `B1-models` |
-| the outer model's `onUpdate` covers `visible()`, its one derived getter | `B1-models` · *an input QUERY change fires the outer model's onUpdate* |
+| `alien-signals` is imported only by `lib/signals/alien.ts`; `@preact/signals-core` only by `lib/signals/preact.ts` | B0 · *each library is imported by exactly its own implementation file* |
+| those two files are imported only by `deps.ts` and the contract suite | B0 · *the implementation files are imported only by deps.ts and the contract suite* |
+| in `todo-app`, `signal(` `computed(` `batch(` appear only in `todo-model.ts`; `effect(` only in `list-controller.ts` and `model-kit.ts`; `untracked(` only in those three | B0 · *in todo-app, signals are created only in a model…* |
+| in `todo-ui`, only `use-value.ts` imports `@todo/signals` | B0 · *in todo-ui, only use-value.ts reaches the signals* |
+| `todo-ui` never names `control` or `TodoListControl` | B0 · *todo-ui never names the control facet* |
+| the facets carry exactly the listed members, are frozen, share no function, and hand out reads that cannot write | B1 · *the two facets* |
+| a write of the value already held wakes nobody | the contract suite (guarantee 1), and a B1 test per mutator |
+| `todos` and each queue are replaced, never mutated | `expectReplacedNotMutated` in B1 |
 
-**The limits, stated honestly.**
-
-- The field-assignment grep needs the receiver's name to contain `model`, or the write to go through
-  `.input.`: `model.input.x = …` and `this._model.x = …` are caught; `const i = model.input; i.x = …`
-  and `props.m.todos = …` are not.
-- The controller-side-method rule matches `.replaceTodos` and `["replaceTodos"]`. A computed name
-  (`model["replace" + "Todos"]`) or a destructured method walks past it.
-- For views, the browser suites add a check at run time: each gesture test stubs its mutator to do
-  nothing and asserts the model's `toJSON()` is unchanged — which catches a view writing *different*
-  data, and **cannot** see a write that stores equal data (`model.replaceTodos(model.todos)`). That
-  is why the controller-side-method rule exists.
-- For controllers, nothing catches an aliased write. Do not alias a model to write through it.
+**The limits.** A grep reads names: `const c = model["con" + "trol"]` walks past *never names the
+control facet*, and the facet key-set test is what notices a new member. Nothing checks that a
+mutator writing two signals uses `batch`; none does today. `use-value.ts`'s subscription tells React
+inside `untracked(onStoreChange)` — defensive, not enforced: swap it for a bare `onStoreChange()` and
+every current test still passes. Kept by review, not by a test.
 
 ### Wiring and lifetimes
 
@@ -116,20 +106,14 @@ A view can only reach a controller through the model, so every new gesture is a 
      watermark in the controller)
    - must every press be honoured, each with its own data? → **Event edge** (a replaced queue plus a
      `take*()` that drains by replacement and is silent when empty)
-2. Add the field and its mutator to `TodoListInput`, with a comment naming its class.
-   **Then add the mutator's name to `VIEW_MAY_CALL` in `B0-boundaries/tests/boundaries.test.ts`** —
-   until you do, B0 counts it as controller-side and fails the view that calls it. An event edge's
-   `take*()` drain is the controller's: leave it off that list.
-3. Add a named channel: `onXChange = onChangeNotifier(this.onUpdate, () => this.x)`.
-4. If an outer-model getter derives from it, forward the relevant channel to the outer `notify()`
-   (see §3 of ARCHITECTURE.md), or a view bound to that getter goes stale.
-5. Test in `B1-models`, counting **raw** `onUpdate` calls — never through the channel, whose own
-   dedup would hide a missing compare-before-write guard.
+2. Add the signal to `createTodoListModel` with a comment naming its class, its mutator to `view`,
+   and — for an edge — its read to `control.edges` and its drain to `control`. Update the key lists
+   in B1 · *the two facets*.
+3. Test in `B1-models` with `watch` (test-support), which counts at the source.
 
 ### Handle an intent in the controller
 
-1. Subscribe to its **channel** in `activate()`, through the registry:
-   `register(model.input.onX(() => void this._reconcile()))`.
+1. Read its edge in the effect in `activate()`, with the other edges, before anything else.
 2. Drain or read it inside `_reconcile()` — the existing loop, not a second one. That is what keeps
    coalescing and re-entrancy correct. The price: if the intent awaits a command a **view** settles
    (a dialog), every other edge waits with it until the user answers — see ARCHITECTURE §6.
@@ -146,21 +130,21 @@ A view can only reach a controller through the model, so every new gesture is a 
    name `ui:`), with the view's model as input and the view's result as output. Export it from
    `models.ts`.
 2. Write the component in `lib/todo-ui/src/views/`. Import from `@todo/app/models` and nothing else
-   in `todo-app`. Take `{ model, settle }`. Bind with `useModel` — and pass `shallowEqual` for any
-   selector returning an array or object. Turn every gesture into a call to a view-side mutator
-   (one in B0's `VIEW_MAY_CALL`); settle from the explicit gesture handlers (not from a derived "the
+   in `todo-app`. Take `{ model, settle }`. Bind with `useValue(model.x)` — and pass `shallowEqual`
+   for any read returning an array or object. Turn every gesture into a call to a view-side mutator
+   (one on the `view` facet); settle from the explicit gesture handlers (not from a derived "the
    dialog closed" event, which fires twice).
 3. Register it in `register-views.tsx` with `show(adapter, mount, decl, render)`. `show` gives it its
    own container and root, and returns focus to where it was if the view held it when it closed.
 4. Test it in `B5-views` (browser): it renders from its model; each gesture calls the right mutator —
-   with the mutator **stubbed to do nothing** and the model's `toJSON()` asserted unchanged; settling
-   removes it from the DOM, checked where it actually lives (Radix dialogs render into
-   `document.body`, not into your mount).
+   with the view handed a copy of its facet whose mutator is a `vi.fn()`, and `snapshotOf(model)`
+   asserted unchanged; settling removes it from the DOM, checked where it actually lives (Radix
+   dialogs render into `document.body`, not into your mount).
 
 ### Add a controller
 
 Give it a constructor taking its model, the bus and the api; an `activate(ready: ViewsReady)` that
-checks the token and subscribes to channels through a `newRegistry`; and an `async dispose()` that
+checks the token and registers its effect through a `newRegistry`; and an `async dispose()` that
 sets `_disposed` first and runs the registry's cleanup **without awaiting in-flight work**. Expose
 its creation as a capability from `bootstrap` returning `{ controller, release }` — do not export a
 way to construct and activate it without the token.
@@ -188,6 +172,7 @@ pnpm test:B3         # one rung
 pnpm typecheck       # before every commit
 pnpm dev             # the app (see README if it hits the file-watcher limit)
 pnpm build && pnpm preview
+pnpm vitest run --project node:preact   # one library
 ```
 
 To see console output from **passing** tests — warnings you want to audit — run vitest with
@@ -200,3 +185,5 @@ To see console output from **passing** tests — warnings you want to audit — 
 - `@statewalker/ui.view.shadcn` is published; import its `./styles`, never a path into its source.
 - If `pnpm add` rewrites `pnpm-workspace.yaml` — reordering it, stripping its comments — revert that
   file. It has happened more than once in this repository, and it destroyed a documenting comment.
+- `alien-signals` and `@preact/signals-core` are pinned exactly; a second copy of a signals library
+  tracks independently and silently.

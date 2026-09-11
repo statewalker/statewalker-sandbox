@@ -23,13 +23,15 @@ as correct, and could not fail. The catalogue below is the most reusable thing i
 
 ```
 B0-boundaries     the layering, as a fact about the files                  node
-B1-models         models, mutators, channels, the three input classes      node
+B1-models         models, facets, the three input classes, the signals contract    node
 B2-commands       the command surface, defaults, override, `claimed`       node
 B3-controller     reconciliation, coalescing, failure, disposal            node
 B4-view-protocol  the adapter, bootstrap order, the panel lifecycle        node
-B5-views          the React views and useModel                             Chromium
+B5-views          the React views and useValue                            Chromium
 B6-app            the running app end to end; the kit's CSS is emitted     Chromium + node
 ```
+
+B1–B5 run on both signals libraries (`node:alien`, `node:preact`, `browser:alien`, `browser:preact`).
 
 ```sh
 pnpm test            # every node suite
@@ -52,7 +54,7 @@ enforces.
 | --- | --- | --- |
 | `expectNoSelfWake({ reactions, writeOuter, writeInput })` | a controller is woken by an **input** write and **not** by an outer write | a controller subscribed to the outer model (it would loop) — **and** one subscribed to nothing |
 | `expectCoalescedEdge({ bump, read, actions })` | a state-latest edge collapses repeated bumps | a controller that acts per bump, one that never acts, and a "mutator" that does not raise the counter |
-| `expectReplacedNotMutated(model, read, mutate)` | the field was replaced **and** the replacement was observed through the notify channel | an in-place `push`, and a replacement that forgot to notify |
+| `expectReplacedNotMutated(read, mutate)` | the value was replaced and an effect over `read` saw it | an in-place `push` |
 
 ### `MemTodoApi` — `lib/todo-core/src/mem-todo-api.ts`
 
@@ -73,6 +75,9 @@ The reference adapter every headless suite runs against. Two properties make it 
   used to hand-roll a look-alike, because a B0 rule meant for view suites bound them too.
 - **`react.ts`** — DOM plumbing for the browser suites: `render`, `waitFor`, `flush`, `button`. Use
   these rather than a local copy.
+- **`signals.ts`** — `watch(read)` counts changes at the source (an effect, first run excluded);
+  `watchResults(model)` counts the controller's writes; `snapshotOf(model)` is every value either
+  facet exposes.
 
 ### The node project cannot load React
 
@@ -126,9 +131,9 @@ The input could not produce the failure the test is named for.
 
 ### 2b. A release nobody counts
 
-- **`useModel`'s unsubscribe.** A version that never unsubscribed passed every browser test: a
-  leaked listener re-renders nothing that is still on screen. Fix: count live subscriptions at the
-  source (wrap `model.onUpdate`) and assert they return to zero on unmount.
+- **`useValue`'s unsubscribe.** A version that never unsubscribed would pass every browser test: a
+  leaked effect re-renders nothing that is still on screen. Fix: count reads at the source (wrap
+  `read`) and assert the count stops moving once the component has unmounted.
 
 ### 3. One change masks another
 
@@ -160,6 +165,9 @@ The input could not produce the failure the test is named for.
 - **"A gesture reaches the model only through a mutator"** used spies that called the real mutator.
   A view that wrote the field itself *and* called the mutator passed. Fix: stub the mutator to do
   nothing (`mockImplementation(() => {})`), then assert the model's `toJSON()` is unchanged.
+
+  Here a facet is frozen, so a test stubs by handing the view a copy of its facet with one function
+  replaced.
 
 ### 6. The grep is too narrow
 
@@ -198,6 +206,14 @@ Inherited from the sibling app this blueprint descends from:
 - **`expectReplacedNotMutated(model, …)`** accepted `model` and never read it, comparing identity
   only — so a replacement that forgot to notify passed. Fix: watch the model.
 
+### 8. The write landed before the subscription
+
+- **use-value's "a read that throws … never throws into the writer"** first wrote right after mount:
+  `mount` waits for a layout effect, and `useSyncExternalStore` subscribes in a passive effect, so
+  the write reached no subscriber and the assertion held with the guard deleted. Fix: a benign write
+  rendered first proves the subscription is live. Found by planting the regression (removing the
+  try/catch).
+
 ### What to take from this
 
 When you write a test, ask **"what change to the code would leave this green?"** If the honest
@@ -229,3 +245,15 @@ planting that failed both tests at once.
   (`import(/* @vite-ignore */ spec)`), or the refusal fails the whole file instead of one assertion.
 - **Focus after a Radix dialog moves on a timer.** Radix restores focus in a `setTimeout` after
   unmount; wait a few turns before asserting where focus is.
+- **An effect's dependencies are its last run's reads.** A helper or a controller that returns
+  before reading subscribes to nothing — read first. And the two libraries differ on re-runs and
+  ordering (ARCHITECTURE §12): a test that counts effect runs across a drain may pass on one and
+  fail on the other; count results, not runs.
+- **A `computed`'s dependencies are the same story.** `visible` used to read `showDone()` only
+  inside the `.filter()` callback, so with an empty `todos()` list the predicate never ran,
+  `showDone` was never read, and it never became a dependency — "Show completed" would stop
+  filtering once items arrived. The fix reads every input, unconditionally, before any
+  data-dependent branch (ARCHITECTURE §4).
+- **`untracked(someSignal)` type-checks and does the wrong thing.** Passing a `Signal` directly
+  infers against its *write* overload (`(value: T): void`) and yields `void`, not the value. Pass a
+  thunk: `untracked(() => someSignal())`.
