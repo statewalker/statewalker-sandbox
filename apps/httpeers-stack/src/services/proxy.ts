@@ -51,6 +51,21 @@ export function createProxyEndpoint(init: ProxyEndpointInit): FetchHandler {
       ? url.pathname.slice(mountPrefix.length)
       : url.pathname;
 
+    // THE MOUNT ROOT DESCRIBES THE PROXY. A consumer discovers a provider as
+    // `{ peerId, id, title }` and nothing more, so without this it could only
+    // guess prefixes. It lists prefix and upstream and NOTHING about headers:
+    // a header's value is a credential, and its name says which scheme is in
+    // use, and every member of the mesh can read this.
+    //
+    // Checked before routing, and it cannot collide: no valid prefix is empty,
+    // and the page refuses a bare "/". Only a read is a listing -- any other
+    // method at the root falls through and misses like any unknown route.
+    if ((pathname === "" || pathname === "/") && c.req.raw.method === "GET") {
+      return c.json({
+        routes: init.routes().map((r) => ({ prefix: r.prefix, upstream: r.upstream })),
+      });
+    }
+
     const found = matchRoute(init.routes(), pathname);
     if (found == null) {
       return c.text(`no route for ${pathname}`, 404, { [MARKER]: "no-route" });

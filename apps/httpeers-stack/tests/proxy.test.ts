@@ -158,3 +158,55 @@ describe("PROXY_POLICIES (spec §10)", () => {
     expect(PROXY_RULES).toBeDefined();
   });
 });
+
+describe("the route listing at the mount root", () => {
+  const LISTED: ProxyRoute[] = [
+    { prefix: "/swapi", upstream: "https://swapi.dev/api", headers: {} },
+    { prefix: "/openai", upstream: "https://api.openai.com/v1",
+      headers: { authorization: "Bearer sk-SECRET", "x-org": "org-SECRET" } },
+  ];
+  const never = vi.fn(async () => new Response("must not be called")) as unknown as typeof fetch;
+
+  it("lists prefix and upstream for every route", async () => {
+    const res = await endpoint(never, LISTED)(new Request("http://mesh/proxy/"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      routes: [
+        { prefix: "/swapi", upstream: "https://swapi.dev/api" },
+        { prefix: "/openai", upstream: "https://api.openai.com/v1" },
+      ],
+    });
+    expect(never).not.toHaveBeenCalled();
+  });
+
+  // THE POINT OF THE SHAPE. A header's VALUE is a credential; its NAME says
+  // which credential scheme is in use. Neither belongs in something every
+  // member of the mesh can read.
+  it("never exposes a header, by value or by name", async () => {
+    const text = await (await endpoint(never, LISTED)(new Request("http://mesh/proxy/"))).text();
+    expect(text).not.toContain("SECRET");
+    expect(text).not.toContain("authorization");
+    expect(text).not.toContain("x-org");
+    expect(text).not.toContain("headers");
+  });
+
+  it("answers at the bare mount too", async () => {
+    const res = await endpoint(never, LISTED)(new Request("http://mesh/proxy"));
+    expect(res.status).toBe(200);
+  });
+
+  it("does not shadow a real route beside it", async () => {
+    const seen: Request[] = [];
+    const spy = vi.fn(async (i: Request) => { seen.push(i); return new Response("ok"); }) as unknown as typeof fetch;
+    await endpoint(spy, LISTED)(new Request("http://mesh/proxy/swapi/people/1/"));
+    expect(seen[0]?.url).toBe("https://swapi.dev/api/people/1/");
+  });
+
+  // Only a read is a listing. Anything else at the root is a request for a
+  // route that does not exist, and says so the same way every other miss does.
+  it("lists only for GET", async () => {
+    const res = await endpoint(never, LISTED)(new Request("http://mesh/proxy/", { method: "POST", body: "x" }));
+    expect(res.status).toBe(404);
+    expect(res.headers.get("x-httpeers-proxy")).toBe("no-route");
+  });
+});
