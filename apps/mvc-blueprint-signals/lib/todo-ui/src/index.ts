@@ -1,5 +1,5 @@
 export * from "./view-adapter.js";
-export * from "./use-model.js";
+export * from "./use-value.js";
 export * from "./register-views.js";
 export * from "./views/list-view.js";
 export * from "./views/confirm-view.js";

@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
-import { type Todo, TodoListModel } from "@todo/app/models";
+import { createTodoListModel, type Todo, type TodoListModel, type TodoListView } from "@todo/app/models";
 import { ListView } from "@todo/ui";
 import { all, button, flush, render, waitFor } from "../../test-support/react.js";
+import { snapshotOf } from "../../test-support/signals.js";
 
 /**
  * B5 · the list panel — spec §1.1: views know only models.
@@ -23,17 +24,18 @@ afterEach(() => {
 const todo = (id: string, title: string, done = false): Todo => ({ id, title, done });
 
 const seeded = () => {
-  const model = new TodoListModel();
-  model.replaceTodos([todo("1", "buy milk"), todo("2", "walk dog"), todo("3", "file taxes", true)]);
+  const model = createTodoListModel();
+  model.control.replaceTodos([todo("1", "buy milk"), todo("2", "walk dog"), todo("3", "file taxes", true)]);
   return model;
 };
 
-const mountList = async (model: TodoListModel) => {
-  const view = render(<ListView model={model} />);
-  unmount = view.unmount;
-  await waitFor(() => view.host.querySelector("ul") !== null);
+/** Mounts the list over `view` — the real facet, or a copy with one mutator stubbed. */
+const mountList = async (view: TodoListView) => {
+  const rendered = render(<ListView model={view} />);
+  unmount = rendered.unmount;
+  await waitFor(() => rendered.host.querySelector("ul") !== null);
   await flush(); // let the passive effects subscribe before a test drives the model
-  return view.host;
+  return rendered.host;
 };
 
 const titles = (host: HTMLElement) => all(host, "li").map((li) => li.querySelector("label")?.textContent?.trim());
@@ -51,7 +53,7 @@ const input = (host: HTMLElement, label: string) => {
 describe("ListView", () => {
   describe("renders from its model", () => {
     it("one row per visible todo, with its done state", async () => {
-      const host = await mountList(seeded());
+      const host = await mountList(seeded().view);
       expect(titles(host)).toEqual(["buy milk", "walk dog", "file taxes"]);
       const checked = all<HTMLInputElement>(host, 'li input[type="checkbox"]').map((c) => c.checked);
       expect(checked).toEqual([false, false, true]);
@@ -59,15 +61,15 @@ describe("ListView", () => {
 
     it("shows lastOutcome as an error line while it is set, and not otherwise", async () => {
       const model = seeded();
-      const host = await mountList(model);
+      const host = await mountList(model.view);
       expect(host.querySelector('[role="alert"]')).toBeNull();
 
       // The controller's mutator — the only way `lastOutcome` changes.
-      model.reportOutcome('add "x" failed: the store is down');
+      model.control.reportOutcome('add "x" failed: the store is down');
       await waitFor(() => host.querySelector('[role="alert"]') !== null);
       expect(host.querySelector('[role="alert"]')?.textContent).toContain("the store is down");
 
-      model.reportOutcome(undefined);
+      model.control.reportOutcome(undefined);
       await waitFor(() => host.querySelector('[role="alert"]') === null);
     });
   });
@@ -75,8 +77,8 @@ describe("ListView", () => {
   describe("re-renders when visible() changes", () => {
     it("when the controller replaces the list", async () => {
       const model = seeded();
-      const host = await mountList(model);
-      model.replaceTodos([todo("1", "buy milk"), todo("4", "call mum")]);
+      const host = await mountList(model.view);
+      model.control.replaceTodos([todo("1", "buy milk"), todo("4", "call mum")]);
       await waitFor(() => titles(host).length === 2);
       expect(titles(host)).toEqual(["buy milk", "call mum"]);
     });
@@ -88,14 +90,14 @@ describe("ListView", () => {
       // changes to its own `onUpdate` (B1 pins that). Driven through the
       // mutators, not the DOM, so this isolates the binding.
       const model = seeded();
-      const host = await mountList(model);
+      const host = await mountList(model.view);
 
-      model.input.setFilter("MILK");
+      model.view.setFilter("MILK");
       await waitFor(() => titles(host).length === 1);
       expect(titles(host)).toEqual(["buy milk"]);
 
-      model.input.setFilter("");
-      model.input.setShowDone(false);
+      model.view.setFilter("");
+      model.view.setShowDone(false);
       await waitFor(() => titles(host).length === 2);
       expect(titles(host)).toEqual(["buy milk", "walk dog"]);
     });
@@ -110,47 +112,45 @@ describe("ListView", () => {
     // for it — masking a missing subscription. The second change cannot.
     it("setShowDone alone hides and shows the completed row", async () => {
       const model = seeded();
-      const host = await mountList(model);
+      const host = await mountList(model.view);
 
-      model.input.setShowDone(false);
+      model.view.setShowDone(false);
       await waitFor(() => titles(host).length === 2);
       expect(titles(host)).toEqual(["buy milk", "walk dog"]);
       expect(input(host, "Show completed").checked, "the control echoes the model").toBe(false);
 
-      model.input.setShowDone(true);
+      model.view.setShowDone(true);
       await waitFor(() => titles(host).length === 3);
     });
 
     it("setFilter alone narrows the rows", async () => {
       const model = seeded();
-      const host = await mountList(model);
+      const host = await mountList(model.view);
 
-      model.input.setFilter("taxes");
+      model.view.setFilter("taxes");
       await waitFor(() => titles(host).length === 1);
       expect(titles(host)).toEqual(["file taxes"]);
 
-      model.input.setFilter("");
+      model.view.setFilter("");
       await waitFor(() => titles(host).length === 3);
     });
   });
 
   describe("user input reaches the model only through a mutator", () => {
-    // Each gesture's mutator is STUBBED to do nothing, and both halves of the
-    // model are snapshotted around the gesture. A spy that calls through
-    // cannot tell "the view called the mutator" from "the view wrote the
-    // field AND called the mutator" — and B0's field-write grep is walked
-    // straight past by an alias (`const i = model.input; i.removals = …`).
-    // With the mutator inert, ANY change to the model is the view's own
-    // write, and fails here.
-    const snapshot = (model: TodoListModel) => ({
-      outer: JSON.parse(JSON.stringify(model.toJSON())),
-      input: JSON.parse(JSON.stringify(model.input.toJSON())),
-    });
+    // Each gesture's mutator is STUBBED — the view is handed a copy of its facet
+    // with that one function replaced — and the whole model is snapshotted
+    // around the gesture. With the mutator inert, ANY change to the model is
+    // the view's own doing, through some other view-side mutator, and fails
+    // here. (A frozen facet cannot be spied on in place; copying it is how a
+    // test swaps one function.)
+    const snapshot = snapshotOf;
+    const withStub = <K extends keyof TodoListView>(model: TodoListModel, key: K, stub: TodoListView[K]) =>
+      ({ ...model.view, [key]: stub }) as TodoListView;
 
     it("typing in the filter calls setFilter with what was typed — and writes nothing itself", async () => {
       const model = seeded();
-      const host = await mountList(model);
-      const setFilter = vi.spyOn(model.input, "setFilter").mockImplementation(() => {});
+      const setFilter = vi.fn();
+      const host = await mountList(withStub(model, "setFilter", setFilter));
       const before = snapshot(model);
 
       await userEvent.fill(input(host, "Filter"), "dog");
@@ -165,8 +165,8 @@ describe("ListView", () => {
 
     it("the show-completed checkbox calls setShowDone — and writes nothing itself", async () => {
       const model = seeded();
-      const host = await mountList(model);
-      const setShowDone = vi.spyOn(model.input, "setShowDone").mockImplementation(() => {});
+      const setShowDone = vi.fn();
+      const host = await mountList(withStub(model, "setShowDone", setShowDone));
       const before = snapshot(model);
 
       await userEvent.click(input(host, "Show completed"));
@@ -179,8 +179,8 @@ describe("ListView", () => {
 
     it("submitting the add form calls queueSubmit(title), clears the draft, and writes nothing itself", async () => {
       const model = seeded();
-      const host = await mountList(model);
-      const queueSubmit = vi.spyOn(model.input, "queueSubmit").mockImplementation(() => {});
+      const queueSubmit = vi.fn();
+      const host = await mountList(withStub(model, "queueSubmit", queueSubmit));
       const before = snapshot(model);
 
       await userEvent.fill(input(host, "New todo"), "  buy bread ");
@@ -197,8 +197,8 @@ describe("ListView", () => {
 
     it("a blank draft submits nothing", async () => {
       const model = seeded();
-      const host = await mountList(model);
-      const queueSubmit = vi.spyOn(model.input, "queueSubmit").mockImplementation(() => {});
+      const queueSubmit = vi.fn();
+      const host = await mountList(withStub(model, "queueSubmit", queueSubmit));
       const before = snapshot(model);
 
       await userEvent.fill(input(host, "New todo"), "   ");
@@ -210,8 +210,8 @@ describe("ListView", () => {
 
     it("a row's checkbox calls requestToggle(id) — and the row keeps showing the MODEL until it changes", async () => {
       const model = seeded();
-      const host = await mountList(model);
-      const requestToggle = vi.spyOn(model.input, "requestToggle").mockImplementation(() => {});
+      const requestToggle = vi.fn();
+      const host = await mountList(withStub(model, "requestToggle", requestToggle));
       const before = snapshot(model);
       const box = row(host, "walk dog").querySelector<HTMLInputElement>('input[type="checkbox"]')!;
 
@@ -223,14 +223,14 @@ describe("ListView", () => {
       // row still reads not-done. Only the controller's `replaceTodos` moves it.
       await flush();
       expect(box.checked).toBe(false);
-      model.replaceTodos([todo("1", "buy milk"), todo("2", "walk dog", true), todo("3", "file taxes", true)]);
+      model.control.replaceTodos([todo("1", "buy milk"), todo("2", "walk dog", true), todo("3", "file taxes", true)]);
       await waitFor(() => box.checked);
     });
 
     it("a row's delete button calls requestRemove(id) — and writes nothing itself", async () => {
       const model = seeded();
-      const host = await mountList(model);
-      const requestRemove = vi.spyOn(model.input, "requestRemove").mockImplementation(() => {});
+      const requestRemove = vi.fn();
+      const host = await mountList(withStub(model, "requestRemove", requestRemove));
       const before = snapshot(model);
 
       await userEvent.click(button(row(host, "file taxes"), 'Delete "file taxes"')!);
@@ -241,8 +241,8 @@ describe("ListView", () => {
 
     it("Clear completed calls requestClearCompleted() — and writes nothing itself", async () => {
       const model = seeded();
-      const host = await mountList(model);
-      const requestClearCompleted = vi.spyOn(model.input, "requestClearCompleted").mockImplementation(() => {});
+      const requestClearCompleted = vi.fn();
+      const host = await mountList(withStub(model, "requestClearCompleted", requestClearCompleted));
       const before = snapshot(model);
 
       await userEvent.click(button(host, "Clear completed")!);
@@ -254,7 +254,7 @@ describe("ListView", () => {
 
   it("the filter field echoes the model once the real mutator runs", async () => {
     const model = seeded();
-    const host = await mountList(model);
+    const host = await mountList(model.view);
 
     await userEvent.fill(input(host, "Filter"), "dog");
 

@@ -1,7 +1,7 @@
 import { CommandError, Commands } from "@statewalker/shared-commands";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BootstrapOptions } from "@todo/app";
-import { ConfirmModel, MenuModel, TodoListModel, uiConfirm, uiShowList, uiShowMenu } from "@todo/app/models";
+import { ConfirmModel, createTodoListModel, MenuModel, uiConfirm, uiShowList, uiShowMenu } from "@todo/app/models";
 import { registerViews } from "@todo/ui";
 import { createHost, waitFor } from "../../test-support/react.js";
 
@@ -40,10 +40,10 @@ const containers = () => [...mount.children].map((c) => (c as HTMLElement).datas
 
 describe("registerViews", () => {
   it("a ui:show-list command renders a list panel into its own container under mount", async () => {
-    const model = new TodoListModel();
-    model.replaceTodos([{ id: "1", title: "buy milk", done: false }]);
+    const model = createTodoListModel();
+    model.control.replaceTodos([{ id: "1", title: "buy milk", done: false }]);
 
-    const cmd = commands.call(uiShowList, model);
+    const cmd = commands.call(uiShowList, model.view);
     await waitFor(() => mount.querySelector("li") !== null);
 
     expect(containers()).toEqual(["ui:show-list"]);
@@ -52,7 +52,7 @@ describe("registerViews", () => {
   });
 
   it("settling the command — from the controller's side — removes the panel", async () => {
-    const cmd = commands.call(uiShowList, new TodoListModel());
+    const cmd = commands.call(uiShowList, createTodoListModel().view);
     await waitFor(() => mount.querySelector("ul") !== null);
 
     cmd.resolve({ closed: true });
@@ -62,8 +62,8 @@ describe("registerViews", () => {
   });
 
   it("two commands are two views — each settles, and unmounts, alone", async () => {
-    const a = commands.call(uiShowList, new TodoListModel());
-    const b = commands.call(uiShowList, new TodoListModel());
+    const a = commands.call(uiShowList, createTodoListModel().view);
+    const b = commands.call(uiShowList, createTodoListModel().view);
     await waitFor(() => mount.querySelectorAll("ul").length === 2);
 
     a.resolve({ closed: true });
@@ -73,13 +73,13 @@ describe("registerViews", () => {
   });
 
   it("dispose removes every open view and rejects exactly the commands still open — nothing else", async () => {
-    const done = commands.call(uiShowList, new TodoListModel());
+    const done = commands.call(uiShowList, createTodoListModel().view);
     await waitFor(() => mount.children.length === 1);
     done.resolve({ closed: true });
     await done.promise;
     await waitFor(() => mount.children.length === 0);
 
-    const list = commands.call(uiShowList, new TodoListModel());
+    const list = commands.call(uiShowList, createTodoListModel().view);
     const confirm = commands.call(uiConfirm, new ConfirmModel("Remove?"));
     const menu = commands.call(uiShowMenu, new MenuModel([{ key: "todos:remove" }]));
     // Observed before dispose, so the rejections below are handled.
@@ -101,7 +101,7 @@ describe("registerViews", () => {
 
     // The listeners are gone too: a view command now finds nobody — the loud
     // wiring-bug diagnosis, not a hang.
-    const late = commands.call(uiShowList, new TodoListModel());
+    const late = commands.call(uiShowList, createTodoListModel().view);
     await expect(late.promise).rejects.toBeInstanceOf(CommandError);
     await expect(late.promise).rejects.toMatchObject({ kind: "no-handlers" });
 
@@ -154,7 +154,7 @@ describe("registerViews", () => {
       const first = outsideButton("first");
       const second = outsideButton("second");
       first.focus();
-      const cmd = commands.call(uiShowList, new TodoListModel());
+      const cmd = commands.call(uiShowList, createTodoListModel().view);
       await waitFor(() => mount.querySelector("ul") !== null);
       second.focus(); // the user moved on while the panel was up
 

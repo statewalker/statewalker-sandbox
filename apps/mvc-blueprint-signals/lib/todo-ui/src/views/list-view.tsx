@@ -8,38 +8,36 @@ import {
   Input,
   cn,
 } from "@statewalker/ui.view.shadcn";
-import type { TodoListModel } from "@todo/app/models";
+import type { TodoListView } from "@todo/app/models";
 import { type FormEvent, useState } from "react";
 import { Checkbox } from "../components/checkbox.js";
-import { shallowEqual, useModel } from "../use-model.js";
+import { shallowEqual, useValue } from "../use-value.js";
 
 /**
- * The list panel — rendered for `ui:show-list`, and knowing only its model.
+ * The list panel — rendered for `ui:show-list`, and knowing only its facet.
  *
- * Every gesture becomes a MUTATOR call on `model.input`, the sub-model the
- * view owns (spec §4.8): it never assigns a field, never notifies, and never
- * guesses an outcome — a toggled row stays unticked until the controller's
- * `replaceTodos` says otherwise. The one piece of local state is the add
- * form's draft, which is not model state: nothing but this form cares about a
- * half-typed title until it is submitted, and then it rides the event edge.
+ * It is handed `TodoListView` and nothing else: reads to render, and the
+ * view-side mutators to raise intents. It cannot reach a result writer — it was
+ * never given one. It never guesses an outcome: a toggled row stays unticked
+ * until the controller's `replaceTodos` says otherwise. Its one piece of local
+ * state is the add form's draft, which is not model state until it is
+ * submitted, and then it rides the event edge.
  */
-export function ListView({ model }: { model: TodoListModel }) {
-  // Every read is bound through the OUTER model: its `onUpdate` covers the
-  // input's query fields (the model forwards them), so the rows depend on
-  // `visible()` and nothing else — not on the controls happening to
-  // subscribe to the same fields. A derived array, so it MUST be compared
-  // shallowly (spec §4.3).
-  const rows = useModel(model, (m) => m.visible(), shallowEqual);
-  const filter = useModel(model, (m) => m.input.filterDraft);
-  const showDone = useModel(model, (m) => m.input.showDone);
-  const outcome = useModel(model, (m) => m.lastOutcome);
+export function ListView({ model }: { model: TodoListView }) {
+  // `visible` is a computed: the same reference until an input changes. A new
+  // `todos` array with equal rows recomputes it, so `shallowEqual` spares that
+  // re-render.
+  const rows = useValue(model.visible, shallowEqual);
+  const filter = useValue(model.filterDraft);
+  const showDone = useValue(model.showDone);
+  const outcome = useValue(model.lastOutcome);
   const [draft, setDraft] = useState("");
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const title = draft.trim();
     if (title === "") return; // `todos:add` would reject it; do not raise an edge for nothing
-    model.input.queueSubmit(title);
+    model.queueSubmit(title);
     setDraft("");
   };
 
@@ -65,13 +63,13 @@ export function ListView({ model }: { model: TodoListModel }) {
             type="search"
             placeholder="Filter"
             value={filter}
-            onChange={(e) => model.input.setFilter(e.target.value)}
+            onChange={(e) => model.setFilter(e.target.value)}
           />
           <label className="flex shrink-0 items-center gap-2 text-sm">
             <Checkbox
               aria-label="Show completed"
               checked={showDone}
-              onChange={(e) => model.input.setShowDone(e.target.checked)}
+              onChange={(e) => model.setShowDone(e.target.checked)}
             />
             Show completed
           </label>
@@ -87,7 +85,7 @@ export function ListView({ model }: { model: TodoListModel }) {
           {rows.map((todo) => (
             <li key={todo.id} className="flex items-center gap-3 py-2">
               <label className="flex flex-1 items-center gap-3">
-                <Checkbox checked={todo.done} onChange={() => model.input.requestToggle(todo.id)} />
+                <Checkbox checked={todo.done} onChange={() => model.requestToggle(todo.id)} />
                 <span className={cn("text-sm", todo.done && "text-muted-foreground line-through")}>
                   {todo.title}
                 </span>
@@ -96,7 +94,7 @@ export function ListView({ model }: { model: TodoListModel }) {
                 variant="ghost"
                 size="sm"
                 aria-label={`Delete "${todo.title}"`}
-                onClick={() => model.input.requestRemove(todo.id)}
+                onClick={() => model.requestRemove(todo.id)}
               >
                 Delete
               </Button>
@@ -106,7 +104,7 @@ export function ListView({ model }: { model: TodoListModel }) {
         {rows.length === 0 && <p className="text-sm text-muted-foreground">Nothing to show.</p>}
       </CardContent>
       <CardFooter className="justify-end">
-        <Button variant="outline" onClick={() => model.input.requestClearCompleted()}>
+        <Button variant="outline" onClick={() => model.requestClearCompleted()}>
           Clear completed
         </Button>
       </CardFooter>
