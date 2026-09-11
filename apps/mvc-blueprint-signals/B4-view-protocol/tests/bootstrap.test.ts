@@ -1,5 +1,5 @@
 import { CommandError, Commands } from "@statewalker/shared-commands";
-import { bootstrap, ListController, TodoListModel } from "@todo/app";
+import { bootstrap, createTodoListModel, ListController } from "@todo/app";
 import { MemTodoApi, todosAdd } from "@todo/core";
 import { describe, expect, it } from "vitest";
 import { claimListView } from "../../test-support/views.js";
@@ -24,14 +24,14 @@ describe("B4 · bootstrap ordering", () => {
         return claimListView(bus);
       },
     });
-    app.createList(new TodoListModel());
+    app.createList(createTodoListModel());
     order.push("controller");
     expect(order).toEqual(["views", "controller"]);
     await app.dispose();
   });
 
   it("refuses to activate a controller that did not come through the capability", () => {
-    const controller = new ListController(new TodoListModel(), new Commands(), new MemTodoApi());
+    const controller = new ListController(createTodoListModel(), new Commands(), new MemTodoApi());
     expect(() => controller.activate(undefined as never)).toThrow(/before the view layer/);
   });
 
@@ -42,7 +42,7 @@ describe("B4 · bootstrap ordering", () => {
       registerViews: (bus) => claimListView(bus),
     });
     await tick();
-    const late = app.createList(new TodoListModel()).controller;
+    const late = app.createList(createTodoListModel()).controller;
     await tick();
     expect(late.debug.reloads).toBeGreaterThan(0);
     await app.dispose();
@@ -54,12 +54,12 @@ describe("B4 · bootstrap ordering", () => {
       api: new MemTodoApi(),
       registerViews: (bus) => claimListView(bus),
     });
-    const model = new TodoListModel();
+    const model = createTodoListModel();
     const controller = app.createList(model).controller;
     await tick();
     const before = controller.debug.reactions;
     await app.dispose();
-    model.input.requestRefresh();
+    model.view.requestRefresh();
     await tick();
     expect(controller.debug.reactions).toBe(before);
   });
@@ -77,7 +77,7 @@ describe("B4 · bootstrap ordering", () => {
         };
       },
     });
-    const controller = app.createList(new TodoListModel()).controller;
+    const controller = app.createList(createTodoListModel()).controller;
     await tick();
 
     // Observe the controller's own disposal in the same array. Bootstrap's
@@ -101,8 +101,8 @@ describe("B4 · bootstrap ordering", () => {
       api: new MemTodoApi(),
       registerViews: (bus) => claimListView(bus),
     });
-    const modelA = new TodoListModel();
-    const modelB = new TodoListModel();
+    const modelA = createTodoListModel();
+    const modelB = createTodoListModel();
     const a = app.createList(modelA);
     const b = app.createList(modelB);
     await tick();
@@ -110,8 +110,8 @@ describe("B4 · bootstrap ordering", () => {
     await a.release();
     const reactionsA = a.controller.debug.reactions;
     const reactionsB = b.controller.debug.reactions;
-    modelA.input.requestRefresh();
-    modelB.input.requestRefresh();
+    modelA.view.requestRefresh();
+    modelB.view.requestRefresh();
     await tick();
     expect(a.controller.debug.reactions, "the released controller is torn down").toBe(reactionsA);
     expect(b.controller.debug.reactions, "its sibling is untouched").toBe(reactionsB + 1);
@@ -156,6 +156,6 @@ describe("B4 · bootstrap ordering", () => {
       registerViews: (bus) => claimListView(bus),
     });
     await app.dispose();
-    expect(() => app.createList(new TodoListModel())).toThrow(/after dispose\(\)/);
+    expect(() => app.createList(createTodoListModel())).toThrow(/after dispose\(\)/);
   });
 });

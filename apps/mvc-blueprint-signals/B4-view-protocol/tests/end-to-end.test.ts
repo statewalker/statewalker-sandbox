@@ -2,7 +2,7 @@ import { Commands } from "@statewalker/shared-commands";
 // A suite that spans every layer on purpose. B0's "views know only models" rule
 // binds todo-ui SOURCES and the suites that render views; this one takes the
 // view layer only as its headless adapter, so it runs over the real api.
-import { bootstrap, MenuController, TodoListModel, uiShowMenu } from "@todo/app";
+import { bootstrap, createTodoListModel, MenuController, uiShowMenu } from "@todo/app";
 import { ViewAdapter } from "@todo/ui/adapter";
 import { describe, expect, it } from "vitest";
 import { seededApi } from "../../test-support/api.js";
@@ -59,11 +59,11 @@ describe("B4 · end to end — bus, then views, then controllers, nothing faked 
         };
       },
     });
-    const model = new TodoListModel();
+    const model = createTodoListModel();
     app.createList(model);
     await tick();
     expect(
-      model.todos.map((t) => t.id),
+      model.control.todos().map((t) => t.id),
       "the list controller came up through the same bootstrap",
     ).toEqual(["1"]);
 

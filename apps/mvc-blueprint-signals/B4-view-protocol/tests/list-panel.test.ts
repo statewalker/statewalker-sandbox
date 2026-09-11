@@ -1,5 +1,5 @@
 import { Commands } from "@statewalker/shared-commands";
-import { bootstrap, TodoListModel, uiShowList } from "@todo/app";
+import { bootstrap, createTodoListModel, uiShowList } from "@todo/app";
 import { ViewAdapter } from "@todo/ui/adapter";
 import { describe, expect, it } from "vitest";
 import { seededApi } from "../../test-support/api.js";
@@ -33,15 +33,15 @@ describe("B4 · the list panel — shown by activate(), unmounted by dispose()/r
         return () => views.dispose();
       },
     });
-    const model = new TodoListModel();
+    const model = createTodoListModel();
     app.createList(model);
     await tick();
 
     expect(adapter?.openViews().map((v) => v.key)).toEqual(["ui:show-list"]);
     expect(
       mounted,
-      "the renderer actually ran, with the controller's own model as the payload",
-    ).toEqual([model]);
+      "the renderer actually ran, with the controller's own view facet as the payload",
+    ).toEqual([model.view]);
 
     await app.dispose();
   });
@@ -62,7 +62,7 @@ describe("B4 · the list panel — shown by activate(), unmounted by dispose()/r
         return () => views.dispose();
       },
     });
-    app.createList(new TodoListModel());
+    app.createList(createTodoListModel());
     await tick();
     expect(adapter?.openViews(), "precondition: the panel is open before teardown").toHaveLength(1);
 
@@ -90,8 +90,8 @@ describe("B4 · the list panel — shown by activate(), unmounted by dispose()/r
         return () => views.dispose();
       },
     });
-    const modelA = new TodoListModel();
-    const modelB = new TodoListModel();
+    const modelA = createTodoListModel();
+    const modelB = createTodoListModel();
     const a = app.createList(modelA);
     const b = app.createList(modelB);
     await tick();
@@ -106,7 +106,7 @@ describe("B4 · the list panel — shown by activate(), unmounted by dispose()/r
     expect(
       adapter?.openViews().map((v) => v.model),
       "B's panel, and only B's, is still reported open",
-    ).toEqual([modelB]);
+    ).toEqual([modelB.view]);
 
     await app.dispose();
     expect(unmounted, "app.dispose() then unmounts the sibling too").toEqual([

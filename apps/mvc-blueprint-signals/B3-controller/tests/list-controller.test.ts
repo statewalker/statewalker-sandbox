@@ -2,14 +2,16 @@ import { CommandError, Commands } from "@statewalker/shared-commands";
 import {
   type AppHandle,
   bootstrap,
+  createTodoListModel,
   expectCoalescedEdge,
   expectNoSelfWake,
   ListController,
-  TodoListModel,
+  type TodoListModel,
   uiConfirm,
 } from "@todo/app";
 import { MemTodoApi, type Todo } from "@todo/core";
 import { beforeEach, describe, expect, it } from "vitest";
+import { watch, watchResults } from "../../test-support/signals.js";
 import { answerDialogs, claimListView, type Dialogs } from "../../test-support/views.js";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -82,30 +84,30 @@ describe("B3 · list controller", () => {
     // which now refuses without the token bootstrap mints (see B4's
     // bootstrap.test.ts "refuses to activate").
     app = bootstrap({ commands, api, registerViews: (bus) => claimListView(bus) });
-    model = new TodoListModel();
+    model = createTodoListModel();
     controller = app.createList(model).controller;
   });
 
   it("loads the api into the model on activate", async () => {
     await tick();
-    expect(model.todos.map((t) => t.id)).toEqual(["1"]);
+    expect(model.control.todos().map((t) => t.id)).toEqual(["1"]);
   });
 
   it("drains the pending queue, one todo per queued item", async () => {
     await tick();
-    model.input.queueSubmit("a");
-    model.input.queueSubmit("b");
+    model.view.queueSubmit("a");
+    model.view.queueSubmit("b");
     await tick();
     await tick();
-    expect(model.todos.map((t) => t.title)).toEqual(["seed", "a", "b"]);
-    expect(model.input.pending, "the queue must be replaced with [] on drain").toEqual([]);
+    expect(model.control.todos().map((t) => t.title)).toEqual(["seed", "a", "b"]);
+    expect(model.control.edges.pending(), "the queue must be replaced with [] on drain").toEqual([]);
   });
 
   it("coalesces refresh: two increments in one tick are one reload", async () => {
     await tick();
     expectCoalescedEdge({
-      bump: () => model.input.requestRefresh(),
-      read: () => model.input.refreshCount,
+      bump: () => model.view.requestRefresh(),
+      read: () => model.control.edges.refreshCount(),
       actions: () => controller.debug.reloads,
       label: "refreshCount",
     });
@@ -117,7 +119,7 @@ describe("B3 · list controller", () => {
     // Five bumps with no gap. Without coalescing this is five reloads; with
     // leading+trailing coalescing it is exactly two — the one already running,
     // and one follow-up that sees the newest count.
-    for (let i = 0; i < 5; i++) model.input.requestRefresh();
+    for (let i = 0; i < 5; i++) model.view.requestRefresh();
     await tick();
     await tick();
     expect(controller.debug.reloads - before).toBe(2);
@@ -128,56 +130,79 @@ describe("B3 · list controller", () => {
     await expectNoSelfWake({
       reactions: () => controller.debug.reactions,
       writeOuter: () =>
-        model.replaceTodos([...model.todos, { id: "9", title: "by controller", done: false }]),
-      writeInput: () => model.input.requestRefresh(),
+        model.control.replaceTodos([...model.control.todos(), { id: "9", title: "by controller", done: false }]),
+      writeInput: () => model.view.requestRefresh(),
     });
   });
 
   it("is not woken by a level change it does not subscribe to", async () => {
     await tick();
     const before = controller.debug.reactions;
-    model.input.setFilter("anything");
+    model.view.setFilter("anything");
     await tick();
     expect(controller.debug.reactions, "filtering is view state, not a reload").toBe(before);
   });
 
+  it("tracks its edges and nothing else — the clear-completed check's read of the list subscribes nothing", async () => {
+    // That check reads `control.todos()` in the synchronous prefix of
+    // `_reconcile`, which runs inside the controller's effect. Untracked, the
+    // read subscribes nothing. Tracked, every later result write would wake
+    // the controller — its own writes included.
+    const bus = new Commands();
+    const dialogs = answerDialogs(bus, false); // decline: nothing is cleared
+    const local = bootstrap({
+      commands: bus,
+      api: new MemTodoApi([{ id: "1", title: "seed", done: true }]),
+      registerViews: (b) => claimListView(b),
+    });
+    const m = createTodoListModel();
+    const c = local.createList(m).controller;
+    await tick();
+    m.view.requestClearCompleted();
+    await tick();
+    await tick();
+    expect(dialogs.confirms, "precondition: the pass that read the list ran").toEqual(["Clear 1 completed todo?"]);
+    const before = c.debug.reactions;
+    m.control.replaceTodos([{ id: "2", title: "x", done: false }]);
+    expect(c.debug.reactions, "a result write woke the controller").toBe(before);
+    dialogs.off();
+    await local.dispose();
+  });
+
   it("writes outcomes to the OUTER model, so live typing is never wiped", async () => {
     await tick();
-    model.input.setFilter("half-typed");
-    let outcomes = 0;
-    model.onOutcomeChange(() => {
-      outcomes++;
-    });
-    model.input.queueSubmit(""); // todos:add's schema is min(1): the bus rejects it
+    model.view.setFilter("half-typed");
+    const outcomes = watch(model.view.lastOutcome);
+    model.view.queueSubmit(""); // todos:add's schema is min(1): the bus rejects it
     await tick();
     await tick();
-    expect(outcomes, "the controller must report through the outer model's mutator").toBe(1);
-    expect(model.lastOutcome).toMatch(/^add "" failed: input-validation/);
-    expect(model.input.filterDraft, "and the input sub-model is left alone").toBe("half-typed");
+    expect(outcomes.n, "the controller must report through the outer model's mutator").toBe(1);
+    expect(model.view.lastOutcome()).toMatch(/^add "" failed: input-validation/);
+    expect(model.view.filterDraft(), "and the input sub-model is left alone").toBe("half-typed");
   });
 
   describe("error policy — a failure becomes an outcome, never a lost promise", () => {
     it("surfaces a rejected add: no hang, no unhandled rejection, and the controller lives on", async () => {
       await collectingUnhandled(async (unhandled) => {
         await tick();
-        model.input.queueSubmit(""); // rejected by todosAdd's zod `min(1)`
+        model.view.queueSubmit(""); // rejected by todosAdd's zod `min(1)`
         await tick();
         await tick();
-        expect(model.lastOutcome, "the rejection must reach the user").toMatch(
+        expect(model.view.lastOutcome(), "the rejection must reach the user").toMatch(
           /input-validation: todos:add/,
         );
-        expect(model.input.pending, "the item was taken off the queue, not wedged in it").toEqual(
+        expect(model.control.edges.pending(), "the item was taken off the queue, not wedged in it").toEqual(
           [],
         );
         expect(unhandled, "a `void`ed reconcile must not leak its rejection").toEqual([]);
 
         // Alive: the next submission is handled, and a later successful pass
         // replaces the stale failure rather than leaving it on screen forever.
-        model.input.queueSubmit("next");
+        model.view.queueSubmit("next");
         await tick();
         await tick();
-        expect(model.todos.map((t) => t.title)).toEqual(["seed", "next"]);
-        expect(model.lastOutcome, "a pass that fully succeeded clears the outcome").toBeUndefined();
+        expect(model.control.todos().map((t) => t.title)).toEqual(["seed", "next"]);
+        expect(model.view.lastOutcome(), "a pass that fully succeeded clears the outcome").toBeUndefined();
         expect(unhandled).toEqual([]);
       });
     });
@@ -191,21 +216,21 @@ describe("B3 · list controller", () => {
           api: flaky,
           registerViews: (bus) => claimListView(bus),
         });
-        const m = new TodoListModel();
+        const m = createTodoListModel();
         flakyApp.createList(m);
         await tick();
         await tick();
-        expect(m.todos, "nothing loaded").toEqual([]);
-        expect(m.lastOutcome, "and the user is told why").toBe("reload failed: network down");
+        expect(m.control.todos(), "nothing loaded").toEqual([]);
+        expect(m.view.lastOutcome(), "and the user is told why").toBe("reload failed: network down");
         expect(unhandled, "the failed load must not escape as a rejection").toEqual([]);
 
         flaky.failing = false;
-        m.input.requestRefresh(); // exactly one bump — nothing unmotivated
+        m.view.requestRefresh(); // exactly one bump — nothing unmotivated
         await tick();
         await tick();
-        expect(m.todos.map((t) => t.id)).toEqual(["1"]);
+        expect(m.control.todos().map((t) => t.id)).toEqual(["1"]);
         expect(
-          m.lastOutcome,
+          m.view.lastOutcome(),
           "the retry succeeded, so the failure is no longer true",
         ).toBeUndefined();
         await flakyApp.dispose();
@@ -222,21 +247,21 @@ describe("B3 · list controller", () => {
         api: flaky,
         registerViews: (bus) => claimListView(bus),
       });
-      const m = new TodoListModel();
+      const m = createTodoListModel();
       const c = flakyApp.createList(m).controller;
       await tick();
 
       flaky.failing = true;
-      m.input.requestRefresh();
+      m.view.requestRefresh();
       await tick();
       await tick();
-      expect(m.lastOutcome).toBe("reload failed: network down");
+      expect(m.view.lastOutcome()).toBe("reload failed: network down");
 
       // Recover, then wake the controller through the OTHER edge. No refresh
       // bump: the refresh it still owes must be repaid on its own.
       flaky.failing = false;
       const before = c.debug.reloads;
-      m.input.queueSubmit("x");
+      m.view.queueSubmit("x");
       await tick();
       await tick();
       expect(
@@ -262,21 +287,18 @@ describe("B3 · list controller", () => {
       api: slow,
       registerViews: (bus) => claimListView(bus),
     });
-    const m = new TodoListModel();
+    const m = createTodoListModel();
     slowApp.createList(m); // the initial load is now in flight
-    let writes = 0;
-    m.onUpdate(() => {
-      writes++; // raw: ANY write counts — the list, or an outcome
-    });
+    const writes = watchResults(m); // the list, or an outcome
     expect(slow.outstanding, "precondition: the load is in flight").toBe(1);
     await slowApp.dispose();
-    const atDispose = writes;
+    const atDispose = writes.n;
     // The slow api is still outstanding here: dispose() did not wait it out.
     // It is left to answer on its own — and when it does, the write must not land.
     await new Promise((r) => setTimeout(r, 120));
     expect(slow.outstanding, "the api call was allowed to finish on its own").toBe(0);
-    expect(writes, "a write landed after dispose() resolved").toBe(atDispose);
-    expect(m.todos, "the in-flight load's answer was dropped, not applied late").toEqual([]);
+    expect(writes.n, "a write landed after dispose() resolved").toBe(atDispose);
+    expect(m.control.todos(), "the in-flight load's answer was dropped, not applied late").toEqual([]);
   });
 
   it("refuses a second activate(), which would double-subscribe every channel", async () => {
@@ -292,7 +314,7 @@ describe("B3 · list controller", () => {
     };
     let again: ListController;
     try {
-      again = app.createList(new TodoListModel()).controller;
+      again = app.createList(createTodoListModel()).controller;
     } finally {
       ListController.prototype.activate = original;
     }
@@ -304,7 +326,7 @@ describe("B3 · list controller", () => {
     await tick();
     const before = controller.debug.reactions;
     await controller.dispose();
-    model.input.requestRefresh();
+    model.view.requestRefresh();
     await tick();
     expect(controller.debug.reactions).toBe(before);
   });
@@ -320,7 +342,7 @@ describe("B3 · list controller", () => {
           api: new MemTodoApi([{ id: "1", title: "seed", done: false }]),
           registerViews: () => {}, // no uiShowList handler — the wiring bug
         });
-        const m = new TodoListModel();
+        const m = createTodoListModel();
         const c = bareApp.createList(m).controller;
 
         const result = await c.panelSettled;
@@ -341,7 +363,7 @@ describe("B3 · list controller", () => {
         await tick();
         await tick();
         expect(
-          m.todos.map((t) => t.id),
+          m.control.todos().map((t) => t.id),
           "the list itself still loads fine",
         ).toEqual(["1"]);
         const resultAfterSuccess = await c.panelSettled;
@@ -364,7 +386,7 @@ describe("B3 · list controller", () => {
           api: new MemTodoApi(),
           registerViews: () => {},
         });
-        bareApp.createList(new TodoListModel());
+        bareApp.createList(createTodoListModel());
         // No one ever touches `.panelSettled` here — the guarantee must not
         // depend on a caller opting in.
         await tick();
@@ -434,7 +456,7 @@ describe("B3 · list controller — row intents", () => {
         };
       },
     });
-    const model = new TodoListModel();
+    const model = createTodoListModel();
     const controller = app.createList(model).controller;
     return { api, app, model, controller, dialogs };
   };
@@ -447,13 +469,13 @@ describe("B3 · list controller — row intents", () => {
     it("two requestToggle in one tick toggle BOTH todos", async () => {
       const { api, app, model } = boot([row("1"), row("2")]);
       await settle();
-      model.input.requestToggle("1");
-      model.input.requestToggle("2");
+      model.view.requestToggle("1");
+      model.view.requestToggle("2");
       await settle();
-      expect(model.todos.map((t) => t.done), "neither toggle was lost").toEqual([true, true]);
+      expect(model.control.todos().map((t) => t.done), "neither toggle was lost").toEqual([true, true]);
       expect(api.calls.filter((c) => c === "toggle")).toHaveLength(2);
-      expect(model.input.toggles, "the queue is drained by replacement").toEqual([]);
-      expect(model.lastOutcome).toBeUndefined();
+      expect(model.control.edges.toggles(), "the queue is drained by replacement").toEqual([]);
+      expect(model.view.lastOutcome()).toBeUndefined();
       await app.dispose();
     });
 
@@ -462,23 +484,23 @@ describe("B3 · list controller — row intents", () => {
       // would coalesce these into one toggle and leave the row done.
       const { api, app, model } = boot([row("1")]);
       await settle();
-      model.input.requestToggle("1");
-      model.input.requestToggle("1");
+      model.view.requestToggle("1");
+      model.view.requestToggle("1");
       await settle();
       expect(api.calls.filter((c) => c === "toggle")).toHaveLength(2);
-      expect(model.todos.map((t) => t.done)).toEqual([false]);
+      expect(model.control.todos().map((t) => t.done)).toEqual([false]);
       await app.dispose();
     });
 
     it("two requestRemove in one tick delete BOTH todos", async () => {
       const { api, app, model } = boot([row("1"), row("2"), row("3")]);
       await settle();
-      model.input.requestRemove("1");
-      model.input.requestRemove("3");
+      model.view.requestRemove("1");
+      model.view.requestRemove("3");
       await settle();
-      expect(model.todos.map((t) => t.id)).toEqual(["2"]);
+      expect(model.control.todos().map((t) => t.id)).toEqual(["2"]);
       expect(api.calls.filter((c) => c === "remove")).toHaveLength(2);
-      expect(model.input.removals).toEqual([]);
+      expect(model.control.edges.removals()).toEqual([]);
       await app.dispose();
     });
 
@@ -498,8 +520,8 @@ describe("B3 · list controller — row intents", () => {
           name: "idle, toggle then remove",
           busy: false,
           press: (m: TodoListModel) => {
-            m.input.requestToggle("1");
-            m.input.requestRemove("1");
+            m.view.requestToggle("1");
+            m.view.requestRemove("1");
           },
           sent: ["toggle", "remove"],
         },
@@ -507,8 +529,8 @@ describe("B3 · list controller — row intents", () => {
           name: "idle, remove then toggle — the first press leads",
           busy: false,
           press: (m: TodoListModel) => {
-            m.input.requestRemove("1");
-            m.input.requestToggle("1"); // meets a deleted row: a no-op
+            m.view.requestRemove("1");
+            m.view.requestToggle("1"); // meets a deleted row: a no-op
           },
           sent: ["remove", "toggle"],
         },
@@ -516,8 +538,8 @@ describe("B3 · list controller — row intents", () => {
           name: "busy, remove then toggle — drained by type",
           busy: true,
           press: (m: TodoListModel) => {
-            m.input.requestRemove("1");
-            m.input.requestToggle("1");
+            m.view.requestRemove("1");
+            m.view.requestToggle("1");
           },
           sent: ["toggle", "remove"],
         },
@@ -525,11 +547,11 @@ describe("B3 · list controller — row intents", () => {
       for (const c of cases) {
         const { api, app, model } = boot([row("1"), row("2")]);
         await settle();
-        if (c.busy) model.input.requestRefresh(); // a run is now in flight
+        if (c.busy) model.view.requestRefresh(); // a run is now in flight
         c.press(model);
         await settle();
-        expect(model.todos.map((t) => t.id), `${c.name}: the deleted row is gone`).toEqual(["2"]);
-        expect(model.lastOutcome, `${c.name}: nothing failed`).toBeUndefined();
+        expect(model.control.todos().map((t) => t.id), `${c.name}: the deleted row is gone`).toEqual(["2"]);
+        expect(model.view.lastOutcome(), `${c.name}: nothing failed`).toBeUndefined();
         expect(
           api.calls.filter((call) => call === "toggle" || call === "remove"),
           `${c.name}: the order the commands went out`,
@@ -542,19 +564,19 @@ describe("B3 · list controller — row intents", () => {
       await collectingUnhandled(async (unhandled) => {
         const { app, model } = boot([row("1"), row("2")], true, new RefusingRemoveApi([row("1"), row("2")]));
         await settle();
-        model.input.requestRemove("2");
+        model.view.requestRemove("2");
         await settle();
-        expect(model.lastOutcome, "the refusal must reach the user").toMatch(
+        expect(model.view.lastOutcome(), "the refusal must reach the user").toMatch(
           /^remove "2" failed: listener-threw: todos:remove/,
         );
-        expect(model.todos.map((t) => t.id), "nothing was removed").toEqual(["1", "2"]);
-        expect(model.input.removals, "taken off the queue, not wedged in it").toEqual([]);
+        expect(model.control.todos().map((t) => t.id), "nothing was removed").toEqual(["1", "2"]);
+        expect(model.control.edges.removals(), "taken off the queue, not wedged in it").toEqual([]);
         expect(unhandled, "a `void`ed reconcile must not leak its rejection").toEqual([]);
 
-        model.input.requestToggle("1");
+        model.view.requestToggle("1");
         await settle();
-        expect(model.todos[0]?.done, "the next intent is still handled").toBe(true);
-        expect(model.lastOutcome, "and a clean pass clears the stale failure").toBeUndefined();
+        expect(model.control.todos()[0]?.done, "the next intent is still handled").toBe(true);
+        expect(model.view.lastOutcome(), "and a clean pass clears the stale failure").toBeUndefined();
         expect(unhandled).toEqual([]);
         await app.dispose();
       });
@@ -565,8 +587,8 @@ describe("B3 · list controller — row intents", () => {
     it("two requestClearCompleted in one tick open ONE confirm dialog", async () => {
       const { api, app, model, dialogs } = boot([row("1", true), row("2")]);
       await settle();
-      model.input.requestClearCompleted();
-      model.input.requestClearCompleted();
+      model.view.requestClearCompleted();
+      model.view.requestClearCompleted();
       await settle();
       // The COUNT of dialogs, not the end state: a controller that asked twice
       // reaches the same list.
@@ -586,30 +608,30 @@ describe("B3 · list controller — row intents", () => {
       // one todo is completed, the backend has two. The question can only
       // quote the model; the notify must quote what was actually cleared.
       await api.toggle("3");
-      model.input.requestClearCompleted();
+      model.view.requestClearCompleted();
       await settle();
       expect(dialogs.confirms).toEqual(["Clear 1 completed todo?"]);
       expect(dialogs.notifies, "the count comes from the command's result").toEqual([
         "Cleared 2 completed todos",
       ]);
-      expect(model.todos.map((t) => t.id), "and the list was reloaded").toEqual(["2"]);
-      expect(model.lastOutcome).toBeUndefined();
+      expect(model.control.todos().map((t) => t.id), "and the list was reloaded").toEqual(["2"]);
+      expect(model.view.lastOutcome()).toBeUndefined();
       await app.dispose();
     });
 
     it("declined: nothing cleared, no notify — and the answer is final, not owed", async () => {
       const { api, app, model, dialogs } = boot([row("1", true), row("2")], false);
       await settle();
-      model.input.requestClearCompleted();
+      model.view.requestClearCompleted();
       await settle();
       expect(dialogs.confirms).toHaveLength(1);
       expect(api.calls, "no clear was attempted").not.toContain("clearCompleted");
       expect(dialogs.notifies).toEqual([]);
-      expect(model.todos.map((t) => t.id)).toEqual(["1", "2"]);
+      expect(model.control.todos().map((t) => t.id)).toEqual(["1", "2"]);
 
       // The user answered, so the watermark moved: a pass woken by any other
       // edge must not ask again.
-      model.input.requestRefresh();
+      model.view.requestRefresh();
       await settle();
       expect(dialogs.confirms, "a declined request is not re-asked").toHaveLength(1);
       await app.dispose();
@@ -619,12 +641,12 @@ describe("B3 · list controller — row intents", () => {
       const api = new GatedClearApi([row("1", true), row("2", true), row("3")]);
       const { app, model, dialogs } = boot([], "hold", api);
       await settle();
-      model.input.requestClearCompleted();
+      model.view.requestClearCompleted();
       await settle();
       expect(dialogs.held, "the dialog is open").toBe(1);
       // Pressed again while it is open — not in the same tick, a real wait.
-      model.input.requestClearCompleted();
-      model.input.requestClearCompleted();
+      model.view.requestClearCompleted();
+      model.view.requestClearCompleted();
       await settle();
       expect(dialogs.confirms, "an open dialog already asks the newest question").toHaveLength(1);
 
@@ -636,9 +658,9 @@ describe("B3 · list controller — row intents", () => {
       // request the open dialog never covered, so it must not be lost. Row 3
       // is completed meanwhile, so the follow-up has something to ask about
       // (an empty question is skipped — see "nothing completed" below).
-      model.input.requestToggle("3");
-      model.input.requestClearCompleted();
-      model.input.requestClearCompleted();
+      model.view.requestToggle("3");
+      model.view.requestClearCompleted();
+      model.view.requestClearCompleted();
       api.release();
       await settle();
       expect(dialogs.confirms, "leading + trailing: the first dialog, and ONE follow-up").toEqual([
@@ -647,14 +669,14 @@ describe("B3 · list controller — row intents", () => {
       ]);
       expect(api.calls.filter((c) => c === "clearCompleted")).toHaveLength(2);
       expect(dialogs.notifies).toEqual(["Cleared 2 completed todos", "Cleared 1 completed todo"]);
-      expect(model.todos).toEqual([]);
+      expect(model.control.todos()).toEqual([]);
       await app.dispose();
     });
 
     it("words the question and the toast in the singular for 1, the plural for more", async () => {
       const one = boot([row("1", true), row("2")]);
       await settle();
-      one.model.input.requestClearCompleted();
+      one.model.view.requestClearCompleted();
       await settle();
       expect(one.dialogs.confirms).toEqual(["Clear 1 completed todo?"]);
       expect(one.dialogs.notifies).toEqual(["Cleared 1 completed todo"]);
@@ -662,7 +684,7 @@ describe("B3 · list controller — row intents", () => {
 
       const three = boot([row("1", true), row("2", true), row("3", true), row("4")]);
       await settle();
-      three.model.input.requestClearCompleted();
+      three.model.view.requestClearCompleted();
       await settle();
       expect(three.dialogs.confirms).toEqual(["Clear 3 completed todos?"]);
       expect(three.dialogs.notifies).toEqual(["Cleared 3 completed todos"]);
@@ -675,25 +697,22 @@ describe("B3 · list controller — row intents", () => {
       // "Clear 0 completed todos?" is a question with no content.
       const { api, app, model, dialogs } = boot([row("1"), row("2")]);
       await settle();
-      let writes = 0;
-      model.onUpdate(() => {
-        writes++; // raw: the list, or an outcome
-      });
-      model.input.requestClearCompleted();
+      const writes = watchResults(model); // the list, or an outcome
+      model.view.requestClearCompleted();
       await settle();
       expect(dialogs.confirms).toEqual([]);
       expect(dialogs.notifies).toEqual([]);
       expect(api.calls).not.toContain("clearCompleted");
-      expect(writes, "a skipped question writes nothing — no reload, no outcome").toBe(0);
-      expect(model.lastOutcome).toBeUndefined();
+      expect(writes.n, "a skipped question writes nothing — no reload, no outcome").toBe(0);
+      expect(model.view.lastOutcome()).toBeUndefined();
 
       // Consumed, not owed: once a todo IS completed, the pass that toggle
       // wakes must not ask on the skipped press's behalf.
-      model.input.requestToggle("1");
+      model.view.requestToggle("1");
       await settle();
-      expect(model.todos[0]?.done).toBe(true);
+      expect(model.control.todos()[0]?.done).toBe(true);
       expect(dialogs.confirms, "the skipped press is not replayed by an unrelated edge").toEqual([]);
-      model.input.requestClearCompleted();
+      model.view.requestClearCompleted();
       await settle();
       expect(dialogs.confirms, "a real press now has something to ask").toEqual([
         "Clear 1 completed todo?",
@@ -709,20 +728,20 @@ describe("B3 · list controller — row intents", () => {
         const api = new RefusingClearApi([row("1", true), row("2")]);
         const { app, model, dialogs } = boot([], true, api);
         await settle();
-        model.input.requestClearCompleted();
+        model.view.requestClearCompleted();
         await settle();
         expect(dialogs.confirms).toHaveLength(1);
-        expect(model.lastOutcome).toMatch(
+        expect(model.view.lastOutcome()).toMatch(
           /^clear completed failed: listener-threw: todos:clear-completed/,
         );
         expect(dialogs.notifies, "nothing was cleared, so nothing is announced").toEqual([]);
 
-        model.input.requestToggle("2");
+        model.view.requestToggle("2");
         await settle();
-        expect(model.todos[1]?.done, "the toggle itself was handled").toBe(true);
+        expect(model.control.todos()[1]?.done, "the toggle itself was handled").toBe(true);
         expect(dialogs.confirms, "an answered question is never re-asked unprompted").toHaveLength(1);
 
-        model.input.requestClearCompleted(); // the explicit retry
+        model.view.requestClearCompleted(); // the explicit retry
         await settle();
         expect(dialogs.confirms, "pressing again asks again").toHaveLength(2);
         expect(unhandled).toEqual([]);
@@ -748,13 +767,13 @@ describe("B3 · list controller — row intents", () => {
             };
           },
         });
-        const model = new TodoListModel();
+        const model = createTodoListModel();
         app.createList(model);
         await settle();
-        model.input.requestClearCompleted();
+        model.view.requestClearCompleted();
         await settle();
-        expect(model.todos.map((t) => t.id), "the clear landed and the list reloaded").toEqual(["2"]);
-        expect(model.lastOutcome).toMatch(/^notify failed: .*no-handlers/);
+        expect(model.control.todos().map((t) => t.id), "the clear landed and the list reloaded").toEqual(["2"]);
+        expect(model.view.lastOutcome()).toMatch(/^notify failed: .*no-handlers/);
         expect(unhandled).toEqual([]);
         await app.dispose();
       });
@@ -768,12 +787,12 @@ describe("B3 · list controller — row intents", () => {
           api,
           registerViews: (bus) => claimListView(bus), // the list, but no dialogs
         });
-        const model = new TodoListModel();
+        const model = createTodoListModel();
         app.createList(model);
         await settle();
-        model.input.requestClearCompleted();
+        model.view.requestClearCompleted();
         await settle();
-        expect(model.lastOutcome).toMatch(/^confirm failed: .*no-handlers/);
+        expect(model.view.lastOutcome()).toMatch(/^confirm failed: .*no-handlers/);
         expect(api.calls).not.toContain("clearCompleted");
         expect(unhandled).toEqual([]);
         await app.dispose();

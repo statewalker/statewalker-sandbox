@@ -1,7 +1,8 @@
 import type { Command, CommandDeclaration, Commands } from "@statewalker/shared-commands";
 import { newRegistry } from "@statewalker/shared-registry";
 import { type TodoApi, todosAdd, todosClearCompleted, todosRemove, todosToggle } from "@todo/core";
-import type { TodoListModel } from "./todo-model.js";
+import { effect, untracked } from "@todo/signals";
+import type { TodoListModel, TodoListView } from "./todo-model.js";
 import { ConfirmModel, NotifyModel, uiConfirm, uiNotify, uiShowList } from "./ui-declarations.js";
 import { ViewsReady } from "./views-ready.js";
 
@@ -25,16 +26,17 @@ const completedTodos = (n: number): string => `${n} completed todo${n === 1 ? ""
  * can override an operation without the controller knowing. That asymmetry is
  * deliberate — reading is not an operation anyone overrides.
  *
- * It subscribes to `model.input` and writes its RESULTS to `model`, so those
- * writes cannot wake it. Its one write to `input` is draining it — each
- * `take*()` replaces a queue and notifies, which does wake its own channel —
- * and that happens inside a run, where the `_reconciling` guard absorbs it.
- * That split is the reason the input sub-model exists, and `expectNoSelfWake`
- * asserts both halves of it: an outer write does not wake it, an input write
- * does.
+ * It subscribes with ONE effect that reads the model's `control.edges` and
+ * nothing else, and writes its RESULTS through `control.replaceTodos` and
+ * `control.reportOutcome` — so those writes cannot wake it. Its one write to an
+ * edge is draining it — each `take*()` replaces a queue — and that happens
+ * inside a run: preact re-runs the effect once for it and alien does not
+ * (spec §4.2); either way the `_reconciling` guard makes it a no-op.
+ * `expectNoSelfWake` asserts both halves: a result write does not wake it, an
+ * input write does.
  *
  * ERROR POLICY. Every piece of work runs inside `_reconcile()`, which is fired
- * with `void` from a channel callback — so a rejection escaping it has nowhere
+ * with `void` from the effect — so a rejection escaping it has nowhere
  * to go but the process, and nothing reaches the user. Therefore nothing
  * escapes: each failure is caught where it happens and reported through the
  * outer model's `reportOutcome` (the mutator that exists for exactly this), and
@@ -46,7 +48,7 @@ const completedTodos = (n: number): string => `${n} completed todo${n === 1 ? ""
  *
  * ONE exception: the panel command's own rejection (`activate()`'s
  * `commands.call(uiShowList, ...)` finding no view layer) does NOT go through
- * `reportOutcome` — see `panelSettled`'s doc for why that channel is the wrong
+ * `reportOutcome` — see `panelSettled`'s doc for why that route is the wrong
  * fit for a wiring bug rather than a transient failure.
  */
 export class ListController {
@@ -74,13 +76,13 @@ export class ListController {
   private _handledClearCompleted = 0;
   /**
    * True while a `_reconcile()` run is in flight — what makes coalescing
-   * leading + trailing rather than absent. `notify()` is synchronous (spec:
-   * `@statewalker/shared-baseclass`), so N `requestRefresh()` calls with no
-   * gap fire `onRefresh` N times before the first run's `await` ever
-   * suspends; a watermark alone cannot help, because all N calls clear it
-   * before any of them awaits. This flag turns every one of those synchronous
-   * re-entries (including the nested one from `takePending()`'s own notify)
-   * into a no-op, so only the FIRST pulse reloads immediately (leading edge).
+   * leading + trailing rather than absent. A signal write wakes the effect
+   * synchronously, so N `requestRefresh()` calls with no gap run it N times
+   * before the first run's `await` ever suspends; a watermark alone cannot
+   * help, because all N calls clear it before any of them awaits. This flag
+   * turns every one of those synchronous re-entries (including preact's re-run
+   * after a `take*()` drain) into a no-op, so only the FIRST pulse reloads
+   * immediately (leading edge).
    * The in-flight run then loops, re-reading both edges after every await, so
    * whatever arrived while it was busy is folded into exactly ONE follow-up
    * pass carrying the newest state (trailing edge) — never zero (nothing
@@ -101,7 +103,7 @@ export class ListController {
    * needs a handle to resolve it closed, and nothing else in this class ever
    * touches it, so there is no other honest owner.
    */
-  private _panel?: Command<TodoListModel, { closed: boolean }>;
+  private _panel?: Command<TodoListView, { closed: boolean }>;
   /**
    * Settles once — when the panel command does, which in the healthy case is
    * only at `dispose()`. NEVER rejects itself: the panel command's rejection
@@ -114,7 +116,7 @@ export class ListController {
    *
    * This exists because `activate()` is synchronous and cannot throw a
    * rejection that arrives after it returns, and because the file's usual
-   * channel for a failure — `reportOutcome` — is the wrong fit here: it is
+   * route for a failure — `reportOutcome` — is the wrong fit here: it is
    * cleared by the very next successful reconcile (by design, so a stale
    * failure does not linger once the thing it described stopped being true),
    * and the initial load succeeding is the common case even when NO view
@@ -146,42 +148,15 @@ export class ListController {
           "ready token from bootstrap(), which mints it only after registerViews has run.",
       );
     }
-    // A second activate() — or one after dispose() — would subscribe every
-    // channel again, and each edge would then start two runs.
+    // A second activate() — or one after dispose() — would subscribe a second
+    // effect, and each edge would then start two runs.
     if (this._activated) {
       throw new Error(
-        "controller already activated: activate() subscribes its channels, so it runs once.",
+        "controller already activated: activate() subscribes its effect, so it runs once.",
       );
     }
     this._activated = true;
     const [register] = this._registry;
-    // Subscribed to NAMED CHANNELS, never to bare `onUpdate` (spec §4.10): a
-    // write to `filterDraft` must not wake the code that reloads from the api.
-    // Registered here, not lazily on first render — a headless controller is a
-    // first-class case, not a degenerate one (fm-protos C3 found this the hard way).
-    register(
-      this._model.input.onRefresh(() => {
-        this.debug.reactions++;
-        void this._reconcile();
-      }),
-    );
-    // Every input edge wakes the SAME loop: one `_reconcile()`, one
-    // `_reconciling` guard, one error policy. A second loop per edge would
-    // race the first over the model it writes. The price — everything waits
-    // behind an open dialog — is in `_reconcile()`'s doc.
-    for (const channel of [
-      this._model.input.onPendingChange,
-      this._model.input.onTogglesChange,
-      this._model.input.onRemovalsChange,
-      this._model.input.onClearCompleted,
-    ]) {
-      register(
-        channel(() => {
-          this.debug.reactions++;
-          void this._reconcile();
-        }),
-      );
-    }
 
     // The design's central sentence, made true for the list: "a controller
     // emits ui:show-*(model); the adapter claims it, renders, and unmounts
@@ -189,7 +164,7 @@ export class ListController {
     // because this is a panel, not a dialog: it has no answer to wait for, so
     // the only thing that ever settles it is `dispose()`, on teardown.
     //
-    // `uiShowList`'s input schema (`z.custom<TodoListModel>()`) validates
+    // `uiShowList`'s input schema (`z.custom<TodoListView>()`) validates
     // synchronously, so `commands.call` dispatches to listeners — and, with
     // none registered, rejects with `no-handlers` — before this line returns.
     // The `.then` below is attached in that same synchronous turn, which is
@@ -197,15 +172,45 @@ export class ListController {
     // force-rejecting this same command) from ever being unhandled: Node/the
     // browser only flags a rejection as unhandled if NOTHING is listening by
     // the end of the current microtask turn, and by then this already is.
-    const panel = this._commands.call(uiShowList, this._model);
+    const panel = this._commands.call(uiShowList, this._model.view);
     this._panel = panel;
     this.panelSettled = panel.promise.then(
       (): PanelOutcome => ({ ok: true }),
       (error: unknown): PanelOutcome => ({ ok: false, error }),
     );
 
-    // The initial load: `_handledRefresh` starts below any `refreshCount`.
-    void this._reconcile();
+    // ONE effect over the declared edges (spec §4.4). Its reads ARE the
+    // subscription: every edge is read first and unconditionally — an effect
+    // depends on what its last run read, so a guard that returned first would
+    // leave it subscribed to nothing, silently. A write to `filterDraft` is not
+    // an edge, so it cannot wake the code that reloads from the api.
+    //
+    // Every edge wakes the SAME loop: one `_reconcile()`, one `_reconciling`
+    // guard, one error policy. The price — everything waits behind an open
+    // dialog — is in `_reconcile()`'s doc.
+    //
+    // `untracked` around the kick is load-bearing: `_reconcile` is async, but
+    // its synchronous prefix runs inside this effect — including `take*()`,
+    // which reads AND writes a tracked queue.
+    //
+    // The first run is the initial load: `_handledRefresh` starts below any
+    // `refreshCount`, so the parent's explicit `void this._reconcile()` goes.
+    // Registered here, not lazily on first render — a headless controller is a
+    // first-class case, not a degenerate one.
+    const { edges } = this._model.control;
+    let initial = true;
+    register(
+      effect(() => {
+        edges.refreshCount();
+        edges.clearCompletedCount();
+        edges.pending();
+        edges.toggles();
+        edges.removals();
+        if (initial) initial = false;
+        else this.debug.reactions++; // wakes by an edge; the first run is the subscription
+        untracked(() => void this._reconcile());
+      }),
+    );
   }
 
   /**
@@ -261,10 +266,10 @@ export class ListController {
   }
 
   /**
-   * Idempotent: it may run on every notify and must do nothing when no field it
+   * Idempotent: it may run on every wake and must do nothing when no field it
    * cares about has changed. Re-entrant-safe: a call that arrives while a run is
-   * already in flight (the synchronous re-entry from a second `notify()` in the
-   * same tick, or from a `take*()` drain's own notify) folds into that run
+   * already in flight (the synchronous re-entry from a second write in the
+   * same tick, or preact's re-run after a `take*()` drain) folds into that run
    * instead of starting a second one — the running loop re-reads every edge
    * after every await, so nothing it would have done is lost.
    *
@@ -309,7 +314,8 @@ export class ListController {
       let again = true;
       while (again && !this._disposed) {
         again = false;
-        const input = this._model.input;
+        const control = this._model.control;
+        const { edges } = control;
 
         // EVENT edges: N queued items are N commands, and each carries its own
         // payload — adds a title, toggles and deletes a row id. `take*()`
@@ -321,9 +327,9 @@ export class ListController {
         // order, which three queues do not record. No gesture depends on it:
         // an add has no id to toggle yet, and a toggle and a delete of one row
         // end with the row gone either way.
-        const adds = input.takePending();
-        const toggles = input.takeToggles();
-        const removals = input.takeRemovals();
+        const adds = control.takePending();
+        const toggles = control.takeToggles();
+        const removals = control.takeRemovals();
         if (adds.length + toggles.length + removals.length > 0) {
           didWork = true;
           // Not retried: a rejected payload (the schema, a host's veto, a
@@ -352,15 +358,15 @@ export class ListController {
         // STATE-LATEST edge, through a dialog: confirm, clear, notify. Checked
         // after the event edges, so a toggle pressed before "clear completed"
         // has landed before the question counts what is completed.
-        if (!clearOwed && input.clearCompletedCount > this._handledClearCompleted) {
-          const completed = this._model.todos.filter((t) => t.done).length;
+        if (!clearOwed && edges.clearCompletedCount() > this._handledClearCompleted) {
+          const completed = control.todos().filter((t) => t.done).length;
           if (completed === 0) {
             // A question with no content is not asked — of a user, a host, or
             // an agent raising this intent through the command surface; a
             // view disabling its button cannot speak for the other two. The
             // intent is consumed on the spot: no dialog, no command, no toast,
             // no model write, so it is not counted as work either.
-            this._handledClearCompleted = input.clearCompletedCount;
+            this._handledClearCompleted = edges.clearCompletedCount();
           } else {
             didWork = true;
             const clear = await this._clearCompleted(completed);
@@ -377,16 +383,16 @@ export class ListController {
         // in flight folds into ONE follow-up pass that re-reads the counter, so
         // the newest state always wins and no bump is lost. Five bumps in a
         // tick are two reloads, not five and not one. A watermark alone cannot
-        // do this: notify() is synchronous, so all five pulses clear the
+        // do this: a write wakes the effect synchronously, so all five pulses clear the
         // watermark before any of them awaits — the `_reconciling` guard above
         // is what turns the extra synchronous calls into the single follow-up.
-        if (!refreshFailed && input.refreshCount > this._handledRefresh) {
+        if (!refreshFailed && edges.refreshCount() > this._handledRefresh) {
           didWork = true;
           // Captured BEFORE the await, committed only AFTER it succeeds. Bumps
           // arriving mid-flight stay above `target`, so they earn the trailing
           // pass; and a reload that throws leaves the watermark where it was,
           // so the refresh is still owed rather than falsely marked as done.
-          const target = input.refreshCount;
+          const target = edges.refreshCount();
           const reloaded = await this._reload();
           if (reloaded.ok) {
             this._handledRefresh = target;
@@ -405,7 +411,7 @@ export class ListController {
     } finally {
       this._reconciling = false;
     }
-    if (didWork && !this._disposed) this._model.reportOutcome(failure);
+    if (didWork && !this._disposed) this._model.control.reportOutcome(failure);
   }
 
   /**
@@ -468,7 +474,7 @@ export class ListController {
       return { failure: `confirm failed: ${reason(error)}` };
     }
     // The answer consumes every press made up to now — see above.
-    const consumed = this._model.input.clearCompletedCount;
+    const consumed = this._model.control.edges.clearCompletedCount();
     if (this._disposed) return { consumed };
     if (!confirmed) return { consumed };
 
@@ -513,8 +519,8 @@ export class ListController {
       // Disposed while the api was answering: drop the write. The run checks
       // `_disposed` too and stops, so nobody acts on this result.
       if (this._disposed) return { ok: true };
-      // One mutator, one notify. The controller does not know the field layout.
-      this._model.replaceTodos(todos);
+      // One mutator, one write. The controller does not know the field layout.
+      this._model.control.replaceTodos(todos);
       return { ok: true };
     } catch (error) {
       return { ok: false, failure: `reload failed: ${reason(error)}` };

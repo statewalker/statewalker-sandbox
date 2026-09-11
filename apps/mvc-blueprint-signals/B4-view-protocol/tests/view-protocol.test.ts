@@ -1,7 +1,7 @@
 import { CommandError, Commands } from "@statewalker/shared-commands";
 import { beforeEach, describe, expect, it } from "vitest";
 // The view layer's suite takes what the view layer may take: models and declarations.
-import { ConfirmModel, NotifyModel, TodoListModel, uiConfirm, uiNotify, uiShowList } from "@todo/app/models";
+import { ConfirmModel, createTodoListModel, NotifyModel, uiConfirm, uiNotify, uiShowList } from "@todo/app/models";
 import { ViewAdapter, viewLayer } from "@todo/ui/adapter";
 
 describe("B4 · view protocol", () => {
@@ -25,7 +25,7 @@ describe("B4 · view protocol", () => {
       return () => cleaned.push("list");
     });
 
-    const cmd = commands.call(uiShowList, new TodoListModel());
+    const cmd = commands.call(uiShowList, createTodoListModel().view);
     expect(rendered).toEqual(["list"]);
     expect(adapter.openViews().map((v) => v.key)).toEqual(["ui:show-list"]);
     expect(cmd.settled).toBe(false);
@@ -41,20 +41,20 @@ describe("B4 · view protocol", () => {
       rendered.push("list");
       return () => cleaned.push("list");
     });
-    const cmd = commands.call(uiShowList, new TodoListModel());
+    const cmd = commands.call(uiShowList, createTodoListModel().view);
     cmd.resolve({ closed: true });
     await cmd.promise;
     expect(cleaned).toEqual(["list"]);
   });
 
   it("hands the renderer the model and nothing else", async () => {
-    const model = new TodoListModel();
+    const model = createTodoListModel();
     let seen: unknown;
     adapter.on(uiShowList, (view) => {
       seen = Object.keys(view).sort();
       view.settle({ closed: true });
     });
-    await commands.call(uiShowList, model).promise;
+    await commands.call(uiShowList, model.view).promise;
     expect(seen).toEqual(["model", "settle"]);
   });
 
@@ -100,7 +100,7 @@ describe("B4 · view protocol", () => {
     // string the menu, the logs and any host override use.
     adapter.on(uiShowList, () => () => {});
     adapter.on(uiConfirm, () => () => {});
-    commands.call(uiShowList, new TodoListModel());
+    commands.call(uiShowList, createTodoListModel().view);
     commands.call(uiConfirm, new ConfirmModel("?"));
     expect(adapter.openViews().map((v) => v.key).sort()).toEqual(
       [uiConfirm.key, uiShowList.key].sort(),
@@ -111,7 +111,7 @@ describe("B4 · view protocol", () => {
 
   it("settles a view that is still open when the adapter is disposed", async () => {
     adapter.on(uiShowList, () => () => cleaned.push("list"));
-    const cmd = commands.call(uiShowList, new TodoListModel());
+    const cmd = commands.call(uiShowList, createTodoListModel().view);
     expect(adapter.openViews()).toHaveLength(1);
     await adapter.dispose();
     expect(cleaned, "the renderer's cleanup must still run").toEqual(["list"]);
@@ -123,7 +123,7 @@ describe("B4 · view protocol", () => {
   it("unbinds every renderer on dispose", async () => {
     adapter.on(uiShowList, () => undefined);
     await adapter.dispose();
-    const err = await commands.call(uiShowList, new TodoListModel()).promise.then(
+    const err = await commands.call(uiShowList, createTodoListModel().view).promise.then(
       () => undefined,
       (e: CommandError) => e,
     );
@@ -136,7 +136,7 @@ describe("B4 · view protocol", () => {
         a.on(uiShowList, () => () => {});
       })(commands);
       await dispose();
-      await expect(commands.call(uiShowList, new TodoListModel()).promise).rejects.toMatchObject({
+      await expect(commands.call(uiShowList, createTodoListModel().view).promise).rejects.toMatchObject({
         kind: "no-handlers",
       });
     });
@@ -151,7 +151,7 @@ describe("B4 · view protocol", () => {
       });
       expect(() => install(commands)).toThrow("second renderer failed to build");
       await new Promise((resolve) => setTimeout(resolve, 0)); // the async dispose's unwinding
-      await expect(commands.call(uiShowList, new TodoListModel()).promise).rejects.toMatchObject({
+      await expect(commands.call(uiShowList, createTodoListModel().view).promise).rejects.toMatchObject({
         kind: "no-handlers",
       });
     });

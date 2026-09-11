@@ -1,9 +1,10 @@
 import { Commands } from "@statewalker/shared-commands";
-import { bootstrap, ConfirmModel, TodoListModel, uiConfirm } from "@todo/app";
+import { bootstrap, ConfirmModel, createTodoListModel, uiConfirm } from "@todo/app";
 import { todosAdd } from "@todo/core";
 import { ViewAdapter } from "@todo/ui/adapter";
 import { describe, expect, it } from "vitest";
 import { seededApi } from "../../test-support/api.js";
+import { watchResults } from "../../test-support/signals.js";
 import { mountListView } from "../../test-support/views.js";
 
 /**
@@ -62,11 +63,11 @@ describe("B3 · dispose() liveness — a controller stuck on a view-settled comm
       },
     });
 
-    const model = new TodoListModel();
+    const model = createTodoListModel();
     app.createList(model);
     // Queues the add: the controller's `_reconcile()` run is now genuinely
     // stuck awaiting the confirm that will never settle.
-    model.input.queueSubmit("x");
+    model.view.queueSubmit("x");
     await new Promise((r) => setTimeout(r, 0)); // let the run actually reach the await
 
     const timeout = new Promise<"timeout">((resolve) => {
@@ -114,20 +115,17 @@ describe("B3 · dispose() liveness — a controller stuck on a view-settled comm
         },
       });
 
-      const model = new TodoListModel();
+      const model = createTodoListModel();
       app.createList(model);
       await new Promise((r) => setTimeout(r, 0)); // the initial load lands
-      model.input.requestClearCompleted();
+      model.view.requestClearCompleted();
       await new Promise((r) => setTimeout(r, 0));
       expect(
         views.openViews().map((v) => v.key),
         "precondition: the confirm is open and the run is awaiting it",
       ).toContain("ui:show-dialog:confirm");
 
-      let writes = 0;
-      model.onUpdate(() => {
-        writes++; // raw: ANY model write after teardown began
-      });
+      const writes = watchResults(model);
       const timeout = new Promise<"timeout">((resolve) => {
         setTimeout(() => resolve("timeout"), 500);
       });
@@ -141,7 +139,7 @@ describe("B3 · dispose() liveness — a controller stuck on a view-settled comm
       expect(api.calls, "the open question was never answered, so nothing was cleared").not.toContain(
         "clearCompleted",
       );
-      expect(writes, "the force-rejected confirm must not land a write (e.g. an outcome)").toBe(0);
+      expect(writes.n, "the force-rejected confirm must not land a write (e.g. an outcome)").toBe(0);
       expect(unhandled, "the force-rejected confirm is caught inside the run").toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandled);

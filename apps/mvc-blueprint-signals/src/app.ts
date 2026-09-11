@@ -1,5 +1,5 @@
 import { Commands } from "@statewalker/shared-commands";
-import { type BootstrapOptions, bootstrap, type PanelOutcome, TodoListModel } from "@todo/app";
+import { type BootstrapOptions, bootstrap, createTodoListModel, type PanelOutcome } from "@todo/app";
 import { MemTodoApi, type Todo, type TodoApi } from "@todo/core";
 import { registerViews } from "@todo/ui";
 
@@ -43,7 +43,7 @@ export function startApp(root: HTMLElement, options: StartOptions = {}): Running
     api: options.api ?? new MemTodoApi([...seedTodos]),
     registerViews: (options.registerViews ?? registerViews)(root),
   });
-  const { controller } = app.createList(new TodoListModel());
+  const { controller } = app.createList(createTodoListModel());
 
   // `panelSettled` never rejects and the library never logs: a view layer
   // that cannot show the list (`no-handlers` — nobody registered
