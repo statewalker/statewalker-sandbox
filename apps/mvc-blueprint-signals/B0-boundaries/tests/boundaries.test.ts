@@ -1,7 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
-import { BaseClass } from "@statewalker/shared-baseclass";
-import * as modelEntry from "@todo/app/models";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -39,86 +37,13 @@ const importOf = (pkg: string) =>
   new RegExp(`@todo/${pkg}\\b|${QUOTE}\\.\\.?/${NOT_QUOTE}*\\btodo-${pkg}/`);
 
 /**
- * A write to a model field from outside the model (spec §4.8): plain, compound
- * or `??=` assignment, and `++`/`--` either side. The receiver is anything whose
- * name contains "model" — a controller's `_model`, a `model` parameter, a
- * `listModel` — followed by any member chain, so `this._model.todos = […]` is
- * caught as surely as `model.input.pending = []`. `=(?![=>])` keeps `==`, `===`
- * and `=>` out of it.
- */
-const MODEL_CHAIN = String.raw`\b\w*[Mm]odel\w*(?:\.\w+)+`;
-const ASSIGN = String.raw`(?:[-+*/%&|^]|\*\*|<<|>>>?|&&|\|\||\?\?)?=(?![=>])`;
-const MODEL_FIELD_WRITE = new RegExp(
-  `${MODEL_CHAIN}\\s*(?:${ASSIGN}|\\+\\+|--)|(?:\\+\\+|--)\\s*${MODEL_CHAIN}`,
-);
-
-/**
  * The files the model rules exempt, named by LOCATION, not by suffix. A bare
  * `endsWith("-model.ts")` also admitted `todo-ui/src/use-model.ts` and any
  * `todo-ui/src/views/selection-model.ts` someone might add — each free to
- * write fields, notify and subscribe to bare `onUpdate`. A model lives in
- * `todo-app`, so that is the only place the exemption reaches.
+ * create signals. A model lives in `todo-app`, so that is the only place the
+ * exemption reaches.
  */
 const isModelModule = (file: string): boolean => file.startsWith("todo-app/src/") && file.endsWith("-model.ts");
-
-/** The React binding: exempt from the bare-`onUpdate` rule and from nothing else. */
-const REACT_BINDING = "todo-ui/src/use-model.ts";
-
-/**
- * What a view may call on a model. Everything else a model class carries —
- * found at run time below, not listed — belongs to the controller (the outer
- * model's mutators, the input's `take*()` drains) or to the model itself
- * (`notify`, `fromJSON`). Default-deny for PROTOTYPE methods only: one added
- * to a model later is off-limits to views until it is named here. Function-
- * valued instance fields, accessors, and methods of classes the models entry
- * does not export are not collected, so they pass — see docs/DEVELOPING.md.
- */
-const VIEW_MAY_CALL = new Set([
-  // TodoListInput — one mutator per gesture (spec §4.8)
-  "setFilter",
-  "setShowDone",
-  "requestRefresh",
-  "queueSubmit",
-  "requestToggle",
-  "requestRemove",
-  "requestClearCompleted",
-  // TodoListModel — a derived read
-  "visible",
-  // BaseClass — a read
-  "toJSON",
-]);
-
-/**
- * Every method on the prototype chain of every model class the view layer's
- * one entry (`@todo/app/models`) exports — inherited `BaseClass` methods
- * included, since `fromJSON` writes fields as surely as a mutator does.
- */
-const modelMethods = (): Set<string> => {
-  const names = new Set<string>();
-  for (const value of Object.values(modelEntry)) {
-    if (typeof value !== "function" || !(value.prototype instanceof BaseClass)) continue;
-    for (let proto = value.prototype; proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) {
-      for (const name of Object.getOwnPropertyNames(proto)) {
-        if (name !== "constructor" && typeof Object.getOwnPropertyDescriptor(proto, name)?.value === "function") {
-          names.add(name);
-        }
-      }
-    }
-  }
-  return names;
-};
-
-/** The methods a view may not name: every model method not in `VIEW_MAY_CALL`. */
-const CONTROLLER_SIDE = [...modelMethods()].filter((name) => !VIEW_MAY_CALL.has(name)).sort();
-
-/**
- * A reference to one of `names` as a member — `.name`, called or not, or
- * `["name"]`. Not a bare identifier: `notify` is also a word in
- * `"./views/notify-view.js"`.
- */
-const memberOf = (names: string[]) =>
-  new RegExp(`\\.\\s*(?:${names.join("|")})\\b|\\[\\s*${QUOTE}(?:${names.join("|")})${QUOTE}\\s*\\]`);
-const CONTROLLER_CALL = memberOf(CONTROLLER_SIDE);
 
 /** Every rung's suites, found by walking `<rung>/tests` recursively. */
 const allSuites = () =>
@@ -236,6 +161,49 @@ const reachableSpecifiers = (file: string, seen = new Set<string>()): string[] =
 /** The test runner, by package or by one of this app's own test configs. */
 const TEST_RUNNER = /^vitest(\/|$)|(^|\/)vitest(\.[\w-]+)?\.config(\.[jt]s)?$/;
 
+/** `lib/signals` — the substrate. Not under a `src/`, so `sources()` does not reach it. */
+const signalSources = () =>
+  (readdirSync(`${ROOT}lib/signals`, { encoding: "utf8" }) as string[]).filter(isSource).map((f) => ({
+    file: `signals/${f}`,
+    code: stripComments(readFileSync(`${ROOT}lib/signals/${f}`, "utf8")),
+  }));
+
+/** Every module this app compiles or runs, B0 itself excepted — it spells the patterns as fixtures. */
+const everyModule = () => [
+  ...signalSources(),
+  ...sources("todo-core"),
+  ...sources("todo-app"),
+  ...sources("todo-ui"),
+  ...pageSources(),
+  ...allSuites().filter(({ file }) => !file.startsWith("B0-boundaries/")),
+  ...headlessModules().filter(({ file }) => file.startsWith("test-support/")),
+];
+
+/** Each library, and the one file that may import it. */
+const LIBRARY_OWNER: Record<string, string> = {
+  "alien-signals": "signals/alien.ts",
+  "@preact/signals-core": "signals/preact.ts",
+};
+const importsLibrary = (lib: string) => (spec: string) => spec === lib || spec.startsWith(`${lib}/`);
+
+/** A specifier naming an implementation file rather than the swap point. */
+const IMPLEMENTATION_FILE = /(?:^\.\/|\/signals\/)(?:alien|preact)(?:\.[jt]s)?$/;
+
+/** What `lib/signals` may import: the two libraries and its own files. */
+const SIGNALS_MAY_IMPORT = /^(?:alien-signals|@preact\/signals-core|\.\/(?:contract|alien|preact)\.js)$/;
+
+/** A specifier reaching the signals, by alias or relative path. */
+const SIGNALS_SPEC = /^@todo\/signals$|(?:^|\/)signals\//;
+
+/** Reactive calls, and where in `todo-app` each may appear. */
+const CREATES = /\b(?:signal|computed|batch)\s*\(/;
+const REACTS = /\beffect\s*\(/;
+const UNTRACKS = /\buntracked\s*\(/;
+const MAY_REACT = ["todo-app/src/list-controller.ts", "todo-app/src/model-kit.ts"];
+
+/** The controller's facet, named in the view layer — as a member, bracketed, or by type. */
+const NAMES_CONTROL = new RegExp(`\\.\\s*control\\b|\\[\\s*${QUOTE}control${QUOTE}\\s*\\]|\\bTodoListControl\\b`);
+
 describe("B0 · package boundaries", () => {
   it("finds sources recursively, including subdirectories", () => {
     // Not `length > 0`: `index.ts` is top-level, so that passes even with a
@@ -299,7 +267,7 @@ describe("B0 · package boundaries", () => {
       // the entry actually exports, transitive re-exports included.
       const names = Object.keys(await import("@todo/app/models"));
       expect(names, "the entry must carry the models a view renders").toEqual(
-        expect.arrayContaining(["TodoListModel", "TodoListInput", "MenuModel", "uiShowList"]),
+        expect.arrayContaining(["createTodoListModel", "ConfirmModel", "MenuModel", "uiShowList"]),
       );
       for (const name of names) {
         expect(name, `@todo/app/models must not export ${name}`).not.toMatch(
@@ -419,39 +387,17 @@ describe("B0 · package boundaries", () => {
 
     it("the adapter whitelist rejects react, react-dom and a relative import", () => {
       const bad = specifiers(
-        'import { useRef } from "react";\nimport { createRoot } from "react-dom/client";\nexport * from "./use-model.js";',
+        'import { useRef } from "react";\nimport { createRoot } from "react-dom/client";\nexport * from "./use-value.js";',
       );
-      expect(bad).toEqual(["react", "react-dom/client", "./use-model.js"]);
+      expect(bad).toEqual(["react", "react-dom/client", "./use-value.js"]);
       for (const spec of bad) expect(spec).not.toMatch(ADAPTER_MAY_IMPORT);
     });
 
     it("the model exemption is by location: todo-app's *-model.ts, not a suffix anywhere", () => {
       expect(isModelModule("todo-app/src/todo-model.ts")).toBe(true);
-      expect(isModelModule("todo-ui/src/use-model.ts")).toBe(false);
+      expect(isModelModule("todo-ui/src/use-value.ts")).toBe(false);
       expect(isModelModule("todo-ui/src/views/selection-model.ts")).toBe(false);
       expect(isModelModule("todo-core/src/api-model.ts")).toBe(false);
-    });
-
-    it("the view-side rule rejects every controller-side reference — called, bracketed or spaced — and no view-side one", () => {
-      for (const bad of [
-        "model.replaceTodos(model.todos);",
-        "model.input.takePending();",
-        "model . reportOutcome(undefined);",
-        'model.input["takeToggles"]();',
-        "const drain = model.input.takeRemovals;",
-        "model.fromJSON({ todos: [] });",
-        "model.notify();",
-      ]) {
-        expect(bad).toMatch(CONTROLLER_CALL);
-      }
-      for (const good of [
-        "model.input.queueSubmit(title);",
-        "useModel(model, (m) => m.visible(), shallowEqual);",
-        'import { NotifyView } from "./views/notify-view.js";',
-        "const takeover = model.input.requestToggle;",
-      ]) {
-        expect(good).not.toMatch(CONTROLLER_CALL);
-      }
     });
 
     it("the build-config rule rejects vitest and this app's own test configs — not the shared table", () => {
@@ -489,6 +435,34 @@ describe("B0 · package boundaries", () => {
       expect(usesReactEntry('import { ViewAdapter } from "@todo/ui/adapter";')).toBe(false);
       expect(usesReactEntry('import { TodoListModel } from "@todo/app/models";')).toBe(false);
     });
+
+    it("the signals rules reject what they exist to reject", () => {
+      expect(specifiers('import * as A from "alien-signals";').some(importsLibrary("alien-signals"))).toBe(true);
+      expect(specifiers('import { x } from "@preact/signals-core/extra";').some(importsLibrary("@preact/signals-core"))).toBe(true);
+      for (const bad of ["./alien.js", "./preact.ts", "../../lib/signals/preact.js", "../signals/alien"]) {
+        expect(bad, bad).toMatch(IMPLEMENTATION_FILE);
+      }
+      for (const good of ["./contract.js", "./deps.js", "@todo/signals", "../../lib/signals/deps.js"]) {
+        expect(good, good).not.toMatch(IMPLEMENTATION_FILE);
+      }
+      // Assembled, not spelled — like `coreByPath` above: a literal
+      // "../todo-core/" here would itself match `importOf("core")`, and "holds
+      // for VIEW suites too" scans this very file's raw text for that pattern.
+      const coreRelPath = ["../todo", "core/src/index.js"].join("-");
+      for (const bad of ["@todo/app", coreRelPath, "zod"]) expect(bad).not.toMatch(SIGNALS_MAY_IMPORT);
+      for (const bad of ["@todo/signals", "../../signals/deps.js"]) expect(bad).toMatch(SIGNALS_SPEC);
+      expect("@todo/app/models").not.toMatch(SIGNALS_SPEC);
+      for (const bad of ["const s = signal(0);", "computed (() => 1)", "batch(() => {})"]) expect(bad).toMatch(CREATES);
+      expect("designal(0); AbortSignal(0)").not.toMatch(CREATES);
+      expect("effect(() => {})").toMatch(REACTS);
+      expect("sideeffect(1)").not.toMatch(REACTS);
+      for (const bad of ["model.control.replaceTodos([]);", 'model["control"]', "import type { TodoListControl } from 'x';"]) {
+        expect(bad, bad).toMatch(NAMES_CONTROL);
+      }
+      for (const good of ["model.setFilter(x);", "const controller = 1;", "model.controls"]) {
+        expect(good, good).not.toMatch(NAMES_CONTROL);
+      }
+    });
   });
 
   describe("the composition root is the only module that wires the core to the views", () => {
@@ -518,71 +492,6 @@ describe("B0 · package boundaries", () => {
       // Equality, not "is a subset": if app.ts stopped matching, the pattern
       // (or the layout) has drifted and this check would be asserting nothing.
       expect(roots, "only the composition root may import every layer").toEqual(["src/app.ts"]);
-    });
-  });
-
-  describe("only models notify, and only models are mutated", () => {
-    // Spec §4.8. A controller that writes fields and notifies for itself can
-    // publish a half-applied state — and the reconciliation in §4.2 then runs
-    // against it. A `todo-app/src/*-model.ts` file is the only place
-    // `notify()` may appear — `use-model.ts` included in the ban.
-    const nonModels = () =>
-      [...sources("todo-core"), ...sources("todo-app"), ...sources("todo-ui")].filter(
-        ({ file }) => !isModelModule(file),
-      );
-
-    it("the exemption reaches the model modules, and nothing else", () => {
-      const exempt = [...sources("todo-core"), ...sources("todo-app"), ...sources("todo-ui")]
-        .map(({ file }) => file)
-        .filter(isModelModule);
-      expect(exempt, "the files these rules skip").toEqual(["todo-app/src/todo-model.ts"]);
-    });
-
-    it("calls notify() only from a model", () => {
-      for (const { file, code } of nonModels()) {
-        expect(code, `${file} must not call notify(); use a mutator on the model`).not.toMatch(
-          /\.notify\s*\(/,
-        );
-      }
-    });
-
-    it("never assigns a model field — on the input sub-model OR the outer model", () => {
-      // Guarding only `.input.` left the outer model open: a controller writing
-      // `this._model.todos = [...]` bypasses `replaceTodos`, fires no notify,
-      // and every subscriber keeps an empty list — with this suite green.
-      for (const { file, code } of nonModels()) {
-        expect(code, `${file} must not assign a model field directly; use a mutator`).not.toMatch(
-          MODEL_FIELD_WRITE,
-        );
-        expect(code, `${file} must not assign through \`.input.\`; use a mutator`).not.toMatch(
-          /\.input\.\w+\s*(=(?![=>])|\+\+|--)/,
-        );
-      }
-    });
-  });
-
-  describe("a view calls only the view-side mutators", () => {
-    // "The view writes only `input`" is not an object boundary on its own: a
-    // view holds the OUTER model, so it can call `replaceTodos`,
-    // `reportOutcome` or a `take*()` drain — and a write that stores equal
-    // data (`model.replaceTodos(model.todos)`) leaves every `toJSON()`
-    // snapshot in the browser suites unchanged. This is what checks it.
-    it("the split is derived from the model classes, and the allow-list names only methods that exist", () => {
-      const methods = modelMethods();
-      expect(CONTROLLER_SIDE, "the controller-side set is found, not assumed").toEqual(
-        expect.arrayContaining(["replaceTodos", "reportOutcome", "takePending", "takeToggles", "takeRemovals", "fromJSON"]),
-      );
-      for (const name of VIEW_MAY_CALL) {
-        expect(methods.has(name), `VIEW_MAY_CALL names "${name}", which no model has`).toBe(true);
-      }
-    });
-
-    it("todo-ui never names a controller-side model method", () => {
-      for (const { file, code } of sources("todo-ui")) {
-        expect(code, `${file} may call only the view-side mutators: ${[...VIEW_MAY_CALL].join(", ")}`).not.toMatch(
-          CONTROLLER_CALL,
-        );
-      }
     });
   });
 
@@ -635,29 +544,6 @@ describe("B0 · package boundaries", () => {
     });
   });
 
-  describe("subscribers use named channels, not bare onUpdate", () => {
-    // Spec §4.10. `onUpdate` wakes a subscriber for every field, which is the
-    // shape that makes self-wake dangerous. `useModel` is the one legitimate
-    // exception: it supplies its own selector.
-    it("never calls onUpdate outside a model or the React binding", () => {
-      const offenders = [...sources("todo-core"), ...sources("todo-app"), ...sources("todo-ui")].filter(
-        ({ file }) => !isModelModule(file) && file !== REACT_BINDING,
-      );
-      expect(offenders.map(({ file }) => file), "the binding is checked by name — a rename must not exempt it silently").not.toContain(
-        REACT_BINDING,
-      );
-      expect(
-        sources("todo-ui").map(({ file }) => file),
-        "the React binding this rule exempts still exists",
-      ).toContain(REACT_BINDING);
-      for (const { file, code } of offenders) {
-        expect(code, `${file} must subscribe to a named channel, not onUpdate`).not.toMatch(
-          /\.onUpdate\s*\(/,
-        );
-      }
-    });
-  });
-
   describe("the build config stays out of the test runner", () => {
     // `vite.config.ts` once took the alias table from `vitest.config.ts`, so
     // every production build loaded `vitest/config`. The table now lives in
@@ -692,6 +578,71 @@ describe("B0 · package boundaries", () => {
         expect(code, `${file} must not import the bus, the model base, or the declarations`).not.toMatch(
           /@statewalker\/shared-(commands|baseclass)|["']\.\/(declarations|todo-commands)(\.js)?["']/,
         );
+      }
+    });
+  });
+
+  describe("the signals library is named in one place, and used where the spec says", () => {
+    // Spec §4.6. The app is written against a five-function contract; the
+    // library behind it is a one-line choice in deps.ts. These keep it so.
+    it("each library is imported by exactly its own implementation file", () => {
+      const modules = everyModule();
+      for (const [lib, owner] of Object.entries(LIBRARY_OWNER)) {
+        const importers = modules
+          .filter(({ code }) => specifiers(code).some(importsLibrary(lib)))
+          .map(({ file }) => file);
+        expect(importers, `only ${owner} may import ${lib}`).toEqual([owner]);
+      }
+    });
+
+    it("the implementation files are imported only by deps.ts and the contract suite", () => {
+      const importers = everyModule()
+        .filter(({ code }) => specifiers(code).some((s) => IMPLEMENTATION_FILE.test(s)))
+        .map(({ file }) => file)
+        .sort();
+      expect(importers).toEqual(["B1-models/tests/signals-contract.test.ts", "signals/deps.ts"]);
+    });
+
+    it("lib/signals imports only the libraries and itself; todo-core imports no signals", () => {
+      const specs = signalSources().flatMap(({ code }) => specifiers(code));
+      expect(specs.length, "found no import in lib/signals — the check below would be vacuous").toBeGreaterThan(0);
+      for (const spec of specs) expect(spec, `lib/signals must not import "${spec}"`).toMatch(SIGNALS_MAY_IMPORT);
+      for (const { file, code } of sources("todo-core")) {
+        for (const spec of specifiers(code)) {
+          expect(SIGNALS_SPEC.test(spec), `${file} must not import "${spec}"`).toBe(false);
+        }
+      }
+    });
+
+    it("the exemption reaches the model modules, and nothing else", () => {
+      const exempt = [...sources("todo-core"), ...sources("todo-app"), ...sources("todo-ui")]
+        .map(({ file }) => file)
+        .filter(isModelModule);
+      expect(exempt, "the files the model rules skip").toEqual(["todo-app/src/todo-model.ts"]);
+    });
+
+    it("in todo-app, signals are created only in a model; effects only in the controller and the kit", () => {
+      const app = sources("todo-app");
+      const creators = app.filter(({ code }) => CREATES.test(code)).map(({ file }) => file);
+      expect(creators, "signal( computed( batch( only in a model module").toEqual(["todo-app/src/todo-model.ts"]);
+      const reactors = app.filter(({ code }) => REACTS.test(code)).map(({ file }) => file).sort();
+      expect(reactors, "effect( only in the controller and the model kit").toEqual([...MAY_REACT].sort());
+      for (const { file, code } of app) {
+        if (!UNTRACKS.test(code)) continue;
+        expect(isModelModule(file) || MAY_REACT.includes(file), `${file} must not call untracked(`).toBe(true);
+      }
+    });
+
+    it("in todo-ui, only use-value.ts reaches the signals", () => {
+      const users = sources("todo-ui")
+        .filter(({ code }) => specifiers(code).some((s) => SIGNALS_SPEC.test(s)))
+        .map(({ file }) => file);
+      expect(users).toEqual(["todo-ui/src/use-value.ts"]);
+    });
+
+    it("todo-ui never names the control facet", () => {
+      for (const { file, code } of sources("todo-ui")) {
+        expect(code, `${file} is handed the view facet only`).not.toMatch(NAMES_CONTROL);
       }
     });
   });

@@ -582,9 +582,6 @@ importers:
       '@preact/signals-core':
         specifier: 1.14.4
         version: 1.14.4
-      '@statewalker/shared-baseclass':
-        specifier: 0.1.1
-        version: 0.1.1
       '@statewalker/shared-commands':
         specifier: 0.2.1
         version: 0.2.1(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.7.1(valibot@1.4.2(typescript@6.0.3)))(quansync@1.0.0)(typebox@1.1.38)(valibot@1.4.2(typescript@6.0.3))(zod-to-json-schema@3.25.2(zod@4.5.4))(zod@4.5.4)
