@@ -32,6 +32,7 @@ const mountList = async (model: TodoListModel) => {
   const view = render(<ListView model={model} />);
   unmount = view.unmount;
   await waitFor(() => view.host.querySelector("ul") !== null);
+  await flush(); // let the passive effects subscribe before a test drives the model
   return view.host;
 };
 
@@ -80,12 +81,12 @@ describe("ListView", () => {
       expect(titles(host)).toEqual(["buy milk", "call mum"]);
     });
 
-    it("when the QUERY changes — visible() reads the input sub-model, whose updates the outer model never sees", async () => {
+    it("when the QUERY changes — visible() reads the input sub-model, and the model forwards its query", async () => {
       // `visible()` lives on the outer model but reads `input.filterDraft` and
-      // `input.showDone`, and `input.notify()` does not fire the outer
-      // model's `onUpdate`. A list bound only to `useModel(model, m =>
-      // m.visible())` would therefore ignore every filter keystroke. Driven
-      // through the mutators, not the DOM, so this isolates the binding.
+      // `input.showDone`. The list is bound only to `useModel(model, m =>
+      // m.visible())`, so this holds only because the model forwards query
+      // changes to its own `onUpdate` (B1 pins that). Driven through the
+      // mutators, not the DOM, so this isolates the binding.
       const model = seeded();
       const host = await mountList(model);
 
@@ -97,6 +98,39 @@ describe("ListView", () => {
       model.input.setShowDone(false);
       await waitFor(() => titles(host).length === 2);
       expect(titles(host)).toEqual(["buy milk", "walk dog"]);
+    });
+  });
+
+  describe("each half of the query re-renders the rows ALONE, in its own tick", () => {
+    // The test above moves filter and showDone together, so a binding that
+    // covers only one half passes it. These do not: each changes one level
+    // field and waits for the DOM before touching anything else. Each changes
+    // it TWICE: a first change can land before React's passive effect
+    // subscribes, and React's post-subscribe snapshot check then re-renders
+    // for it — masking a missing subscription. The second change cannot.
+    it("setShowDone alone hides and shows the completed row", async () => {
+      const model = seeded();
+      const host = await mountList(model);
+
+      model.input.setShowDone(false);
+      await waitFor(() => titles(host).length === 2);
+      expect(titles(host)).toEqual(["buy milk", "walk dog"]);
+      expect(input(host, "Show completed").checked, "the control echoes the model").toBe(false);
+
+      model.input.setShowDone(true);
+      await waitFor(() => titles(host).length === 3);
+    });
+
+    it("setFilter alone narrows the rows", async () => {
+      const model = seeded();
+      const host = await mountList(model);
+
+      model.input.setFilter("taxes");
+      await waitFor(() => titles(host).length === 1);
+      expect(titles(host)).toEqual(["file taxes"]);
+
+      model.input.setFilter("");
+      await waitFor(() => titles(host).length === 3);
     });
   });
 

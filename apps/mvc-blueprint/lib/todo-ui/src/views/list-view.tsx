@@ -24,15 +24,14 @@ import { shallowEqual, useModel } from "../use-model.js";
  * half-typed title until it is submitted, and then it rides the event edge.
  */
 export function ListView({ model }: { model: TodoListModel }) {
-  // The query lives on the INPUT sub-model, whose updates never reach the
-  // outer model's `onUpdate`. Reading both level fields here is what
-  // re-renders this component when the query moves — and it is on that
-  // render that `useSyncExternalStore` re-samples `visible()` below. Bound
-  // only to the outer model, the list would ignore every filter keystroke.
-  const filter = useModel(model.input, (i) => i.filterDraft);
-  const showDone = useModel(model.input, (i) => i.showDone);
-  // A derived array, so it MUST be compared shallowly (spec §4.3).
+  // Every read is bound through the OUTER model: its `onUpdate` covers the
+  // input's query fields (the model forwards them), so the rows depend on
+  // `visible()` and nothing else — not on the controls happening to
+  // subscribe to the same fields. A derived array, so it MUST be compared
+  // shallowly (spec §4.3).
   const rows = useModel(model, (m) => m.visible(), shallowEqual);
+  const filter = useModel(model, (m) => m.input.filterDraft);
+  const showDone = useModel(model, (m) => m.input.showDone);
   const outcome = useModel(model, (m) => m.lastOutcome);
   const [draft, setDraft] = useState("");
 

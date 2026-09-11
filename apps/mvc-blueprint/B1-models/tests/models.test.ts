@@ -107,6 +107,39 @@ describe("B1 · todo models", () => {
     expect(queries, "filterDraft is the other half").toBe(2);
   });
 
+  it("an input QUERY change fires the outer model's onUpdate — visible() derives from it", () => {
+    // `visible()` is a getter on the OUTER model that reads the input's level
+    // fields. `useModel(model, m => m.visible())` subscribes to the outer
+    // `onUpdate` only, so that channel must cover every derived getter the
+    // model exposes — or a view goes stale with no error. Counted on the RAW
+    // channel, each half of the query separately, each in its own tick.
+    const m = new TodoListModel();
+    let outer = 0;
+    m.onUpdate(() => { outer++; });
+
+    m.input.setShowDone(false);
+    expect(outer, "showDone alone must reach the outer model").toBe(1);
+    m.input.setFilter("abc");
+    expect(outer, "filterDraft alone must reach the outer model").toBe(2);
+    m.input.setFilter("abc");
+    expect(outer, "no query change, no outer notify").toBe(2);
+  });
+
+  it("forwards QUERY changes only — the add form and row queues derive nothing on the outer model", () => {
+    const m = new TodoListModel();
+    let outer = 0;
+    m.onUpdate(() => { outer++; });
+
+    m.input.queueSubmit("a");
+    m.input.takePending();
+    m.input.requestToggle("1");
+    m.input.requestRemove("1");
+    m.input.requestClearCompleted();
+    m.input.requestRefresh();
+
+    expect(outer).toBe(0);
+  });
+
   it("wakes a channel subscriber only for its own change", () => {
     const m = new TodoListModel();
     let refreshes = 0;

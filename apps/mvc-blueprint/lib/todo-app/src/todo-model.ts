@@ -164,6 +164,25 @@ export class TodoListModel extends BaseClass {
   lastOutcome?: string;
   readonly input = new TodoListInput();
 
+  constructor() {
+    super();
+    // `visible()` reads the input's QUERY fields, and `input.notify()` never
+    // reaches this model's `onUpdate` on its own. That channel must cover
+    // every derived getter this model exposes, or a view bound through
+    // `useModel(model, m => m.visible())` goes stale with no error — a
+    // "Show completed" that stops filtering, a count badge that stops
+    // counting. So the QUERY channel is forwarded, and nothing else: the
+    // add-form and row queues feed the controller, and the outer model
+    // derives nothing from them.
+    //
+    // No loop and no self-wake: this notifies the OUTER model, which writes
+    // nothing back to `input`; the controller subscribes to input CHANNELS,
+    // never to the outer `onUpdate`. The subscription lives exactly as long
+    // as the two objects it joins, which are one lifetime — so it has no
+    // disposer to own.
+    this.input.onQueryChange(() => this.notify());
+  }
+
   // --- Mutators. The controller calls these; it never assigns and never notifies.
 
   /** Replaced, never mutated: a selector comparing by identity sees nothing otherwise. */
