@@ -71,3 +71,51 @@ export function withSecrets(
     return { prefix: route.prefix, upstream: route.upstream, headers };
   });
 }
+
+/**
+ * Routes the page starts with, so it does something before anyone types.
+ *
+ * Both measured from a browser origin on 2026-09-11 -- CORS allowed, no key.
+ * `/swapi` is a real JSON API to explore. `/httpbin` is the diagnostic one:
+ * `/headers` echoes what arrived, proving nothing was stripped, and `/drip`
+ * sends bytes spaced over time, which is the falsifiable streaming test --
+ * first byte at 0.37s of a 3s response, and anything that buffered would
+ * collapse the two together.
+ *
+ * Note the upstream for swapi is `/api` WITHOUT a trailing slash, and that
+ * `https://swapi.dev/api` itself answers 403 while `/api/` answers 200. That
+ * is swapi's rule, not this proxy's; it is why the page's examples point at a
+ * resource rather than at the bare `/swapi`.
+ */
+export const DEFAULT_ROUTES: readonly StoredRoute[] = [
+  { prefix: "/swapi", upstream: "https://swapi.dev/api", headers: {}, secretHeader: null },
+  { prefix: "/httpbin", upstream: "https://httpbin.org", headers: {}, secretHeader: null },
+];
+
+/**
+ * Stored routes, or `defaults` on a genuine first visit.
+ *
+ * A FIRST VISIT MEANS THE KEY WAS NEVER WRITTEN, not that the list is empty.
+ * Deleting every route writes `[]`, and seeding whenever the list is empty
+ * would bring the demo routes back on every reload -- a person could never get
+ * rid of them. Likewise content that cannot be parsed is not a first visit:
+ * someone wrote it, possibly a newer version of this page, and seeding would
+ * overwrite it.
+ */
+export function loadRoutesOrSeed(
+  storage: Pick<Storage, "getItem" | "setItem">,
+  defaults: readonly StoredRoute[],
+): StoredRoute[] {
+  let neverWritten: boolean;
+  try {
+    neverWritten = storage.getItem(ROUTES_STORAGE_KEY) === null;
+  } catch {
+    // Storage that refuses to be read cannot be written either; serve the
+    // defaults for this session without pretending they were saved.
+    return [...defaults];
+  }
+  if (!neverWritten) return loadRoutes(storage);
+  const seeded = [...defaults];
+  saveRoutes(storage, seeded);
+  return seeded;
+}

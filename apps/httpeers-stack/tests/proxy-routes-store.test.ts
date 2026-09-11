@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  ROUTES_STORAGE_KEY, type StoredRoute, loadRoutes, saveRoutes, withSecrets,
+  DEFAULT_ROUTES, ROUTES_STORAGE_KEY, type StoredRoute, loadRoutes, loadRoutesOrSeed, saveRoutes, withSecrets,
 } from "../src/pages/proxy/routes-store.js";
 
 const ROUTE: StoredRoute = {
@@ -86,5 +86,48 @@ describe("withSecrets", () => {
     const plain: StoredRoute = { ...ROUTE, secretHeader: null };
     const [merged] = withSecrets([plain], new Map([["/openai", "ignored"]]));
     expect(merged?.headers).toEqual({ "content-type": "application/json" });
+  });
+});
+
+describe("loadRoutesOrSeed", () => {
+  it("seeds the defaults on a first visit, and writes them down", () => {
+    const s = fakeStorage();
+    expect(loadRoutesOrSeed(s, DEFAULT_ROUTES)).toEqual(DEFAULT_ROUTES);
+    expect(s.map.has(ROUTES_STORAGE_KEY)).toBe(true);
+  });
+
+  // THE CASE THIS FUNCTION EXISTS FOR. Deleting the demo routes writes an empty
+  // list. Seeding whenever the list is empty would resurrect them on the next
+  // reload, so a person could never get rid of them.
+  it("does NOT reseed a list the person emptied", () => {
+    const s = fakeStorage();
+    saveRoutes(s, []);
+    expect(loadRoutesOrSeed(s, DEFAULT_ROUTES)).toEqual([]);
+  });
+
+  it("returns stored routes untouched when there are some", () => {
+    const s = fakeStorage();
+    saveRoutes(s, [ROUTE]);
+    expect(loadRoutesOrSeed(s, DEFAULT_ROUTES)).toEqual([ROUTE]);
+  });
+
+  // Unreadable content is not a first visit: someone wrote something. Reseeding
+  // here would overwrite whatever a newer version of this page stored.
+  it("does not seed over content it cannot read", () => {
+    const s = fakeStorage("not json");
+    expect(loadRoutesOrSeed(s, DEFAULT_ROUTES)).toEqual([]);
+    expect(s.map.get(ROUTES_STORAGE_KEY)).toBe("not json");
+  });
+});
+
+describe("DEFAULT_ROUTES", () => {
+  // Pre-configured so the page works before anyone types anything. Both were
+  // measured from a browser origin on 2026-09-11: CORS allowed, no key needed.
+  it("offers swapi and httpbin, and holds no credential", () => {
+    expect(DEFAULT_ROUTES.map((r) => r.prefix)).toEqual(["/swapi", "/httpbin"]);
+    for (const r of DEFAULT_ROUTES) {
+      expect(r.secretHeader).toBeNull();
+      expect(r.headers).toEqual({});
+    }
   });
 });
