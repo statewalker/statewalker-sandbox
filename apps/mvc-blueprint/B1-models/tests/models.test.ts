@@ -52,6 +52,19 @@ describe("B1 · todo models", () => {
     expect(notifies, "three writes, one real change").toBe(1);
   });
 
+  it("raises no notify when setShowDone is handed the value it already holds", () => {
+    // Its own test: the one above covers `setFilter` only, and deleting this
+    // guard left every suite green — `onQueryChange`'s dedup hid it from the
+    // outer model, and nothing counted the input's raw channel for it.
+    const m = new TodoListModel();
+    let notifies = 0;
+    m.input.onUpdate(() => { notifies++; });
+    m.input.setShowDone(false);
+    m.input.setShowDone(false);
+    m.input.setShowDone(false);
+    expect(notifies, "three writes, one real change").toBe(1);
+  });
+
   it("does not notify when takePending drains an already-empty queue", () => {
     const m = new TodoListModel();
     m.input.queueSubmit("a");

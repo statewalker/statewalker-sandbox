@@ -315,8 +315,10 @@ describe("B0 · package boundaries", () => {
     it("touches the bus only in the adapter", () => {
       // Spec §4.3: a view deriving menu items from the registry would be a
       // layering violation. Only view-adapter.ts may name the bus.
+      // Exempt by exact path, not by suffix: `endsWith("view-adapter.ts")`
+      // also admitted any `views/list-view-adapter.ts` someone might add.
       for (const { file, code } of sources("todo-ui")) {
-        if (file.endsWith("view-adapter.ts")) continue;
+        if (file === "todo-ui/src/view-adapter.ts") continue;
         expect(code, `${file} must not name Commands or CommandsRegistry`).not.toMatch(
           /\b(Commands|CommandsRegistry)\b/,
         );
