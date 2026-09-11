@@ -123,6 +123,24 @@ describe("B6 · a list panel that fails to show is loud", () => {
     expect(rejections).toEqual([]);
   });
 
+  it("an app disposed before its panel failure is read reports nothing — no log, no element", async () => {
+    // The only window in which `disposed` matters: the panel's `no-handlers`
+    // rejection is settled inside `startApp`, but its reader runs a few
+    // microtasks later — and a caller that disposes in the same turn has
+    // already been told the root is theirs again. (A healthy app never gets
+    // here: dispose settles the panel `{ closed: true }`, which is not a
+    // failure, so the test below cannot tell whether the guard exists.)
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const running = startApp(host, { registerViews: () => () => undefined });
+    await running.dispose(); // same turn: the failure is still pending
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(errors, "nothing reports for an app the caller already tore down").not.toHaveBeenCalled();
+    expect(host.childNodes, "nothing was rendered into the returned root").toHaveLength(0);
+    expect(rejections).toEqual([]);
+  });
+
   it("a healthy app renders no error and logs nothing — including across dispose", async () => {
     const errors = vi.spyOn(console, "error");
 

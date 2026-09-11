@@ -47,6 +47,14 @@ export function startApp(root: HTMLElement, options: StartOptions = {}): Running
   // that cannot show the list (`no-handlers` — nobody registered
   // `ui:show-list`) would otherwise leave a blank page and a silent console.
   // This is the production reader the controller's doc asks for.
+  //
+  // `disposed` covers the one window where it matters: the failure is
+  // settled inside `startApp`, but this reader runs microtasks later, and a
+  // caller that disposes in the same turn has already been handed its root
+  // back. An app nobody is looking at any more reports nothing — no log, and
+  // no element rendered into a root that is no longer ours (without the
+  // guard, whether dispose's `failure?.remove()` catches that element would
+  // depend on how many microtasks the registry's unwind takes).
   let disposed = false;
   let failure: HTMLElement | undefined;
   void controller.panelSettled.then((outcome: PanelOutcome) => {
