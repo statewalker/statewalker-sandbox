@@ -1,0 +1,50 @@
+{
+  "name": "@statewalker/httpeers-lib-protos",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Prototypes that answer the open questions of the httpeers library extraction.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+  },
+  "scripts": {
+    "test": "pnpm run typecheck && vitest run --no-file-parallelism",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "@biscuit-auth/biscuit-wasm": "0.6.0",
+    "@chainsafe/libp2p-noise": "17.0.0",
+    "@chainsafe/libp2p-yamux": "8.0.1",
+    "@libp2p/circuit-relay-v2": "4.2.11",
+    "@libp2p/crypto": "5.1.22",
+    "@libp2p/identify": "4.1.12",
+    "@libp2p/interface": "3.2.5",
+    "@libp2p/peer-id": "6.0.14",
+    "@libp2p/tcp": "11.0.26",
+    "@libp2p/webrtc": "6.0.29",
+    "@libp2p/websockets": "10.1.19",
+    "@multiformats/multiaddr": "13.0.3",
+    "@statewalker/httpeers-stack": "workspace:*",
+    "@statewalker/httpeers.core": "workspace:*",
+    "@statewalker/webrun-files": "catalog:",
+    "@statewalker/webrun-files-mem": "catalog:",
+    "@statewalker/webrun-http-browser": "catalog:",
+    "hono": "catalog:",
+    "libp2p": "3.3.8",
+    "qrcode-generator": "^2.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "jsqr": "^1.4.0",
+    "playwright": "1.58.0",
+    "sharp": "^0.35.4",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -5,6 +5,11 @@
   "type": "module",
   "description": "The installable reference deployment of the httpeers mesh design.",
   "license": "MIT",
+  "comment:exports": "So apps/httpeers-lib-protos can import the PROVEN code unchanged rather than copy it — that it need not be copied is what those rungs are measuring. Source-only, like httpeers.core's own exports map.",
+  "exports": {
+    "./src/*.js": "./src/*.ts",
+    "./tests/*.js": "./tests/*.ts"
+  },
   "repository": {
     "type": "git",
     "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
