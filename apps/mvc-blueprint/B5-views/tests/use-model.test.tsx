@@ -217,6 +217,22 @@ describe("useModel", () => {
     ).toBe(true);
   });
 
+  it("a selector may close over props: re-rendered with a new prop, it re-selects", async () => {
+    // The selector is not part of the cache key, and need not be: the CURRENT
+    // selector runs on every `getSnapshot`, and the cache answers only when
+    // the fresh value is equal to the cached one.
+    const model = new TodoListModel();
+    model.replaceTodos([todo("1", "buy milk"), todo("2", "walk dog")]);
+    const values: (string | undefined)[] = [];
+    const titleOf = (id: string) =>
+      createElement(Probe, { model, selector: (m) => m.todos.find((t) => t.id === id)?.title, values });
+
+    await mount(titleOf("1"), values);
+    view!.root.render(titleOf("2"));
+    await waitFor(() => values.length >= 2);
+    expect(values).toEqual(["buy milk", "walk dog"]);
+  });
+
   it("unsubscribes on unmount — the model keeps no listener for a component that is gone", async () => {
     // Every render test passes whether or not the subscription is released: a
     // leaked listener re-renders nothing that is still on screen. Counted at
@@ -235,7 +251,9 @@ describe("useModel", () => {
 
     const values: (string | undefined)[] = [];
     await mount(createElement(Probe, { model, selector: (m) => m.lastOutcome, values }), values);
-    expect(live, "precondition: the mounted component is subscribed").toBeGreaterThan(0);
+    // `useSyncExternalStore` subscribes in a passive effect, after the layout
+    // effect `mount` waits for — so wait for the subscription itself.
+    await waitFor(() => live > 0);
 
     view!.unmount();
     view = undefined;

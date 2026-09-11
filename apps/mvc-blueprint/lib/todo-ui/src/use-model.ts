@@ -41,20 +41,23 @@ export function useModel<M extends BaseClass, T>(
   // central case — a panel re-pointed at a new model as it comes and goes)
   // without unmounting, and two different models can legitimately produce
   // `isEqual` values (two empty lists, under `shallowEqual`, is the obvious
-  // case). Comparing only `cached.value` against `next` would then return
-  // the OLD model's cached reference and never sample the new model at all
-  // — a stale read that self-corrects only once the new model changes for
-  // real, which is exactly what made it easy to miss.
+  // case). A value-only cache WOULD sample the new model — `getSnapshot`
+  // runs the selector on every call — but, finding the result equal to the
+  // old model's, would hand back the OLD model's reference: a value the new
+  // model never produced, kept until the new model changes for real. Equal
+  // by the comparator's definition, so rarely visible; keying by model means
+  // a re-pointed component starts from its own model's value regardless.
   //
   // `selector` is deliberately NOT part of the cache key. Every call site
   // passes an inline arrow (that is the whole reason this hook exists — see
   // the module doc), so keying on selector identity would make every render
   // a cache miss and reintroduce the fresh-array-every-call loop this hook
-  // exists to prevent. The contract this relies on: `selector` must be
-  // semantically stable for a given model (the same projection of the same
-  // model), which holds for every selector in this codebase (`m =>
-  // m.lastOutcome`, `m => m.visible()`, …) — none of them close over
-  // anything besides their parameter.
+  // exists to prevent. Leaving it out costs nothing: `getSnapshot` calls the
+  // CURRENT selector every time (it is in the dependency list below, and
+  // React calls `getSnapshot` on every render), and the cached reference is
+  // returned only when `isEqual` says the fresh result is equivalent. So a
+  // selector may close over props or state — a changed projection yields a
+  // changed value, which is not equal, which is not served from the cache.
   const cache = useRef<{ model: M; value: T } | undefined>(undefined);
 
   // Only `model` in the dependency list: `onUpdate` is a bound arrow field

@@ -25,16 +25,24 @@ const completedTodos = (n: number): string => `${n} completed todo${n === 1 ? ""
  * can override an operation without the controller knowing. That asymmetry is
  * deliberate — reading is not an operation anyone overrides.
  *
- * It subscribes to `model.input` and writes `model` — never the reverse — so
- * its own writes cannot wake it. That is the whole reason the input sub-model
- * exists, and `expectNoSelfWake` asserts both halves of it.
+ * It subscribes to `model.input` and writes its RESULTS to `model`, so those
+ * writes cannot wake it. Its one write to `input` is draining it — each
+ * `take*()` replaces a queue and notifies, which does wake its own channel —
+ * and that happens inside a run, where the `_reconciling` guard absorbs it.
+ * That split is the reason the input sub-model exists, and `expectNoSelfWake`
+ * asserts both halves of it: an outer write does not wake it, an input write
+ * does.
  *
  * ERROR POLICY. Every piece of work runs inside `_reconcile()`, which is fired
  * with `void` from a channel callback — so a rejection escaping it has nowhere
  * to go but the process, and nothing reaches the user. Therefore nothing
  * escapes: each failure is caught where it happens and reported through the
  * outer model's `reportOutcome` (the mutator that exists for exactly this), and
- * a watermark moves only once the work it stands for has actually landed.
+ * a watermark moves once the user's intent is CONSUMED. For work with no
+ * question in it — a reload — that is when the work landed: a failed reload
+ * leaves its watermark where it was. For an intent that asks the user a
+ * question — clear-completed — the answer consumes it, whatever follows (see
+ * `_handledClearCompleted`).
  *
  * ONE exception: the panel command's own rejection (`activate()`'s
  * `commands.call(uiShowList, ...)` finding no view layer) does NOT go through
@@ -159,7 +167,8 @@ export class ListController {
     );
     // Every input edge wakes the SAME loop: one `_reconcile()`, one
     // `_reconciling` guard, one error policy. A second loop per edge would
-    // race the first over the model it writes.
+    // race the first over the model it writes. The price — everything waits
+    // behind an open dialog — is in `_reconcile()`'s doc.
     for (const channel of [
       this._model.input.onPendingChange,
       this._model.input.onTogglesChange,
@@ -264,6 +273,18 @@ export class ListController {
    * run did. A run that did work and hit no failure clears the outcome, because
    * the failure it described is no longer the latest word; a run that did
    * nothing leaves it alone.
+   *
+   * ONE LOOP, AND WHAT IT COSTS. Every edge is drained here, one step after
+   * another, and a step may await a command only a VIEW settles. While the
+   * clear-completed confirm is open, a queued add, a toggle and a refresh all
+   * sit undrained until the user answers — the in-flight guard folds their
+   * wakes into a run that is parked on the dialog. The modal hides that here:
+   * nobody can press anything behind it. It would not hide it for a host that
+   * routes `todos:add` through an approval dialog, or for the Files Manager's
+   * conflict dialogs: one open question would freeze the whole controller.
+   * Deferred, not solved (DECISIONS.md, Deferred); the likely direction is to
+   * await view-settled commands OUTSIDE this loop and feed each answer back
+   * in as an edge.
    */
   private async _reconcile(): Promise<void> {
     if (this._reconciling) return;
