@@ -3,7 +3,7 @@ import { Commands } from "@statewalker/shared-commands";
 // directly (same precedent as `end-to-end.test.ts` and
 // `dispose-liveness.test.ts`), hence the local seeded api below.
 import { bootstrap, TodoListModel, uiShowList } from "@todo/app";
-import { ViewAdapter } from "@todo/ui";
+import { ViewAdapter } from "@todo/ui/adapter";
 import { describe, expect, it } from "vitest";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));

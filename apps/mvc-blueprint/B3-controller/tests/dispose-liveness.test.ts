@@ -1,6 +1,6 @@
 import { Command, Commands } from "@statewalker/shared-commands";
 import { bootstrap, ConfirmModel, TodoListModel, uiConfirm } from "@todo/app";
-import { ViewAdapter } from "@todo/ui";
+import { ViewAdapter } from "@todo/ui/adapter";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { mountListView } from "../../test-support/views.js";

@@ -72,6 +72,57 @@ const suitesUsing = (pkg: string) => allSuites().filter(({ code }) => importOf(p
 
 const DOM_GLOBALS = /\b(document|window|HTMLElement|navigator)\b/;
 
+/**
+ * A `todo-ui` import of todo-app that is NOT the models-only entry — alias or
+ * relative path. Module-scope so the negative control at the bottom can prove
+ * it still rejects a controller import: a regex weakened later would
+ * otherwise pass every real file and nobody would know.
+ */
+const BEYOND_MODELS = new RegExp(
+  `@todo/app(?!/models${QUOTE})|${QUOTE}\\.\\.?/${NOT_QUOTE}*\\btodo-app/`,
+);
+
+/** Every module specifier in `code`: `from "x"`, `import "x"`, `import("x")`. */
+const specifiers = (code: string): string[] =>
+  [...code.matchAll(/\b(?:from|import)\s*\(?\s*["'`]([^"'`\n]+)["'`]/g)].map((m) => m[1]);
+
+/**
+ * A specifier reaching the view layer somewhere OTHER than its adapter entry.
+ * `@todo/ui` is the React entry — it re-exports the views, and with them
+ * react-dom and the kit — so a headless module that takes it loads a DOM
+ * library by accident, and dies at import the moment any view touches
+ * `document` at module scope.
+ */
+const reachesUiBeyondAdapter = (spec: string): boolean => {
+  if (/^@todo\/ui(\/|$)/.test(spec)) return spec !== "@todo/ui/adapter";
+  if (/^\.\.?\//.test(spec) && /\btodo-ui\//.test(spec)) {
+    return !/\btodo-ui\/src\/view-adapter(\.js|\.ts)?$/.test(spec);
+  }
+  return false;
+};
+
+/**
+ * What `view-adapter.ts` may import: the bus and the registry, nothing else.
+ * A whitelist, not a React blacklist — a relative `./use-model.js` pulls React
+ * in just as surely as `"react"` does, and a blacklist would miss it.
+ */
+const ADAPTER_MAY_IMPORT = /^@statewalker\/shared-(commands|registry)$/;
+
+/**
+ * The modules a node suite can load: every `*.test.ts`, and the shared test
+ * support. B0 itself is left out — it spells the bad specifiers as fixtures;
+ * it is the grep, not an importer.
+ */
+const headlessModules = () => [
+  ...allSuites().filter(({ file }) => file.endsWith(".test.ts") && !file.startsWith("B0-boundaries/")),
+  ...(readdirSync(`${ROOT}test-support`, { recursive: true, encoding: "utf8" }) as string[])
+    .filter((f) => f.endsWith(".ts"))
+    .map((f) => ({
+      file: `test-support/${f}`,
+      code: stripComments(readFileSync(`${ROOT}test-support/${f}`, "utf8")),
+    })),
+];
+
 describe("B0 · package boundaries", () => {
   it("finds sources recursively, including subdirectories", () => {
     // Not `length > 0`: `index.ts` is top-level, so that passes even with a
@@ -124,11 +175,8 @@ describe("B0 · package boundaries", () => {
     // todo-app for model types, so a blanket ban is wrong; the separation is
     // the models-only entry point, `@todo/app/models`.
     it("reaches todo-app only through @todo/app/models — never a controller", () => {
-      const beyondModels = new RegExp(
-        `@todo/app(?!/models${QUOTE})|${QUOTE}\\.\\.?/${NOT_QUOTE}*\\btodo-app/`,
-      );
       for (const { file, code } of sources("todo-ui")) {
-        expect(code, `${file} must import todo-app only as "@todo/app/models"`).not.toMatch(beyondModels);
+        expect(code, `${file} must import todo-app only as "@todo/app/models"`).not.toMatch(BEYOND_MODELS);
       }
     });
 
@@ -172,6 +220,70 @@ describe("B0 · package boundaries", () => {
       for (const { file, code } of suites) {
         expect(code, `${file} must not import the core directly`).not.toMatch(importOf("core"));
       }
+    });
+  });
+
+  describe("the view layer's adapter entry keeps headless suites headless", () => {
+    it("view-adapter.ts imports the bus and the registry — no React, and nothing relative", () => {
+      const adapter = sources("todo-ui").find(({ file }) => file === "todo-ui/src/view-adapter.ts");
+      expect(adapter, "the adapter entry this rule guards").toBeDefined();
+      const specs = specifiers(adapter!.code);
+      expect(specs.length, "found no import in view-adapter.ts — the check below would be vacuous").toBeGreaterThan(0);
+      for (const spec of specs) {
+        expect(spec, `view-adapter.ts must not import "${spec}"`).toMatch(ADAPTER_MAY_IMPORT);
+      }
+    });
+
+    it("a node suite, or the test support it loads, takes @todo/ui only as @todo/ui/adapter", () => {
+      const modules = headlessModules();
+      const users = modules.filter(({ code }) => specifiers(code).some((s) => /todo[-/]ui\b/.test(s)));
+      expect(users.length, "found no headless user of the view layer — the check below would be vacuous").toBeGreaterThan(0);
+      for (const { file, code } of modules) {
+        for (const spec of specifiers(code)) {
+          expect(reachesUiBeyondAdapter(spec), `${file} imports "${spec}"; a node suite takes "@todo/ui/adapter"`).toBe(false);
+        }
+      }
+    });
+  });
+
+  describe("the rules can fail — negative controls against known-bad fixtures", () => {
+    // A one-time plant proves a rule once. These prove it on every run, so a
+    // regex weakened later fails HERE instead of passing every real file.
+    it("the models-only rule rejects a controller, bootstrap or the barrel — by alias and by relative path", () => {
+      for (const bad of [
+        'import { ListController } from "@todo/app";',
+        'export * from "@todo/app";',
+        'import { bootstrap } from "@todo/app/bootstrap";',
+        'import { ListController } from "../../todo-app/src/list-controller.js";',
+        'import type { TodoListModel } from "../../../todo-app/src/models.js";',
+      ]) {
+        expect(bad).toMatch(BEYOND_MODELS);
+      }
+      expect('import { TodoListModel, uiShowList } from "@todo/app/models";').not.toMatch(BEYOND_MODELS);
+    });
+
+    it("the headless rule rejects the React entry, by alias and by relative path", () => {
+      const bad = specifiers(
+        [
+          'import { ViewAdapter } from "@todo/ui";',
+          'import { ListView } from "@todo/ui/views";',
+          'import { ViewAdapter } from "../../lib/todo-ui/src/index.js";',
+          'import { MenuView } from "../../lib/todo-ui/src/views/menu-view.js";',
+        ].join("\n"),
+      );
+      expect(bad).toHaveLength(4);
+      for (const spec of bad) expect(reachesUiBeyondAdapter(spec), spec).toBe(true);
+      for (const good of ["@todo/ui/adapter", "../../lib/todo-ui/src/view-adapter.js", "@todo/app/models"]) {
+        expect(reachesUiBeyondAdapter(good), good).toBe(false);
+      }
+    });
+
+    it("the adapter whitelist rejects react, react-dom and a relative import", () => {
+      const bad = specifiers(
+        'import { useRef } from "react";\nimport { createRoot } from "react-dom/client";\nexport * from "./use-model.js";',
+      );
+      expect(bad).toEqual(["react", "react-dom/client", "./use-model.js"]);
+      for (const spec of bad) expect(spec).not.toMatch(ADAPTER_MAY_IMPORT);
     });
   });
 

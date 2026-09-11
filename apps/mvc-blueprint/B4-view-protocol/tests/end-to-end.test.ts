@@ -3,7 +3,7 @@ import { Commands } from "@statewalker/shared-commands";
 // binds todo-ui SOURCES; a suite wiring bootstrap to the view layer needs both.
 // It may still not import @todo/core (B0 checks that), hence the local api.
 import { bootstrap, MenuController, TodoListModel, uiShowMenu } from "@todo/app";
-import { ViewAdapter } from "@todo/ui";
+import { ViewAdapter } from "@todo/ui/adapter";
 import { describe, expect, it } from "vitest";
 import { claimListView } from "../../test-support/views.js";
 

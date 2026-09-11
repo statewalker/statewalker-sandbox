@@ -1,6 +1,6 @@
 import type { Command, Commands } from "@statewalker/shared-commands";
 import { type ConfirmModel, uiConfirm, uiNotify, uiShowList } from "@todo/app/models";
-import type { ViewAdapter } from "@todo/ui";
+import type { ViewAdapter } from "@todo/ui/adapter";
 
 /**
  * The honest precondition every real app has, now that `ListController`
