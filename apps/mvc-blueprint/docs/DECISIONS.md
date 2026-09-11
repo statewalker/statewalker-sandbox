@@ -186,7 +186,10 @@ project's.
 checker and every browser test — a `toJSON()` snapshot cannot see a write of equal data. B0 now fails
 a `todo-ui` source that names any model method outside an explicit list of what a view may call. The
 forbidden set is not listed: it is read at run time from the model classes `@todo/app/models`
-exports, so a method added to a model later is forbidden to views until someone adds it to the list.
+exports, so a *prototype* method added to a model later is forbidden to views until someone adds it
+to the list. Only prototype methods are collected: a function-valued instance field (the shape the
+change channels use), a getter or setter, or a method of a model class `@todo/app/models` does not
+export is not, and is therefore allowed to views by default.
 The object split between `model` and `model.input` is what makes this checkable, not what enforces
 it.
 

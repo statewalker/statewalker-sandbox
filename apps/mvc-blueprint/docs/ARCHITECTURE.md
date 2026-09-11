@@ -243,7 +243,8 @@ The object split does not *enforce* this on its own — a view holds the outer m
 JavaScript stops it calling `replaceTodos`. What the split does is make it **checkable**: "who may
 call what" is a list of method names. B0 checks it: a `todo-ui` source may not name any model method
 except the view-side mutators, `visible` and `toJSON`, and the forbidden set is derived at run time
-from the model classes, so a method added later is forbidden to views until someone says otherwise.
+from the model classes, so a *prototype* method added later is forbidden to views until someone says
+otherwise. A function-valued instance field or a getter is not collected, and is allowed.
 A computed name (`model["replace" + "Todos"]`) walks past it. This rule exists because the browser
 suites' `toJSON()` snapshots cannot see a view writing *equal* data — `model.replaceTodos(model.todos)`
 passed all of them.
@@ -449,8 +450,10 @@ broke at import.
 
 Naming the adapter is not the same as not loading React, and a grep can only check the naming: a
 node suite that imported `src/app.ts` named no `@todo/ui` and loaded every view. So the node vitest
-project refuses to **resolve** `react`, `react-dom` or `@statewalker/ui.view.shadcn` at all — the
-import fails, naming the rule — and B0 proves on every run that the refusal is in place.
+project refuses to **resolve** `react`, `react-dom` or `@statewalker/ui.view.shadcn` — the import
+fails, naming the rule — and B0 proves on every run that the refusal is in place. It refuses what
+Vite resolves: a package under `node_modules` that imported React by itself, or a `createRequire`
+call, would get past it. No current dependency does.
 
 ## 8. Bootstrap, and why the order is a token
 

@@ -68,8 +68,10 @@ const REACT_BINDING = "todo-ui/src/use-model.ts";
  * What a view may call on a model. Everything else a model class carries —
  * found at run time below, not listed — belongs to the controller (the outer
  * model's mutators, the input's `take*()` drains) or to the model itself
- * (`notify`, `fromJSON`). Default-deny: a method added to a model later is
- * off-limits to views until it is named here.
+ * (`notify`, `fromJSON`). Default-deny for PROTOTYPE methods only: one added
+ * to a model later is off-limits to views until it is named here. Function-
+ * valued instance fields, accessors, and methods of classes the models entry
+ * does not export are not collected, so they pass — see docs/DEVELOPING.md.
  */
 const VIEW_MAY_CALL = new Set([
   // TodoListInput — one mutator per gesture (spec §4.8)

@@ -26,7 +26,8 @@ pnpm build        # production bundle in dist/
    [docs/DEVELOPING.md](docs/DEVELOPING.md) lists every rule with its test and what walks past it,
    and names the few that are kept by review.
 3. **Headless first.** Everything that can be proven without a browser is: models, commands,
-   controllers and the view *protocol* are all tested in Node — where React cannot even be loaded.
+   controllers and the view *protocol* are all tested in Node — where the test project refuses to
+   resolve React.
    The browser is reserved for what only a browser can prove — that React renders, that Tailwind
    emitted the styles, that a user can click.
 4. **Be a starting point, not a demo.** The code is written to be copied. Its comments say *why*,
