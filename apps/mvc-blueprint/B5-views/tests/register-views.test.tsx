@@ -110,4 +110,58 @@ describe("registerViews", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(rejections).toEqual([]);
   });
+
+  describe("focus", () => {
+    // The confirm has no trigger — it is opened by a command, not a button —
+    // and it leaves by unmounting its root. Radix returns focus to a trigger,
+    // so with none it returned it nowhere, and every answered dialog left the
+    // keyboard user on <body>.
+    let outside: HTMLButtonElement[];
+    const outsideButton = (label: string) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      document.body.appendChild(b); // not under `mount`: `containers()` counts that
+      outside.push(b);
+      return b;
+    };
+    beforeEach(() => {
+      outside = [];
+    });
+    afterEach(() => {
+      for (const b of outside) b.remove();
+    });
+
+    it("an answered dialog returns focus to the element that had it when the dialog opened", async () => {
+      const opener = outsideButton("Clear completed");
+      opener.focus();
+      expect(document.activeElement).toBe(opener);
+
+      const cmd = commands.call(uiConfirm, new ConfirmModel("Clear 1 completed todo?"));
+      await waitFor(() => document.querySelector('[role="alertdialog"]') !== null);
+      await waitFor(() => document.activeElement !== opener); // the dialog took focus
+      const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(
+        (b) => b.textContent === "Confirm",
+      );
+      confirm!.click();
+      await expect(cmd.promise).resolves.toEqual({ confirmed: true });
+      await waitFor(() => document.querySelector('[role="alertdialog"]') === null);
+      // Radix moves focus on a timer after unmount; give it the turns it takes.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(document.activeElement, "focus is back where the user was").toBe(opener);
+    });
+
+    it("a view that did not hold focus leaves it where it is when it closes", async () => {
+      const first = outsideButton("first");
+      const second = outsideButton("second");
+      first.focus();
+      const cmd = commands.call(uiShowList, new TodoListModel());
+      await waitFor(() => mount.querySelector("ul") !== null);
+      second.focus(); // the user moved on while the panel was up
+
+      cmd.resolve({ closed: true });
+      await waitFor(() => mount.children.length === 0);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(document.activeElement, "closing a view must not yank focus back to where it opened").toBe(second);
+    });
+  });
 });

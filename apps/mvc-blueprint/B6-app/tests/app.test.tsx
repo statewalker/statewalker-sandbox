@@ -82,6 +82,8 @@ describe("B6 · the application, end to end", () => {
     await waitFor(() => row("Water the plants") === undefined);
     expect(titles()).toEqual(seedTodos.filter((t) => !t.done).map((t) => t.title));
     await waitFor(() => dialog() === null);
+    // The keyboard user is back on the button they pressed, not on <body>.
+    await waitFor(() => document.activeElement === button(host, "Clear completed"));
 
     // The toast announces what happened.
     await waitFor(() => toast() !== null);

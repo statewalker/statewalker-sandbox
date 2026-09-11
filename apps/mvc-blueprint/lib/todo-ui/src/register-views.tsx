@@ -48,6 +48,10 @@ function show<M, R>(
   render: (view: ViewHandle<M, R>) => ReactNode,
 ): void {
   adapter.on(declaration, (view) => {
+    // Where the user was when this view appeared. A command-opened dialog has
+    // no trigger, and Radix returns focus only to a trigger — so without this,
+    // every answered confirm left the keyboard on <body>.
+    const opener = document.activeElement;
     const container = document.createElement("div");
     container.dataset.view = declaration.key;
     mount.appendChild(container);
@@ -56,8 +60,17 @@ function show<M, R>(
     // Returning the cleanup is what CLAIMS the command: the view stays up
     // until the command settles, and this runs then.
     return () => {
+      // Restored only if closing THIS view is what lost the focus: the
+      // focused element was one this unmount removed (a dialog's button, in
+      // its portal). A toast expiring while the user types elsewhere must not
+      // pull them back to where they were when it appeared.
+      const focused = document.activeElement;
       root.unmount();
       container.remove();
+      const lost = focused !== null && focused !== document.body && !focused.isConnected;
+      if (lost && opener instanceof HTMLElement && opener !== document.body && opener.isConnected) {
+        opener.focus();
+      }
     };
   });
 }
