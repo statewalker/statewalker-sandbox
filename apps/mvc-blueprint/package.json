@@ -5,6 +5,9 @@
   "type": "module",
   "description": "The MVC blueprint — a TODO app whose purpose is to separate substrate from application.",
   "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:browser": "vitest run --config vitest.browser.config.ts",
@@ -14,7 +17,8 @@
     "test:B2": "vitest run B2-commands",
     "test:B3": "vitest run B3-controller",
     "test:B4": "vitest run B4-view-protocol",
-    "test:B5": "vitest run --config vitest.browser.config.ts B5-views"
+    "test:B5": "vitest run --config vitest.browser.config.ts B5-views",
+    "test:B6": "vitest run B6-app && vitest run --config vitest.browser.config.ts B6-app"
   },
   "dependencies": {
     "@statewalker/shared-baseclass": "0.1.1",
@@ -26,13 +30,16 @@
     "zod": "4.5.4"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "@vitest/browser-playwright": "^5.0.0",
     "playwright": "1.58.0",
+    "tailwindcss": "catalog:",
     "typescript": "catalog:",
+    "vite": "catalog:",
     "vitest": "^5.0.0"
   }
 }
