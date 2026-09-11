@@ -43,7 +43,18 @@ export function useValue<T>(read: () => T, isEqual: (a: T, b: T) => boolean = Ob
           first = false;
           return;
         }
-        untracked(onStoreChange);
+        try {
+          untracked(onStoreChange);
+        } catch (error) {
+          // React can throw out of onStoreChange ("Maximum update depth
+          // exceeded"), which would otherwise reach the writer — the
+          // controller — and, on alien, skip the rest of that flush (no
+          // effect in this app throws). Rethrow on a microtask instead, so it
+          // still surfaces without escaping this effect.
+          queueMicrotask(() => {
+            throw error;
+          });
+        }
       });
     },
     [read],

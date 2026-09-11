@@ -93,15 +93,26 @@ export async function expectReplacedNotMutated<T>(
   mutate: () => void | Promise<void>,
 ): Promise<void> {
   let observed = -1; // the effect's first run is the subscription, not a change
+  // No effect in this app throws (global constraint): a `read()` failure is
+  // caught here, inside the effect, so it cannot escape unguarded and strand
+  // `stop` unreturned; it is rethrown below, from the HELPER, once torn down.
+  let readError: unknown;
+  let readFailed = false;
   const stop = effect(() => {
-    read();
-    observed++;
+    try {
+      read();
+      observed++;
+    } catch (error) {
+      readFailed = true;
+      readError ??= error;
+    }
   });
   try {
     await mutate();
   } finally {
     stop();
   }
+  if (readFailed) throw readError;
   if (observed <= 0) {
     throw new Error(
       "level field was not observably replaced: an in-place push/splice is " +

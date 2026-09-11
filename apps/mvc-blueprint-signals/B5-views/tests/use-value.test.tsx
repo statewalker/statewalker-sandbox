@@ -46,15 +46,34 @@ describe("useValue", () => {
   });
 
   it("does not re-render when a signal it does not read changes", async () => {
+    // Counted at the source, as "unsubscribes on unmount" below does: `values`
+    // not changing is no evidence on its own — `lastOutcome` never changes in
+    // this test either way, so React's own snapshot check (same `undefined`
+    // reference) would bail out however often the subscription woke, even for
+    // a `read` that spuriously tracked `todos` too. Only the read count can
+    // tell the difference.
     const model = createTodoListModel();
+    let reads = 0;
+    const read = () => {
+      reads++;
+      return model.view.lastOutcome();
+    };
     const values: (string | undefined)[] = [];
-    await mount(createElement(Probe, { read: model.view.lastOutcome, values }), values);
+    await mount(createElement(Probe, { read, values }), values);
+
+    // A benign write first, proving the subscription is live — same shape as
+    // "unsubscribes on unmount": with no evidence the subscription ever ran,
+    // the read count not moving after `replaceTodos` would prove nothing.
+    model.control.reportOutcome("ok");
+    await waitFor(() => values.length >= 2);
+    const atSubscribed = reads;
 
     model.control.replaceTodos([todo("1", "buy milk")]);
     await flush();
     await flush();
     await flush();
-    expect(values).toEqual([undefined]);
+    expect(values, "no re-render happened").toEqual([undefined, "ok"]);
+    expect(reads, "a subscription that also tracked todos would have re-read").toBe(atSubscribed);
   });
 
   it("a derived array with shallowEqual re-renders only when the contents change", async () => {

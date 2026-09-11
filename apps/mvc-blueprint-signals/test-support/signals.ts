@@ -3,8 +3,9 @@ import type { TodoListModel } from "@todo/app/models";
 import type { SignalsImplementation } from "../lib/signals/contract.js";
 
 /**
- * Test-side helpers for signals. For now only the type of what each Vitest
- * project provides; the watchers join it in Task 3.
+ * Test-side helpers for signals: the type of what each Vitest project
+ * provides (`ProvidedContext.signals`), and the `watch`/`watchResults`/
+ * `snapshotOf` helpers suites use to observe a model without writing it.
  */
 declare module "vitest" {
   export interface ProvidedContext {
@@ -18,13 +19,26 @@ declare module "vitest" {
  * first run (the subscription itself) is not counted. The signals counterpart
  * of counting RAW `onUpdate` calls in the parent — it counts at the source, so
  * a missing compare-before-write is visible and nothing downstream dedups it.
+ *
+ * No effect in this app throws (global constraint): a `read()` failure is
+ * caught here, inside the effect, and rethrown from `stop()` instead — so it
+ * cannot escape unguarded, and a caller who tears the watcher down still
+ * learns the read was broken.
  */
 export function watch(read: () => unknown): { readonly n: number; stop(): void } {
   let first = true;
   let n = 0;
+  let readError: unknown;
+  let readFailed = false;
   // Read before anything else: an effect depends on what its last run read.
-  const stop = effect(() => {
-    read();
+  const stopEffect = effect(() => {
+    try {
+      read();
+    } catch (error) {
+      readFailed = true;
+      readError ??= error;
+      return;
+    }
     if (first) {
       first = false;
       return;
@@ -35,7 +49,10 @@ export function watch(read: () => unknown): { readonly n: number; stop(): void }
     get n() {
       return n;
     },
-    stop,
+    stop() {
+      stopEffect();
+      if (readFailed) throw readError;
+    },
   };
 }
 
