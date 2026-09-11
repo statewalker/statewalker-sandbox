@@ -268,6 +268,26 @@ describe("B0 · package boundaries", () => {
       }
     });
 
+    it("the node project refuses to LOAD React, react-dom or the kit — by name, and through the composition root", async () => {
+      // The grep below reads what a suite names; a suite that imports
+      // `src/app.ts` names no `@todo/ui` and still loads every view. So the
+      // node project's own resolver refuses the React stack (`vitest.config.ts`),
+      // and this proves on every run that it does — remove the plugin and
+      // these imports succeed.
+      //
+      // Through a variable: Vite resolves a literal `import("react")` while
+      // transforming this file, and the refusal would then fail B0 as a whole
+      // instead of this one assertion.
+      const load = (spec: string) => import(/* @vite-ignore */ spec);
+      const refused = /headless stays headless/;
+      for (const spec of ["react", "react-dom/client", "@statewalker/ui.view.shadcn"]) {
+        await expect(load(spec), spec).rejects.toThrow(refused);
+      }
+      await expect(load("../../src/app.js"), "the composition root pulls in the React views").rejects.toThrow(refused);
+      // A control that refuses everything proves nothing: the adapter loads.
+      await expect(load("@todo/ui/adapter")).resolves.toHaveProperty("ViewAdapter");
+    });
+
     it("a node suite, or the test support it loads, takes @todo/ui only as @todo/ui/adapter", () => {
       const modules = headlessModules();
       const users = modules.filter(({ code }) => specifiers(code).some((s) => /todo[-/]ui\b/.test(s)));
