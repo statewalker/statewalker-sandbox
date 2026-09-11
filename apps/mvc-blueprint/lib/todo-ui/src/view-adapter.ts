@@ -110,7 +110,14 @@ export function viewLayer(
 ): (commands: Commands) => () => Promise<void> {
   return (commands) => {
     const adapter = new ViewAdapter(commands);
-    install(adapter);
+    try {
+      install(adapter);
+    } catch (error) {
+      // bootstrap gets no cleanup from a registerViews that threw, so nothing
+      // else would ever unbind the renderers registered before the throw.
+      void adapter.dispose();
+      throw error;
+    }
     return () => adapter.dispose();
   };
 }

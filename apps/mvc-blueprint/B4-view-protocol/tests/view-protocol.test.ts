@@ -2,7 +2,7 @@ import { CommandError, Commands } from "@statewalker/shared-commands";
 import { beforeEach, describe, expect, it } from "vitest";
 // The view layer's suite takes what the view layer may take: models and declarations.
 import { ConfirmModel, NotifyModel, TodoListModel, uiConfirm, uiNotify, uiShowList } from "@todo/app/models";
-import { ViewAdapter } from "@todo/ui/adapter";
+import { ViewAdapter, viewLayer } from "@todo/ui/adapter";
 
 describe("B4 · view protocol", () => {
   let commands: Commands;
@@ -128,5 +128,32 @@ describe("B4 · view protocol", () => {
       (e: CommandError) => e,
     );
     expect(err?.kind).toBe("no-handlers");
+  });
+
+  describe("viewLayer — the installer bootstrap's registerViews takes", () => {
+    it("returns the adapter's dispose, which unbinds what install registered", async () => {
+      const dispose = viewLayer((a) => {
+        a.on(uiShowList, () => () => {});
+      })(commands);
+      await dispose();
+      await expect(commands.call(uiShowList, new TodoListModel()).promise).rejects.toMatchObject({
+        kind: "no-handlers",
+      });
+    });
+
+    it("an install that throws partway leaks no listener it had already registered", async () => {
+      // bootstrap never receives a cleanup from a registerViews that threw,
+      // so nothing else would ever unbind the renderers registered before the
+      // throw — a half-installed view layer answering commands for ever.
+      const install = viewLayer((a) => {
+        a.on(uiShowList, () => () => {});
+        throw new Error("second renderer failed to build");
+      });
+      expect(() => install(commands)).toThrow("second renderer failed to build");
+      await new Promise((resolve) => setTimeout(resolve, 0)); // the async dispose's unwinding
+      await expect(commands.call(uiShowList, new TodoListModel()).promise).rejects.toMatchObject({
+        kind: "no-handlers",
+      });
+    });
   });
 });
