@@ -195,11 +195,39 @@ const SIGNALS_MAY_IMPORT = /^(?:alien-signals|@preact\/signals-core|\.\/(?:contr
 /** A specifier reaching the signals, by alias or relative path. */
 const SIGNALS_SPEC = /^@todo\/signals$|(?:^|\/)signals\//;
 
-/** Reactive calls, and where in `todo-app` each may appear. */
-const CREATES = /\b(?:signal|computed|batch)\s*\(/;
-const REACTS = /\beffect\s*\(/;
-const UNTRACKS = /\buntracked\s*\(/;
+/**
+ * Reactive calls, and where in `todo-app` each may appear. An optional type-
+ * argument group is allowed between the name and the `(` — `signal<number>(0)`,
+ * `untracked<void>(...)` — so an explicit type argument cannot walk a call past
+ * these the way it could when the pattern required `(` right after the name.
+ */
+const TYPE_ARGS = "(?:<[^()]*>)?";
+const CREATES = new RegExp(`\\b(?:signal|computed|batch)\\s*${TYPE_ARGS}\\s*\\(`);
+const REACTS = new RegExp(`\\beffect\\s*${TYPE_ARGS}\\s*\\(`);
+const UNTRACKS = new RegExp(`\\buntracked\\s*${TYPE_ARGS}\\s*\\(`);
 const MAY_REACT = ["todo-app/src/list-controller.ts", "todo-app/src/model-kit.ts"];
+
+/**
+ * Named imports pulled from `@todo/signals` (or a relative path into
+ * `signals/`), keyed by the ORIGINAL exported name. An `as` alias renames the
+ * LOCAL binding, never what was imported — `import { signal as cell }` still
+ * imports `signal`, and a call-pattern grep alone (`CREATES` etc.) never sees
+ * it, because the call site then reads `cell(...)`. This is what catches that:
+ * it names the import, not the call.
+ */
+const signalsImportNames = (code: string): string[] => {
+  const names: string[] = [];
+  const re = /import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*(["'`])([^"'`]+)\2/g;
+  for (const m of code.matchAll(re)) {
+    if (!SIGNALS_SPEC.test(m[3])) continue;
+    for (const item of m[1].split(",")) {
+      const trimmed = item.replace(/^\s*type\s+/, "").trim();
+      if (!trimmed) continue;
+      names.push(trimmed.split(/\s+as\s+/)[0].trim());
+    }
+  }
+  return names;
+};
 
 /** The controller's facet, named in the view layer — as a member, bracketed, or by type. */
 const NAMES_CONTROL = new RegExp(`\\.\\s*control\\b|\\[\\s*${QUOTE}control${QUOTE}\\s*\\]|\\bTodoListControl\\b`);
@@ -456,12 +484,39 @@ describe("B0 · package boundaries", () => {
       expect("designal(0); AbortSignal(0)").not.toMatch(CREATES);
       expect("effect(() => {})").toMatch(REACTS);
       expect("sideeffect(1)").not.toMatch(REACTS);
+      expect("untracked(() => 1)").toMatch(UNTRACKS);
+      expect("undertracked(1)").not.toMatch(UNTRACKS);
       for (const bad of ["model.control.replaceTodos([]);", 'model["control"]', "import type { TodoListControl } from 'x';"]) {
         expect(bad, bad).toMatch(NAMES_CONTROL);
       }
       for (const good of ["model.setFilter(x);", "const controller = 1;", "model.controls"]) {
         expect(good, good).not.toMatch(NAMES_CONTROL);
       }
+    });
+
+    it("the reactive-call patterns are not walked past by an explicit type argument", () => {
+      // Verified bypass: `signal<number>(0)` reached `(` only after `<number>`,
+      // which the un-widened patterns required right after the name.
+      for (const bad of ["signal<number>(0)", "computed<Todo[]>(() => [])", "batch<void>(() => {})"]) {
+        expect(bad, bad).toMatch(CREATES);
+      }
+      expect("effect<void>(() => {})").toMatch(REACTS);
+      expect("untracked<number>(() => 1)").toMatch(UNTRACKS);
+    });
+
+    it("signalsImportNames names the ORIGINAL export, not a local `as` alias", () => {
+      // Verified bypass: a controller writing `import { signal as cell } from
+      // "@todo/signals"` and calling `cell(...)` matched none of CREATES —
+      // there is no `signal(` in the file — so the call-pattern check alone
+      // never saw it create a signal.
+      expect(signalsImportNames('import { signal as cell } from "@todo/signals";')).toEqual(["signal"]);
+      expect(signalsImportNames('import { effect, untracked as u } from "@todo/signals";')).toEqual([
+        "effect",
+        "untracked",
+      ]);
+      expect(signalsImportNames('import type { Signal } from "@todo/signals";')).toEqual(["Signal"]);
+      expect(signalsImportNames('import { signal } from "../../lib/signals/deps.js";')).toEqual(["signal"]);
+      expect(signalsImportNames('import { registerViews } from "@todo/ui";')).toEqual([]);
     });
   });
 
@@ -630,6 +685,32 @@ describe("B0 · package boundaries", () => {
       for (const { file, code } of app) {
         if (!UNTRACKS.test(code)) continue;
         expect(isModelModule(file) || MAY_REACT.includes(file), `${file} must not call untracked(`).toBe(true);
+      }
+    });
+
+    it("the same rule holds by IMPORTED NAME, which an `as` alias cannot dodge", () => {
+      // The call-pattern checks above are walked past by `import { signal as
+      // cell } from "@todo/signals"` — the file then reads `cell(...)`,
+      // nowhere `signal(`. This checks what was actually imported instead of
+      // what the call site happens to spell.
+      for (const { file, code } of sources("todo-app")) {
+        for (const name of signalsImportNames(code)) {
+          if (name === "signal" || name === "computed" || name === "batch") {
+            expect(isModelModule(file), `${file} imports "${name}" from @todo/signals; only a model module may`).toBe(
+              true,
+            );
+          } else if (name === "effect") {
+            expect(
+              MAY_REACT.includes(file),
+              `${file} imports "effect"; only the controller and the model kit may`,
+            ).toBe(true);
+          } else if (name === "untracked") {
+            expect(
+              isModelModule(file) || MAY_REACT.includes(file),
+              `${file} imports "untracked"; only a model module, the controller or the kit may`,
+            ).toBe(true);
+          }
+        }
       }
     });
 
