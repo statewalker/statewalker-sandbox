@@ -72,6 +72,25 @@ export function createProxyEndpoint(init: ProxyEndpointInit): FetchHandler {
     }
 
     const headers = new Headers(c.req.raw.headers);
+    // THE ONE HEADER THAT IS NOT FORWARDED, and it is not a judgement about
+    // usefulness. On the mesh path `authorization` carries the MESH's own
+    // credential: `edge-dispatch` sets it, and `peer.ts` verified it before this
+    // handler ran. It was addressed to this hop, not to the upstream -- the way
+    // HTTP's `Proxy-Authorization` is consumed by the proxy it names rather than
+    // passed on.
+    //
+    // Forwarding it did two kinds of damage, both measured. It handed a mesh
+    // token to third parties (OpenAI echoed one back). And it turned every
+    // request into a preflighted one, which broke any upstream whose preflight
+    // does not name `authorization`: swapi answers such a preflight with no CORS
+    // headers at all, and `allow-headers: *` does not cover it under the Fetch
+    // spec. Upstream credentials come from the ROUTE, which is the point of the
+    // proxy -- members call the upstream without holding the key.
+    //
+    // A caller cannot supply its own upstream `authorization` through the mesh
+    // anyway: edge-dispatch never overwrites a caller's header, so one set by
+    // the caller would replace the mesh token and fail verification.
+    headers.delete("authorization");
     // LAST, so operator configuration wins over anything a caller sent. A
     // caller's own `authorization` therefore survives only on a route that
     // configures none -- which is the sensible reading of a route that needs

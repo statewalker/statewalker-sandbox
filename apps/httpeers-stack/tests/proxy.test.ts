@@ -46,14 +46,36 @@ describe("createProxyEndpoint", () => {
     expect(seen[0]?.headers.get("authorization")).toBe("Bearer sk-cfg");
   });
 
-  it("keeps a caller's header when the route configures none of that name", async () => {
+  // REVERSED 2026-09-11, on evidence. This used to assert that a caller's
+  // `authorization` reaches the upstream. But on the mesh path that header IS
+  // the mesh's own credential -- set by edge-dispatch, verified by peer.ts
+  // before this handler runs -- and forwarding it (a) handed a mesh token to
+  // third parties, and (b) broke every upstream whose CORS preflight does not
+  // name `authorization`: swapi answers such a preflight with no CORS headers
+  // at all, and `allow-headers: *` does not cover it under the Fetch spec.
+  it("does not forward the mesh's own credential to the upstream", async () => {
     const seen: Request[] = [];
     const spy = vi.fn(async (i: Request) => { seen.push(i); return new Response("ok"); }) as unknown as typeof fetch;
     const open: ProxyRoute[] = [{ prefix: "/open", upstream: "https://o.example", headers: {} }];
     await endpoint(spy, open)(
-      new Request("http://mesh/proxy/open/x", { headers: { authorization: "Bearer caller" } }),
+      new Request("http://mesh/proxy/open/x", { headers: { authorization: "Bearer EpkECq4DmeshToken" } }),
     );
-    expect(seen[0]?.headers.get("authorization")).toBe("Bearer caller");
+    expect(seen[0]?.headers.has("authorization")).toBe(false);
+  });
+
+  // The exception is exactly one header. Everything else still passes through
+  // unjudged, or this would quietly become the strip list the spec rejected.
+  it("still forwards every other caller header", async () => {
+    const seen: Request[] = [];
+    const spy = vi.fn(async (i: Request) => { seen.push(i); return new Response("ok"); }) as unknown as typeof fetch;
+    const open: ProxyRoute[] = [{ prefix: "/open", upstream: "https://o.example", headers: {} }];
+    await endpoint(spy, open)(
+      new Request("http://mesh/proxy/open/x", {
+        headers: { authorization: "Bearer mesh", "x-trace": "abc", "x-api-version": "2" },
+      }),
+    );
+    expect(seen[0]?.headers.get("x-trace")).toBe("abc");
+    expect(seen[0]?.headers.get("x-api-version")).toBe("2");
   });
 
   it("returns the upstream status and body verbatim", async () => {
