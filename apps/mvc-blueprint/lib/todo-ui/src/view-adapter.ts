@@ -94,3 +94,23 @@ export class ViewAdapter {
     entry.cleanup?.();
   }
 }
+
+/**
+ * A view layer, in the shape bootstrap's `registerViews` option takes: given
+ * the bus, build ONE adapter, let `install` register its renderers, and hand
+ * back the adapter's `dispose` as the cleanup — so bootstrap's LIFO registry
+ * unwinds the view layer after the controllers that use it (spec §4.9, §4.12).
+ *
+ * It lives here, not beside the renderers, because it is the one place that
+ * has to NAME the bus, and B0 confines that name to this file: a module that
+ * mounts React views gets the adapter, never `Commands` (spec §4.3).
+ */
+export function viewLayer(
+  install: (adapter: ViewAdapter) => void,
+): (commands: Commands) => () => Promise<void> {
+  return (commands) => {
+    const adapter = new ViewAdapter(commands);
+    install(adapter);
+    return () => adapter.dispose();
+  };
+}
