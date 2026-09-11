@@ -123,6 +123,21 @@ const headlessModules = () => [
     })),
 ];
 
+/**
+ * Does `code` import all three layers? Only the composition root may: it is
+ * where the core's api, the app's bootstrap and the ui's views meet, and a
+ * second module that knows every layer is a second composition root nobody
+ * reviews as one.
+ */
+const knowsEveryLayer = (code: string): boolean => ["core", "app", "ui"].every((pkg) => importOf(pkg).test(code));
+
+/** The page's own modules under `src/` — the entry and the composition root. */
+const pageSources = () =>
+  (readdirSync(`${ROOT}src`, { recursive: true, encoding: "utf8" }) as string[]).filter(isSource).map((f) => ({
+    file: `src/${f}`,
+    code: stripComments(readFileSync(`${ROOT}src/${f}`, "utf8")),
+  }));
+
 describe("B0 · package boundaries", () => {
   it("finds sources recursively, including subdirectories", () => {
     // Not `length > 0`: `index.ts` is top-level, so that passes even with a
@@ -284,6 +299,49 @@ describe("B0 · package boundaries", () => {
       );
       expect(bad).toEqual(["react", "react-dom/client", "./use-model.js"]);
       for (const spec of bad) expect(spec).not.toMatch(ADAPTER_MAY_IMPORT);
+    });
+
+    it("the composition-root rule flags a module importing all three layers, by alias or relative path — not two", () => {
+      // The core's specifiers are assembled, not spelled: this file names
+      // `@todo/ui` in its fixtures, and "a suite naming the ui must not name
+      // the core" (above) reads this file too.
+      const core = ["@todo", "core"].join("/");
+      const coreByPath = ["../lib/todo", "core/src/index.js"].join("-");
+      for (const bad of [
+        `import { MemTodoApi } from "${core}";\nimport { bootstrap } from "@todo/app";\nimport { registerViews } from "@todo/ui";`,
+        `import { MemTodoApi } from "${coreByPath}";\nimport { bootstrap } from "@todo/app";\nimport { ViewAdapter } from "@todo/ui/adapter";`,
+      ]) {
+        expect(knowsEveryLayer(bad), bad).toBe(true);
+      }
+      expect(knowsEveryLayer('import { bootstrap } from "@todo/app";\nimport { ViewAdapter } from "@todo/ui/adapter";')).toBe(false);
+    });
+  });
+
+  describe("the composition root is the only module that knows every layer", () => {
+    // `src/app.ts` imports the core (the api), the app (bootstrap, models) and
+    // the ui (the React views) — legitimately: wiring them is its whole job.
+    // That is an exemption scoped to ONE file, not a relaxation of any rule
+    // above: the per-library rules still apply to every `lib/` file, and
+    // none of them reads `src/`. What this adds is the other half — nothing
+    // else may know all three: no library, no suite, no test support, and not
+    // the page entry `src/main.tsx`, which only calls `startApp`.
+    it("only src/app.ts imports todo-core, todo-app and todo-ui together", () => {
+      const everything = [
+        ...sources("todo-core"),
+        ...sources("todo-app"),
+        ...sources("todo-ui"),
+        ...pageSources(),
+        // B0 itself spells all three as fixtures; it is the grep, not an importer.
+        ...headlessModules(),
+        ...allSuites().filter(({ file }) => file.endsWith(".tsx")),
+      ];
+      expect(everything.map(({ file }) => file), "the page's modules are scanned").toEqual(
+        expect.arrayContaining(["src/app.ts", "src/main.tsx"]),
+      );
+      const roots = everything.filter(({ code }) => knowsEveryLayer(code)).map(({ file }) => file);
+      // Equality, not "is a subset": if app.ts stopped matching, the pattern
+      // (or the layout) has drifted and this check would be asserting nothing.
+      expect(roots, "only the composition root may import every layer").toEqual(["src/app.ts"]);
     });
   });
 
