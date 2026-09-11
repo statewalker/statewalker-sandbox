@@ -207,6 +207,13 @@ describe("useValue", () => {
     try {
       const values: (string | undefined)[] = [];
       await mount(createElement(Boundary, null, createElement(Probe, { read, values })), values);
+      // A benign write first, proving the subscription is live (same shape as
+      // "unsubscribes on unmount"): useSyncExternalStore registers `subscribe`
+      // from a passive effect, which commits AFTER the layout effect `mount()`
+      // waits on — without this, the throwing write below would run before any
+      // effect subscribes, making it a no-op regardless of the try/catch.
+      model.control.reportOutcome("ok");
+      await waitFor(() => values.length >= 2);
       expect(() => model.control.reportOutcome("boom")).not.toThrow();
       await waitFor(() => caught.length > 0);
       expect(String(caught[0])).toMatch(/read failed/);
