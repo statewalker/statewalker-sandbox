@@ -65,7 +65,12 @@ import {
   RevocationRegistry,
 } from "@statewalker/httpeers.core";
 import { HUB_RULES } from "../policy.js";
-import { dialRelay, waitForCircuitReservation } from "../reservation.js";
+import {
+  dialRelay,
+  type RelaySupervisor,
+  superviseRelay,
+  waitForCircuitReservation,
+} from "../reservation.js";
 import { APP_PORT, IMAGE_PEER_PORT } from "../static-server/main.js";
 import { createHubEndpoints, DEFAULT_PRESENCE_TTL_MS, usesTransportIdentity } from "./endpoints.js";
 import { createHubNode } from "./node-profile.js";
@@ -276,7 +281,16 @@ export async function startHub(init: StartHubInit = {}) {
   // "THE HUB IS REACHED THROUGH THE RELAY" note. `ownsNode` mirrors
   // `httpeers.core`'s own rule for the same word: whoever built it stops it.
   const suppliedNode = init.node;
-  const node = suppliedNode ?? (await createHubNode({ privateKey, listen: init.listen ?? [] }));
+  // THE HUB RELAYS FOR ITS OWN MEMBERS -- signalling only, gated on the
+  // member store read live, so a revoked member loses the relay on its next
+  // request. See `../hub-relay.ts`.
+  const node =
+    suppliedNode ??
+    (await createHubNode({
+      privateKey,
+      listen: init.listen ?? [],
+      isMember: (peerId) => persistent.memberStore.get(peerId) != null,
+    }));
   const ownsNode = suppliedNode == null;
 
   /** Stop the node if and only if this function built it. Used by both `startFailed` and `stop()`. */
@@ -309,11 +323,19 @@ export async function startHub(init: StartHubInit = {}) {
   // that point, a page that dialled immediately would race it and fail with
   // an error pointing nowhere near the cause.
   let circuitAddr: string | undefined;
+  let relaySupervisor: RelaySupervisor | undefined;
   if (init.relayAddr != null) {
     try {
       await dialRelay(node, init.relayAddr);
       const reserved = await waitForCircuitReservation(node);
       circuitAddr = preferWebRtcCircuitAddr(node, reserved);
+      // KEPT, NOT ONLY ACQUIRED. libp2p re-dials a lost relay once and then
+      // never again, so without this a relay restart leaves the hub -- the
+      // one peer every member must reach -- unreachable until it is itself
+      // restarted. See `../reservation.ts`'s `superviseRelay`.
+      const supervisor = superviseRelay({ node, relayAddr: init.relayAddr });
+      relaySupervisor = supervisor;
+      unwind.push(async () => supervisor.stop());
     } catch (err) {
       // Loudly, and with the node closed. A hub that came up anyway would be
       // a hub no browser can reach, reporting success -- exactly the failure
@@ -402,6 +424,8 @@ export async function startHub(init: StartHubInit = {}) {
     invitations: persistent.invitations,
     async stop() {
       clearInterval(timer);
+      // First, so nothing re-dials the relay while the node is going down.
+      relaySupervisor?.stop();
       try {
         await peer.stop();
       } finally {

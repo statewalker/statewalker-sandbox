@@ -9,8 +9,9 @@
  *      supplies `StartBrowserPeerInit.config` instead, which is how a page
  *      joins a mesh whose hub is another browser page and therefore has no
  *      entry in that file at all; see that field.
- *   2. build the browser libp2p node, dial the relay, wait for the
- *      circuit reservation to actually land (`node-profile.ts`).
+ *   2. build the browser libp2p node and connect to the relay -- WITHOUT
+ *      reserving on it: a member is reached through its hub, where it
+ *      reserves after joining (step 5; `../hub-link.ts`).
  *   3. wire `httpeers.core`'s `createPeer` over that node, against a rule
  *      set built from THIS APPLICATION'S OWN derivation (`../policy.ts`'s
  *      `APP_RULES`) and the caller's own policies -- never
@@ -20,10 +21,10 @@
  *      derivation from being substitutable -- a policy evaluated against
  *      the wrong role->capability mapping is a fail-open, and ADR-0019
  *      leaves that no place to live.
- *   4. pre-dial the hub over `/webrtc` BEFORE any protocol call reaches it
- *      -- `join.ts`'s `preDialPeer`, see its own doc comment for why this
- *      is not optional (applies to the hub exactly as it would to any
- *      other peer: the hub declares no listen address of its own).
+ *   4. reach the hub over `/webrtc` BEFORE any protocol call reaches it,
+ *      and close the limited signalling circuit that got it there --
+ *      `../hub-link.ts`'s `reachHub`, see its doc comment for why both
+ *      halves are needed.
  *   5. get in: RESUME first (`join.ts`'s `resumeMembership` -- a tokenless
  *      presence write, which the hub answers with a fresh token if it still
  *      lists this peer as a member), and only redeem an invitation if the
@@ -68,10 +69,14 @@
  * assume. Joining as a genuinely new peer is what resetting the identity is
  * for.
  */
+
+import { peerIdFromString } from "@libp2p/peer-id";
 import type { Ed25519PrivateKey, Mounts } from "@statewalker/httpeers.core";
 import { createPeer, RevocationCache } from "@statewalker/httpeers.core";
 import type { MeshView } from "../hub/mesh-view.js";
+import { leaveRelay, reachHub, reserveOnHub, superviseHubReservation } from "../hub-link.js";
 import { appRules } from "../policy.js";
+import { type ConnectionKind, classifyConnection } from "./connection-kind.js";
 import { describeError } from "./describe-error.js";
 import { mountEdge } from "./edge.js";
 import { createEdgeDispatch } from "./edge-dispatch.js";
@@ -79,20 +84,13 @@ import type { AdvertisementInput, PresenceRefusal } from "./join.js";
 import {
   createRouteEnsurer,
   nextInitialSeq,
-  preDialPeer,
   REVOCATION_MAX_STALENESS_MS,
   redeemInvitation,
   resumeMembership,
   startJoin,
 } from "./join.js";
-import {
-  createBrowserNode,
-  dialNeedsPermissiveGater,
-  dialRelay,
-  waitForCircuitReservation,
-} from "./node-profile.js";
-import { peerIdFromString } from "@libp2p/peer-id";
-import { type ConnectionKind, classifyConnection } from "./connection-kind.js";
+import { createBrowserNode, dialNeedsPermissiveGater, dialRelay } from "./node-profile.js";
+import { watchPageWake } from "./page-wake.js";
 
 /**
  * The invitation payload's shape -- mirrors `../setup/main.ts`'s own
@@ -120,11 +118,12 @@ export const DEFAULT_HTTPEERS_CONFIG_URL = "/httpeers.json";
 export type BrowserPeerState =
   | "loading-config"
   | "connecting-relay"
-  | "awaiting-reservation"
   | "starting-peer"
   | "dialing-hub"
   | "resuming"
   | "joining"
+  /** On the HUB, and only after joining: the hub reserves only for members. */
+  | "awaiting-reservation"
   | "mounting-edge"
   | "ready"
   | "stopped";
@@ -356,20 +355,24 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
     for (const step of [...unwind].reverse()) await step().catch(() => {});
   };
 
+  // CONNECTED, NOT RESERVED. A member no longer reserves on the public
+  // relay: other members reach it through its hub, where it reserves once
+  // the hub has accepted it (after the join, below). The relay is still how
+  // the hub itself is reached.
   try {
     await dialRelay(node, relayAddr);
-
-    onState("awaiting-reservation");
-    await waitForCircuitReservation(node);
   } catch (err) {
     await startFailed();
     throw new Error(
-      `startBrowserPeer: could not reserve a circuit slot through the relay at "${relayAddr}" -- ` +
-        "this page cannot join the mesh without one. Is the relay running, and is httpeers.json's " +
-        `relayAddrs[0] the address it is actually listening on? Cause: ${describeError(err)}`,
+      `startBrowserPeer: could not connect to the relay at "${relayAddr}" -- this page reaches ` +
+        "its hub through it. Is the relay running, and is httpeers.json's relayAddrs[0] the " +
+        `address it is actually listening on? Cause: ${describeError(err)}`,
       { cause: err },
     );
   }
+
+  /** Stops the hub-reservation supervisor; a no-op until it exists, after the join. */
+  let stopSupervising = (): void => {};
 
   onState("starting-peer");
   const revocationCache = new RevocationCache({ maxStalenessMs: REVOCATION_MAX_STALENESS_MS });
@@ -383,11 +386,10 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   unwind.push(async () => await peer.stop());
 
   onState("dialing-hub");
-  // See `join.ts`'s `preDialPeer` doc comment: this applies to the hub
-  // exactly as it would to any other peer -- libp2p's auto-dial may
-  // already hold a relay-only limited connection to it from address
-  // exchange alone, and a limited connection silently refuses the
-  // `/httpeers/1.0.0` protocol `redeemInvitation` is about to open.
+  // See `../hub-link.ts`'s `reachHub`: a limited connection silently
+  // refuses the `/httpeers/1.0.0` protocol `redeemInvitation` is about to
+  // open, so the hub is reached over WebRTC explicitly -- and the limited
+  // signalling circuit is closed, or relaying THROUGH the hub later fails.
   //
   // CAUGHT, AND NOT BECAUSE THE PAGE CAN CARRY ON WITHOUT IT -- it cannot;
   // `redeemInvitation` on the very next line rides this connection. It is
@@ -397,7 +399,7 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
   // separate investigations down the wrong path (Task 14). The remedy is
   // the same one every time, so it belongs in the message.
   try {
-    await preDialPeer(node, relayAddr, config.hubPeerId);
+    await reachHub(node, relayAddr, config.hubPeerId);
   } catch (err) {
     await startFailed();
     throw new Error(
@@ -493,6 +495,39 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
     }
   }
 
+  // NOW A MEMBER, SO NOW RESERVABLE. The hub grants a reservation only to
+  // its members (`../hub-relay.ts`), which this peer has been since the
+  // resume or redemption above -- this is the earliest it can work. Without
+  // it no other member can reach this page.
+  onState("awaiting-reservation");
+  try {
+    await reserveOnHub(node, config.hubPeerId);
+  } catch (err) {
+    await startFailed();
+    throw new Error(
+      `startBrowserPeer: joined the mesh, but the hub (${config.hubPeerId}) would not let this ` +
+        `page reserve on it, so no other member could reach it. Cause: ${describeError(err)}`,
+      { cause: err },
+    );
+  }
+
+  // KEPT, NOT ONLY ACQUIRED. A reservation on the hub is one libp2p never
+  // restores by itself, and a tab is exactly the peer whose links die
+  // unwatched -- see `../hub-link.ts`'s `superviseHubReservation` and
+  // `./page-wake.ts` for why wake-ups retry at once.
+  const hubSupervisor = superviseHubReservation({ node, relayAddr, hubPeerId: config.hubPeerId });
+  const unwatchWake = watchPageWake(() => hubSupervisor.poke());
+  stopSupervising = (): void => {
+    unwatchWake();
+    hubSupervisor.stop();
+  };
+  unwind.push(async () => stopSupervising());
+
+  // The public relay has nothing more to do for this page; the socket is
+  // reopened whenever the hub has to be reached again. Best-effort: a relay
+  // that will not hang up cleanly is not a reason to fail the join.
+  await leaveRelay(node, relayAddr).catch(() => {});
+
   let join: ReturnType<typeof startJoin>;
   try {
     join = startJoin({
@@ -538,6 +573,7 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
           node,
           relayAddr,
           selfPeerId: peer.peerId,
+          hubPeerId: config.hubPeerId,
           meshView: () => join.meshView(),
         }),
       }),
@@ -562,7 +598,7 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
     meshView: () => join.meshView(),
     connectionKind(peerIdStr: string): ConnectionKind {
       // Read the OPEN connection's own address. This is the only place that
-      // knows whether the WebRTC upgrade actually happened: `preDialPeer`'s
+      // knows whether the WebRTC upgrade actually happened: a failed route's
       // failure is swallowed by design (`edge-dispatch.ts` job 4), so nothing
       // upstream of here can tell a direct peer from a relayed one.
       try {
@@ -578,6 +614,9 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
       }
     },
     async stop() {
+      // First, so nothing re-dials the relay while the node is going down --
+      // a disconnected page must stay disconnected.
+      stopSupervising();
       try {
         join.stop();
         await edge.stop();
