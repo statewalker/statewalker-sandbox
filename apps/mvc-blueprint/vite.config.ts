@@ -3,10 +3,9 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 // The SAME alias table the suites resolve through, not a copy of it: its
-// order is load-bearing (the specific `@todo/app/models` and `@todo/ui/adapter`
-// must precede their prefixes — see the comment there), and a second copy is a
-// second place to get that wrong. `vitest.browser.config.ts` imports it too.
-import { alias } from "./vitest.config.js";
+// order is load-bearing (see `aliases.ts`). Imported from its own module, so
+// building the app never loads `vitest/config`.
+import { alias } from "./aliases.js";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],

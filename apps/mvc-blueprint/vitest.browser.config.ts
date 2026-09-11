@@ -1,7 +1,7 @@
 import react from "@vitejs/plugin-react";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
-import { alias } from "./vitest.config.js";
+import { alias } from "./aliases.js";
 
 /**
  * The browser rungs (B5-B6) run against a real Chromium: `useSyncExternalStore`

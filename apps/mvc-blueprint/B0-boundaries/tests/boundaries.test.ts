@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, normalize } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -137,6 +138,24 @@ const pageSources = () =>
     file: `src/${f}`,
     code: stripComments(readFileSync(`${ROOT}src/${f}`, "utf8")),
   }));
+
+/**
+ * Every module specifier reachable from a root-level config file, following
+ * its relative imports (a `.js` specifier names the `.ts` beside it). A config
+ * that takes one table from a sibling module is only as clean as that module.
+ */
+const reachableSpecifiers = (file: string, seen = new Set<string>()): string[] => {
+  if (seen.has(file)) return [];
+  seen.add(file);
+  return specifiers(stripComments(readFileSync(`${ROOT}${file}`, "utf8"))).flatMap((spec) =>
+    /^\.\.?\//.test(spec)
+      ? [spec, ...reachableSpecifiers(normalize(join(dirname(file), spec.replace(/\.js$/, ".ts"))), seen)]
+      : [spec],
+  );
+};
+
+/** The test runner, by package or by one of this app's own test configs. */
+const TEST_RUNNER = /^vitest(\/|$)|(^|\/)vitest(\.[\w-]+)?\.config(\.[jt]s)?$/;
 
 describe("B0 · package boundaries", () => {
   it("finds sources recursively, including subdirectories", () => {
@@ -301,6 +320,15 @@ describe("B0 · package boundaries", () => {
       for (const spec of bad) expect(spec).not.toMatch(ADAPTER_MAY_IMPORT);
     });
 
+    it("the build-config rule rejects vitest and this app's own test configs — not the shared table", () => {
+      for (const bad of ["vitest/config", "vitest", "./vitest.config.js", "./vitest.browser.config.ts"]) {
+        expect(bad).toMatch(TEST_RUNNER);
+      }
+      for (const good of ["./aliases.js", "vite", "@vitejs/plugin-react", "@tailwindcss/vite"]) {
+        expect(good).not.toMatch(TEST_RUNNER);
+      }
+    });
+
     it("the composition-root rule flags a module importing all three layers, by alias or relative path — not two", () => {
       // The core's specifiers are assembled, not spelled: this file names
       // `@todo/ui` in its fixtures, and "a suite naming the ui must not name
@@ -438,6 +466,19 @@ describe("B0 · package boundaries", () => {
         expect(code, `${file} must subscribe to a named channel, not onUpdate`).not.toMatch(
           /\.onUpdate\s*\(/,
         );
+      }
+    });
+  });
+
+  describe("the build config stays out of the test runner", () => {
+    // `vite.config.ts` once took the alias table from `vitest.config.ts`, so
+    // every production build loaded `vitest/config`. The table now lives in
+    // `aliases.ts`; this keeps it there.
+    it("vite.config.ts reaches no vitest module, directly or through a local import", () => {
+      const specs = reachableSpecifiers("vite.config.ts");
+      expect(specs, "the shared alias table is followed — the check below is not vacuous").toContain("./aliases.js");
+      for (const spec of specs) {
+        expect(spec, `vite.config.ts reaches "${spec}"`).not.toMatch(TEST_RUNNER);
       }
     });
   });
