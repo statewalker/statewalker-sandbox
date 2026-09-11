@@ -39,12 +39,16 @@ a grep for it. Packages would have bought build steps and stale-`dist` hazards f
 
 ### D5 — Models are changed only through mutators · adopted
 
-No caller assigns a field or calls `notify()`. One intention, one notify, owned by the model.
-Checked by B0 as far as its patterns reach — a `.notify(` outside a model module, an assignment
-through a receiver named `…model…` or `.input.`, a view naming a controller-side method — and not
-through an alias. See ARCHITECTURE §3 and §5, and D20.
+No caller assigns a field or writes a signal outside the model's own mutators. One intention, one
+write, owned by the model. The parent checked this with B0 greps — a `.notify(` outside a model
+module, an assignment through a receiver named `…model…` or `.input.`, a view naming a
+controller-side method, and not through an alias. See ARCHITECTURE §3 and §5, and D20.
 
-Now a fact of scope: the signals are in the factory's closure.
+Here it is a fact of scope, not a grep: the signals live in the factory's closure, so nothing outside
+it can hold a writable one, and the view is handed only the `view` facet (S4) — `replaceTodos` is not
+a name it can reach. What B0 still checks is what remains checkable: *in todo-app, signals are
+created only in a model; effects only in the controller and the kit*, and *todo-ui never names the
+control facet*.
 
 ### D6 — Input fields come in three classes · adopted
 
