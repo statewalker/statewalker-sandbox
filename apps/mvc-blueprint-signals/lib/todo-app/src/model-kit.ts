@@ -1,4 +1,4 @@
-import { type BaseClass, onChangeNotifier } from "@statewalker/shared-baseclass";
+import { effect, type Read } from "@todo/signals";
 
 /**
  * The controller's reaction must be subscribed to `input`, never to the outer
@@ -35,7 +35,7 @@ export async function expectNoSelfWake(steps: {
 
 /**
  * A STATE-LATEST edge (spec §4.2): N increments in one tick are ONE action
- * carrying the newest state. Two increments then one notify; the controller
+ * carrying the newest state. Two increments then one write; the controller
  * must act exactly once. Acting twice means it is treating a state-latest edge
  * as an event edge; acting zero times means it compares against a boolean
  * rather than a watermark.
@@ -83,18 +83,18 @@ export function expectCoalescedEdge(steps: {
 }
 
 /**
- * A level field holding an array or object must be REPLACED, never mutated —
- * and the replacement must be ANNOUNCED. Identity alone is too weak: a mutator
- * that replaces the value but forgets to notify changes nothing anyone can see,
- * and a watcher is what catches that. This is why `model` is a parameter.
+ * A level field holding an array or object must be REPLACED, never mutated. An
+ * in-place `push` changes nothing a signal can see: no write reached it, so no
+ * effect over the read wakes. Watched through an effect on `read` — at the
+ * source — and the watcher is stopped before this returns.
  */
 export async function expectReplacedNotMutated<T>(
-  model: BaseClass,
-  read: () => T,
+  read: Read<T>,
   mutate: () => void | Promise<void>,
 ): Promise<void> {
-  let observed = 0;
-  const stop = onChangeNotifier(model.onUpdate, read as () => unknown)(() => {
+  let observed = -1; // the effect's first run is the subscription, not a change
+  const stop = effect(() => {
+    read();
     observed++;
   });
   try {
@@ -102,11 +102,10 @@ export async function expectReplacedNotMutated<T>(
   } finally {
     stop();
   }
-  if (observed === 0) {
+  if (observed <= 0) {
     throw new Error(
       "level field was not observably replaced: an in-place push/splice is " +
-        "invisible to an identity comparison, and a replacement that never " +
-        "notifies is invisible to every subscriber. Replace the value AND notify.",
+        "invisible to every subscriber. Write a new value.",
     );
   }
 }

@@ -1,7 +1,6 @@
-import { BaseClass } from "@statewalker/shared-baseclass";
 import { Command } from "@statewalker/shared-commands";
 import { z } from "zod";
-import type { TodoListModel } from "./todo-model.js";
+import type { TodoListView } from "./todo-model.js";
 
 /**
  * Panels, dialogs, notifications and menus are ONE mechanism at four
@@ -12,19 +11,23 @@ import type { TodoListModel } from "./todo-model.js";
  * These live in todo-app, not todo-core: the core names no `ui:` command, and
  * B0 greps for it.
  */
-export class ConfirmModel extends BaseClass {
-  constructor(readonly question: string) { super(); }
+/**
+ * Plain readonly records, not signals: nothing in them changes after the
+ * controller builds them, so there is nothing to observe.
+ */
+export class ConfirmModel {
+  constructor(readonly question: string) {}
 }
-export class NotifyModel extends BaseClass {
-  constructor(readonly text: string) { super(); }
+export class NotifyModel {
+  constructor(readonly text: string) {}
 }
-export class MenuModel extends BaseClass {
+export class MenuModel {
   /** Built by the CONTROLLER from the declarations — the view may not read the registry. */
-  constructor(readonly items: { key: string; label?: string; icon?: string }[]) { super(); }
+  constructor(readonly items: { key: string; label?: string; icon?: string }[]) {}
 }
 
 export const uiShowList = Command.required("ui:show-list")
-  .input(z.custom<TodoListModel>())
+  .input(z.custom<TodoListView>())
   .output(z.object({ closed: z.boolean() }))
   .build();
 

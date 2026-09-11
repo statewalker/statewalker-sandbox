@@ -1,359 +1,304 @@
+import { createTodoListModel, expectReplacedNotMutated, type TodoListModel } from "@todo/app";
 import { describe, expect, it } from "vitest";
-import { TodoListModel, expectReplacedNotMutated } from "@todo/app";
+import { watch } from "../../test-support/signals.js";
 
-describe("B1 · todo models", () => {
-  it("derives the visible set from level fields, without storing it", () => {
-    const m = new TodoListModel();
-    m.replaceTodos([
+/**
+ * B1 · the todo model. Change is counted at the source (`watch`, an effect on
+ * the read) — never through something downstream that dedups on its own.
+ */
+describe("B1 · todo model", () => {
+  it("derives the visible set from the level fields, without storing it", () => {
+    const m = createTodoListModel();
+    m.control.replaceTodos([
       { id: "1", title: "write", done: false },
       { id: "2", title: "ship", done: true },
     ]);
-    m.input.setShowDone(false);
-    expect(m.visible().map((t) => t.id)).toEqual(["1"]);
-    m.input.setShowDone(true);
-    expect(m.visible().map((t) => t.id)).toEqual(["1", "2"]);
+    m.view.setShowDone(false);
+    expect(m.view.visible().map((t) => t.id)).toEqual(["1"]);
+    m.view.setShowDone(true);
+    expect(m.view.visible().map((t) => t.id)).toEqual(["1", "2"]);
   });
 
   it("filters by the draft, case-insensitively", () => {
-    const m = new TodoListModel();
-    m.replaceTodos([
+    const m = createTodoListModel();
+    m.control.replaceTodos([
       { id: "1", title: "Write the spec", done: false },
       { id: "2", title: "ship it", done: false },
     ]);
-    m.input.setFilter("WRITE");
-    expect(m.visible().map((t) => t.id)).toEqual(["1"]);
+    m.view.setFilter("WRITE");
+    expect(m.view.visible().map((t) => t.id)).toEqual(["1"]);
+  });
+
+  it("visible is tracked through BOTH query halves and the list — no forwarding (parent D16)", () => {
+    const m = createTodoListModel();
+    const woken = watch(m.view.visible);
+    m.view.setShowDone(false);
+    expect(woken.n, "showDone alone").toBe(1);
+    m.view.setFilter("abc");
+    expect(woken.n, "filterDraft alone").toBe(2);
+    m.view.setFilter("abc");
+    expect(woken.n, "no query change, no wake").toBe(2);
+    m.control.replaceTodos([]);
+    expect(woken.n, "the list").toBe(3);
+  });
+
+  it("visible derives from nothing on the add form or the row queues", () => {
+    const m = createTodoListModel();
+    const woken = watch(m.view.visible);
+    m.view.queueSubmit("a");
+    m.control.takePending();
+    m.view.requestToggle("1");
+    m.view.requestRemove("1");
+    m.view.requestClearCompleted();
+    m.view.requestRefresh();
+    expect(woken.n).toBe(0);
   });
 
   it("replaces the todo list rather than mutating it", async () => {
-    const m = new TodoListModel();
-    await expectReplacedNotMutated(m, () => m.todos, () => {
-      m.replaceTodos([...m.todos, { id: "1", title: "x", done: false }]);
+    const m = createTodoListModel();
+    await expectReplacedNotMutated(m.control.todos, () => {
+      m.control.replaceTodos([...m.control.todos(), { id: "1", title: "x", done: false }]);
     });
   });
 
   it("keeps the event-edge queue replaced, so a drain is observable", async () => {
-    const m = new TodoListModel();
-    m.input.queueSubmit("a");
-    await expectReplacedNotMutated(m.input, () => m.input.pending, () => {
-      m.input.takePending();
+    const m = createTodoListModel();
+    m.view.queueSubmit("a");
+    await expectReplacedNotMutated(m.control.edges.pending, () => {
+      m.control.takePending();
     });
   });
 
-  it("raises no notify when a mutator is handed the value it already holds", () => {
-    // Counted on the RAW notify channel, deliberately: subscribing through a
-    // named channel would prove onChangeNotifier's dedup instead of the
-    // mutator's guard, and would pass with the guard deleted.
-    const m = new TodoListModel();
-    let notifies = 0;
-    m.input.onUpdate(() => { notifies++; });
-    m.input.setFilter("abc");
-    m.input.setFilter("abc");
-    m.input.setFilter("abc");
-    expect(notifies, "three writes, one real change").toBe(1);
+  for (const [name, write, read] of [
+    ["setFilter", (m: TodoListModel) => m.view.setFilter("abc"), (m: TodoListModel) => m.view.filterDraft],
+    ["setShowDone", (m: TodoListModel) => m.view.setShowDone(false), (m: TodoListModel) => m.view.showDone],
+    ["reportOutcome", (m: TodoListModel) => m.control.reportOutcome("x"), (m: TodoListModel) => m.view.lastOutcome],
+  ] as const) {
+    it(`${name}: a write of the value already held wakes nobody`, () => {
+      const m = createTodoListModel();
+      const woken = watch(read(m));
+      write(m);
+      write(m);
+      write(m);
+      expect(woken.n, "three writes, one real change").toBe(1);
+    });
+  }
+
+  it("reportOutcome: clearing twice is one change too", () => {
+    const m = createTodoListModel();
+    m.control.reportOutcome("x");
+    const woken = watch(m.view.lastOutcome);
+    m.control.reportOutcome(undefined);
+    m.control.reportOutcome(undefined);
+    expect(woken.n).toBe(1);
   });
 
-  it("raises no notify when setShowDone is handed the value it already holds", () => {
-    // Its own test: the one above covers `setFilter` only, and deleting this
-    // guard left every suite green — `onQueryChange`'s dedup hid it from the
-    // outer model, and nothing counted the input's raw channel for it.
-    const m = new TodoListModel();
-    let notifies = 0;
-    m.input.onUpdate(() => { notifies++; });
-    m.input.setShowDone(false);
-    m.input.setShowDone(false);
-    m.input.setShowDone(false);
-    expect(notifies, "three writes, one real change").toBe(1);
+  it("takePending on an empty queue is silent", () => {
+    const m = createTodoListModel();
+    m.view.queueSubmit("a");
+    expect(m.control.takePending()).toEqual([{ title: "a" }]);
+    const woken = watch(m.control.edges.pending);
+    expect(m.control.takePending()).toEqual([]);
+    expect(woken.n, "draining an empty queue is not a change").toBe(0);
   });
 
-  it("does not notify when takePending drains an already-empty queue", () => {
-    const m = new TodoListModel();
-    m.input.queueSubmit("a");
-    expect(m.input.takePending()).toEqual([{ title: "a" }]);
-
-    let notifies = 0;
-    m.input.onUpdate(() => { notifies++; });
-    expect(m.input.takePending()).toEqual([]);
-    expect(notifies, "draining an empty queue is not a field change").toBe(0);
+  it("wakes a watcher of one edge only for its own change", () => {
+    const m = createTodoListModel();
+    const refreshes = watch(m.control.edges.refreshCount);
+    const filters = watch(m.view.filterDraft);
+    m.view.setFilter("abc");
+    expect([refreshes.n, filters.n], "a filter change does not wake refresh").toEqual([0, 1]);
+    m.view.requestRefresh();
+    expect([refreshes.n, filters.n], "a refresh does not wake the filter").toEqual([1, 1]);
   });
 
-  it("wakes onPendingChange when a submission is queued", () => {
-    const m = new TodoListModel();
-    let changes = 0;
-    m.input.onPendingChange(() => { changes++; });
-    m.input.queueSubmit("a");
-    expect(changes).toBe(1);
-  });
-
-  it("raises no notify when reportOutcome is handed the outcome it already holds", () => {
-    // Counted on the RAW notify channel, exactly as for setFilter above.
-    // Subscribing through onOutcomeChange would prove onChangeNotifier's own
-    // dedup, and pass with reportOutcome's compare-before-write guard deleted
-    // (which it did).
-    const m = new TodoListModel();
-    let notifies = 0;
-    m.onUpdate(() => { notifies++; });
-    m.reportOutcome("x");
-    m.reportOutcome("x");
-    m.reportOutcome("x");
-    expect(notifies, "three writes, one real change").toBe(1);
-    m.reportOutcome(undefined);
-    m.reportOutcome(undefined);
-    expect(notifies, "clearing twice is one change too").toBe(2);
-  });
-
-  it("wakes onOutcomeChange when the outcome changes", () => {
-    const m = new TodoListModel();
-    let changes = 0;
-    m.onOutcomeChange(() => { changes++; });
-    m.reportOutcome("x");
-    m.reportOutcome("y");
-    expect(changes).toBe(2);
-  });
-
-  it("wakes onQueryChange from either half of the composite selector", () => {
-    const m = new TodoListModel();
-    let queries = 0;
-    m.input.onQueryChange(() => { queries++; });
-    m.input.setShowDone(false);
-    expect(queries, "showDone is half of the composite query").toBe(1);
-    m.input.setFilter("abc");
-    expect(queries, "filterDraft is the other half").toBe(2);
-  });
-
-  it("an input QUERY change fires the outer model's onUpdate — visible() derives from it", () => {
-    // `visible()` is a getter on the OUTER model that reads the input's level
-    // fields. `useModel(model, m => m.visible())` subscribes to the outer
-    // `onUpdate` only, so that channel must cover every derived getter the
-    // model exposes — or a view goes stale with no error. Counted on the RAW
-    // channel, each half of the query separately, each in its own tick.
-    const m = new TodoListModel();
-    let outer = 0;
-    m.onUpdate(() => { outer++; });
-
-    m.input.setShowDone(false);
-    expect(outer, "showDone alone must reach the outer model").toBe(1);
-    m.input.setFilter("abc");
-    expect(outer, "filterDraft alone must reach the outer model").toBe(2);
-    m.input.setFilter("abc");
-    expect(outer, "no query change, no outer notify").toBe(2);
-  });
-
-  it("forwards QUERY changes only — the add form and row queues derive nothing on the outer model", () => {
-    const m = new TodoListModel();
-    let outer = 0;
-    m.onUpdate(() => { outer++; });
-
-    m.input.queueSubmit("a");
-    m.input.takePending();
-    m.input.requestToggle("1");
-    m.input.requestRemove("1");
-    m.input.requestClearCompleted();
-    m.input.requestRefresh();
-
-    expect(outer).toBe(0);
-  });
-
-  it("wakes a channel subscriber only for its own change", () => {
-    const m = new TodoListModel();
-    let refreshes = 0;
-    let queries = 0;
-    m.input.onRefresh(() => { refreshes++; });
-    m.input.onQueryChange(() => { queries++; });
-
-    m.input.setFilter("abc");
-    expect([refreshes, queries], "a filter change must not wake onRefresh").toEqual([0, 1]);
-
-    m.input.requestRefresh();
-    expect([refreshes, queries], "a refresh must not wake onQueryChange").toEqual([1, 1]);
-  });
-
-  it("keeps a channel alive across replacement, which is why arrays are replaced", () => {
-    const m = new TodoListModel();
-    let changes = 0;
-    m.onTodosChange(() => { changes++; });
-    m.replaceTodos([{ id: "1", title: "x", done: false }]);
-    expect(changes).toBe(1);
-    // Same contents, new array identity: the channel fires, because a selector
-    // comparing by identity is what the view uses too.
-    m.replaceTodos([{ id: "1", title: "x", done: false }]);
-    expect(changes).toBe(2);
-  });
-
-  it("keeps change channels out of toJSON, so a session snapshot stays data", () => {
-    // Spec §4.10 property 3: channels are function-valued fields, and toJSON
-    // skips functions. (No model here has an underscore field, so this test no
-    // longer claims to check one.)
-    const m = new TodoListModel();
-    m.replaceTodos([{ id: "1", title: "x", done: false }]);
-    const json = JSON.parse(JSON.stringify(m.toJSON()));
-    expect(json.todos).toHaveLength(1);
-    for (const channel of ["onTodosChange", "onOutcomeChange", "onUpdate"]) {
-      expect(Object.keys(json), `${channel} is a function, not state`).not.toContain(channel);
-    }
-    const input = JSON.parse(JSON.stringify(m.input.toJSON()));
-    for (const channel of ["onRefresh", "onPendingChange", "onQueryChange"]) {
-      expect(Object.keys(input), `${channel} is a function, not state`).not.toContain(channel);
-    }
+  it("an equal-content replacement is still a change — change detection is by identity", () => {
+    const m = createTodoListModel();
+    const woken = watch(m.control.todos);
+    m.control.replaceTodos([{ id: "1", title: "x", done: false }]);
+    m.control.replaceTodos([{ id: "1", title: "x", done: false }]);
+    expect(woken.n).toBe(2);
   });
 });
 
 /**
- * The row intents a view needs (Task 13a): every button a view can press must
- * exist as a mutator on the INPUT sub-model, because a view knows only models.
- * Two are EVENT edges carrying their payload (a replaced queue, like
- * `pending`); one is a STATE-LATEST edge (a counter, like `refreshCount`).
- *
- * Notifies are counted on the RAW `onUpdate`, never through the named channel:
- * a channel's own `!==` dedup would hide a missing compare-before-write guard,
- * which is the mistake this codebase has already made and fixed three times.
+ * The facets are what keeps a view off the controller's side (spec §4.3). B0
+ * checks names in the view layer's source; these check the objects.
  */
-describe("B1 · row intents on the input sub-model", () => {
-  const rawNotifies = (m: TodoListModel) => {
-    const counter = { n: 0 };
-    m.input.onUpdate(() => {
-      counter.n++;
-    });
-    return counter;
-  };
+describe("B1 · the two facets", () => {
+  const VIEW_KEYS = [
+    "filterDraft",
+    "lastOutcome",
+    "queueSubmit",
+    "requestClearCompleted",
+    "requestRefresh",
+    "requestRemove",
+    "requestToggle",
+    "setFilter",
+    "setShowDone",
+    "showDone",
+    "visible",
+  ];
+  const CONTROL_KEYS = ["edges", "replaceTodos", "reportOutcome", "takePending", "takeRemovals", "takeToggles", "todos"];
+  const EDGE_KEYS = ["clearCompletedCount", "pending", "refreshCount", "removals", "toggles"];
 
-  // The two queues share one shape; each is tested through the same table so a
-  // guard missing from ONE of them cannot hide behind the other's test.
+  it("carry exactly the members the spec lists — adding one is a deliberate edit here", () => {
+    const m = createTodoListModel();
+    expect(Object.keys(m).sort()).toEqual(["control", "view"]);
+    expect(Object.keys(m.view).sort()).toEqual(VIEW_KEYS);
+    expect(Object.keys(m.control).sort()).toEqual(CONTROL_KEYS);
+    expect(Object.keys(m.control.edges).sort()).toEqual(EDGE_KEYS);
+  });
+
+  it("are frozen — a facet is shared, so replacing one of its functions would change it for every holder", () => {
+    const m = createTodoListModel();
+    for (const facet of [m, m.view, m.control, m.control.edges]) {
+      expect(Object.isFrozen(facet)).toBe(true);
+    }
+  });
+
+  it("share no function — nothing the view holds is a controller-side capability", () => {
+    const m = createTodoListModel();
+    const fns = (o: object) => new Set(Object.values(o).filter((v) => typeof v === "function"));
+    const viewFns = fns(m.view);
+    for (const fn of [...fns(m.control), ...fns(m.control.edges)]) {
+      expect(viewFns.has(fn)).toBe(false);
+    }
+  });
+
+  it("hand out reads that cannot write — calling one with an argument changes nothing", () => {
+    const m = createTodoListModel();
+    m.control.replaceTodos([{ id: "1", title: "x", done: false }]);
+    const tryWrite = (read: unknown, value: unknown) => (read as (v: unknown) => void)(value);
+    tryWrite(m.view.filterDraft, "hacked");
+    tryWrite(m.view.showDone, false);
+    tryWrite(m.view.lastOutcome, "hacked");
+    tryWrite(m.view.visible, []);
+    tryWrite(m.control.todos, []);
+    tryWrite(m.control.edges.pending, [{ title: "hacked" }]);
+    expect(m.view.filterDraft()).toBe("");
+    expect(m.view.showDone()).toBe(true);
+    expect(m.view.lastOutcome()).toBeUndefined();
+    expect(m.view.visible()).toHaveLength(1);
+    expect(m.control.todos()).toHaveLength(1);
+    expect(m.control.edges.pending()).toEqual([]);
+  });
+});
+
+/**
+ * The row intents a view raises. Two are EVENT edges carrying their payload
+ * (replaced queues); one is a STATE-LATEST edge (a counter).
+ */
+describe("B1 · row intents", () => {
   const queues = [
     {
       name: "toggle",
-      raise: (m: TodoListModel, id: string) => m.input.requestToggle(id),
-      take: (m: TodoListModel) => m.input.takeToggles(),
-      read: (m: TodoListModel) => m.input.toggles,
+      raise: (m: TodoListModel, id: string) => m.view.requestToggle(id),
+      take: (m: TodoListModel) => m.control.takeToggles(),
+      read: (m: TodoListModel) => m.control.edges.toggles,
     },
     {
       name: "remove",
-      raise: (m: TodoListModel, id: string) => m.input.requestRemove(id),
-      take: (m: TodoListModel) => m.input.takeRemovals(),
-      read: (m: TodoListModel) => m.input.removals,
+      raise: (m: TodoListModel, id: string) => m.view.requestRemove(id),
+      take: (m: TodoListModel) => m.control.takeRemovals(),
+      read: (m: TodoListModel) => m.control.edges.removals,
     },
   ] as const;
 
   for (const q of queues) {
     describe(`the ${q.name} queue — an EVENT edge`, () => {
-      it("queues the id with ONE raw notify per request", () => {
-        const m = new TodoListModel();
-        const raw = rawNotifies(m);
+      it("queues the id, one change per request", () => {
+        const m = createTodoListModel();
+        const woken = watch(q.read(m));
         q.raise(m, "1");
         q.raise(m, "2");
-        expect(q.read(m)).toEqual([{ id: "1" }, { id: "2" }]);
-        expect(raw.n, "one intention, one notify").toBe(2);
+        expect(q.read(m)()).toEqual([{ id: "1" }, { id: "2" }]);
+        expect(woken.n, "one intention, one change").toBe(2);
       });
 
-      it("honours a repeated id — two presses on one row are two actions, not one", () => {
-        // An event edge is never deduplicated: toggling a row twice is a
-        // round trip the user asked for, and a queue that collapsed it would
-        // silently drop one of them.
-        const m = new TodoListModel();
-        const raw = rawNotifies(m);
+      it("honours a repeated id — two presses on one row are two actions", () => {
+        const m = createTodoListModel();
         q.raise(m, "1");
         q.raise(m, "1");
-        expect(q.read(m)).toEqual([{ id: "1" }, { id: "1" }]);
-        expect(raw.n).toBe(2);
+        expect(q.read(m)()).toEqual([{ id: "1" }, { id: "1" }]);
       });
 
-      it("is replaced on request, never mutated — so its channel can see it", async () => {
-        const m = new TodoListModel();
-        await expectReplacedNotMutated(m.input, () => q.read(m), () => {
+      it("is replaced on request, never mutated", async () => {
+        const m = createTodoListModel();
+        await expectReplacedNotMutated(q.read(m), () => {
           q.raise(m, "1");
         });
       });
 
       it("drains by replacement and hands the batch back", async () => {
-        const m = new TodoListModel();
+        const m = createTodoListModel();
         q.raise(m, "1");
         q.raise(m, "2");
-        const before = q.read(m);
+        const before = q.read(m)();
         let batch: readonly { id: string }[] = [];
-        await expectReplacedNotMutated(m.input, () => q.read(m), () => {
+        await expectReplacedNotMutated(q.read(m), () => {
           batch = q.take(m);
         });
         expect(batch).toEqual([{ id: "1" }, { id: "2" }]);
-        expect(q.read(m)).toEqual([]);
-        expect(before, "the drained batch was handed back, not emptied in place").toEqual([
-          { id: "1" },
-          { id: "2" },
-        ]);
+        expect(q.read(m)()).toEqual([]);
+        expect(before, "the batch was handed back, not emptied in place").toEqual([{ id: "1" }, { id: "2" }]);
       });
 
-      it("is silent when drained empty — counted on the RAW notify", () => {
-        const m = new TodoListModel();
+      it("is silent when drained empty", () => {
+        const m = createTodoListModel();
         q.raise(m, "1");
         q.take(m);
-        const raw = rawNotifies(m);
+        const woken = watch(q.read(m));
         expect(q.take(m)).toEqual([]);
         expect(q.take(m)).toEqual([]);
-        expect(raw.n, "draining an empty queue is not a field change").toBe(0);
+        expect(woken.n).toBe(0);
       });
     });
   }
 
-  describe("clear-completed — a STATE-LATEST edge", () => {
-    it("raises a monotonic counter, one raw notify per request", () => {
-      const m = new TodoListModel();
-      const raw = rawNotifies(m);
-      expect(m.input.clearCompletedCount).toBe(0);
-      m.input.requestClearCompleted();
-      m.input.requestClearCompleted();
-      expect(m.input.clearCompletedCount, "every press is counted; coalescing is the controller's job").toBe(2);
-      expect(raw.n).toBe(2);
-    });
+  it("clear-completed raises a monotonic counter, one change per request", () => {
+    const m = createTodoListModel();
+    const woken = watch(m.control.edges.clearCompletedCount);
+    m.view.requestClearCompleted();
+    m.view.requestClearCompleted();
+    expect(m.control.edges.clearCompletedCount(), "coalescing is the controller's job").toBe(2);
+    expect(woken.n).toBe(2);
   });
 
-  it("wakes each channel only for its own change", () => {
-    // Every intent against every channel. A channel woken by a neighbour's
-    // mutator would wake a controller for work it does not own.
-    const m = new TodoListModel();
-    const woken: Record<string, number> = {};
-    const channels = {
-      onTogglesChange: m.input.onTogglesChange,
-      onRemovalsChange: m.input.onRemovalsChange,
-      onClearCompleted: m.input.onClearCompleted,
-      onPendingChange: m.input.onPendingChange,
-      onRefresh: m.input.onRefresh,
-      onQueryChange: m.input.onQueryChange,
+  it("each intent wakes only its own edge", () => {
+    const m = createTodoListModel();
+    const reads = {
+      toggles: m.control.edges.toggles,
+      removals: m.control.edges.removals,
+      clearCompletedCount: m.control.edges.clearCompletedCount,
+      pending: m.control.edges.pending,
+      refreshCount: m.control.edges.refreshCount,
+      query: () => [m.view.filterDraft(), m.view.showDone()],
     };
-    for (const [name, channel] of Object.entries(channels)) {
-      woken[name] = 0;
-      channel(() => {
-        woken[name]++;
-      });
-    }
+    const watchers = Object.fromEntries(Object.entries(reads).map(([k, r]) => [k, watch(r)]));
+    const counts = () => Object.fromEntries(Object.entries(watchers).map(([k, w]) => [k, w.n]));
+    let last = counts();
     const expectOnly = (owner: string, label: string) => {
-      const expected = Object.fromEntries(Object.keys(channels).map((k) => [k, k === owner ? 1 : 0]));
-      expect(woken, label).toEqual(expected);
-      for (const k of Object.keys(woken)) woken[k] = 0;
+      const now = counts();
+      const delta = Object.fromEntries(Object.keys(now).map((k) => [k, now[k] - last[k]]));
+      expect(delta, label).toEqual(Object.fromEntries(Object.keys(now).map((k) => [k, k === owner ? 1 : 0])));
+      last = now;
     };
-
-    m.input.requestToggle("1");
-    expectOnly("onTogglesChange", "requestToggle");
-    m.input.takeToggles();
-    expectOnly("onTogglesChange", "takeToggles");
-    m.input.requestRemove("1");
-    expectOnly("onRemovalsChange", "requestRemove");
-    m.input.takeRemovals();
-    expectOnly("onRemovalsChange", "takeRemovals");
-    m.input.requestClearCompleted();
-    expectOnly("onClearCompleted", "requestClearCompleted");
-    m.input.queueSubmit("a");
-    expectOnly("onPendingChange", "queueSubmit");
-    m.input.requestRefresh();
-    expectOnly("onRefresh", "requestRefresh");
-    m.input.setFilter("x");
-    expectOnly("onQueryChange", "setFilter");
-  });
-
-  it("keeps the new channels out of toJSON", () => {
-    const m = new TodoListModel();
-    m.input.requestToggle("1");
-    const input = JSON.parse(JSON.stringify(m.input.toJSON()));
-    expect(input.toggles).toEqual([{ id: "1" }]);
-    for (const channel of ["onTogglesChange", "onRemovalsChange", "onClearCompleted"]) {
-      expect(Object.keys(input), `${channel} is a function, not state`).not.toContain(channel);
-    }
+    m.view.requestToggle("1");
+    expectOnly("toggles", "requestToggle");
+    m.control.takeToggles();
+    expectOnly("toggles", "takeToggles");
+    m.view.requestRemove("1");
+    expectOnly("removals", "requestRemove");
+    m.control.takeRemovals();
+    expectOnly("removals", "takeRemovals");
+    m.view.requestClearCompleted();
+    expectOnly("clearCompletedCount", "requestClearCompleted");
+    m.view.queueSubmit("a");
+    expectOnly("pending", "queueSubmit");
+    m.view.requestRefresh();
+    expectOnly("refreshCount", "requestRefresh");
+    m.view.setFilter("x");
+    expectOnly("query", "setFilter");
   });
 });

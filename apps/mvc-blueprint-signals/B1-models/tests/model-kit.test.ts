@@ -1,56 +1,66 @@
-import { BaseClass } from "@statewalker/shared-baseclass";
-import { describe, expect, it } from "vitest";
 import { expectCoalescedEdge, expectNoSelfWake, expectReplacedNotMutated } from "@todo/app";
+import { effect, signal, untracked } from "@todo/signals";
+import { describe, expect, it } from "vitest";
 
-/** A stand-in obeying §4.8: fields are private to the class, writes are mutators. */
-class Input extends BaseClass {
-  /** Level. */ draft = "";
-  /** State-latest edge. */ refreshCount = 0;
-  setDraft(v: string) { this.draft = v; this.notify(); }
-  requestRefresh() { this.refreshCount++; this.notify(); }
-}
-class Outer extends BaseClass {
-  items: string[] = [];
-  readonly input = new Input();
-  addItem(x: string) { this.items = [...this.items, x]; this.notify(); }
-  mutateInPlace(x: string) { this.items.push(x); this.notify(); }
-  replaceSilently(x: string) { this.items = [...this.items, x]; }
-}
+/** A stand-in with the model's shape: signals in a closure, mutators to write them. */
+const standIn = () => {
+  const draft = signal("");
+  const refreshCount = signal(0);
+  const items = signal<string[]>([]);
+  return {
+    draft: () => draft(),
+    refreshCount: () => refreshCount(),
+    items: () => items(),
+    setDraft: (v: string) => draft(v),
+    requestRefresh: () => refreshCount(untracked(() => refreshCount()) + 1),
+    addItem: (x: string) => items([...untracked(() => items()), x]),
+    /** The mistake: the array changes, the signal never hears of it. */
+    mutateInPlace: (x: string) => {
+      untracked(() => items()).push(x);
+    },
+  };
+};
 
 describe("B1 · model kit", () => {
   describe("expectNoSelfWake", () => {
-    it("passes a controller subscribed to input", async () => {
-      const outer = new Outer();
+    it("passes a controller whose effect reads only the input", async () => {
+      const m = standIn();
       let reactions = 0;
-      outer.input.onUpdate(() => { reactions++; });
+      effect(() => {
+        m.draft();
+        m.refreshCount();
+        reactions++;
+      });
       await expectNoSelfWake({
         reactions: () => reactions,
-        writeOuter: () => outer.addItem("x"),
-        writeInput: () => outer.input.setDraft("q"),
+        writeOuter: () => m.addItem("x"),
+        writeInput: () => m.setDraft("q"),
       });
     });
 
-    it("REJECTS a controller subscribed to the outer model — it would loop", async () => {
-      const outer = new Outer();
+    it("REJECTS a controller whose effect reads what it writes — it would loop", async () => {
+      const m = standIn();
       let reactions = 0;
-      outer.onUpdate(() => { reactions++; });
+      effect(() => {
+        m.items();
+        reactions++;
+      });
       await expect(
         expectNoSelfWake({
           reactions: () => reactions,
-          writeOuter: () => outer.addItem("x"),
-          writeInput: () => outer.input.setDraft("q"),
+          writeOuter: () => m.addItem("x"),
+          writeInput: () => m.setDraft("q"),
         }),
       ).rejects.toThrow(/reacted to its own write/);
     });
 
     it("REJECTS a controller subscribed to nothing — absence of wiring is not the rule", async () => {
-      // fm-protos' version passes here, because it never touches `input`.
-      const outer = new Outer();
+      const m = standIn();
       await expect(
         expectNoSelfWake({
           reactions: () => 0,
-          writeOuter: () => outer.addItem("x"),
-          writeInput: () => outer.input.setDraft("q"),
+          writeOuter: () => m.addItem("x"),
+          writeInput: () => m.setDraft("q"),
         }),
       ).rejects.toThrow(/never reacted to `input`/);
     });
@@ -58,34 +68,55 @@ describe("B1 · model kit", () => {
 
   describe("expectCoalescedEdge", () => {
     it("passes when N bumps in one tick produce ONE action", () => {
+      const m = standIn();
       let actions = 0;
       let handled = 0;
-      const input = new Input();
-      // Defer, as a real controller does: it awaits the store before acting.
       let scheduled = false;
-      input.onUpdate(() => {
-        if (scheduled) return;
-        scheduled = true;
-        queueMicrotask(() => { scheduled = false; });
-        if (input.refreshCount > handled) { handled = input.refreshCount; actions++; }
+      let first = true;
+      // Defer, as a real controller does: it awaits the store before acting.
+      effect(() => {
+        const n = m.refreshCount();
+        if (first) {
+          first = false;
+          return;
+        }
+        untracked(() => {
+          if (scheduled) return;
+          scheduled = true;
+          queueMicrotask(() => {
+            scheduled = false;
+          });
+          if (n > handled) {
+            handled = n;
+            actions++;
+          }
+        });
       });
       expectCoalescedEdge({
-        bump: () => input.requestRefresh(),
-        read: () => input.refreshCount,
+        bump: () => m.requestRefresh(),
+        read: () => m.refreshCount(),
         actions: () => actions,
         label: "refreshCount",
       });
     });
 
     it("REJECTS a controller that acts once per bump", () => {
-      const input = new Input();
+      const m = standIn();
       let actions = 0;
       let last = 0;
-      input.onUpdate(() => { while (last < input.refreshCount) { last++; actions++; } });
+      effect(() => {
+        const n = m.refreshCount();
+        untracked(() => {
+          while (last < n) {
+            last++;
+            actions++;
+          }
+        });
+      });
       expect(() =>
         expectCoalescedEdge({
-          bump: () => input.requestRefresh(),
-          read: () => input.refreshCount,
+          bump: () => m.requestRefresh(),
+          read: () => m.refreshCount(),
           actions: () => actions,
           label: "refreshCount",
         }),
@@ -93,11 +124,11 @@ describe("B1 · model kit", () => {
     });
 
     it("REJECTS a controller that never acts", () => {
-      const input = new Input();
+      const m = standIn();
       expect(() =>
         expectCoalescedEdge({
-          bump: () => input.requestRefresh(),
-          read: () => input.refreshCount,
+          bump: () => m.requestRefresh(),
+          read: () => m.refreshCount(),
           actions: () => 0,
           label: "refreshCount",
         }),
@@ -105,11 +136,11 @@ describe("B1 · model kit", () => {
     });
 
     it("REJECTS a mutator that does not actually raise the counter", () => {
-      const input = new Input();
+      const m = standIn();
       expect(() =>
         expectCoalescedEdge({
-          bump: () => input.setDraft("x"),
-          read: () => input.refreshCount,
+          bump: () => m.setDraft("x"),
+          read: () => m.refreshCount(),
           actions: () => 1,
           label: "refreshCount",
         }),
@@ -118,23 +149,16 @@ describe("B1 · model kit", () => {
   });
 
   describe("expectReplacedNotMutated", () => {
-    it("passes a proper replace-and-notify", async () => {
-      const outer = new Outer();
-      await expectReplacedNotMutated(outer, () => outer.items, () => outer.addItem("x"));
+    it("passes a proper replacement", async () => {
+      const m = standIn();
+      await expectReplacedNotMutated(m.items, () => m.addItem("x"));
     });
 
-    it("REJECTS an in-place push", async () => {
-      const outer = new Outer();
-      await expect(
-        expectReplacedNotMutated(outer, () => outer.items, () => outer.mutateInPlace("x")),
-      ).rejects.toThrow(/replaced/);
-    });
-
-    it("REJECTS a replace that never notifies — invisible to every subscriber", async () => {
-      const outer = new Outer();
-      await expect(
-        expectReplacedNotMutated(outer, () => outer.items, () => outer.replaceSilently("x")),
-      ).rejects.toThrow(/replaced/);
+    it("REJECTS an in-place push — the signal never hears of it", async () => {
+      // The parent also rejected "a replacement that forgot to notify". Under
+      // signals that mistake cannot be made: writing a new value IS the notify.
+      const m = standIn();
+      await expect(expectReplacedNotMutated(m.items, () => m.mutateInPlace("x"))).rejects.toThrow(/replaced/);
     });
   });
 });
