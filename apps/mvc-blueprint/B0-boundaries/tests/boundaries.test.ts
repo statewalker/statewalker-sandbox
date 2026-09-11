@@ -1,5 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
+import { BaseClass } from "@statewalker/shared-baseclass";
+import * as modelEntry from "@todo/app/models";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -49,6 +51,72 @@ const ASSIGN = String.raw`(?:[-+*/%&|^]|\*\*|<<|>>>?|&&|\|\||\?\?)?=(?![=>])`;
 const MODEL_FIELD_WRITE = new RegExp(
   `${MODEL_CHAIN}\\s*(?:${ASSIGN}|\\+\\+|--)|(?:\\+\\+|--)\\s*${MODEL_CHAIN}`,
 );
+
+/**
+ * The files the model rules exempt, named by LOCATION, not by suffix. A bare
+ * `endsWith("-model.ts")` also admitted `todo-ui/src/use-model.ts` and any
+ * `todo-ui/src/views/selection-model.ts` someone might add — each free to
+ * write fields, notify and subscribe to bare `onUpdate`. A model lives in
+ * `todo-app`, so that is the only place the exemption reaches.
+ */
+const isModelModule = (file: string): boolean => file.startsWith("todo-app/src/") && file.endsWith("-model.ts");
+
+/** The React binding: exempt from the bare-`onUpdate` rule and from nothing else. */
+const REACT_BINDING = "todo-ui/src/use-model.ts";
+
+/**
+ * What a view may call on a model. Everything else a model class carries —
+ * found at run time below, not listed — belongs to the controller (the outer
+ * model's mutators, the input's `take*()` drains) or to the model itself
+ * (`notify`, `fromJSON`). Default-deny: a method added to a model later is
+ * off-limits to views until it is named here.
+ */
+const VIEW_MAY_CALL = new Set([
+  // TodoListInput — one mutator per gesture (spec §4.8)
+  "setFilter",
+  "setShowDone",
+  "requestRefresh",
+  "queueSubmit",
+  "requestToggle",
+  "requestRemove",
+  "requestClearCompleted",
+  // TodoListModel — a derived read
+  "visible",
+  // BaseClass — a read
+  "toJSON",
+]);
+
+/**
+ * Every method on the prototype chain of every model class the view layer's
+ * one entry (`@todo/app/models`) exports — inherited `BaseClass` methods
+ * included, since `fromJSON` writes fields as surely as a mutator does.
+ */
+const modelMethods = (): Set<string> => {
+  const names = new Set<string>();
+  for (const value of Object.values(modelEntry)) {
+    if (typeof value !== "function" || !(value.prototype instanceof BaseClass)) continue;
+    for (let proto = value.prototype; proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) {
+      for (const name of Object.getOwnPropertyNames(proto)) {
+        if (name !== "constructor" && typeof Object.getOwnPropertyDescriptor(proto, name)?.value === "function") {
+          names.add(name);
+        }
+      }
+    }
+  }
+  return names;
+};
+
+/** The methods a view may not name: every model method not in `VIEW_MAY_CALL`. */
+const CONTROLLER_SIDE = [...modelMethods()].filter((name) => !VIEW_MAY_CALL.has(name)).sort();
+
+/**
+ * A reference to one of `names` as a member — `.name`, called or not, or
+ * `["name"]`. Not a bare identifier: `notify` is also a word in
+ * `"./views/notify-view.js"`.
+ */
+const memberOf = (names: string[]) =>
+  new RegExp(`\\.\\s*(?:${names.join("|")})\\b|\\[\\s*${QUOTE}(?:${names.join("|")})${QUOTE}\\s*\\]`);
+const CONTROLLER_CALL = memberOf(CONTROLLER_SIDE);
 
 /** Every rung's suites, found by walking `<rung>/tests` recursively. */
 const allSuites = () =>
@@ -353,6 +421,35 @@ describe("B0 · package boundaries", () => {
       for (const spec of bad) expect(spec).not.toMatch(ADAPTER_MAY_IMPORT);
     });
 
+    it("the model exemption is by location: todo-app's *-model.ts, not a suffix anywhere", () => {
+      expect(isModelModule("todo-app/src/todo-model.ts")).toBe(true);
+      expect(isModelModule("todo-ui/src/use-model.ts")).toBe(false);
+      expect(isModelModule("todo-ui/src/views/selection-model.ts")).toBe(false);
+      expect(isModelModule("todo-core/src/api-model.ts")).toBe(false);
+    });
+
+    it("the view-side rule rejects every controller-side reference — called, bracketed or spaced — and no view-side one", () => {
+      for (const bad of [
+        "model.replaceTodos(model.todos);",
+        "model.input.takePending();",
+        "model . reportOutcome(undefined);",
+        'model.input["takeToggles"]();',
+        "const drain = model.input.takeRemovals;",
+        "model.fromJSON({ todos: [] });",
+        "model.notify();",
+      ]) {
+        expect(bad).toMatch(CONTROLLER_CALL);
+      }
+      for (const good of [
+        "model.input.queueSubmit(title);",
+        "useModel(model, (m) => m.visible(), shallowEqual);",
+        'import { NotifyView } from "./views/notify-view.js";',
+        "const takeover = model.input.requestToggle;",
+      ]) {
+        expect(good).not.toMatch(CONTROLLER_CALL);
+      }
+    });
+
     it("the build-config rule rejects vitest and this app's own test configs — not the shared table", () => {
       for (const bad of ["vitest/config", "vitest", "./vitest.config.js", "./vitest.browser.config.ts"]) {
         expect(bad).toMatch(TEST_RUNNER);
@@ -423,11 +520,19 @@ describe("B0 · package boundaries", () => {
   describe("only models notify, and only models are mutated", () => {
     // Spec §4.8. A controller that writes fields and notifies for itself can
     // publish a half-applied state — and the reconciliation in §4.2 then runs
-    // against it. A `*-model.ts` file is the only place `notify()` may appear.
+    // against it. A `todo-app/src/*-model.ts` file is the only place
+    // `notify()` may appear — `use-model.ts` included in the ban.
     const nonModels = () =>
       [...sources("todo-core"), ...sources("todo-app"), ...sources("todo-ui")].filter(
-        ({ file }) => !file.endsWith("-model.ts"),
+        ({ file }) => !isModelModule(file),
       );
+
+    it("the exemption reaches the model modules, and nothing else", () => {
+      const exempt = [...sources("todo-core"), ...sources("todo-app"), ...sources("todo-ui")]
+        .map(({ file }) => file)
+        .filter(isModelModule);
+      expect(exempt, "the files these rules skip").toEqual(["todo-app/src/todo-model.ts"]);
+    });
 
     it("calls notify() only from a model", () => {
       for (const { file, code } of nonModels()) {
@@ -447,6 +552,31 @@ describe("B0 · package boundaries", () => {
         );
         expect(code, `${file} must not assign through \`.input.\`; use a mutator`).not.toMatch(
           /\.input\.\w+\s*(=(?![=>])|\+\+|--)/,
+        );
+      }
+    });
+  });
+
+  describe("a view calls only the view-side mutators", () => {
+    // "The view writes only `input`" is not an object boundary on its own: a
+    // view holds the OUTER model, so it can call `replaceTodos`,
+    // `reportOutcome` or a `take*()` drain — and a write that stores equal
+    // data (`model.replaceTodos(model.todos)`) leaves every `toJSON()`
+    // snapshot in the browser suites unchanged. This is what checks it.
+    it("the split is derived from the model classes, and the allow-list names only methods that exist", () => {
+      const methods = modelMethods();
+      expect(CONTROLLER_SIDE, "the controller-side set is found, not assumed").toEqual(
+        expect.arrayContaining(["replaceTodos", "reportOutcome", "takePending", "takeToggles", "takeRemovals", "fromJSON"]),
+      );
+      for (const name of VIEW_MAY_CALL) {
+        expect(methods.has(name), `VIEW_MAY_CALL names "${name}", which no model has`).toBe(true);
+      }
+    });
+
+    it("todo-ui never names a controller-side model method", () => {
+      for (const { file, code } of sources("todo-ui")) {
+        expect(code, `${file} may call only the view-side mutators: ${[...VIEW_MAY_CALL].join(", ")}`).not.toMatch(
+          CONTROLLER_CALL,
         );
       }
     });
@@ -507,8 +637,15 @@ describe("B0 · package boundaries", () => {
     // exception: it supplies its own selector.
     it("never calls onUpdate outside a model or the React binding", () => {
       const offenders = [...sources("todo-core"), ...sources("todo-app"), ...sources("todo-ui")].filter(
-        ({ file }) => !file.endsWith("-model.ts") && !file.endsWith("use-model.ts"),
+        ({ file }) => !isModelModule(file) && file !== REACT_BINDING,
       );
+      expect(offenders.map(({ file }) => file), "the binding is checked by name — a rename must not exempt it silently").not.toContain(
+        REACT_BINDING,
+      );
+      expect(
+        sources("todo-ui").map(({ file }) => file),
+        "the React binding this rule exempts still exists",
+      ).toContain(REACT_BINDING);
       for (const { file, code } of offenders) {
         expect(code, `${file} must subscribe to a named channel, not onUpdate`).not.toMatch(
           /\.onUpdate\s*\(/,

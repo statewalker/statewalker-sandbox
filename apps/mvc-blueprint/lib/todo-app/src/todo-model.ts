@@ -9,9 +9,27 @@ import type { Todo } from "@todo/core";
 export type { Todo };
 
 /**
- * The user-input sub-model. The view writes ONLY here; the controller writes
- * only the outer model. Ownership is an object boundary, not a convention, and
- * that is what kills the reaction loop structurally (drive file 08 §2).
+ * The user-input sub-model. Intent flows IN through here and results flow OUT
+ * through the outer model — that direction is what kills the reaction loop
+ * (drive file 08 §2):
+ *
+ * - The view writes here, and only here, through the view-side mutators
+ *   (`set*`, `request*`, `queueSubmit`).
+ * - The controller writes the outer model through ITS mutators, and touches
+ *   this object only to drain it: each `take*()` replaces a queue and
+ *   notifies, which DOES wake the controller's own channel. That wake is
+ *   harmless because it happens inside a run: the in-flight guard
+ *   (`ListController._reconciling`) turns it into a no-op, and the run
+ *   re-reads every edge before it ends anyway.
+ *
+ * The object split is not what ENFORCES this — a view holds the outer model
+ * and could call `replaceTodos` on it. The split is what makes it CHECKABLE:
+ * "who may call what" becomes a list of method names, and B0 checks it — only
+ * as far as its patterns reach. A `todo-ui` file may not name a controller-
+ * side method (every model method but the view-side mutators, `visible` and
+ * `toJSON`), and nothing outside a model may assign a field through a
+ * receiver whose name contains "model". A computed method name, or an alias
+ * (`const i = model.input; i.pending = []`), walks past both.
  *
  * Every field is classified — spec §4.2 — because the controller's obligation
  * differs by class and nothing else records which is which.
@@ -48,7 +66,8 @@ export class TodoListInput extends BaseClass {
    */
   clearCompletedCount = 0;
 
-  // --- Mutators. The view calls these; it never assigns a field and never
+  // --- Mutators. The view calls the `set*`/`request*`/`queueSubmit` ones; the
+  // controller calls only the `take*()` drains. Neither assigns a field or
   // notifies (spec §4.8). Each says what happened, not which fields moved.
 
   setFilter(draft: string): void {
@@ -78,7 +97,9 @@ export class TodoListInput extends BaseClass {
   /**
    * Drains the queue by REPLACEMENT and hands the batch back, so the controller
    * never has to assign `pending` itself. Returns [] when there is nothing to do,
-   * and does not notify in that case — no field change, no update.
+   * and does not notify in that case — no field change, no update. When it does
+   * notify, it wakes the draining controller's own `onPendingChange`, which its
+   * in-flight guard absorbs (see the class doc). Controller-side: B0 bars views.
    */
   takePending(): { title: string }[] {
     if (this.pending.length === 0) return [];
@@ -183,7 +204,9 @@ export class TodoListModel extends BaseClass {
     this.input.onQueryChange(() => this.notify());
   }
 
-  // --- Mutators. The controller calls these; it never assigns and never notifies.
+  // --- Mutators. The controller calls these; it never assigns and never
+  // notifies. A view never calls them — B0's "todo-ui never names a
+  // controller-side model method".
 
   /** Replaced, never mutated: a selector comparing by identity sees nothing otherwise. */
   replaceTodos(todos: Todo[]): void {
