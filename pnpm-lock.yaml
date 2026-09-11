@@ -417,6 +417,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 25.9.5
+      html5-qrcode:
+        specifier: ^2.3.8
+        version: 2.3.8
       jsqr:
         specifier: ^1.4.0
         version: 1.4.0
