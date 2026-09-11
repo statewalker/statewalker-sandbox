@@ -68,12 +68,13 @@ import type { InvitationStore, SnapshotStore } from "../hub/hub-state.js";
 import { createHubState } from "../hub/hub-state.js";
 import type { MeshView } from "../hub/mesh-view.js";
 import { HUB_RULES } from "../policy.js";
-import { dialRelay, waitForCircuitReservation } from "../reservation.js";
+import { dialRelay, superviseRelay, waitForCircuitReservation } from "../reservation.js";
 import { describeError } from "./describe-error.js";
 import { mountEdge } from "./edge.js";
 import { createEdgeDispatch } from "./edge-dispatch.js";
 import { createRouteEnsurer } from "./join.js";
 import { createBrowserNode, dialNeedsPermissiveGater } from "./node-profile.js";
+import { watchPageWake } from "./page-wake.js";
 
 /** How often the hub sweeps stale presence -- `../hub/main.ts`'s `SWEEP_INTERVAL_MS`, and for the same reason (1 s granularity keeps "leaves the view within one TTL" tight). */
 export const SWEEP_INTERVAL_MS = 1_000;
@@ -256,6 +257,20 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
       { cause: err },
     );
   }
+
+  // KEPT, NOT ONLY ACQUIRED -- and this hub's reservation is the one every
+  // member of its mesh depends on. libp2p re-dials a lost relay once and then
+  // never again; a tab is exactly the peer whose relay link dies unwatched
+  // (backgrounded, frozen, asleep, off the network), and whose timers are
+  // throttled meanwhile, so page wake-ups retry at once. See
+  // `../reservation.ts`'s `superviseRelay` and `./page-wake.ts`.
+  const relaySupervisor = superviseRelay({ node, relayAddr });
+  const unwatchWake = watchPageWake(() => relaySupervisor.poke());
+  const stopSupervising = (): void => {
+    unwatchWake();
+    relaySupervisor.stop();
+  };
+  unwind.push(async () => stopSupervising());
 
   onState("starting-hub");
   // ONE shared clock for this hub's minting AND its revocation registry --
@@ -457,6 +472,8 @@ export async function startBrowserHub(init: StartBrowserHubInit): Promise<Browse
     async stop() {
       clearInterval(sweepTimer);
       clearInterval(renewTimer);
+      // First, so nothing re-dials the relay while the node is going down.
+      stopSupervising();
       try {
         await edge.stop();
         await peer.stop();

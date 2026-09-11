@@ -418,13 +418,16 @@ export interface JoinHandle {
  *
  * THREE TIMERS, KEPT APART (design note's Step 3 / note 07 §6). This
  * function owns two of them -- the heartbeat and the keepalive, below.
- * THE THIRD, circuit-relay's own reservation refresh, is NOT started
- * here: it is entirely libp2p-managed (the `circuitRelayTransport`
- * service renews the reservation on its own schedule once granted), and
- * folding it into either of these two would conflate "is my reservation
- * still valid" with "does the hub still consider me a member" or "is my
- * connection to the hub still open" -- three questions this design keeps
- * separate because they fail independently and mean different things.
+ * THE THIRD, the reservation on the relay, is NOT started here either:
+ * libp2p renews a reservation it holds on its own schedule, and restoring
+ * one lost with the relay link -- which libp2p attempts once and then never
+ * again -- is `../reservation.ts`'s `superviseRelay`, started by the
+ * runtime. The keepalive below is NOT that: it watches the HUB connection,
+ * which can stay up over WebRTC after the relay link is gone. Folding
+ * either into these two would conflate "is my reservation still valid"
+ * with "does the hub still consider me a member" or "is my connection to
+ * the hub still open" -- three questions this design keeps separate
+ * because they fail independently and mean different things.
  */
 export function startJoin(init: JoinInit): JoinHandle {
   const { peer, node, hubPeerId, relayAddr, revocationCache } = init;

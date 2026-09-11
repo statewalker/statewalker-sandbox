@@ -68,10 +68,14 @@
  * assume. Joining as a genuinely new peer is what resetting the identity is
  * for.
  */
+
+import { peerIdFromString } from "@libp2p/peer-id";
 import type { Ed25519PrivateKey, Mounts } from "@statewalker/httpeers.core";
 import { createPeer, RevocationCache } from "@statewalker/httpeers.core";
 import type { MeshView } from "../hub/mesh-view.js";
 import { appRules } from "../policy.js";
+import { superviseRelay } from "../reservation.js";
+import { type ConnectionKind, classifyConnection } from "./connection-kind.js";
 import { describeError } from "./describe-error.js";
 import { mountEdge } from "./edge.js";
 import { createEdgeDispatch } from "./edge-dispatch.js";
@@ -91,8 +95,7 @@ import {
   dialRelay,
   waitForCircuitReservation,
 } from "./node-profile.js";
-import { peerIdFromString } from "@libp2p/peer-id";
-import { type ConnectionKind, classifyConnection } from "./connection-kind.js";
+import { watchPageWake } from "./page-wake.js";
 
 /**
  * The invitation payload's shape -- mirrors `../setup/main.ts`'s own
@@ -371,6 +374,19 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
     );
   }
 
+  // KEPT, NOT ONLY ACQUIRED. Without a reservation no other member can reach
+  // this page, and libp2p re-dials a lost relay once and then never again --
+  // while `startJoin`'s keepalive watches the HUB connection, which can stay
+  // up over WebRTC after the relay link is gone. See `../reservation.ts`'s
+  // `superviseRelay`, and `./page-wake.ts` for why wake-ups retry at once.
+  const relaySupervisor = superviseRelay({ node, relayAddr });
+  const unwatchWake = watchPageWake(() => relaySupervisor.poke());
+  const stopSupervising = (): void => {
+    unwatchWake();
+    relaySupervisor.stop();
+  };
+  unwind.push(async () => stopSupervising());
+
   onState("starting-peer");
   const revocationCache = new RevocationCache({ maxStalenessMs: REVOCATION_MAX_STALENESS_MS });
   const peer = await createPeer({
@@ -578,6 +594,9 @@ export async function startBrowserPeer(init: StartBrowserPeerInit): Promise<Brow
       }
     },
     async stop() {
+      // First, so nothing re-dials the relay while the node is going down --
+      // a disconnected page must stay disconnected.
+      stopSupervising();
       try {
         join.stop();
         await edge.stop();

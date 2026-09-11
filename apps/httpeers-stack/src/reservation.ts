@@ -67,3 +67,118 @@ export async function waitForCircuitReservation(
       "the relay may be unreachable, or its reservation limits already exhausted.",
   );
 }
+
+export interface SuperviseRelayInit {
+  node: Libp2p;
+  /** The same string `dialRelay` was given. */
+  relayAddr: string;
+  /** The first retry after a failed attempt. */
+  minRetryDelayMs?: number;
+  /** The ceiling the backoff grows to. */
+  maxRetryDelayMs?: number;
+}
+
+export interface RelaySupervisor {
+  /** Re-check now, and if the reservation is gone try at once rather than wait out the backoff. */
+  poke(): void;
+  stop(): void;
+}
+
+/** How long one restore attempt waits for the reservation after its dial resolved -- 20 x 250 ms = 5 s. */
+const RESTORE_POLL_ATTEMPTS = 20;
+
+/** The backstop check, for a loss no event reported. */
+const SUPERVISOR_CHECK_INTERVAL_MS = 10_000;
+
+/**
+ * Keep this node's reservation on the relay at `relayAddr`, re-dialling
+ * whenever it is lost. Call once the first reservation has landed.
+ */
+export function superviseRelay(init: SuperviseRelayInit): RelaySupervisor {
+  const { node, relayAddr } = init;
+  const minDelayMs = init.minRetryDelayMs ?? 1_000;
+  const maxDelayMs = init.maxRetryDelayMs ?? 30_000;
+  const relayPeerId = multiaddr(relayAddr)
+    .getComponents()
+    .findLast((c) => c.name === "p2p")?.value;
+
+  let failures = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let restoring = false;
+  let stopped = false;
+
+  const reserved = (): boolean =>
+    node.getMultiaddrs().some((addr) => {
+      const s = addr.toString();
+      return relayPeerId == null
+        ? s.includes("/p2p-circuit")
+        : s.includes(`/p2p/${relayPeerId}/p2p-circuit`);
+    });
+
+  const schedule = (delayMs: number): void => {
+    timer = setTimeout(() => {
+      timer = undefined;
+      void restore();
+    }, delayMs);
+  };
+
+  async function restore(): Promise<void> {
+    if (stopped || restoring || reserved()) return;
+    restoring = true;
+    try {
+      await dialRelay(node, relayAddr);
+      await waitForCircuitReservation(node, { attempts: RESTORE_POLL_ATTEMPTS });
+      failures = 0;
+    } catch {
+      if (!stopped) schedule(retryDelayMs(failures++, minDelayMs, maxDelayMs));
+    } finally {
+      restoring = false;
+    }
+  }
+
+  const check = (): void => {
+    if (stopped || restoring || timer != null) return;
+    if (reserved()) {
+      failures = 0;
+      return;
+    }
+    schedule(0);
+  };
+
+  node.addEventListener("connection:close", check);
+  node.addEventListener("self:peer:update", check);
+  const interval = setInterval(check, SUPERVISOR_CHECK_INTERVAL_MS);
+
+  return {
+    poke() {
+      if (stopped) return;
+      clearTimeout(timer);
+      timer = undefined;
+      failures = 0;
+      check();
+    },
+    stop() {
+      stopped = true;
+      clearTimeout(timer);
+      timer = undefined;
+      clearInterval(interval);
+      node.removeEventListener("connection:close", check);
+      node.removeEventListener("self:peer:update", check);
+    },
+  };
+}
+
+/**
+ * The wait before retry number `failures` (0-based): doubling from
+ * `minDelayMs`, capped at `maxDelayMs`, then jittered into its upper half
+ * so a relay restart does not bring every peer back in the same instant.
+ */
+export function retryDelayMs(
+  failures: number,
+  minDelayMs: number,
+  maxDelayMs: number,
+  random: () => number = Math.random,
+): number {
+  const base = Math.min(maxDelayMs, minDelayMs * 2 ** failures);
+  return base / 2 + (random() * base) / 2;
+}
