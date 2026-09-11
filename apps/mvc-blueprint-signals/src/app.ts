@@ -61,7 +61,7 @@ export function startApp(root: HTMLElement, options: StartOptions = {}): Running
   let failure: HTMLElement | undefined;
   void controller.panelSettled.then((outcome: PanelOutcome) => {
     if (outcome.ok || disposed) return;
-    console.error("[mvc-blueprint] the todo list could not be shown:", outcome.error);
+    console.error("[mvc-blueprint-signals] the todo list could not be shown:", outcome.error);
     failure = renderFailure(root, outcome.error);
   });
 

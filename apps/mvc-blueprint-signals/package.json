@@ -1,9 +1,9 @@
 {
-  "name": "@statewalker/mvc-blueprint",
+  "name": "@statewalker/mvc-blueprint-signals",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The MVC blueprint — a TODO app whose purpose is to separate substrate from application.",
+  "description": "The MVC blueprint on signals — the same architecture, with its model substrate behind one signals contract.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

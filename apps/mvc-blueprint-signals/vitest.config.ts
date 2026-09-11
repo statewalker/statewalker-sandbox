@@ -22,7 +22,7 @@ const REACT_STACK = /^(react|react-dom|@statewalker\/ui\.view\.shadcn)(\/.*)?$/;
  * project's headless dependencies does.
  */
 const headless = (): Plugin => ({
-  name: "mvc-blueprint:headless",
+  name: "mvc-blueprint-signals:headless",
   enforce: "pre",
   resolveId(source, importer) {
     if (!REACT_STACK.test(source)) return null;
