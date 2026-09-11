@@ -1,27 +1,10 @@
 import { Commands } from "@statewalker/shared-commands";
-// B0 bans a suite importing `@todo/ui` from also importing `@todo/core`
-// directly (same precedent as `end-to-end.test.ts` and
-// `dispose-liveness.test.ts`), hence the local seeded api below.
 import { bootstrap, TodoListModel, uiShowList } from "@todo/app";
 import { ViewAdapter } from "@todo/ui/adapter";
 import { describe, expect, it } from "vitest";
+import { seededApi } from "../../test-support/api.js";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
-
-const seededApi = () => {
-  const rows = [{ id: "1", title: "seed", done: false }];
-  return {
-    list: async () => [...rows],
-    add: async (title: string) => {
-      const todo = { id: String(rows.length + 1), title, done: false };
-      rows.push(todo);
-      return todo;
-    },
-    toggle: async () => undefined,
-    remove: async () => false,
-    clearCompleted: async () => 0,
-  };
-};
 
 /**
  * Task 12's own claim, tested against a REAL `ViewAdapter` rather than a

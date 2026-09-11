@@ -1,29 +1,14 @@
 import { Commands } from "@statewalker/shared-commands";
 // A suite that spans every layer on purpose. B0's "views know only models" rule
-// binds todo-ui SOURCES; a suite wiring bootstrap to the view layer needs both.
-// It may still not import @todo/core (B0 checks that), hence the local api.
+// binds todo-ui SOURCES and the suites that render views; this one takes the
+// view layer only as its headless adapter, so it runs over the real api.
 import { bootstrap, MenuController, TodoListModel, uiShowMenu } from "@todo/app";
 import { ViewAdapter } from "@todo/ui/adapter";
 import { describe, expect, it } from "vitest";
+import { seededApi } from "../../test-support/api.js";
 import { claimListView } from "../../test-support/views.js";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
-
-/** The smallest honest `TodoApi`: async throughout, and naming nothing from the core. */
-const seededApi = () => {
-  let rows = [{ id: "1", title: "seed", done: false }];
-  return {
-    list: async () => [...rows],
-    add: async (title: string) => {
-      const todo = { id: String(rows.length + 1), title, done: false };
-      rows = [...rows, todo];
-      return todo;
-    },
-    toggle: async () => undefined,
-    remove: async () => false,
-    clearCompleted: async () => 0,
-  };
-};
 
 /**
  * Spec §1.1: "Views are command handlers. A controller emits `ui:show-*(model)`;

@@ -68,9 +68,6 @@ const allSuites = () =>
       }));
     });
 
-/** A package's suites, found by what they import — alias or relative path — not by directory. */
-const suitesUsing = (pkg: string) => allSuites().filter(({ code }) => importOf(pkg).test(code));
-
 const DOM_GLOBALS = /\b(document|window|HTMLElement|navigator)\b/;
 
 /**
@@ -125,12 +122,24 @@ const headlessModules = () => [
 ];
 
 /**
- * Does `code` import all three layers? Only the composition root may: it is
- * where the core's api, the app's bootstrap and the ui's views meet, and a
- * second module that knows every layer is a second composition root nobody
- * reviews as one.
+ * Does `code` take the view layer's REACT entry — `@todo/ui` or a view, by
+ * alias or relative path — rather than only the headless `@todo/ui/adapter`?
  */
-const knowsEveryLayer = (code: string): boolean => ["core", "app", "ui"].every((pkg) => importOf(pkg).test(code));
+const usesReactEntry = (code: string): boolean => specifiers(code).some(reachesUiBeyondAdapter);
+
+/**
+ * Does `code` wire the core to the React views — import the core, the app and
+ * the view layer's React entry? Only the composition root may: it is where the
+ * core's api, the app's bootstrap and the ui's views meet, and a second module
+ * that does that is a second composition root nobody reviews as one.
+ *
+ * The ui half is the React entry, not any `todo-ui` import: a headless suite
+ * that boots `bootstrap` over a real `MemTodoApi` and a `ViewAdapter` from
+ * `@todo/ui/adapter` is a protocol harness — it can render nothing — and
+ * counting the adapter made such suites hand-roll a copy of the core instead.
+ */
+const knowsEveryLayer = (code: string): boolean =>
+  importOf("core").test(code) && importOf("app").test(code) && usesReactEntry(code);
 
 /** The page's own modules under `src/` — the entry and the composition root. */
 const pageSources = () =>
@@ -246,11 +255,15 @@ describe("B0 · package boundaries", () => {
       }
     });
 
-    it("holds for todo-ui SUITES too — a suite can breach a boundary as easily as a module", () => {
-      const suites = suitesUsing("ui");
+    it("holds for VIEW suites too — a suite rendering views imports no todo-core", () => {
+      // A suite that renders the React views (`@todo/ui`, or a view by path)
+      // tests what a view knows, and a view knows only models. A suite taking
+      // only `@todo/ui/adapter` tests the bus protocol, which spans layers by
+      // nature — it may boot a real `MemTodoApi` and name `todosAdd`.
+      const suites = allSuites().filter(({ code }) => usesReactEntry(code));
       // The same empty-loop shape the recursion guard above exists for: if the
       // discovery ever finds nothing, the loop below asserts nothing and passes.
-      expect(suites.length, "found no todo-ui suite — the check below would be vacuous").toBeGreaterThan(0);
+      expect(suites.length, "found no view suite — the check below would be vacuous").toBeGreaterThan(0);
       for (const { file, code } of suites) {
         expect(code, `${file} must not import the core directly`).not.toMatch(importOf("core"));
       }
@@ -349,31 +362,45 @@ describe("B0 · package boundaries", () => {
       }
     });
 
-    it("the composition-root rule flags a module importing all three layers, by alias or relative path — not two", () => {
+    it("the composition-root rule flags the core, the app and the React entry together, by alias or relative path — not the adapter, not two", () => {
       // The core's specifiers are assembled, not spelled: this file names
-      // `@todo/ui` in its fixtures, and "a suite naming the ui must not name
-      // the core" (above) reads this file too.
+      // `@todo/ui` in its fixtures, and "a view suite must not name the core"
+      // (above) reads this file too.
       const core = ["@todo", "core"].join("/");
       const coreByPath = ["../lib/todo", "core/src/index.js"].join("-");
       for (const bad of [
         `import { MemTodoApi } from "${core}";\nimport { bootstrap } from "@todo/app";\nimport { registerViews } from "@todo/ui";`,
-        `import { MemTodoApi } from "${coreByPath}";\nimport { bootstrap } from "@todo/app";\nimport { ViewAdapter } from "@todo/ui/adapter";`,
+        `import { MemTodoApi } from "${coreByPath}";\nimport { bootstrap } from "@todo/app";\nimport { ListView } from "../lib/todo-ui/src/views/list-view.js";`,
       ]) {
         expect(knowsEveryLayer(bad), bad).toBe(true);
       }
-      expect(knowsEveryLayer('import { bootstrap } from "@todo/app";\nimport { ViewAdapter } from "@todo/ui/adapter";')).toBe(false);
+      for (const good of [
+        `import { MemTodoApi } from "${core}";\nimport { bootstrap } from "@todo/app";\nimport { ViewAdapter } from "@todo/ui/adapter";`,
+        'import { bootstrap } from "@todo/app";\nimport { registerViews } from "@todo/ui";',
+      ]) {
+        expect(knowsEveryLayer(good), good).toBe(false);
+      }
+    });
+
+    it("the view-suite rule binds a suite taking the React entry — not one taking only the adapter", () => {
+      expect(usesReactEntry('import { ListView } from "@todo/ui";')).toBe(true);
+      expect(usesReactEntry('import { ListView } from "../../lib/todo-ui/src/views/list-view.js";')).toBe(true);
+      expect(usesReactEntry('import { ViewAdapter } from "@todo/ui/adapter";')).toBe(false);
+      expect(usesReactEntry('import { TodoListModel } from "@todo/app/models";')).toBe(false);
     });
   });
 
-  describe("the composition root is the only module that knows every layer", () => {
+  describe("the composition root is the only module that wires the core to the views", () => {
     // `src/app.ts` imports the core (the api), the app (bootstrap, models) and
     // the ui (the React views) — legitimately: wiring them is its whole job.
     // That is an exemption scoped to ONE file, not a relaxation of any rule
     // above: the per-library rules still apply to every `lib/` file, and
     // none of them reads `src/`. What this adds is the other half — nothing
-    // else may know all three: no library, no suite, no test support, and not
-    // the page entry `src/main.tsx`, which only calls `startApp`.
-    it("only src/app.ts imports todo-core, todo-app and todo-ui together", () => {
+    // else may import all three with the ui as its React entry: no library,
+    // no suite, no test support, and not the page entry `src/main.tsx`, which
+    // only calls `startApp`. A headless suite over `@todo/ui/adapter` is not
+    // counted (see `knowsEveryLayer`).
+    it("only src/app.ts imports todo-core, todo-app and todo-ui's React entry together", () => {
       const everything = [
         ...sources("todo-core"),
         ...sources("todo-app"),

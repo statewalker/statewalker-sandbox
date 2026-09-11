@@ -35,10 +35,9 @@ import type { ViewAdapter } from "@todo/ui/adapter";
  * books entirely, while still satisfying `Command.required`.
  *
  * B0 boundary note: this module imports `@todo/app/models` (never
- * `@todo/core`) and `@todo/ui`'s public type, so a suite that imports it
- * alongside `@todo/ui` stays within "a todo-ui suite must not import
- * `@todo/core` directly" — the same precedent `end-to-end.test.ts` and
- * `dispose-liveness.test.ts` already set with their own local `seededApi()`.
+ * `@todo/core`) and the adapter's type from `@todo/ui/adapter`, so a suite
+ * that renders views may use it and still keep "a view suite imports no
+ * `@todo/core`".
  */
 export function claimListView(bus: Commands): () => void {
   return bus.listen(uiShowList, () => true);
@@ -79,7 +78,7 @@ export interface Dialogs {
  * shape and the same reason as `claimListView`: a suite that boots a
  * controller with a bare `Commands` and no `ViewAdapter`. The notify settles
  * itself at once (a toast that timed out instantly); the confirm answers per
- * `answer`. Imports `@todo/app/models` only, so a `@todo/ui` suite may use it.
+ * `answer`. Imports `@todo/app/models` only, so a view suite may use it.
  */
 export function answerDialogs(bus: Commands, answer: Dialogs["answer"] = true): Dialogs {
   const held: Command<ConfirmModel, { confirmed: boolean }>[] = [];
