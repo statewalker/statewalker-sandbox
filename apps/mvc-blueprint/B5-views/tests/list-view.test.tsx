@@ -135,34 +135,53 @@ describe("ListView", () => {
   });
 
   describe("user input reaches the model only through a mutator", () => {
-    it("typing in the filter calls setFilter with what was typed", async () => {
+    // Each gesture's mutator is STUBBED to do nothing, and both halves of the
+    // model are snapshotted around the gesture. A spy that calls through
+    // cannot tell "the view called the mutator" from "the view wrote the
+    // field AND called the mutator" — and B0's field-write grep is walked
+    // straight past by an alias (`const i = model.input; i.removals = …`).
+    // With the mutator inert, ANY change to the model is the view's own
+    // write, and fails here.
+    const snapshot = (model: TodoListModel) => ({
+      outer: JSON.parse(JSON.stringify(model.toJSON())),
+      input: JSON.parse(JSON.stringify(model.input.toJSON())),
+    });
+
+    it("typing in the filter calls setFilter with what was typed — and writes nothing itself", async () => {
       const model = seeded();
       const host = await mountList(model);
-      const setFilter = vi.spyOn(model.input, "setFilter");
+      const setFilter = vi.spyOn(model.input, "setFilter").mockImplementation(() => {});
+      const before = snapshot(model);
 
       await userEvent.fill(input(host, "Filter"), "dog");
 
       expect(setFilter).toHaveBeenLastCalledWith("dog");
-      // The field is the model's echo, not the view's own state: the rows follow.
-      await waitFor(() => titles(host).length === 1);
-      expect(titles(host)).toEqual(["walk dog"]);
-      expect(input(host, "Filter").value).toBe("dog");
+      expect(snapshot(model)).toEqual(before);
+      // The field is controlled BY THE MODEL: with the mutator inert, the
+      // model still says "", so the field snaps back to it.
+      await flush();
+      expect(input(host, "Filter").value).toBe("");
     });
 
-    it("the show-completed checkbox calls setShowDone", async () => {
+    it("the show-completed checkbox calls setShowDone — and writes nothing itself", async () => {
       const model = seeded();
       const host = await mountList(model);
-      const setShowDone = vi.spyOn(model.input, "setShowDone");
+      const setShowDone = vi.spyOn(model.input, "setShowDone").mockImplementation(() => {});
+      const before = snapshot(model);
 
       await userEvent.click(input(host, "Show completed"));
 
       expect(setShowDone).toHaveBeenCalledExactlyOnceWith(false);
+      expect(snapshot(model)).toEqual(before);
+      await flush();
+      expect(input(host, "Show completed").checked, "still the model's value").toBe(true);
     });
 
-    it("submitting the add form calls queueSubmit(title) and clears the draft", async () => {
+    it("submitting the add form calls queueSubmit(title), clears the draft, and writes nothing itself", async () => {
       const model = seeded();
       const host = await mountList(model);
-      const queueSubmit = vi.spyOn(model.input, "queueSubmit");
+      const queueSubmit = vi.spyOn(model.input, "queueSubmit").mockImplementation(() => {});
+      const before = snapshot(model);
 
       await userEvent.fill(input(host, "New todo"), "  buy bread ");
       await userEvent.click(button(host, "Add")!);
@@ -173,28 +192,33 @@ describe("ListView", () => {
       // Enter submits too — it is a form.
       await userEvent.type(input(host, "New todo"), "walk cat{Enter}");
       expect(queueSubmit).toHaveBeenLastCalledWith("walk cat");
+      expect(snapshot(model)).toEqual(before);
     });
 
     it("a blank draft submits nothing", async () => {
       const model = seeded();
       const host = await mountList(model);
-      const queueSubmit = vi.spyOn(model.input, "queueSubmit");
+      const queueSubmit = vi.spyOn(model.input, "queueSubmit").mockImplementation(() => {});
+      const before = snapshot(model);
 
       await userEvent.fill(input(host, "New todo"), "   ");
       await userEvent.click(button(host, "Add")!);
 
       expect(queueSubmit).not.toHaveBeenCalled();
+      expect(snapshot(model)).toEqual(before);
     });
 
     it("a row's checkbox calls requestToggle(id) — and the row keeps showing the MODEL until it changes", async () => {
       const model = seeded();
       const host = await mountList(model);
-      const requestToggle = vi.spyOn(model.input, "requestToggle");
+      const requestToggle = vi.spyOn(model.input, "requestToggle").mockImplementation(() => {});
+      const before = snapshot(model);
       const box = row(host, "walk dog").querySelector<HTMLInputElement>('input[type="checkbox"]')!;
 
       await userEvent.click(box);
 
       expect(requestToggle).toHaveBeenCalledExactlyOnceWith("2");
+      expect(snapshot(model)).toEqual(before);
       // The view does not guess the outcome: `todos` has not changed, so the
       // row still reads not-done. Only the controller's `replaceTodos` moves it.
       await flush();
@@ -203,24 +227,39 @@ describe("ListView", () => {
       await waitFor(() => box.checked);
     });
 
-    it("a row's delete button calls requestRemove(id)", async () => {
+    it("a row's delete button calls requestRemove(id) — and writes nothing itself", async () => {
       const model = seeded();
       const host = await mountList(model);
-      const requestRemove = vi.spyOn(model.input, "requestRemove");
+      const requestRemove = vi.spyOn(model.input, "requestRemove").mockImplementation(() => {});
+      const before = snapshot(model);
 
       await userEvent.click(button(row(host, "file taxes"), 'Delete "file taxes"')!);
 
       expect(requestRemove).toHaveBeenCalledExactlyOnceWith("3");
+      expect(snapshot(model)).toEqual(before);
     });
 
-    it("Clear completed calls requestClearCompleted()", async () => {
+    it("Clear completed calls requestClearCompleted() — and writes nothing itself", async () => {
       const model = seeded();
       const host = await mountList(model);
-      const requestClearCompleted = vi.spyOn(model.input, "requestClearCompleted");
+      const requestClearCompleted = vi.spyOn(model.input, "requestClearCompleted").mockImplementation(() => {});
+      const before = snapshot(model);
 
       await userEvent.click(button(host, "Clear completed")!);
 
       expect(requestClearCompleted).toHaveBeenCalledExactlyOnceWith();
+      expect(snapshot(model)).toEqual(before);
     });
+  });
+
+  it("the filter field echoes the model once the real mutator runs", async () => {
+    const model = seeded();
+    const host = await mountList(model);
+
+    await userEvent.fill(input(host, "Filter"), "dog");
+
+    await waitFor(() => titles(host).length === 1);
+    expect(titles(host)).toEqual(["walk dog"]);
+    expect(input(host, "Filter").value).toBe("dog");
   });
 });
