@@ -530,6 +530,9 @@ importers:
       '@statewalker/shared-registry':
         specifier: 'catalog:'
         version: 0.1.1
+      '@statewalker/ui.view.shadcn':
+        specifier: 'catalog:'
+        version: 0.1.1(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       react:
         specifier: 'catalog:'
         version: 19.2.8

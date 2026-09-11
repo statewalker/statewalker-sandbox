@@ -20,6 +20,7 @@
     "@statewalker/shared-baseclass": "0.1.1",
     "@statewalker/shared-commands": "0.2.1",
     "@statewalker/shared-registry": "catalog:",
+    "@statewalker/ui.view.shadcn": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "zod": "4.5.4"
