@@ -2,7 +2,7 @@ import { Commands } from "@statewalker/shared-commands";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NotifyModel, uiNotify } from "@todo/app/models";
 import { NotifyView, registerViews } from "@todo/ui";
-import { createHost, flush, render, waitFor } from "../../test-support/react.js";
+import { createHost, render, waitFor } from "../../test-support/react.js";
 
 /** B5 · the toast. It settles itself; the timeout is injected so this suite waits milliseconds, not seconds. */
 
@@ -22,11 +22,16 @@ describe("NotifyView", () => {
   });
 
   it("settles itself once the timeout elapses — and not before", async () => {
+    // "Not before" is checked well INSIDE the window, after the toast is on
+    // screen and its effect has had turns to run: a bare flush() right after
+    // render runs before the effect even commits, and would pass for a toast
+    // that settles at once.
     const settle = vi.fn<() => void>();
-    const view = render(<NotifyView model={new NotifyModel("hi")} settle={settle} timeoutMs={40} />);
+    const view = render(<NotifyView model={new NotifyModel("hi")} settle={settle} timeoutMs={400} />);
     teardown.push(view.unmount);
-    await flush();
-    expect(settle).not.toHaveBeenCalled();
+    await waitFor(() => view.host.querySelector('[role="status"]') !== null);
+    await sleep(150);
+    expect(settle, "150 ms into a 400 ms toast").not.toHaveBeenCalled();
     await waitFor(() => settle.mock.calls.length > 0);
     expect(settle).toHaveBeenCalledExactlyOnceWith();
   });
@@ -50,7 +55,13 @@ describe("NotifyView", () => {
     await waitFor(() => mount.querySelector('[role="status"]') !== null);
     expect(mount.querySelector('[data-view="ui:notify"]')?.textContent).toContain("Removed 2 todos");
 
-    await expect(cmd.promise).resolves.toBeUndefined();
+    // Raced, so the injected 30 ms is what is under test: the 4 s default
+    // would still resolve inside the test's own timeout, and prove nothing.
+    const outcome = await Promise.race([
+      cmd.promise.then(() => "settled"),
+      sleep(500).then(() => "still open after 500 ms"),
+    ]);
+    expect(outcome, "registerViews must hand notifyTimeoutMs to the toast").toBe("settled");
     await waitFor(() => mount.children.length === 0);
   });
 });
