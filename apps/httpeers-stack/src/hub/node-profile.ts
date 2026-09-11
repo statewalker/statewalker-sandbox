@@ -46,7 +46,8 @@ import { tcp } from "@libp2p/tcp";
 import { webRTC } from "@libp2p/webrtc";
 import { webSockets } from "@libp2p/websockets";
 import type { Ed25519PrivateKey, Libp2p } from "@statewalker/httpeers.core";
-import { createLibp2p } from "libp2p";
+import { createLibp2p, type ServiceFactoryMap } from "libp2p";
+import { hubRelayServer, type IsMember, membershipGater } from "../hub-relay.js";
 
 export interface CreateHubNodeInit {
   /** The hub's signing key -- `main.ts`'s `loadHubKey`. Its peerId IS the mesh identity, so this is never optional here. */
@@ -66,6 +67,8 @@ export interface CreateHubNodeInit {
    * pin the behaviour, not because Node needs it today.
    */
   dev?: boolean;
+  /** When given, this node relays for the peers it answers true for. */
+  isMember?: IsMember;
 }
 
 /**
@@ -81,7 +84,21 @@ export async function createHubNode(init: CreateHubNodeInit): Promise<Libp2p> {
     transports: [tcp(), webSockets(), webRTC(), circuitRelayTransport()],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],
-    connectionGater: init.dev === true ? { denyDialMultiaddr: async () => false } : undefined,
-    services: { identify: identify() },
+    connectionGater: {
+      ...(init.dev === true ? { denyDialMultiaddr: async () => false } : {}),
+      ...(init.isMember != null ? membershipGater(init.isMember) : {}),
+    },
+    services: hubServices(init.isMember),
   });
+}
+
+/**
+ * The relay service only with a membership test to gate it: a hub that
+ * relayed for anyone would be a second public relay. Typed as the general
+ * map because the two shapes differ and nothing reads the services by type.
+ */
+function hubServices(isMember: IsMember | undefined): ServiceFactoryMap {
+  return isMember != null
+    ? { identify: identify(), relay: hubRelayServer() }
+    : { identify: identify() };
 }
