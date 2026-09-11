@@ -38,8 +38,8 @@ const completedTodos = (n: number): string => `${n} completed todo${n === 1 ? ""
  * ERROR POLICY. Every piece of work runs inside `_reconcile()`, which is fired
  * with `void` from the effect — so a rejection escaping it has nowhere
  * to go but the process, and nothing reaches the user. Therefore nothing
- * escapes: each failure is caught where it happens and reported through the
- * outer model's `reportOutcome` (the mutator that exists for exactly this), and
+ * escapes: each failure is caught where it happens and reported through
+ * `control.reportOutcome` (the mutator that exists for exactly this), and
  * a watermark moves once the user's intent is CONSUMED. For work with no
  * question in it — a reload — that is when the work landed: a failed reload
  * leaves its watermark where it was. For an intent that asks the user a

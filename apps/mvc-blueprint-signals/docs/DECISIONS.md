@@ -89,7 +89,8 @@ Underneath all three: the latch's only power the alternatives lack is stopping a
 masking a broken rule while hiding it from the tests that would catch it.
 
 **Instead**, in order: check the controller really needs to write what it observes (usually it
-should write an *outcome* instead); use a named channel so it is not woken by its own writes;
+should write an *outcome* instead); subscribe to a declared `edges` set — an effect that reads only
+its own input, never what it writes — so it is not woken by its own writes;
 **compare before writing in the mutator**, which raises no notify at all for an unchanged value and
 survives `await`; use a watermark for edges; and for a genuinely shared model (peer sync), carry the
 writer's identity in the data and skip your own.
@@ -253,8 +254,10 @@ Swapping libraries is editing that line and running the ladder.
 ### S2 — What the contract guarantees, and the five things it leaves open · adopted
 
 Eight guarantees, pinned on both libraries by B1's contract suite. Five behaviours differ (ARCHITECTURE
-§12); the suite records each per library, so an upgrade that changes one fails where it is named. The
-app relies on none, hence two rules: no effect throws, and a reaction must converge.
+§12): four are left open, and the suite records each per library, so an upgrade that changes one
+fails where it is named; the fifth — effect ownership — is normalized (S3) and pinned as guarantee 8
+instead. The app relies on none of the five, hence two rules: no effect throws, and a reaction must
+converge.
 
 ### S3 — Effects are owned by nobody · adopted
 

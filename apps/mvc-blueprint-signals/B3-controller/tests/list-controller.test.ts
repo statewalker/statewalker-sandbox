@@ -301,7 +301,7 @@ describe("B3 · list controller", () => {
     expect(m.control.todos(), "the in-flight load's answer was dropped, not applied late").toEqual([]);
   });
 
-  it("refuses a second activate(), which would double-subscribe every channel", async () => {
+  it("refuses a second activate(), which would subscribe a second effect", async () => {
     // Replays the GENUINE token bootstrap handed this controller — captured on
     // its way in, never minted — because since B4's token fix no caller holds
     // one otherwise. bootstrap re-uses one token for every controller by

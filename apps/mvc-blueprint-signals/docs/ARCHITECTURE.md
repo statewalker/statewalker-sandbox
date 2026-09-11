@@ -474,12 +474,12 @@ routing `todos:add` through an approval dialog — waits for a dialog nobody can
 
 ## 10. Failure
 
-Controller work runs inside `_reconcile()`, fired with `void` from a channel callback — so a
+Controller work runs inside `_reconcile()`, fired with `void` from the effect — so a
 rejection escaping it has nowhere to go but the process, and nothing reaches the user. Therefore
 **nothing escapes**. Every failure is caught where it happens and reported through the model:
 
 ```ts
-if (didWork && !this._disposed) this._model.reportOutcome(failure);
+if (didWork && !this._disposed) this._model.control.reportOutcome(failure);
 ```
 
 `lastOutcome` is what the list view shows as its error line.
@@ -514,10 +514,10 @@ export function startApp(root: HTMLElement, options: StartOptions = {}): Running
     api: options.api ?? new MemTodoApi([...seedTodos]),
     registerViews: (options.registerViews ?? registerViews)(root),
   });
-  const { controller } = app.createList(new TodoListModel());
+  const { controller } = app.createList(createTodoListModel());
   void controller.panelSettled.then((outcome) => {
     if (outcome.ok || disposed) return;
-    console.error("[mvc-blueprint] the todo list could not be shown:", outcome.error);
+    console.error("[mvc-blueprint-signals] the todo list could not be shown:", outcome.error);
     failure = renderFailure(root, outcome.error);
   });
   // ...
@@ -567,8 +567,11 @@ untracked<T>(fn: () => T): T
 ```
 
 `alien.ts` is nearly a re-export; `preact.ts` wraps `.value` into call syntax. Swapping libraries is
-editing that one line. B1's contract suite runs both against the eight guarantees the app relies on,
-and records, per library, the five behaviours the contract leaves open:
+editing that one line. B1's contract suite runs both against the eight guarantees the app relies on.
+Five behaviours differ between the libraries: four are left open, and the suite records each per
+library, so an upgrade that changes one fails where it is named; the fifth — an effect created
+inside another effect's run — is normalized instead (`alien.ts` creates every effect untracked) and
+pinned as guarantee 8:
 
 | Behaviour | alien-signals | preact |
 | --- | --- | --- |

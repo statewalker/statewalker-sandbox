@@ -21,7 +21,7 @@ export async function expectNoSelfWake(steps: {
   if (steps.reactions() !== before) {
     throw new Error(
       "controller reacted to its own write: the reaction must be subscribed to " +
-        "`input`, not to the outer model it writes.",
+        "its input edges, not to the results it writes.",
     );
   }
   await steps.writeInput();

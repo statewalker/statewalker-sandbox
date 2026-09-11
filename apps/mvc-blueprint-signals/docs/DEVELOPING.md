@@ -41,7 +41,7 @@ it, the row or the note under the table says what.
 | a suite that renders views — imports `@todo/ui` or a view, by alias or path — imports no `@todo/core`. A suite taking only `@todo/ui/adapter` tests the bus protocol and may use the real core | B0 · *holds for VIEW suites too* |
 | `view-adapter.ts` imports `@statewalker/shared-commands` and `@statewalker/shared-registry`, and nothing else | B0 · *view-adapter.ts imports the bus and the registry — no React* |
 | a **node** suite, and the test support it loads, names `@todo/ui` only as `@todo/ui/adapter` | B0 · *a node suite… takes @todo/ui only as @todo/ui/adapter* |
-| a node suite cannot **load** `react`, `react-dom` or `@statewalker/ui.view.shadcn` — by name or through any module that imports them, `src/app.ts` included: resolution fails, naming the rule | the `mvc-blueprint:headless` plugin in `vitest.config.ts`; B0 · *the node project refuses to LOAD React…* proves it is on, every run |
+| a node suite cannot **load** `react`, `react-dom` or `@statewalker/ui.view.shadcn` — by name or through any module that imports them, `src/app.ts` included: resolution fails, naming the rule | the `mvc-blueprint-signals:headless` plugin in `vitest.config.ts`; B0 · *the node project refuses to LOAD React…* proves it is on, every run |
 | only `src/app.ts` imports the core, the app and the view layer's **React entry** together | B0 · *only src/app.ts imports todo-core, todo-app and todo-ui's React entry together* |
 | `vite.config.ts` reaches no `vitest` module, directly or through a local import | B0 · *vite.config.ts reaches no vitest module…* |
 

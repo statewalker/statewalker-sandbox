@@ -12,7 +12,7 @@ The signals library is a one-line choice (`lib/signals/deps.ts`): alien-signals 
 
 ```
 pnpm dev          # the app, in a browser
-pnpm test         # 285 headless tests, run on both signals libraries
+pnpm test         # 288 headless tests, run on both signals libraries
 pnpm test:browser # 90 tests in real Chromium
 pnpm typecheck
 pnpm build        # production bundle in dist/
@@ -118,7 +118,7 @@ The app starts with three seeded todos in memory. There is no persistence yet �
 
 | Rung | Settles | Where | Tests |
 | --- | --- | --- | --- |
-| B0 | the layering, as a fact about the files — and that node suites cannot load React | node | 35 |
+| B0 | the layering, as a fact about the files — and that node suites cannot load React | node | 38 |
 | B1 | models, the three classes of input field, the model kit, **the signals contract on both libraries** | node | 108 |
 | B2 | the command surface, its defaults, the override, the `claimed` contract | node | 20 |
 | B3 | the controllers: reconciliation, coalescing, errors, disposal | node | 72 |
@@ -126,7 +126,7 @@ The app starts with three seeded todos in memory. There is no persistence yet �
 | B5 | the React views, `useValue`, focus on close | Chromium | 86 |
 | B6 | the running app, end to end, and that Tailwind emitted the kit's styles | Chromium + node | 4 + 2 |
 
-285 node tests and 90 browser tests in all — B1 through B5 run once per signals library
+288 node tests and 90 browser tests in all — B1 through B5 run once per signals library
 (`node:alien`/`node:preact`, `browser:alien`/`browser:preact`); the contract suite (counted in B1)
 and B0/B6 run once.
 

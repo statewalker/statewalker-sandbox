@@ -5,9 +5,12 @@ import * as preact from "../../lib/signals/preact.js";
 
 /**
  * B1 · the signals contract. Every guarantee the app relies on, run against
- * BOTH implementations. The second half records the five behaviours the
- * contract leaves open — per library — so an upgrade that changes one fails
- * here, where it is named, instead of somewhere in the controller.
+ * BOTH implementations. The second half records FOUR of the five behaviours
+ * the contract leaves open — per library — so an upgrade that changes one
+ * fails here, where it is named, instead of somewhere in the controller. The
+ * fifth — an effect created inside another effect's run — is normalized
+ * instead (`alien.ts` creates every effect untracked) and pinned as
+ * guarantee 8 below.
  *
  * This is the only suite that imports the implementations directly; the rest
  * of the ladder reaches them through `@todo/signals` (see signals-binding).
@@ -198,9 +201,11 @@ for (const s of IMPLEMENTATIONS) {
 }
 
 /**
- * The five behaviours the contract leaves open (spec §4.2), recorded per
- * library. The app relies on none of them — that is the point of recording
- * them: when a library changes one, this fails and names it.
+ * FOUR of the five behaviours the contract leaves open (spec §4.2), recorded
+ * per library — the fifth (effect ownership) is normalized and pinned as
+ * guarantee 8 above instead. The app relies on none of the five — that is the
+ * point of recording these four: when a library changes one, this fails and
+ * names it.
  */
 describe("B1 · signals — left open, and recorded", () => {
   const recorded: Record<SignalsImplementation, Record<string, unknown>> = {

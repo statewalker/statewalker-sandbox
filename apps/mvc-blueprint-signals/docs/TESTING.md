@@ -52,7 +52,7 @@ enforces.
 
 | Helper | Asserts | Fails for |
 | --- | --- | --- |
-| `expectNoSelfWake({ reactions, writeOuter, writeInput })` | a controller is woken by an **input** write and **not** by an outer write | a controller subscribed to the outer model (it would loop) — **and** one subscribed to nothing |
+| `expectNoSelfWake({ reactions, writeOuter, writeInput })` | a controller is woken by an **edge** write and **not** by a write to its own results | a controller subscribed to its own results (it would loop) — **and** one subscribed to nothing |
 | `expectCoalescedEdge({ bump, read, actions })` | a state-latest edge collapses repeated bumps | a controller that acts per bump, one that never acts, and a "mutator" that does not raise the counter |
 | `expectReplacedNotMutated(read, mutate)` | the value was replaced and an effect over `read` saw it | an in-place `push` |
 
