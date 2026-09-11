@@ -35,7 +35,14 @@ import { createPeerSession } from "../../browser/session.js";
 import type { ProxyRoute } from "../../services/proxy-routes.js";
 import { createProxyEndpoint, PROXY_POLICIES } from "../../services/proxy.js";
 import type { StoredRoute } from "./routes-store.js";
-import { loadRoutes, saveRoutes, withSecrets } from "./routes-store.js";
+import { DEFAULT_ROUTES, loadRoutesOrSeed, saveRoutes, withSecrets } from "./routes-store.js";
+import {
+  DEFAULT_EXAMPLES,
+  describeStatus,
+  parseHeaders,
+  renderExamples,
+  streamInto,
+} from "../../browser/request-console.js";
 
 const el = <T extends HTMLElement>(id: string): T => document.querySelector<T>(`#${id}`)!;
 
@@ -71,7 +78,7 @@ const consoleOutputEl = el("console-output");
  * anywhere -- see `./routes-store.ts` for why the split is by ownership.
  */
 const secrets = new Map<string, string>();
-let stored: StoredRoute[] = loadRoutes(localStorage);
+let stored: StoredRoute[] = loadRoutesOrSeed(localStorage, DEFAULT_ROUTES);
 
 /**
  * Read per request by the endpoint, so editing a route or typing a key takes
@@ -80,26 +87,6 @@ let stored: StoredRoute[] = loadRoutes(localStorage);
 const currentRoutes = (): ProxyRoute[] => withSecrets(stored, secrets);
 
 
-/**
- * A `Name: value` per line textarea, as a header record.
- *
- * Blank lines and lines with no colon are IGNORED rather than rejected: this
- * field is typed into, and a half-finished line while someone is still editing
- * must not be the thing that stops a route being saved. Only the first colon
- * splits, so a value may contain one (`Bearer a:b`, a URL).
- */
-function parseHeaders(text: string): Record<string, string> {
-  const headers: Record<string, string> = {};
-  for (const line of text.split("\n")) {
-    const at = line.indexOf(":");
-    if (at <= 0) continue;
-    const name = line.slice(0, at).trim();
-    const value = line.slice(at + 1).trim();
-    if (name === "") continue;
-    headers[name] = value;
-  }
-  return headers;
-}
 
 function say(tone: string, text: string): void {
   routeStatusEl.dataset.tone = tone;
@@ -264,20 +251,15 @@ async function runConsole(): Promise<void> {
         ...(body !== "" ? { body } : {}),
       }),
     );
-    consoleStatusEl.textContent =
-      `${res.status} ${res.statusText} · ${res.headers.get("content-type") ?? ""}` +
-      // The proxy's OWN answers are marked, so a 404 from this page is never
-      // mistaken for a 404 the upstream sent.
-      (res.headers.get("x-httpeers-proxy") != null
-        ? ` · x-httpeers-proxy: ${res.headers.get("x-httpeers-proxy")}`
-        : "");
-    const reader = res.body?.getReader();
-    if (reader == null) return;
-    const decoder = new TextDecoder();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      consoleOutputEl.textContent += decoder.decode(value, { stream: true });
+    consoleStatusEl.textContent = describeStatus(res);
+    const stats = await streamInto(res, (text) => {
+      consoleOutputEl.textContent += text;
+    });
+    // The timing IS the streaming evidence: a buffered response would put the
+    // first chunk at the same moment as the last.
+    if (stats.firstChunkMs !== null) {
+      consoleStatusEl.textContent +=
+        ` · ${stats.chunks} chunk(s), first at ${Math.round(stats.firstChunkMs)} ms of ${Math.round(stats.totalMs)} ms`;
     }
   } catch (err) {
     // A fetch that never reached the edge at all -- the ServiceWorker gone,
@@ -313,6 +295,15 @@ async function runConsole(): Promise<void> {
  * `/proxy/openai/models` and getting the upstream's own answer.
  */
 const proxyEndpoint = createProxyEndpoint({ routes: currentRoutes });
+
+// One-click requests against the pre-configured routes, placed directly above
+// the console they fill.
+consoleForm.before(
+  renderExamples(DEFAULT_EXAMPLES, (example) => {
+    consoleMethodEl.value = example.method;
+    consolePathEl.value = example.path;
+  }),
+);
 
 async function buildMounts(): Promise<ReturnType<typeof createMounts>> {
   const mounts = createMounts();
