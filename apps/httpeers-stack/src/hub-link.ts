@@ -8,6 +8,7 @@
 import { peerIdFromString } from "@libp2p/peer-id";
 import { multiaddr } from "@multiformats/multiaddr";
 import type { Libp2p } from "@statewalker/httpeers.core";
+import { type RelaySupervisor, superviseRelay } from "./reservation.js";
 
 /**
  * The address a member dials another member at: through their hub, with a
@@ -49,8 +50,8 @@ export async function reachHub(node: Libp2p, relayAddr: string, hubPeerId: strin
  * after the hub has accepted this peer, not before.
  *
  * A CONFIGURED RELAY, NOT A DISCOVERED ONE: libp2p will not restore it on
- * its own if the link to the hub drops, which is `./reservation.ts`'s
- * `superviseRelay`'s job. Each call adds a listener; after a lost link the
+ * its own if the link to the hub drops, which is `superviseHubReservation`'s
+ * job, below. Each call adds a listener; after a lost link the
  * old one sits empty. That is one small object per reconnection, accepted
  * rather than reaching into libp2p's internals to reuse it.
  */
@@ -74,6 +75,34 @@ export async function reserveOnHub(node: Libp2p, hubPeerId: string): Promise<str
     throw new Error(`hub-link: listening on the hub (${hubPeerId}) produced no reserved address`);
   }
   return reserved;
+}
+
+export interface SuperviseHubReservationInit {
+  node: Libp2p;
+  /** The public relay the hub is reached through -- `reachHub`'s. */
+  relayAddr: string;
+  hubPeerId: string;
+  minRetryDelayMs?: number;
+  maxRetryDelayMs?: number;
+}
+
+/**
+ * Keep this member's reservation on its hub: whenever it is lost, reach the
+ * hub again and re-reserve, with `superviseRelay`'s backoff and `poke()`.
+ * Call once the first `reserveOnHub` has succeeded.
+ */
+export function superviseHubReservation(init: SuperviseHubReservationInit): RelaySupervisor {
+  const { node, relayAddr, hubPeerId } = init;
+  return superviseRelay({
+    node,
+    relayAddr: `/p2p/${hubPeerId}`,
+    minRetryDelayMs: init.minRetryDelayMs,
+    maxRetryDelayMs: init.maxRetryDelayMs,
+    restore: async () => {
+      await reachHub(node, relayAddr, hubPeerId);
+      await reserveOnHub(node, hubPeerId);
+    },
+  });
 }
 
 /**

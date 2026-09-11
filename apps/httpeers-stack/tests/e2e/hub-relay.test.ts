@@ -23,9 +23,13 @@ import type { Libp2p } from "@statewalker/httpeers.core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBrowserNode } from "../../src/browser/node-profile.js";
 import { createHubNode } from "../../src/hub/node-profile.js";
-import { hubRoute, reachHub, reserveOnHub } from "../../src/hub-link.js";
+import { hubRoute, reachHub, reserveOnHub, superviseHubReservation } from "../../src/hub-link.js";
 import { type Relay, startRelay } from "../../src/relay/main.js";
-import { dialRelay, waitForCircuitReservation } from "../../src/reservation.js";
+import {
+  dialRelay,
+  type RelaySupervisor,
+  waitForCircuitReservation,
+} from "../../src/reservation.js";
 import { loadOrGenerateKey } from "../../src/setup/keys.js";
 
 const RELAY_SEED = "httpeers-stack/e2e/hub-relay";
@@ -37,6 +41,19 @@ let hub: Libp2p;
 let hubId: string;
 const members = new Set<string>();
 const nodes: Libp2p[] = [];
+let supervisor: RelaySupervisor | undefined;
+
+const onHub = (node: Libp2p): boolean =>
+  node.getMultiaddrs().some((addr) => addr.toString().includes(`/p2p/${hubId}/p2p-circuit`));
+
+async function eventually(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return predicate();
+}
 
 async function member(): Promise<Libp2p> {
   const node = await createBrowserNode({ dev: true, privateKey: await generateKeyPair("Ed25519") });
@@ -69,6 +86,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  supervisor?.stop();
+  supervisor = undefined;
   await Promise.all(nodes.splice(0).map((node) => node.stop()));
   await relay.stop();
   rmSync(dir, { recursive: true, force: true });
@@ -126,4 +145,29 @@ describe("a hub relaying for its members", () => {
       /PERMISSION_DENIED/,
     );
   }, 30_000);
+});
+
+describe("superviseHubReservation", () => {
+  it("restores a member's reservation on its hub after the link drops", async () => {
+    // A reservation on the hub is a CONFIGURED relay, which libp2p never
+    // restores on its own -- so a member whose link to the hub dropped (the
+    // hub's tab slept, the network changed) would stay unreachable by every
+    // other member until reloaded.
+    const a = await member();
+    members.add(a.peerId.toString());
+    await reachHub(a, relayAddr, hubId);
+    await reserveOnHub(a, hubId);
+    supervisor = superviseHubReservation({
+      node: a,
+      relayAddr,
+      hubPeerId: hubId,
+      minRetryDelayMs: 250,
+      maxRetryDelayMs: 1_000,
+    });
+
+    await hub.hangUp(a.peerId);
+    expect(await eventually(() => !onHub(a), 5_000)).toBe(true);
+
+    expect(await eventually(() => onHub(a), 15_000)).toBe(true);
+  }, 40_000);
 });

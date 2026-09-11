@@ -70,8 +70,20 @@ export async function waitForCircuitReservation(
 
 export interface SuperviseRelayInit {
   node: Libp2p;
-  /** The same string `dialRelay` was given. */
+  /**
+   * The same string `dialRelay` was given. Its last `/p2p/<id>` names the
+   * relay whose reservation counts; with a custom `restore`, `/p2p/<id>`
+   * alone is enough.
+   */
   relayAddr: string;
+  /**
+   * How to get the reservation back. Defaults to dialling `relayAddr` and
+   * waiting for libp2p to reserve on it, which is right for a relay libp2p
+   * DISCOVERED (a `/p2p-circuit` listen address). A CONFIGURED relay -- a
+   * member's reservation on its hub -- is never re-reserved by libp2p, so its
+   * restore has to ask again itself; see `./hub-link.ts`.
+   */
+  restore?: () => Promise<void>;
   /** The first retry after a failed attempt. */
   minRetryDelayMs?: number;
   /** The ceiling the backoff grows to. */
@@ -126,8 +138,13 @@ export function superviseRelay(init: SuperviseRelayInit): RelaySupervisor {
     if (stopped || restoring || reserved()) return;
     restoring = true;
     try {
-      await dialRelay(node, relayAddr);
-      await waitForCircuitReservation(node, { attempts: RESTORE_POLL_ATTEMPTS });
+      if (init.restore != null) {
+        await init.restore();
+        if (!reserved()) throw new Error("reservation: restore resolved without a reservation");
+      } else {
+        await dialRelay(node, relayAddr);
+        await waitForCircuitReservation(node, { attempts: RESTORE_POLL_ATTEMPTS });
+      }
       failures = 0;
     } catch {
       if (!stopped) schedule(retryDelayMs(failures++, minDelayMs, maxDelayMs));
