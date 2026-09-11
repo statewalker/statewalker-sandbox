@@ -1,6 +1,6 @@
-import { Commands } from "@statewalker/shared-commands";
+import { CommandError, Commands } from "@statewalker/shared-commands";
 import { bootstrap, ListController, TodoListModel } from "@todo/app";
-import { MemTodoApi } from "@todo/core";
+import { MemTodoApi, todosAdd } from "@todo/core";
 import { describe, expect, it } from "vitest";
 import { claimListView } from "../../test-support/views.js";
 
@@ -124,5 +124,38 @@ describe("B4 · bootstrap ordering", () => {
     };
     await app.dispose();
     expect(disposedAgain, "the app registry still held a released controller").toBe(0);
+  });
+
+  it("unwinds what already succeeded when registerViews throws — the command defaults go too", async () => {
+    // Spec §4.9's saga: a step that fails must release exactly the steps that
+    // succeeded before it. The defaults were registered first; a view layer
+    // that throws must not leave them answering a bus nobody will dispose.
+    const commands = new Commands();
+    const broken = new Error("the view layer could not register");
+    expect(() =>
+      bootstrap({
+        commands,
+        api: new MemTodoApi(),
+        registerViews: () => {
+          throw broken;
+        },
+      }),
+    ).toThrow(broken);
+    // bootstrap is synchronous and the registry's unwind is not: it is under
+    // way when the error arrives, and done within the turn.
+    await tick();
+    const add = commands.call(todosAdd, { title: "orphaned?" });
+    await expect(add.promise, "the default todos:add was released").rejects.toBeInstanceOf(CommandError);
+    await expect(add.promise).rejects.toMatchObject({ kind: "no-handlers" });
+  });
+
+  it("refuses createList() once the app is disposed — no controller activates on a dead app", async () => {
+    const app = bootstrap({
+      commands: new Commands(),
+      api: new MemTodoApi(),
+      registerViews: (bus) => claimListView(bus),
+    });
+    await app.dispose();
+    expect(() => app.createList(new TodoListModel())).toThrow(/after dispose\(\)/);
   });
 });

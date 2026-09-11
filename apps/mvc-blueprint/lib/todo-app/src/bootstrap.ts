@@ -40,9 +40,10 @@ export interface AppHandle {
    * A shell opening and closing panels calls this once per panel and
    * `release()`s each on close. Without a per-child release, every call would
    * append a closure to the app registry that only `dispose()` ever drops.
+   * Throws once `dispose()` has been called.
    */
   createList(model: TodoListModel): ListHandle;
-  /** The registry's cleanup: LIFO, idempotent, error-tolerant. */
+  /** The registry's cleanup: LIFO, idempotent, error-tolerant. Ends `createList`. */
   dispose(): Promise<void>;
 }
 
@@ -76,15 +77,39 @@ export function bootstrap(options: BootstrapOptions): AppHandle {
   // before the view handlers, and the view handlers before the command
   // defaults — without anyone sequencing it.
   register(registerTodoCommands(commands, api));
-  const viewsCleanup = registerViews(commands);
+  let viewsCleanup: ReturnType<BootstrapOptions["registerViews"]>;
+  try {
+    viewsCleanup = registerViews(commands);
+  } catch (error) {
+    // The saga's failure path (spec §4.9): a step that throws unwinds exactly
+    // the steps that succeeded before it. The caller gets no handle, so
+    // nothing else could ever release the command defaults — they would stay
+    // on the bus answering `todos:*` for an app that never started. Started
+    // here, not awaited, because bootstrap is synchronous: the unwind is
+    // under way when the error reaches the caller and completes a few
+    // microtasks later (the core's disposer is itself a registry's async
+    // cleanup). The registry never rejects, so nothing here goes unhandled.
+    void cleanup();
+    throw error;
+  }
   if (viewsCleanup) register(viewsCleanup);
 
   // Minted only now, once the view layer is provably done registering: no
   // controller created below this line can predate it.
   const ready = ViewsReady._mint();
+  let disposed = false;
 
   return {
     createList(model: TodoListModel): ListHandle {
+      // After dispose() the view layer and the command defaults are gone, so a
+      // controller activated now would emit `ui:show-list` to nobody and write
+      // through a bus with no handlers — and the registry would own it anyway.
+      if (disposed) {
+        throw new Error(
+          "createList() after dispose(): the app is torn down, so there is no view layer " +
+            "and no command default for a controller to use. Bootstrap a new app.",
+        );
+      }
       const controller = new ListController(model, commands, api);
       controller.activate(ready);
       // `register()` already returns a per-registration disposer: running it
@@ -93,6 +118,9 @@ export function bootstrap(options: BootstrapOptions): AppHandle {
       const release = register(() => controller.dispose());
       return { controller, release };
     },
-    dispose: cleanup,
+    dispose() {
+      disposed = true;
+      return cleanup();
+    },
   };
 }
