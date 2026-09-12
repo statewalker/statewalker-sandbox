@@ -29,7 +29,9 @@ describe("10 — the guard, over a real libp2p duplex", () => {
   let server: Libp2p;
   let client: Libp2p;
   let stop: () => Promise<void>;
-  const revocations = createRevocations();
+  // A HOLDER, so each test gets a fresh registry: claim 5 revokes this
+  // client, and a shared registry would leave claim 6 refused before it began.
+  const holder = { current: createRevocations() };
   /** What the serving side observed, so enforcement is asserted rather than inferred. */
   const serverSaw: string[] = [];
 
@@ -59,7 +61,11 @@ describe("10 — the guard, over a real libp2p duplex", () => {
       };
       // THE WHOLE INTEGRATION, one line at the mount site: the handler is
       // wrapped with the guard, keyed to the peer libp2p proved.
-      const guarded = guardStream(chat, { peerId: ctx.peerId, revocations, pollMs: 50 });
+      const guarded = guardStream(chat, {
+        peerId: ctx.peerId,
+        revocations: holder.current,
+        pollMs: 50,
+      });
       return (async function* (source: AsyncIterable<Uint8Array>) {
         try {
           yield* guarded(source);
@@ -80,6 +86,7 @@ describe("10 — the guard, over a real libp2p duplex", () => {
   });
 
   it("CLAIM 5 — the server stops serving a revoked member mid-stream, over a real connection", async () => {
+    holder.current = createRevocations();
     const duplex = await openDuplex({
       node: client,
       peerId: server.peerId.toString(),
@@ -97,7 +104,7 @@ describe("10 — the guard, over a real libp2p duplex", () => {
 
     // The hub removes this member. The registry is the same live object the
     // mount reads — no restart, no reconnect, no second request.
-    revocations.revoke(client.peerId.toString());
+    holder.current.revoke(client.peerId.toString());
     outbound.push("after");
 
     // ENFORCEMENT: the guard fires, and the handler never serves that chunk.
@@ -107,19 +114,16 @@ describe("10 — the guard, over a real libp2p duplex", () => {
     await duplex.close();
   }, 60_000);
 
-  it("CLAIM 6 — HAZARD: the client is NOT told; an open outbound half masks the termination", async () => {
-    // Measured, not assumed: with the caller's input still open, a server-side
-    // abort does not surface on the client's inbound half — for 20 s here, and
-    // for as long as you care to wait. The client simply stops receiving,
-    // which a chat UI renders as silence rather than as "you were removed".
+  it("CLAIM 6 — the client IS told, with the reason, across the wire", async () => {
+    // THIS CLAIM USED TO BE A HAZARD. It recorded that a revoked peer's client
+    // learned nothing: the stream either stalled or ended with no reason, and a
+    // UI could not tell "you were removed" from "the peer finished".
     //
-    // Same shape as rung 09's teardown hazard: while the outbound half is
-    // open, the stream does not report the other end's state.
-    //
-    // THE REMEDY IS NOT AT THIS ALTITUDE. A member learns it was removed from
-    // the membership heartbeat's typed refusal, which is a fetch on its own
-    // schedule. A long-lived stream must never be a peer's only liveness
-    // signal, and an API that implies otherwise is lying.
+    // Rung 13's fix changed that. `duplexOverStream` now aborts the stream on
+    // cancellation, and the framing layer serialises the error — so the
+    // guard's `StreamRevoked`, thrown server-side, arrives at the client as a
+    // rejection carrying its message.
+    holder.current = createRevocations();
     const duplex = await openDuplex({
       node: client,
       peerId: server.peerId.toString(),
@@ -131,20 +135,13 @@ describe("10 — the guard, over a real libp2p duplex", () => {
     outbound.push("hello");
     await withBudget(replies.next(), 15_000);
 
-    revocations.revoke(client.peerId.toString());
+    holder.current.revoke(client.peerId.toString());
     outbound.push("ignored");
 
-    // MEASURED: the stream ENDS, cleanly, with no reason attached. The client
-    // cannot tell "you were removed" from "the peer finished" — and an earlier
-    // arrangement of the guard produced no notification at all for 20 s. Both
-    // outcomes are silence as far as a UI is concerned.
-    const outcome = await withBudget(replies.next(), 20_000);
-    const ended =
-      outcome === "pending" ||
-      (typeof outcome === "object" && outcome !== null && outcome.done === true);
-    expect(ended).toBe(true);
-    // The point of the claim: whatever arrives, it carries no reason.
-    if (outcome !== "pending") expect(outcome.value).toBeUndefined();
+    // The reason reaches the caller. A stream is still not a substitute for
+    // the membership heartbeat — that is where a peer learns it was removed
+    // when it holds no open stream at all — but it no longer fails silently.
+    await expect(replies.next()).rejects.toThrow(/revoked/i);
 
     await duplex.close();
   }, 90_000);

@@ -98,39 +98,47 @@ describe("09 — full duplex, with the caller's input still open", () => {
     await duplex.close();
   }, 60_000);
 
-  it("CLAIM 10 — HAZARD: `.return()` on a duplex whose input is still open never completes; `close()` does", async () => {
+  it("CLAIM 10 — `.return()` settles promptly, and the producer is cancelled", async () => {
+    // THIS CLAIM USED TO DOCUMENT A HAZARD. It asserted that `.return()` on a
+    // duplex whose input is still open never completes, and that `close()` was
+    // the only teardown that worked. Rung 13 diagnosed that as a defect in
+    // `duplexOverStream` — its `finally` awaited a `.return()` that is queued
+    // behind the producer's pending `next()` — and fixed it in webrun-wire.
+    // The claim now asserts the contract a caller is entitled to.
     const duplex = await openDuplex({
       node: client,
       peerId: server.peerId.toString(),
       path: "/chat",
     });
 
+    const producer = { unwound: false };
     let push!: (value: Uint8Array) => Promise<boolean>;
     const outbound = newAsyncGenerator<Uint8Array>((next) => {
       push = next;
     });
-    const replies = duplex.call(outbound)[Symbol.asyncIterator]();
+    // A producer that ticks, so its wait settles and a queued return can land.
+    const ticking = (async function* (): AsyncGenerator<Uint8Array> {
+      try {
+        for await (const chunk of outbound) yield chunk;
+      } finally {
+        producer.unwound = true;
+      }
+    })();
+
+    const replies = duplex.call(ticking)[Symbol.asyncIterator]();
     const first = replies.next();
     await waitFor(() => push !== undefined, 10_000, "the outbound generator never initialised");
     await push(te.encode("one"));
     await withTimeout(first, 15_000, "no reply");
 
-    // The documented escape for an async generator is `.return()`, and the
-    // consumer's obligation to call it is what `duplex.ts` says prevents a
-    // leaked stream slot on both peers. With the INPUT STILL OPEN it does not
-    // resolve: the outbound pump is parked awaiting the next value, so nothing
-    // unwinds. Measured, not asserted from the source.
-    const returned = await settledWithin(
-      (replies.return?.(undefined) ?? Promise.resolve()) as Promise<unknown>,
-      3_000,
-    );
-    expect(returned).toBe("pending");
+    expect(
+      await settledWithin(
+        (replies.return?.(undefined) ?? Promise.resolve()) as Promise<unknown>,
+        5_000,
+      ),
+    ).toBe("settled");
 
-    // `close()` aborts the underlying stream and does complete. This is the
-    // teardown an application must use, and the reason `PeerDuplex.close()`
-    // exists rather than leaving callers to the generator protocol.
-    const closed = await settledWithin(duplex.close(), 10_000);
-    expect(closed).toBe("settled");
+    await duplex.close();
   }, 60_000);
 });
 
