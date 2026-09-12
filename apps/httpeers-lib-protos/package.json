@@ -33,6 +33,7 @@
     "@statewalker/webrun-files": "catalog:",
     "@statewalker/webrun-files-mem": "catalog:",
     "@statewalker/webrun-http-browser": "catalog:",
+    "@hono/node-server": "^1.19.17",
     "hono": "catalog:",
     "libp2p": "3.3.8",
     "qrcode-generator": "^2.0.4"
