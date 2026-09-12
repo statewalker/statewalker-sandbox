@@ -21,6 +21,6 @@
     "resolvePackageJsonExports": true,
     "noEmit": true
   },
-  "include": ["0*/**/*.ts", "0*/**/*.d.ts", "lib/**/*.ts"],
+  "include": ["??-*/**/*.ts", "??-*/**/*.d.ts", "lib/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
