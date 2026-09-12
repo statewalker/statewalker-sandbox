@@ -405,8 +405,8 @@ importers:
         specifier: 'catalog:'
         version: 0.9.0
       '@statewalker/webrun-http-browser':
-        specifier: 'catalog:'
-        version: 0.3.4
+        specifier: link:../../../webrun-wire/packages/webrun-http-browser
+        version: link:../../../webrun-wire/packages/webrun-http-browser
       '@statewalker/webrun-http-streams':
         specifier: link:../../../webrun-wire/packages/webrun-http-streams
         version: link:../../../webrun-wire/packages/webrun-http-streams
@@ -416,6 +416,9 @@ importers:
       '@statewalker/webrun-site-builder':
         specifier: link:../../../webrun-wire/packages/webrun-site-builder
         version: link:../../../webrun-wire/packages/webrun-site-builder
+      '@statewalker/webrun-site-host':
+        specifier: link:../../../webrun-wire/packages/webrun-site-host
+        version: link:../../../webrun-wire/packages/webrun-site-host
       '@statewalker/webrun-streams':
         specifier: link:../../../webrun-wire/packages/webrun-streams
         version: link:../../../webrun-wire/packages/webrun-streams
