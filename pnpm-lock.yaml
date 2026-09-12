@@ -410,6 +410,9 @@ importers:
       '@statewalker/webrun-http-streams':
         specifier: link:../../../webrun-wire/packages/webrun-http-streams
         version: link:../../../webrun-wire/packages/webrun-http-streams
+      '@statewalker/webrun-msgpack':
+        specifier: link:../../../webrun-wire/packages/webrun-msgpack
+        version: link:../../../webrun-wire/packages/webrun-msgpack
       '@statewalker/webrun-rpc':
         specifier: link:../../../webrun-wire/packages/webrun-rpc
         version: link:../../../webrun-wire/packages/webrun-rpc
