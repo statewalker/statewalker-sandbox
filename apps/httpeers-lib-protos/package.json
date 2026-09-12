@@ -39,7 +39,9 @@
     "@hono/node-server": "^1.19.17",
     "hono": "catalog:",
     "libp2p": "3.3.8",
-    "qrcode-generator": "^2.0.4"
+    "qrcode-generator": "^2.0.4",
+    "@statewalker/webrun-rpc": "link:../../../webrun-wire/packages/webrun-rpc",
+    "@statewalker/webrun-site-builder": "link:../../../webrun-wire/packages/webrun-site-builder"
   },
   "devDependencies": {
     "@types/node": "catalog:",

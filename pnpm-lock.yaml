@@ -410,6 +410,12 @@ importers:
       '@statewalker/webrun-http-streams':
         specifier: 'catalog:'
         version: 0.2.1
+      '@statewalker/webrun-rpc':
+        specifier: link:../../../webrun-wire/packages/webrun-rpc
+        version: link:../../../webrun-wire/packages/webrun-rpc
+      '@statewalker/webrun-site-builder':
+        specifier: link:../../../webrun-wire/packages/webrun-site-builder
+        version: link:../../../webrun-wire/packages/webrun-site-builder
       '@statewalker/webrun-streams':
         specifier: ^0.1.1
         version: 0.1.1
