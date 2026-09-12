@@ -14,7 +14,15 @@ export const BLOCKS: Record<string, string> = {
   "E": "Edges",
   "M": "Mesh services",
   "X": "Peer & intermediary",
-  "C": "Cross-cutting"
+  "C": "Cross-cutting",
+  "CORE": "httpeers-core",
+  "ACC": "httpeers-access",
+  "P2P": "httpeers-libp2p",
+  "QR": "httpeers-qr",
+  "MEM": "httpeers-member",
+  "HUB": "httpeers-hub",
+  "EXP": "httpeers-expose",
+  "GHOST": "httpeers-ghost"
 };
 
 export const CRITERIA: readonly Criterion[] = [
