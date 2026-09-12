@@ -1,6 +1,6 @@
 # httpeers-lib-protos
 
-Fourteen prototypes, each answering **one** open question of the httpeers
+Sixteen prototypes, each answering **one** open question of the httpeers
 **library extraction** — the move from `apps/httpeers-stack` (a working demo) to
 a set of isomorphic packages published from the `httpeers` monorepo.
 
@@ -23,7 +23,7 @@ The base is the union of both working branches: `main`'s mesh proxy merged with
 
 ## The questions
 
-Rungs 01–06 cut the seams. Rungs 07–14 answer the API design, prompted by two
+Rungs 01–06 cut the seams. Rungs 07–16 answer the API design, prompted by two
 rounds of adversarial review in which the best findings all came from *running*
 something and the worst prose survived every reading.
 
@@ -43,12 +43,14 @@ something and the worst prose survived every reading.
 | **12-hub-http** | Is the hub protocol nothing but HTTP? | **Yes.** The whole membership lifecycle runs over three transports with byte-identical hub and client code and two seams swapped |
 | **13-teardown** | Why `close()` and not `.return()`? | **A defect in two places**, reproducible with no libp2p, fixed at the source — plus one part that is a property of the language and no library can fix |
 | **14-browser-site** | Does the same site work in a browser, over a ServiceWorker? | **Yes — the fourth parity column.** Getting there uncovered four more `webrun-wire` defects, all fixed |
+| **15-ports** | Can a libp2p connection hand out MessagePorts? | **Yes — one stream is one port**, and webrun-rpc's stack runs over it unmodified. The dividing line for "isomorphic" turns out to be **transfer**, which `tsc` cannot see |
+| **16-ghost-containment** | Which ghost containment actually contains? | **A path-scoped CSP**, at no cost to the host app. The sandboxed-iframe candidate is **disqualified**: its opaque origin removes the document from the ServiceWorker's control |
 
-Eighty-eight claims, all passing, ~42 s: `pnpm test`.
+One hundred and two claims, all passing, ~50 s: `pnpm test`.
 
 ## What came out that no rung asked for
 
-Eight defects in `webrun-wire` itself, all fixed at the source in a sibling
+Nine defects in `webrun-wire` itself, all fixed at the source in a sibling
 worktree with regression tests **in the package**, not in this ladder:
 
 - **Teardown that never reached the producer** (rungs 09, 10, 13).
@@ -66,6 +68,10 @@ worktree with regression tests **in the package**, not in this ladder:
 - **A worker url that could not be relative** (rung 14). `new
   URL("/sw-worker.js")` with no base throws from a *constructor*, naming
   neither the option nor the value.
+- **A port stack that only accepted `MessagePort`** (rung 15). `PortParams` and
+  `byteChannelFromMessagePort` were narrowed though neither needs more than
+  `MessageTarget`, which shut out every virtual port — including the one a mesh
+  hands out. Found by `tsc`.
 
 And in the httpeers code itself:
 
@@ -94,6 +100,11 @@ an abort" as a platform limit; it is not, and a forty-line probe using none of
 the library's own code is what settled it. Both claims are kept in their
 original form with the measurement beside them.
 
+And its corollary, earned by rungs 15 and 16: **a mode that never reports is a
+result, not an error.** Rung 16's most important finding — that a sandboxed
+ghost is never served at all — would have been thrown as a timeout by the
+harness that was supposed to measure it.
+
 ## Conventions
 
 Each rung is a folder: `README.md` states the question, the claims established,
@@ -103,7 +114,7 @@ A claim with no test is not a claim. A claim that turns out to be wrong is
 **rewritten with its history**, not deleted — rungs 09, 10 and 14 all carry a
 claim that used to assert the opposite.
 
-ServiceWorker rungs (02, 06, 14) use
+ServiceWorker rungs (02, 06, 14, 16) use
 [`@statewalker/webrun-http-browser`](https://github.com/statewalker/webrun-wire/tree/main/packages/webrun-http-browser)
 and [`webrun-site-host`](https://github.com/statewalker/webrun-wire/tree/main/packages/webrun-site-host)
 — `SwHttpAdapter` / `HostedSiteBuilder` on the page side, `startHttpDispatcher`
