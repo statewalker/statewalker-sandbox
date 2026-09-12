@@ -407,6 +407,15 @@ importers:
       '@statewalker/webrun-http-browser':
         specifier: 'catalog:'
         version: 0.3.4
+      '@statewalker/webrun-http-streams':
+        specifier: 'catalog:'
+        version: 0.2.1
+      '@statewalker/webrun-streams':
+        specifier: ^0.1.1
+        version: 0.1.1
+      '@statewalker/webrun-streams-libp2p':
+        specifier: 'catalog:'
+        version: 0.1.1(@libp2p/interface@3.2.5)(@multiformats/multiaddr@13.0.3)(libp2p@3.3.8)
       hono:
         specifier: 'catalog:'
         version: 4.13.5
