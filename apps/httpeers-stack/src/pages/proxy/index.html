@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>httpeers proxy</title>
+    <style>
+      body {
+        font: 14px/1.4 system-ui, sans-serif;
+        max-width: 720px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        color: #1a1a1a;
+      }
+      h1 {
+        font-size: 1.1rem;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.25rem 0.75rem;
+      }
+      dt {
+        font-weight: 600;
+      }
+      dd {
+        margin: 0;
+        font-family: ui-monospace, monospace;
+        word-break: break-all;
+      }
+      #warning,
+      .warning {
+        background: #fff3cd;
+        border: 1px solid #e0c36a;
+        border-radius: 4px;
+        padding: 0.5rem 0.75rem;
+        margin: 1rem 0;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        margin-top: 0.6rem;
+      }
+      input,
+      select,
+      textarea {
+        font-family: ui-monospace, monospace;
+        font-size: 0.9rem;
+        padding: 0.3rem 0.45rem;
+        box-sizing: border-box;
+      }
+      #add-route-form input,
+      #add-route-form textarea,
+      #console-form textarea,
+      #console-path {
+        width: 100%;
+      }
+      textarea {
+        min-height: 3.5rem;
+      }
+      #routes {
+        list-style: none;
+        margin: 1rem 0;
+        padding: 0;
+      }
+      #routes li {
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        padding: 0.5rem 0.75rem;
+        margin-bottom: 0.5rem;
+      }
+      #routes:empty::after {
+        content: "No routes configured yet. Nothing is proxied until one is added.";
+        color: #555;
+      }
+      .route-head {
+        display: flex;
+        gap: 0.5rem;
+        align-items: baseline;
+        flex-wrap: wrap;
+      }
+      .route-prefix {
+        font-family: ui-monospace, monospace;
+        font-weight: 600;
+      }
+      .route-upstream {
+        font-family: ui-monospace, monospace;
+        word-break: break-all;
+      }
+      .route-remove {
+        margin-left: auto;
+      }
+      .route-headers {
+        color: #555;
+        font-size: 0.85rem;
+        margin: 0.25rem 0 0;
+        word-break: break-all;
+      }
+      .route-secret {
+        margin-top: 0.4rem;
+      }
+      .route-secret input {
+        width: 100%;
+      }
+      .route-secret[data-held="true"] > span::after {
+        content: " — held for this session";
+        font-weight: 400;
+        color: #1a7a1a;
+      }
+      /* The console's own two panes: what came back, and how much of it. */
+      #console-status {
+        font-family: ui-monospace, monospace;
+        min-height: 1.2em;
+        margin: 0.6rem 0 0.3rem;
+        word-break: break-all;
+      }
+      #console-output {
+        font-family: ui-monospace, monospace;
+        font-size: 0.85rem;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+        background: #f7f7f7;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 0.5rem;
+        max-height: 22rem;
+        overflow-y: auto;
+        margin: 0;
+      }
+      #console-output:empty::after {
+        content: "nothing yet";
+        color: #888;
+      }
+      #route-status {
+        min-height: 1.2em;
+        margin: 0.4rem 0 0;
+      }
+      #route-status[data-tone="failed"] {
+        color: #a11;
+      }
+      #join-form {
+        margin: 1rem 0;
+      }
+      #join-form input {
+        font-family: ui-monospace, monospace;
+        padding: 0.35rem 0.5rem;
+        min-width: 20rem;
+      }
+      form[hidden],
+      button[hidden] {
+        display: none;
+      }
+      #session-controls {
+        display: flex;
+        gap: 0.5rem;
+        margin: 1rem 0;
+      }
+      #reset-identity {
+        margin-left: auto;
+      }
+      #session-status {
+        margin: 0.75rem 0;
+        padding: 0.4rem 0.6rem;
+        border-radius: 4px;
+        background: #f2f2f2;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+      }
+      #session-status[data-tone="ok"] {
+        background: #eaf7ea;
+        border: 1px solid #a0d0a0;
+      }
+      #session-status[data-tone="unreachable"] {
+        background: #fff3cd;
+        border: 1px solid #e0c36a;
+      }
+      #session-status[data-tone="failed"] {
+        background: #fdecea;
+        border: 1px solid #e0a0a0;
+      }
+      #session-status:empty {
+        display: none;
+      }
+      .scan { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; margin-top: 0.5rem; }
+      .scan .picker { display: inline-flex; flex-direction: column; gap: 0.2rem; font-weight: 600; }
+      #scan-status { min-height: 1.2em; margin: 0.25rem 0 0; }
+      /* THE PREVIEW'S WIDTH IS THE SCAN RESOLUTION. html5-qrcode sizes its
+         capture canvas to this container, not to the camera: at 320px a
+         1280x720 feed was captured at 320x180, so a QR filling the frame
+         arrived as 1.9 pixels per module and never decoded. Wide as the
+         layout allows. */
+      #scan-camera-host { width: 100%; max-width: 640px; margin: 0.5rem 0; }
+      #scan-camera-host video { width: 100%; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>httpeers proxy</h1>
+
+    <p id="warning">
+      <strong>Closing this tab removes these upstreams from the mesh.</strong>
+      This page forwards mesh requests to the HTTP APIs configured below while
+      it stays open — no page, no proxy. Its identity is saved in this browser,
+      so reopening it resumes the same provider without a new invitation.
+    </p>
+
+    <dl>
+      <dt>peer id</dt>
+      <dd id="peer-id">reading…</dd>
+      <dt>connection state</dt>
+      <dd id="state">not started</dd>
+    </dl>
+
+    <p id="session-status"></p>
+
+    <form id="join-form" hidden>
+      <label for="invite">invitation</label>
+      <input
+        id="invite"
+        name="invite"
+        type="text"
+        autocomplete="off"
+        placeholder="an invitation id, a join blob, or a whole join link"
+      />
+      <button type="submit">join mesh</button>
+    </form>
+
+    <p id="session-controls">
+      <!--
+        "disconnect" stops proxying and keeps this page's membership, so
+        "reconnect" undoes it exactly. "reset identity" throws the saved key
+        away and comes back as a peer id the hub has never seen; it warns
+        before doing so.
+      -->
+      <button type="button" id="disconnect" hidden>disconnect</button>
+      <button type="button" id="reconnect" hidden>reconnect</button>
+      <button type="button" id="reset-identity" hidden>reset identity</button>
+    </p>
+
+    <h2>routes</h2>
+    <p>
+      A route maps a mesh-side prefix onto an upstream base URL. Any member can
+      then call <code>/proxy/&lt;prefix&gt;/…</code> and reach it. The upstream is
+      never taken from the request — only from this list.
+    </p>
+    <ul id="routes"></ul>
+
+    <h2>add a route</h2>
+    <form id="add-route-form">
+      <label for="route-prefix">mesh prefix</label>
+      <input id="route-prefix" type="text" autocomplete="off" placeholder="/openai" />
+
+      <label for="route-upstream">upstream base URL</label>
+      <input
+        id="route-upstream"
+        type="text"
+        autocomplete="off"
+        placeholder="https://api.openai.com/v1"
+      />
+
+      <label for="route-headers">headers (one <code>Name: value</code> per line)</label>
+      <textarea
+        id="route-headers"
+        autocomplete="off"
+        placeholder="content-type: application/json"
+      ></textarea>
+
+      <label for="route-secret-name">token header name (optional)</label>
+      <input id="route-secret-name" type="text" autocomplete="off" placeholder="authorization" />
+
+      <label for="route-secret-value">token value</label>
+      <input
+        id="route-secret-value"
+        type="password"
+        autocomplete="off"
+        placeholder="Bearer sk-…"
+      />
+      <p class="warning">
+        Anyone who can reach this proxy through the mesh can spend this key. It is
+        held in memory only and is cleared when this page reloads.
+      </p>
+
+      <button type="submit" id="add-route">add route</button>
+      <p id="route-status"></p>
+    </form>
+
+    <h2>console</h2>
+    <p>
+      Sends a request through this page's own mesh edge — the ServiceWorker, the
+      mount, the route — so it exercises the whole path before any other peer
+      joins. The body is rendered as it arrives, not when it finishes.
+    </p>
+    <form id="console-form">
+      <label for="console-method">method</label>
+      <select id="console-method">
+        <option>GET</option>
+        <option>POST</option>
+        <option>PUT</option>
+        <option>PATCH</option>
+        <option>DELETE</option>
+      </select>
+
+      <label for="console-path">path, starting with a configured prefix</label>
+      <input id="console-path" type="text" autocomplete="off" placeholder="/openai/models" />
+
+      <label for="console-headers">headers (one <code>Name: value</code> per line)</label>
+      <textarea id="console-headers" autocomplete="off"></textarea>
+
+      <label for="console-body">body (sent when not empty)</label>
+      <textarea id="console-body" autocomplete="off"></textarea>
+
+      <button type="submit" id="console-send">send</button>
+    </form>
+    <p id="console-status"></p>
+    <pre id="console-output"></pre>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

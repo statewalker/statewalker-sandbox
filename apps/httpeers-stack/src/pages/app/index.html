@@ -220,6 +220,7 @@
     <h2>discovered providers</h2>
     <p class="provider" id="search-provider" data-status="unknown">search: not started</p>
     <p class="provider" id="images-provider" data-status="unknown">images: not started</p>
+    <p class="provider" id="proxy-provider" data-status="unknown">proxy: not started</p>
 
     <h2>search</h2>
     <form id="search-form">
@@ -236,6 +237,28 @@
     </p>
     <p class="status" id="images-status"></p>
     <div id="gallery"></div>
+
+    <h2>proxied resources</h2>
+    <p>
+      Requests here travel <strong>through the mesh</strong> to the proxy peer,
+      which forwards them to the upstream. The proxy page's own console skips
+      the mesh; this one exists to prove it.
+    </p>
+    <p>
+      <button type="button" id="load-routes">load routes</button>
+      <select id="proxy-route"></select>
+    </p>
+    <form id="proxy-console-form">
+      <select id="proxy-method">
+        <option>GET</option><option>POST</option><option>PUT</option>
+        <option>PATCH</option><option>DELETE</option>
+      </select>
+      <input id="proxy-path" placeholder="/people/1/" size="36" />
+      <button type="submit" id="proxy-send">send</button>
+      <textarea id="proxy-headers" rows="2" placeholder="Name: value, one per line"></textarea>
+    </form>
+    <p class="status" id="proxy-status"></p>
+    <pre id="proxy-output"></pre>
 
     <h2>members</h2>
     <p class="status" id="admin-status"></p>
