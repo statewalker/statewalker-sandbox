@@ -23,14 +23,32 @@ The base is the union of both working branches: `main`'s mesh proxy merged with
 
 ## The questions
 
-| | Question | Answer decides |
+| | Question | Answer |
 |---|---|---|
-| **01-node-member** | Does the member lifecycle run headless under Node, with the in-process edge instead of the ServiceWorker? | Whether `member` is one isomorphic package or two platform ones |
-| **02-sw-access** | Can a Biscuit token be verified **inside** a ServiceWorker? | Whether `withAccess` may run at the edge, or only in the page |
-| **03-qr-pixels** | Does a pure-pixel decoder read QR codes that a camera actually produced? | Whether the isomorphic decoder is *the* decoder or a server-side one |
-| **04-hub-storage** | Does hub state survive a restart over a FilesApi adapter, and what breaks with two writers? | Whether the storage interface needs a conditional write |
-| **05-expose** | Are "reverse proxy" and "expose a local service" one mechanism? | Whether `expose` is one package or two |
-| **06-ghost-pin** | Can a remote peer's app render as a page that can reach **only** that peer? | Whether the ghost's isolation claim holds at all |
+| **01-node-member** | Does the member lifecycle run headless under Node, with the in-process edge instead of the ServiceWorker? | **Yes**, on the production path with three injected adapters. `fetch` is the edge on both platforms; `baseUrl` is the browser-only part |
+| **02-sw-access** | Can a Biscuit token be verified **inside** a ServiceWorker? | **Not as published** (top-level await), **yes** through the `__wbg_set_wasm` loader seam — but the architecture puts access checks in the page, so this is an option, not a requirement |
+| **03-qr-pixels** | Does a pure-pixel decoder read QR codes that a camera actually produced? | jsqr **8/12**, the incumbent **9/12**, differing on heavy blur. Pure decoder for still images; the live camera loop stays in the app |
+| **04-hub-storage** | Does hub state survive a restart over a FilesApi adapter, and what breaks with two writers? | **Survives**; `get`/`set`/`delete` is enough; two writers **clobber silently**, so single-writer is a precondition, not a storage feature |
+| **05-expose** | Are "reverse proxy" and "expose a local service" one mechanism? | **Yes** — twelve scenarios pass on both platforms. `Via` is the one row a browser cannot do |
+| **06-ghost-pin** | Can a remote peer's app render as a page that can reach **only** that peer? | **The peer pin holds**; a **root-absolute URL escapes** to the viewer's origin, and `<base href>` does not fix it |
+
+Thirty claims, all passing, ~17 s: `pnpm test`.
+
+## What came out that no rung asked for
+
+- **`sideEffects: false` + `rollupOptions` silently produces a dead
+  ServiceWorker** — it registers, activates, and intercepts nothing. Rung 02
+  hit the trap `apps/httpeers-stack/vite.app.config.ts` already records from
+  its Task 12. Any extracted package with a worker entry needs the same note,
+  and the check has to be *does it control the page*, not *does it register*.
+- **Two shipping proxy defects**: a redirecting upstream is reported as
+  `502 upstream-unreachable`, and the outbound request carries no `signal`.
+  Both are fixed and pinned in rung 05.
+- **The Node file snapshot store is not crash-safe** (writes in place); the
+  rung-04 adapter writes-then-moves.
+- **Unredeemed invitations do not survive a hub restart** — they are memory-only.
+- **`looksLikePeerId` now exists in three copies** (core's router,
+  edge-dispatch, and the ghost pin). The extracted core should export it once.
 
 ## Conventions
 
