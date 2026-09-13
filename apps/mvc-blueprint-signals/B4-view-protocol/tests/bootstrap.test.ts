@@ -1,0 +1,161 @@
+import { CommandError, Commands } from "@statewalker/shared-commands";
+import { bootstrap, createTodoListModel, ListController } from "@todo/app";
+import { MemTodoApi, todosAdd } from "@todo/core";
+import { describe, expect, it } from "vitest";
+import { claimListView } from "../../test-support/views.js";
+
+const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+describe("B4 · bootstrap ordering", () => {
+  it("registers the view layer BEFORE any controller can be created", async () => {
+    // This proves `registerViews` runs, and returns, before `bootstrap()` gives
+    // the caller anything to create a controller with — otherwise the test's
+    // own "controller" marker below could not land after "views". It does NOT
+    // by itself observe construction order from inside `bootstrap`; that half
+    // is closed structurally by the `ViewsReady` token (see "refuses to
+    // activate" below), which makes an out-of-order activation throw rather
+    // than merely go untested.
+    const order: string[] = [];
+    const app = bootstrap({
+      commands: new Commands(),
+      api: new MemTodoApi(),
+      registerViews: (bus) => {
+        order.push("views");
+        return claimListView(bus);
+      },
+    });
+    app.createList(createTodoListModel());
+    order.push("controller");
+    expect(order).toEqual(["views", "controller"]);
+    await app.dispose();
+  });
+
+  it("refuses to activate a controller that did not come through the capability", () => {
+    const controller = new ListController(createTodoListModel(), new Commands(), new MemTodoApi());
+    expect(() => controller.activate(undefined as never)).toThrow(/before the view layer/);
+  });
+
+  it("supports controllers created AFTER bootstrap returned — the shell's case", async () => {
+    const app = bootstrap({
+      commands: new Commands(),
+      api: new MemTodoApi(),
+      registerViews: (bus) => claimListView(bus),
+    });
+    await tick();
+    const late = app.createList(createTodoListModel()).controller;
+    await tick();
+    expect(late.debug.reloads).toBeGreaterThan(0);
+    await app.dispose();
+  });
+
+  it("disposes every controller it handed out", async () => {
+    const app = bootstrap({
+      commands: new Commands(),
+      api: new MemTodoApi(),
+      registerViews: (bus) => claimListView(bus),
+    });
+    const model = createTodoListModel();
+    const controller = app.createList(model).controller;
+    await tick();
+    const before = controller.debug.reactions;
+    await app.dispose();
+    model.view.requestRefresh();
+    await tick();
+    expect(controller.debug.reactions).toBe(before);
+  });
+
+  it("tears down in the reverse of registration order: controllers, then views", async () => {
+    const order: string[] = [];
+    const app = bootstrap({
+      commands: new Commands(),
+      api: new MemTodoApi(),
+      registerViews: (bus) => {
+        const unclaim = claimListView(bus);
+        return () => {
+          order.push("views");
+          unclaim();
+        };
+      },
+    });
+    const controller = app.createList(createTodoListModel()).controller;
+    await tick();
+
+    // Observe the controller's own disposal in the same array. Bootstrap's
+    // teardown calls `controller.dispose()` by property lookup at cleanup
+    // time (`register(() => controller.dispose())`), so shadowing the method
+    // on the instance here is visible to that call without touching
+    // production code.
+    const originalDispose = controller.dispose.bind(controller);
+    controller.dispose = async () => {
+      order.push("controller");
+      await originalDispose();
+    };
+
+    await app.dispose();
+    expect(order).toEqual(["controller", "views"]);
+  });
+
+  it("releases ONE controller without tearing down the app — the shell's panel case", async () => {
+    const app = bootstrap({
+      commands: new Commands(),
+      api: new MemTodoApi(),
+      registerViews: (bus) => claimListView(bus),
+    });
+    const modelA = createTodoListModel();
+    const modelB = createTodoListModel();
+    const a = app.createList(modelA);
+    const b = app.createList(modelB);
+    await tick();
+
+    await a.release();
+    const reactionsA = a.controller.debug.reactions;
+    const reactionsB = b.controller.debug.reactions;
+    modelA.view.requestRefresh();
+    modelB.view.requestRefresh();
+    await tick();
+    expect(a.controller.debug.reactions, "the released controller is torn down").toBe(reactionsA);
+    expect(b.controller.debug.reactions, "its sibling is untouched").toBe(reactionsB + 1);
+
+    // Released means OUT of the app registry, not merely disposed: otherwise
+    // every panel ever opened still costs a closure until the app dies.
+    let disposedAgain = 0;
+    a.controller.dispose = async () => {
+      disposedAgain++;
+    };
+    await app.dispose();
+    expect(disposedAgain, "the app registry still held a released controller").toBe(0);
+  });
+
+  it("unwinds what already succeeded when registerViews throws — the command defaults go too", async () => {
+    // Spec §4.9's saga: a step that fails must release exactly the steps that
+    // succeeded before it. The defaults were registered first; a view layer
+    // that throws must not leave them answering a bus nobody will dispose.
+    const commands = new Commands();
+    const broken = new Error("the view layer could not register");
+    expect(() =>
+      bootstrap({
+        commands,
+        api: new MemTodoApi(),
+        registerViews: () => {
+          throw broken;
+        },
+      }),
+    ).toThrow(broken);
+    // bootstrap is synchronous and the registry's unwind is not: it is under
+    // way when the error arrives, and done within the turn.
+    await tick();
+    const add = commands.call(todosAdd, { title: "orphaned?" });
+    await expect(add.promise, "the default todos:add was released").rejects.toBeInstanceOf(CommandError);
+    await expect(add.promise).rejects.toMatchObject({ kind: "no-handlers" });
+  });
+
+  it("refuses createList() once the app is disposed — no controller activates on a dead app", async () => {
+    const app = bootstrap({
+      commands: new Commands(),
+      api: new MemTodoApi(),
+      registerViews: (bus) => claimListView(bus),
+    });
+    await app.dispose();
+    expect(() => app.createList(createTodoListModel())).toThrow(/after dispose\(\)/);
+  });
+});
