@@ -1,6 +1,6 @@
 # httpeers-lib-protos
 
-Sixteen prototypes, each answering **one** open question of the httpeers
+Seventeen prototypes, each answering **one** open question of the httpeers
 **library extraction** — the move from `apps/httpeers-stack` (a working demo) to
 a set of isomorphic packages published from the `httpeers` monorepo.
 
@@ -23,7 +23,7 @@ The base is the union of both working branches: `main`'s mesh proxy merged with
 
 ## The questions
 
-Rungs 01–06 cut the seams. Rungs 07–16 answer the API design, prompted by two
+Rungs 01–06 cut the seams. Rungs 07–17 answer the API design, prompted by two
 rounds of adversarial review in which the best findings all came from *running*
 something and the worst prose survived every reading.
 
@@ -45,8 +45,9 @@ something and the worst prose survived every reading.
 | **14-browser-site** | Does the same site work in a browser, over a ServiceWorker? | **Yes — the fourth parity column.** Getting there uncovered four more `webrun-wire` defects, all fixed |
 | **15-ports** | Can a libp2p connection hand out MessagePorts? | **Yes — one stream is one port**, and webrun-rpc's stack runs over it unmodified. The dividing line for "isomorphic" turns out to be **transfer**, which `tsc` cannot see |
 | **16-ghost-containment** | Which ghost containment actually contains? | **A path-scoped CSP**, at no cost to the host app. The sandboxed-iframe candidate is **disqualified**: its opaque origin removes the document from the ServiceWorker's control |
+| **17-port-factory** | Can one consumer run over every kind of port? | **Yes, in twenty lines.** Take a SOURCE of ports, not a port: `multiplexPort` where the transport is one pipe, a libp2p stream per port where yamux already multiplexes. The second multiplexer disappears |
 
-One hundred and two claims, all passing, ~50 s: `pnpm test`.
+One hundred and six claims, all passing, ~55 s: `pnpm test`.
 
 ## What came out that no rung asked for
 
