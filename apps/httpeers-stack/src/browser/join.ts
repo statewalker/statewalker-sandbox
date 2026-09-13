@@ -27,6 +27,7 @@ import type {
   RuleSet,
 } from "@statewalker/httpeers.core";
 import type { MeshView } from "../hub/mesh-view.js";
+import { hubRoute, reachHub } from "../hub-link.js";
 
 /**
  * Dial `${relayAddr}/p2p-circuit/webrtc/p2p/${peerId}` explicitly, BEFORE
@@ -61,6 +62,15 @@ export interface RouteEnsurerInit {
   selfPeerId: PeerIdStr;
   /** The current mesh view -- `JoinHandle.meshView`. Read per call, never snapshotted: a provider's addresses change when it re-reserves. */
   meshView: () => MeshView | null;
+  /**
+   * This mesh's hub. When given -- on a member page -- every other member is
+   * reached THROUGH it (`../hub-link.ts`'s `hubRoute`), and what members
+   * advertise is ignored: since members reserve on their hub rather than on
+   * the public relay, their own addresses are double-circuit ones nothing
+   * can dial. Omitted on the hub page, which cannot relay through itself
+   * and reaches its members over the connections they already hold to it.
+   */
+  hubPeerId?: PeerIdStr;
 }
 
 /**
@@ -113,6 +123,11 @@ export function createRouteEnsurer(init: RouteEnsurerInit): (peerId: PeerIdStr) 
     }
 
     if (node.getConnections(target).some((conn) => conn.limits == null)) return;
+
+    if (init.hubPeerId != null && init.hubPeerId !== selfPeerId) {
+      await node.dial(multiaddr(hubRoute(init.hubPeerId, peerId)));
+      return;
+    }
 
     const advertised = (init.meshView()?.members.find((m) => m.peerId === peerId)?.addrs ?? [])
       .filter((addr) => addr.includes("/p2p-circuit") && addr.includes("/webrtc"))
@@ -418,13 +433,16 @@ export interface JoinHandle {
  *
  * THREE TIMERS, KEPT APART (design note's Step 3 / note 07 §6). This
  * function owns two of them -- the heartbeat and the keepalive, below.
- * THE THIRD, circuit-relay's own reservation refresh, is NOT started
- * here: it is entirely libp2p-managed (the `circuitRelayTransport`
- * service renews the reservation on its own schedule once granted), and
- * folding it into either of these two would conflate "is my reservation
- * still valid" with "does the hub still consider me a member" or "is my
- * connection to the hub still open" -- three questions this design keeps
- * separate because they fail independently and mean different things.
+ * THE THIRD, the reservation on the relay, is NOT started here either:
+ * libp2p renews a reservation it holds on its own schedule, and restoring
+ * one lost with the relay link -- which libp2p attempts once and then never
+ * again -- is `../reservation.ts`'s `superviseRelay`, started by the
+ * runtime. The keepalive below is NOT that: it watches the HUB connection,
+ * which can stay up over WebRTC after the relay link is gone. Folding
+ * either into these two would conflate "is my reservation still valid"
+ * with "does the hub still consider me a member" or "is my connection to
+ * the hub still open" -- three questions this design keeps separate
+ * because they fail independently and mean different things.
  */
 export function startJoin(init: JoinInit): JoinHandle {
   const { peer, node, hubPeerId, relayAddr, revocationCache } = init;
@@ -553,7 +571,10 @@ export function startJoin(init: JoinInit): JoinHandle {
     const stillOpen =
       hubPeerIdObj != null && node.getConnections(hubPeerIdObj).some((c) => c.status === "open");
     if (stillOpen) return;
-    void preDialPeer(node, relayAddr, hubPeerId).catch(() => {
+    // `reachHub`, not a bare pre-dial: it also closes the limited signalling
+    // circuit, which would otherwise break relaying THROUGH the hub (and so
+    // restoring this page's reservation on it) -- see `../hub-link.ts`.
+    void reachHub(node, relayAddr, hubPeerId).catch(() => {
       // Best-effort -- the next tick retries, and a heartbeat that keeps
       // failing on its own schedule surfaces the same underlying
       // unreachability independently.
