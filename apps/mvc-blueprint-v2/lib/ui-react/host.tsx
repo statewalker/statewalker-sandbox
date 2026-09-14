@@ -1,8 +1,8 @@
 import {
   type DialogContribution,
   dialogsSlot,
-  panelsSlot,
   type Placement,
+  panelsSlot,
   type SlotsReader,
   type UiHost,
   type ViewKind,

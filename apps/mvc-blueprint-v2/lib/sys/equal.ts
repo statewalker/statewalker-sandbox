@@ -10,5 +10,5 @@ export function shallowEqual(a: unknown, b: unknown): boolean {
   const br = b as Record<string, unknown>;
   const keys = Object.keys(ar);
   if (keys.length !== Object.keys(br).length) return false;
-  return keys.every((k) => Object.prototype.hasOwnProperty.call(br, k) && Object.is(ar[k], br[k]));
+  return keys.every((k) => Object.hasOwn(br, k) && Object.is(ar[k], br[k]));
 }

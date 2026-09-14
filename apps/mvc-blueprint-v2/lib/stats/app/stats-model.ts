@@ -1,12 +1,25 @@
 import { shallowEqual } from "@sys";
 import { ModelBase } from "./model-base.js";
-import { type Baseline, BUCKET_SIZES, type StatsControl, type StatsTotals, type StatsView, type TimelineBucket } from "./models.js";
+import {
+  type Baseline,
+  BUCKET_SIZES,
+  type StatsControl,
+  type StatsTotals,
+  type StatsView,
+  type TimelineBucket,
+} from "./models.js";
 
 const bucketsEqual = (a: readonly TimelineBucket[], b: readonly TimelineBucket[]) =>
   a.length === b.length && a.every((x, i) => shallowEqual(x, b[i]));
 
 export class StatsModel extends ModelBase {
-  private _totals: StatsTotals = Object.freeze({ created: 0, closed: 0, reopened: 0, removed: 0, open: undefined });
+  private _totals: StatsTotals = Object.freeze({
+    created: 0,
+    closed: 0,
+    reopened: 0,
+    removed: 0,
+    open: undefined,
+  });
   private _timeline: readonly TimelineBucket[] = Object.freeze([]);
   private _bucket: number = BUCKET_SIZES[0];
   private _baseline: Baseline = Object.freeze({ status: "loading" });

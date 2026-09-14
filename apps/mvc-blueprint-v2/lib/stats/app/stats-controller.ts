@@ -1,6 +1,14 @@
 import type { Commands } from "@statewalker/shared-commands";
 import { newRegistry } from "@statewalker/shared-registry";
-import { type AppContext, atLeast, getCommands, getSlots, type LogRecord, loggerBackendsSlot, panelsSlot } from "@sys";
+import {
+  type AppContext,
+  atLeast,
+  getCommands,
+  getSlots,
+  type LogRecord,
+  loggerBackendsSlot,
+  panelsSlot,
+} from "@sys";
 import { todosSummary } from "@todo/core";
 import { LoggerBackendModel } from "./backend-model.js";
 import { InspectorModel } from "./inspector-model.js";
@@ -118,7 +126,9 @@ export class StatsController {
     const b = this.stats.view.getBaseline();
     const c = this._counts;
     const open =
-      b.status === "known" ? b.total - b.done + c.created + c.reopened - c.closed - c.removedOpen : undefined;
+      b.status === "known"
+        ? b.total - b.done + c.created + c.reopened - c.closed - c.removedOpen
+        : undefined;
     this.stats.control.publishTotals({
       created: c.created,
       closed: c.closed,
@@ -134,7 +144,11 @@ export class StatsController {
     const now = (this._options.now ?? Date.now)();
     const end = Math.floor(now / size) * size + size;
     const start = end - TIMELINE_LENGTH * size;
-    const buckets = Array.from({ length: TIMELINE_LENGTH }, (_, i) => ({ start: start + i * size, created: 0, closed: 0 }));
+    const buckets = Array.from({ length: TIMELINE_LENGTH }, (_, i) => ({
+      start: start + i * size,
+      created: 0,
+      closed: 0,
+    }));
     for (const r of this.backend.getRecords()) {
       if (r.at < start || r.at >= end) continue;
       const bucket = buckets[Math.floor((r.at - start) / size)];
@@ -148,7 +162,11 @@ export class StatsController {
     if (this._disposed) return;
     const { level, module } = this.inspector.control.getFilter();
     const records = this.backend.getRecords();
-    const modules = [...new Set(records.map((r) => r.metadata.module).filter((m): m is string => typeof m === "string"))].sort();
+    const modules = [
+      ...new Set(
+        records.map((r) => r.metadata.module).filter((m): m is string => typeof m === "string"),
+      ),
+    ].sort();
     const entries = records
       .filter((r) => atLeast(r.level, level) && (module === "all" || r.metadata.module === module))
       .slice(-INSPECTOR_LIMIT)

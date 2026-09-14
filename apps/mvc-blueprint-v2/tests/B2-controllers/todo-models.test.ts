@@ -1,4 +1,9 @@
-import { createConfirmDialogModel, createSampleOperation, createTodoListModel, type Todo } from "@todo/app";
+import {
+  createConfirmDialogModel,
+  createSampleOperation,
+  createTodoListModel,
+  type Todo,
+} from "@todo/app";
 import { describe, expect, it } from "vitest";
 
 const todo = (id: string, title: string, done = false): Todo => ({ id, title, done });
@@ -120,7 +125,10 @@ describe("B2 · confirm dialog model (signals)", () => {
     const d = createConfirmDialogModel("Clear 2 completed todos?");
     d.view.answer(true);
     d.dispose();
-    expect(d.control.takeAnswer(), "takeAnswer after dispose is a no-op, even with an untaken answer").toBeUndefined();
+    expect(
+      d.control.takeAnswer(),
+      "takeAnswer after dispose is a no-op, even with an untaken answer",
+    ).toBeUndefined();
     d.view.answer(false);
     expect(d.control.takeAnswer(), "answer() after dispose is ignored too").toBeUndefined();
   });
@@ -130,7 +138,11 @@ describe("B2 · sample operation (signals)", () => {
   it("advances its progress, notifies per step, and stops at the total", () => {
     const op = createSampleOperation("Adding 2 sample todos", 2);
     const woken = watch(op.operation.onProgressUpdate);
-    expect(op.operation.getProgress()).toEqual({ label: "Adding 2 sample todos", done: 0, total: 2 });
+    expect(op.operation.getProgress()).toEqual({
+      label: "Adding 2 sample todos",
+      done: 0,
+      total: 2,
+    });
     op.advance();
     op.advance();
     op.advance();

@@ -15,10 +15,18 @@ export interface LogRecord {
 }
 
 /** Severity order, shared by every filter on levels (the fan-out logger, the inspector). */
-export const LOG_LEVELS: readonly LoggerLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
+export const LOG_LEVELS: readonly LoggerLevel[] = [
+  "trace",
+  "debug",
+  "info",
+  "warn",
+  "error",
+  "fatal",
+];
 
 /** Whether `level` is at least as severe as `min`. */
-export const atLeast = (level: LoggerLevel, min: LoggerLevel): boolean => LOG_LEVELS.indexOf(level) >= LOG_LEVELS.indexOf(min);
+export const atLeast = (level: LoggerLevel, min: LoggerLevel): boolean =>
+  LOG_LEVELS.indexOf(level) >= LOG_LEVELS.indexOf(min);
 
 /** What the logs controller needs from a contributed backend. Its owner may observe more. */
 export interface LoggerBackend {

@@ -1,6 +1,6 @@
 import { MemTodoApi } from "@todo/core";
-import { userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it } from "vitest";
+import { userEvent } from "vitest/browser";
 import { type RunningApp, startApp } from "../../src/app.js";
 import { button, createHost, waitFor } from "../support/react.js";
 

@@ -1,4 +1,4 @@
-import { ProgressController, type ProgressBarView } from "@progress/app";
+import { type ProgressBarView, ProgressController } from "@progress/app";
 import {
   type OperationProgress,
   progressSlot,

@@ -16,7 +16,10 @@ export class InspectorModel extends ModelBase {
     onFilterUpdate: this.channel(() => this._filter),
     setFilter: (patch: Partial<InspectorFilter>) =>
       this.commit(() => {
-        const next = { level: patch.level ?? this._filter.level, module: patch.module ?? this._filter.module };
+        const next = {
+          level: patch.level ?? this._filter.level,
+          module: patch.module ?? this._filter.module,
+        };
         if (shallowEqual(next, this._filter)) return false;
         this._filter = Object.freeze(next);
         return true;

@@ -6,8 +6,21 @@ import { newTestContext, settle } from "../support/context.js";
 
 const NOW = 105_000;
 
-const record = (seq: number, event: string, data: unknown, over: Partial<LogRecord> = {}): LogRecord =>
-  Object.freeze({ seq, at: NOW, level: "info", args: [event, data], metadata: { module: "todos" }, dropped: 0, ...over });
+const record = (
+  seq: number,
+  event: string,
+  data: unknown,
+  over: Partial<LogRecord> = {},
+): LogRecord =>
+  Object.freeze({
+    seq,
+    at: NOW,
+    level: "info",
+    args: [event, data],
+    metadata: { module: "todos" },
+    dropped: 0,
+    ...over,
+  });
 
 function boot(summary?: { total: number; done: number }) {
   const t = newTestContext();
@@ -26,7 +39,11 @@ describe("B2 · stats controller", () => {
     expect(slots.getSnapshot(loggerBackendsSlot)).toHaveLength(1);
     const stats = slots.get(panelsSlot, "stats:overview");
     const inspector = slots.get(panelsSlot, "logs:inspector");
-    expect([stats?.kind.id, stats?.placement, stats?.model]).toEqual(["stats:overview", "side", controller.stats.view]);
+    expect([stats?.kind.id, stats?.placement, stats?.model]).toEqual([
+      "stats:overview",
+      "side",
+      controller.stats.view,
+    ]);
     expect([inspector?.kind.id, inspector?.placement, inspector?.model]).toEqual([
       "logs:inspector",
       "bottom",
@@ -44,10 +61,23 @@ describe("B2 · stats controller", () => {
     write(record(4, "todos:reopened", { id: "a" }));
     write(record(5, "todos:removed", { id: "b", done: false }));
     write(record(6, "todos:cleared", { count: 2 }));
-    write(record(7, "command:call", { key: "todos:add" }, { metadata: { module: "trace" }, level: "trace" }));
+    write(
+      record(
+        7,
+        "command:call",
+        { key: "todos:add" },
+        { metadata: { module: "trace" }, level: "trace" },
+      ),
+    );
     expect(controller.stats.view.getBaseline()).toEqual({ status: "known", total: 2, done: 1 });
     // open = baseline open (1) + created (2) + reopened (1) - closed (1) - removed while open (1)
-    expect(controller.stats.view.getTotals()).toEqual({ created: 2, closed: 1, reopened: 1, removed: 3, open: 2 });
+    expect(controller.stats.view.getTotals()).toEqual({
+      created: 2,
+      closed: 1,
+      reopened: 1,
+      removed: 3,
+      open: 2,
+    });
     await controller.dispose();
   });
 
@@ -90,7 +120,14 @@ describe("B2 · stats controller", () => {
     const { controller, write } = boot({ total: 0, done: 0 });
     await settle();
     write(record(1, "todos:created", { id: "a" }));
-    write(record(2, "command:call", { key: "todos:add" }, { level: "trace", metadata: { module: "trace" }, dropped: 3 }));
+    write(
+      record(
+        2,
+        "command:call",
+        { key: "todos:add" },
+        { level: "trace", metadata: { module: "trace" }, dropped: 3 },
+      ),
+    );
     expect(controller.inspector.view.getEntries().map((r) => r.seq)).toEqual([2, 1]);
     expect(controller.inspector.view.getModules()).toEqual(["todos", "trace"]);
     expect(controller.inspector.view.getDropped()).toBe(3);
@@ -99,7 +136,10 @@ describe("B2 · stats controller", () => {
     controller.inspector.view.setFilter({ level: "trace", module: "trace" });
     expect(controller.inspector.view.getEntries().map((r) => r.seq)).toEqual([2]);
     controller.inspector.view.setFilter({ module: undefined });
-    expect(controller.inspector.view.getFilter().module, "an undefined patch field leaves the value").toBe("trace");
+    expect(
+      controller.inspector.view.getFilter().module,
+      "an undefined patch field leaves the value",
+    ).toBe("trace");
     await controller.dispose();
   });
 

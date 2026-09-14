@@ -1,5 +1,5 @@
-import { newRegistry } from "@statewalker/shared-registry";
 import type { Command, CommandListener, Commands } from "@statewalker/shared-commands";
+import { newRegistry } from "@statewalker/shared-registry";
 import {
   TODO_COMMANDS,
   todosAdd,

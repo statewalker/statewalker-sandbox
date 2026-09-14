@@ -35,7 +35,7 @@ const renderCounter = domRenderer(counterKind, (container, model) => {
   });
 });
 
-let cleanups: (() => void)[] = [];
+const cleanups: (() => void)[] = [];
 afterEach(() => {
   for (const c of cleanups.splice(0)) c();
 });

@@ -65,7 +65,7 @@ function setup() {
 
 describe("B3 · React host", () => {
   it("renders a panel by kind, re-renders through useModel, and unmounts it when withdrawn", async () => {
-    const { slots, main, host } = setup();
+    const { slots, main } = setup();
     const model = counter();
     const off = slots.register(panelsSlot, "c", {
       kind: counterKind,

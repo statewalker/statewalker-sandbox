@@ -39,8 +39,14 @@ describe("B2 · sys core", () => {
     expect([panelsSlot.key, panelsSlot._kind]).toEqual(["ui:panels", "keyed"]);
     expect([dialogsSlot.key, dialogsSlot._kind]).toEqual(["ui:dialogs", "plain"]);
     expect([progressSlot.key, progressSlot._kind]).toEqual(["ui:progress", "plain"]);
-    expect([loggerBackendsSlot.key, loggerBackendsSlot._kind]).toEqual(["sys:logger-backends", "plain"]);
-    expect([runningOperationsSlot.key, runningOperationsSlot._kind]).toEqual(["ops:running", "plain"]);
+    expect([loggerBackendsSlot.key, loggerBackendsSlot._kind]).toEqual([
+      "sys:logger-backends",
+      "plain",
+    ]);
+    expect([runningOperationsSlot.key, runningOperationsSlot._kind]).toEqual([
+      "ops:running",
+      "plain",
+    ]);
   });
 
   it("atLeast orders levels by severity", () => {
@@ -69,8 +75,8 @@ describe("B2 · sys core", () => {
     const slots = new Slots();
     const kind = defineViewKind<object>("demo:panel");
     slots.register(panelsSlot, "p", { kind, title: "A", placement: "main", model: {} });
-    expect(() => slots.register(panelsSlot, "p", { kind, title: "B", placement: "main", model: {} })).toThrow(
-      RangeError,
-    );
+    expect(() =>
+      slots.register(panelsSlot, "p", { kind, title: "B", placement: "main", model: {} }),
+    ).toThrow(RangeError);
   });
 });

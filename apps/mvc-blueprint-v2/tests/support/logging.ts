@@ -11,9 +11,11 @@ export function newRecordingLogger(): { logger: Logger; calls: LoggedCall[] } {
   const calls: LoggedCall[] = [];
   let level: LoggerLevel = "trace";
   const make = (metadata: Record<string, unknown>): Logger => {
-    const write = (l: LoggerLevel) => (...args: unknown[]) => {
-      calls.push({ level: l, args, metadata });
-    };
+    const write =
+      (l: LoggerLevel) =>
+      (...args: unknown[]) => {
+        calls.push({ level: l, args, metadata });
+      };
     return {
       get level() {
         return level;

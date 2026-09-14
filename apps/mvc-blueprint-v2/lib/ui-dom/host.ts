@@ -1,6 +1,6 @@
 import {
-  panelsSlot,
   type Placement,
+  panelsSlot,
   progressSlot,
   type SlotsReader,
   type UiHost,

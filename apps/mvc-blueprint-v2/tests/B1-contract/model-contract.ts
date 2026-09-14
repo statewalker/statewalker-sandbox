@@ -98,7 +98,8 @@ export const CONTRACT_CHECKS: readonly Check[] = [
   },
   {
     id: "5",
-    title: "unsubscribing inside a callback is safe and final; a listener removed earlier in the pass is not woken",
+    title:
+      "unsubscribing inside a callback is safe and final; a listener removed earlier in the pass is not woken",
     run(subject) {
       const m = subject.make();
       // Order-independent: listener order within a pass is not part of the
@@ -161,7 +162,8 @@ export const CONTRACT_CHECKS: readonly Check[] = [
   },
   {
     id: "7",
-    title: "a snapshot keeps its identity until its value changes — including across an unrelated write",
+    title:
+      "a snapshot keeps its identity until its value changes — including across an unrelated write",
     run(subject) {
       const m = subject.make();
       const first = m.read();
@@ -178,7 +180,8 @@ export const CONTRACT_CHECKS: readonly Check[] = [
   },
   {
     id: "8",
-    title: "after dispose: the last value reads, nothing notifies, mutators are no-ops, unsubscribe is idempotent",
+    title:
+      "after dispose: the last value reads, nothing notifies, mutators are no-ops, unsubscribe is idempotent",
     run(subject) {
       const m = subject.make();
       const c = counted(m);

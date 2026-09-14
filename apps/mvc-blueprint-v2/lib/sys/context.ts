@@ -9,5 +9,13 @@ import type { Slots } from "@statewalker/shared-slots";
 export type AppContext = Record<string, unknown>;
 
 // No factory and no parent chain: an unset service throws, and nothing is inherited.
-export const [getCommands, setCommands] = newAdapter<Commands, AppContext>("sys:commands", undefined, () => undefined);
-export const [getSlots, setSlots] = newAdapter<Slots, AppContext>("sys:slots", undefined, () => undefined);
+export const [getCommands, setCommands] = newAdapter<Commands, AppContext>(
+  "sys:commands",
+  undefined,
+  () => undefined,
+);
+export const [getSlots, setSlots] = newAdapter<Slots, AppContext>(
+  "sys:slots",
+  undefined,
+  () => undefined,
+);

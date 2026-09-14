@@ -3,8 +3,8 @@ import { InspectorPanel } from "@stats/ui/react";
 import { loggerBackendsSlot } from "@sys";
 import { createConfirmDialogModel, createTodoListModel } from "@todo/app";
 import { ConfirmView, ListView } from "@todo/ui";
-import { userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it } from "vitest";
+import { userEvent } from "vitest/browser";
 import { newTestContext } from "../support/context.js";
 import { button, render, waitFor } from "../support/react.js";
 
@@ -47,18 +47,16 @@ describe("B3 · React views", () => {
     const stats = new StatsController({ tickMs: 60_000 });
     stats.activate(ctx);
     const write = (seq: number, level: "info" | "trace", event: string) =>
-      slots
-        .getSnapshot(loggerBackendsSlot)[0]
-        .write(
-          Object.freeze({
-            seq,
-            at: Date.now(),
-            level,
-            args: [event, {}],
-            metadata: { module: "demo" },
-            dropped: 0,
-          }),
-        );
+      slots.getSnapshot(loggerBackendsSlot)[0].write(
+        Object.freeze({
+          seq,
+          at: Date.now(),
+          level,
+          args: [event, {}],
+          metadata: { module: "demo" },
+          dropped: 0,
+        }),
+      );
     write(1, "info", "first");
     write(2, "trace", "second");
     const view = render(<InspectorPanel model={stats.inspector.view} />);

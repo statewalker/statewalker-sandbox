@@ -1,15 +1,14 @@
 import { CommandError, Commands } from "@statewalker/shared-commands";
-import { beforeEach, describe, expect, it } from "vitest";
 import {
-  TODO_COMMANDS,
+  MemTodoApi,
   registerTodoCommands,
+  TODO_COMMANDS,
   todosAdd,
   todosClearCompleted,
   todosResolveActions,
   todosToggle,
-  MemTodoApi,
 } from "@todo/core";
-
+import { beforeEach, describe, expect, it } from "vitest";
 
 describe("B2 · todo commands · command surface", () => {
   let commands: Commands;
@@ -70,7 +69,8 @@ describe("B2 · todo commands · command surface", () => {
       { id: "1", title: "a", done: true },
       { id: "2", title: "b", done: false },
     ]);
-    off = registerTodoCommands((commands = new Commands()), api);
+    commands = new Commands();
+    off = registerTodoCommands(commands, api);
     const { cleared } = await commands.call(todosClearCompleted, {}).promise;
     expect(cleared).toBe(1);
     expect((await api.list()).map((t) => t.id)).toEqual(["2"]);

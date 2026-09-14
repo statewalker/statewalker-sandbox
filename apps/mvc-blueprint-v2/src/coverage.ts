@@ -1,7 +1,7 @@
 import {
   dialogsSlot,
-  panelsSlot,
   type Placement,
+  panelsSlot,
   progressSlot,
   type RenderQuery,
   type SlotsReader,

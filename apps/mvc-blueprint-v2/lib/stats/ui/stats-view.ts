@@ -1,6 +1,6 @@
 import { BUCKET_SIZES, type StatsView } from "@stats/models";
 
-const LABELS: Record<number, string> = { 10_000: "10 s", 60_000: "1 min", 300_000: "5 min" };
+const LABELS: Record<number, string> = { 10000: "10 s", 60000: "1 min", 300000: "5 min" };
 const SVG = "http://www.w3.org/2000/svg";
 const WIDTH = 240;
 const HEIGHT = 80;

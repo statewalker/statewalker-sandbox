@@ -57,6 +57,7 @@ export function ListView({ model }: { model: TodoListView }) {
             value={query.filterDraft}
             onChange={(e) => model.setFilter(e.target.value)}
           />
+          {/* biome-ignore lint/a11y/noLabelWithoutControl: the kit's Checkbox renders the <input> this label wraps */}
           <label className="flex shrink-0 items-center gap-2 text-sm">
             <Checkbox
               aria-label="Show completed"
@@ -74,6 +75,7 @@ export function ListView({ model }: { model: TodoListView }) {
         <ul className="flex flex-col divide-y">
           {rows.map((todo) => (
             <li key={todo.id} className="flex items-center gap-3 py-2">
+              {/* biome-ignore lint/a11y/noLabelWithoutControl: the kit's Checkbox renders the <input> this label wraps */}
               <label className="flex flex-1 items-center gap-3">
                 <Checkbox checked={todo.done} onChange={() => model.requestToggle(todo.id)} />
                 <span className={cn("text-sm", todo.done && "text-muted-foreground line-through")}>

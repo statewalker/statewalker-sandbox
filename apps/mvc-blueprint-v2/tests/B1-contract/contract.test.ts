@@ -1,6 +1,6 @@
 import { createProgressBarModel } from "@progress/app";
-import type { OperationProgress, RunningOperation } from "@sys";
 import { StatsModel } from "@stats/app";
+import type { OperationProgress, RunningOperation } from "@sys";
 import { createTodoListModel } from "@todo/app";
 import { modelContract } from "./model-contract.js";
 
