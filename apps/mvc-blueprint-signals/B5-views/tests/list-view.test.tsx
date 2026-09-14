@@ -83,12 +83,11 @@ describe("ListView", () => {
       expect(titles(host)).toEqual(["buy milk", "call mum"]);
     });
 
-    it("when the QUERY changes — visible() reads the input sub-model, and the model forwards its query", async () => {
-      // `visible()` lives on the outer model but reads `input.filterDraft` and
-      // `input.showDone`. The list is bound only to `useModel(model, m =>
-      // m.visible())`, so this holds only because the model forwards query
-      // changes to its own `onUpdate` (B1 pins that). Driven through the
-      // mutators, not the DOM, so this isolates the binding.
+    it("when the QUERY changes — visible is a computed over the filter, the flag and the list", async () => {
+      // The list is bound only to `useValue(model.view.visible)`. That holds
+      // because `visible` reads filterDraft and showDone unconditionally, so
+      // both are dependencies even over an empty list (B1 pins that). Driven
+      // through the mutators, not the DOM, so this isolates the binding.
       const model = seeded();
       const host = await mountList(model.view);
 

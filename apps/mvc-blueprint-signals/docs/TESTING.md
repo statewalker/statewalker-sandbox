@@ -32,6 +32,8 @@ B6-app            the running app end to end; the kit's CSS is emitted     Chrom
 ```
 
 B1–B5 run on both signals libraries (`node:alien`, `node:preact`, `browser:alien`, `browser:preact`).
+B6's browser half runs once, on the default library, as `browser:app` (it resolves `@todo/signals`
+through `deps.ts`, like the build).
 
 ```sh
 pnpm test            # every node suite

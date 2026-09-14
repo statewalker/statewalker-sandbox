@@ -567,7 +567,8 @@ untracked<T>(fn: () => T): T
 ```
 
 `alien.ts` is nearly a re-export; `preact.ts` wraps `.value` into call syntax. Swapping libraries is
-editing that one line. B1's contract suite runs both against the eight guarantees the app relies on.
+editing that one line. B1's contract suite runs both against the nine guarantees the app relies on (the ninth,
+synchronous propagation outside a batch, is pinned by test 4's unbatched half).
 Five behaviours differ between the libraries: four are left open, and the suite records each per
 library, so an upgrade that changes one fails where it is named; the fifth — an effect created
 inside another effect's run — is normalized instead (`alien.ts` creates every effect untracked) and
