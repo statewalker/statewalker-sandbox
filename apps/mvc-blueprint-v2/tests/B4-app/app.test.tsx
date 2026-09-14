@@ -21,6 +21,16 @@ const rowTitles = () =>
     li.querySelector("label")?.textContent?.trim(),
   );
 const inspectorText = () => panel("logs:inspector")?.textContent ?? "";
+/** The largest value the stats chart draws for `series`: the chart moved when it is above zero. */
+const charted = (series: string) =>
+  Math.max(
+    0,
+    ...[...(host?.querySelectorAll<SVGRectElement>(`rect[data-series="${series}"]`) ?? [])].map(
+      (rect) => Number(rect.dataset.value),
+    ),
+  );
+const progressNow = () =>
+  Number(host?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow") ?? 0);
 
 describe("B4 · the running app", () => {
   it("todos, logs, stats and progress work together through slots, commands and models", async () => {
@@ -28,7 +38,8 @@ describe("B4 · the running app", () => {
     const unrendered: unknown[] = [];
     app = startApp(host, {
       api: new MemTodoApi([{ id: "s1", title: "seed", done: false }]),
-      sampleDelayMs: 20,
+      // Slow enough that the bar is on screen for a few polls while it advances.
+      sampleDelayMs: 60,
       tickMs: 200,
       onUnrendered: (u) => unrendered.push(u),
     });
@@ -48,6 +59,7 @@ describe("B4 · the running app", () => {
     await userEvent.click(button(host, "Add")!);
     await waitFor(() => rowTitles().includes("buy milk"));
     await waitFor(() => stat("created") === "1");
+    await waitFor(() => charted("created") > 0, 3000);
     await waitFor(
       () => inspectorText().includes("todos:created") && inspectorText().includes("command:call"),
     );
@@ -57,10 +69,12 @@ describe("B4 · the running app", () => {
     );
     await userEvent.click(milk!.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
     await waitFor(() => stat("closed") === "1");
+    await waitFor(() => charted("closed") > 0, 3000);
 
     // Signals-side operation → plain projection → DOM progress bar.
     await userEvent.click(button(host, "Add sample activity")!);
     await waitFor(() => !!host?.querySelector('[role="progressbar"]'), 3000);
+    await waitFor(() => progressNow() > 0, 3000);
     await waitFor(() => !host?.querySelector('[role="progressbar"]'), 5000);
     await waitFor(() => stat("created") === "6", 3000);
 
