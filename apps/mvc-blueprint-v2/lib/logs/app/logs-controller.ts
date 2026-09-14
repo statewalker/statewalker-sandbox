@@ -31,6 +31,9 @@ export class LogsController {
     register(() => removeLogger(ctx));
     // observe() calls back immediately, so backends contributed earlier are picked up now.
     register(slots.observe(loggerBackendsSlot, (backends) => fanOut.setBackends(backends)));
+    // Child loggers resolved while active outlive this controller; they must stop
+    // writing to backends that are no longer this controller's to feed.
+    register(() => fanOut.setBackends([]));
   }
 
   async dispose(): Promise<void> {

@@ -36,6 +36,21 @@ describe("B2 · logs controller", () => {
     await logs.dispose();
   });
 
+  it("dispose withdraws the backends from the fan-out: a child logger held elsewhere stops writing to them", async () => {
+    const { ctx, slots } = newTestContext();
+    const fallback = newRecordingLogger();
+    const logs = new LogsController({ fallback: fallback.logger });
+    logs.activate(ctx);
+    const held = getLogger(ctx).child({ module: "held" });
+    const records: LogRecord[] = [];
+    slots.provide(loggerBackendsSlot, { write: (r) => records.push(r) });
+    held.info("while active");
+    await logs.dispose();
+    held.info("after dispose");
+    expect(records.map((r) => r.args[0])).toEqual(["while active"]);
+    expect(fallback.calls.map((c) => c.args[0])).toEqual(["after dispose"]);
+  });
+
   it("with no fallback option and no backend, a record reaches the standard console logger", async () => {
     const { ctx } = newTestContext();
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
