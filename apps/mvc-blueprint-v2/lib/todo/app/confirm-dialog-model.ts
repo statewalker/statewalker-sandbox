@@ -17,6 +17,7 @@ export function createConfirmDialogModel(question: string): ConfirmDialogModel {
   const control: ConfirmDialogControl = Object.freeze({
     onAnswerUpdate: ch.channel(() => answer()),
     takeAnswer: () => {
+      if (ch.disposed) return undefined;
       const value = untracked(() => answer());
       if (taken || value === undefined) return undefined;
       taken = true;

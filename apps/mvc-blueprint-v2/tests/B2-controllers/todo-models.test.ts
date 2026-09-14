@@ -115,6 +115,15 @@ describe("B2 · confirm dialog model (signals)", () => {
     expect(d.control.takeAnswer()).toBe(true);
     expect(d.control.takeAnswer(), "an answer is consumed once").toBeUndefined();
   });
+
+  it("after dispose, takeAnswer is a no-op and answer is ignored", () => {
+    const d = createConfirmDialogModel("Clear 2 completed todos?");
+    d.view.answer(true);
+    d.dispose();
+    expect(d.control.takeAnswer(), "takeAnswer after dispose is a no-op, even with an untaken answer").toBeUndefined();
+    d.view.answer(false);
+    expect(d.control.takeAnswer(), "answer() after dispose is ignored too").toBeUndefined();
+  });
 });
 
 describe("B2 · sample operation (signals)", () => {
