@@ -8,7 +8,14 @@ import { describe, expect, it } from "vitest";
  * what walks past a pattern is written next to it.
  */
 const ROOT = new URL("../../", import.meta.url).pathname;
-const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, "");
+/** Drops block and line comments while leaving string and template literals — including a
+ * `"http://…"` URL — untouched: literals are matched alongside comments and, unlike comments,
+ * played back verbatim. */
+const stripComments = (text: string) =>
+  text.replace(
+    /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\/\*[\s\S]*?\*\/|\/\/.*/g,
+    (match) => (match.startsWith("/*") || match.startsWith("//") ? "" : match),
+  );
 
 function walk(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -104,7 +111,9 @@ describe("B0 · boundaries", () => {
     });
 
     it("UI modules never provide or register a contribution", () => {
-      for (const { file, code } of sources("lib").filter((s) => isUi(s.file))) {
+      const ui = sources("lib").filter((s) => isUi(s.file));
+      expect(ui.length).toBeGreaterThan(5);
+      for (const { file, code } of ui) {
         expect(code, `${file} publishes to a slot`).not.toMatch(UI_PUBLISHES);
       }
     });
@@ -135,9 +144,9 @@ describe("B0 · boundaries", () => {
 
   describe("features meet only through services, slots, commands and models", () => {
     it("no feature's app layer imports another feature's app, models or ui — cores are shared declarations", () => {
-      for (const { file, code } of sources("lib").filter((s) =>
-        /^lib\/[^/]+\/app\//.test(s.file),
-      )) {
+      const appFiles = sources("lib").filter((s) => /^lib\/[^/]+\/app\//.test(s.file));
+      expect(appFiles.length).toBeGreaterThan(10);
+      for (const { file, code } of appFiles) {
         const own = featureOf(file);
         for (const spec of specifiers(code)) {
           const m = /^@([^/]+)\/(app|models|ui)(?:\/|$)/.exec(spec);
@@ -158,7 +167,9 @@ describe("B0 · boundaries", () => {
     });
 
     it("lib/sys imports no feature and no host", () => {
-      for (const { file, code } of sources("lib/sys")) {
+      const sys = sources("lib/sys");
+      expect(sys.length).toBeGreaterThan(3);
+      for (const { file, code } of sys) {
         for (const spec of specifiers(code)) {
           expect(
             /^@(?:todo|stats|progress|logs|ui)\//.test(spec) || /^\.\.\//.test(spec),
@@ -211,6 +222,14 @@ describe("B0 · boundaries", () => {
   });
 
   describe("the rules can fail — negative controls", () => {
+    it("stripComments keeps string literals — including a URL's // — but drops real comments", () => {
+      expect(
+        specifiers(stripComments('const u = "http://x"; import { getSlots } from "@sys";')),
+      ).toEqual(["@sys"]);
+      expect(specifiers(stripComments('// import { getSlots } from "@sys";'))).toEqual([]);
+      expect(specifiers(stripComments('/* import { getSlots } from "@sys"; */'))).toEqual([]);
+    });
+
     it("UI_FORBIDDEN rejects what it exists for, and allows what a UI needs", () => {
       for (const bad of [
         "@statewalker/shared-commands",
