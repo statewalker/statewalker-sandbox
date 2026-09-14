@@ -98,7 +98,12 @@ export function mountDomHost(options: DomHostOptions): UiHost {
 
   let disposed = false;
   return {
-    kinds: () => [...byKind.keys()],
+    renders: (slot, { kind, placement }) => {
+      if (!byKind.has(kind.id)) return false;
+      if (slot === progressSlot.key) return options.progress !== undefined;
+      if (slot === panelsSlot.key) return placement !== undefined && !!options.regions[placement];
+      return false; // ui:dialogs, or a slot this host does not observe
+    },
     dispose: () => {
       if (disposed) return;
       disposed = true;

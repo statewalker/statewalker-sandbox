@@ -62,7 +62,12 @@ export function mountReactHost(options: ReactHostOptions): UiHost {
   }
   let disposed = false;
   return {
-    kinds: () => [...byKind.keys()],
+    renders: (slot, { kind, placement }) => {
+      if (!byKind.has(kind.id)) return false;
+      if (slot === dialogsSlot.key) return options.dialogs !== undefined;
+      if (slot === panelsSlot.key) return placement !== undefined && !!options.regions[placement];
+      return false; // ui:progress, or a slot this host does not observe
+    },
     dispose: () => {
       if (disposed) return;
       disposed = true;

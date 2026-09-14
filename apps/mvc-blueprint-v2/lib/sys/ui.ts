@@ -3,7 +3,7 @@ import { defineKeyedSlot, defineSlot, type Slots } from "@statewalker/shared-slo
 /**
  * The UI's extension points — the ONLY slot declarations a UI module may import
  * (B0). A contribution carries a view kind and a MODELS.md view facet; a host
- * renders the kinds it has renderers for.
+ * renders the contributions it has both a renderer and a place for.
  */
 export interface ViewKind<M> {
   readonly id: string;
@@ -43,9 +43,19 @@ export const progressSlot = defineSlot<ProgressContribution>("ui:progress");
 /** What a UI host may do with the bus: observe and read. Never provide. */
 export type SlotsReader = Pick<Slots, "observe" | "getSnapshot" | "get">;
 
+/** What a host is asked about: a contribution's kind, and — for a panel — its placement. */
+export interface RenderQuery {
+  readonly kind: ViewKind<unknown>;
+  readonly placement?: Placement;
+}
+
 /** What the composition root holds for a mounted UI host. */
 export interface UiHost {
-  /** The view kinds this host has renderers for. */
-  kinds(): readonly string[];
+  /**
+   * Whether this host puts `contribution` on screen when it arrives in the slot
+   * keyed `slot`: it has a renderer for the kind AND somewhere to put it — the
+   * placement's region for a panel, a container for a dialog or a progress bar.
+   */
+  renders(slot: string, contribution: RenderQuery): boolean;
   dispose(): void;
 }

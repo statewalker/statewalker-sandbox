@@ -32,7 +32,10 @@ its services once, in `activate(ctx)`.
 
 A slot is order-independent: a contribution made before its observer exists is delivered when the
 observer subscribes. Its one silent failure — a contribution nothing renders — is what
-`src/coverage.ts` reports.
+`src/coverage.ts` reports. It asks each host `renders(slot, contribution)`: a renderer for the kind
+*and* a place for it — the placement's region for a panel, a dialogs or progress container
+otherwise. So a known kind in a placement no host has a region for, or a progress bar sent to
+`ui:dialogs`, is reported too, once per slot, kind and placement.
 
 ## 4. The four controllers
 

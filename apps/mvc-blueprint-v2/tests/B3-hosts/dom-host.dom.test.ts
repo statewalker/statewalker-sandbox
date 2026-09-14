@@ -101,7 +101,32 @@ describe("B3 · DOM host", () => {
       model: counter(),
     });
     expect(r.side.children).toHaveLength(0);
-    expect(host.kinds()).toEqual(["demo:counter"]);
+  });
+
+  it("renders() is true only where it has a renderer for the kind AND a place for it", () => {
+    const slots = new Slots();
+    const r = regions();
+    const host = mountDomHost({
+      slots,
+      regions: { side: r.side },
+      progress: r.progress,
+      renderers: [renderCounter],
+    });
+    cleanups.push(() => host.dispose());
+    const other = defineViewKind("demo:other");
+    expect(host.renders("ui:panels", { kind: counterKind, placement: "side" })).toBe(true);
+    expect(
+      host.renders("ui:panels", { kind: counterKind, placement: "main" }),
+      "no main region",
+    ).toBe(false);
+    expect(host.renders("ui:panels", { kind: other, placement: "side" }), "no renderer").toBe(
+      false,
+    );
+    expect(host.renders("ui:progress", { kind: counterKind })).toBe(true);
+    expect(host.renders("ui:dialogs", { kind: counterKind }), "it renders no dialogs").toBe(false);
+    const bare = mountDomHost({ slots, regions: {}, renderers: [renderCounter] });
+    cleanups.push(() => bare.dispose());
+    expect(bare.renders("ui:progress", { kind: counterKind }), "no progress container").toBe(false);
   });
 
   it("renders progress contributions into the progress region, and dispose removes everything", () => {

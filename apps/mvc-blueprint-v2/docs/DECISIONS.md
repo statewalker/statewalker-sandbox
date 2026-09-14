@@ -33,7 +33,10 @@ render a dialog in every host that observes it.
 ### V6 — Renderers are host-local; a coverage observer reports what nothing renders · adopted
 
 Registering a renderer is wiring, not a contribution, so it stays out of slots (V2). The silent
-failure slots introduce is made loud by `src/coverage.ts`.
+failure slots introduce is made loud by `src/coverage.ts`. Knowing the kind is not enough: a host
+skips a contribution it has a renderer for but no region for, so the observer asks each host whether
+it renders the contribution in the slot and placement it arrived with, and reports what no host can
+render.
 
 ### V7 — The logs controller replaces the logger · adopted
 
