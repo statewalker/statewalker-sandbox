@@ -65,6 +65,18 @@ describe("B2 · todo controller", () => {
     await controller.dispose();
   });
 
+  it("a toggle and a removal landing in the SAME pass log the removal with the fresh done state", async () => {
+    const { controller, events } = boot([todo("1", "open", false)]);
+    await settle();
+    // No settle between these two: both intents land in the reconcile pass triggered
+    // by the first one, so the model has not been reloaded when the removal runs.
+    controller.model.view.requestToggle("1");
+    controller.model.view.requestRemove("1");
+    await settle();
+    expect(events()).toContainEqual({ event: "todos:removed", data: { id: "1", done: true } });
+    await controller.dispose();
+  });
+
   it("clear completed publishes ONE dialog for two presses and does not block other intents while it is open", async () => {
     const { controller, slots, api, events } = boot([todo("1", "open"), todo("2", "done", true)]);
     await settle();
@@ -152,5 +164,19 @@ describe("B2 · todo controller", () => {
     expect(slots.get(panelsSlot, "todos:list")).toBeNull();
     expect(slots.getSnapshot(dialogsSlot)).toHaveLength(0);
     await expect(commands.call(todosSummary, {}).promise).rejects.toMatchObject({ kind: "no-handlers" });
+  });
+
+  it("dispose while a pass is in flight never lets a dialog reach ui:dialogs", async () => {
+    const { controller, slots } = boot([todo("1", "done", true)]);
+    await settle();
+    controller.model.view.queueSubmit("x");
+    controller.model.view.requestClearCompleted();
+    // Let the reconcile pass's microtask start and suspend on its first internal
+    // await (inside `_add`, awaiting the add command) — this is "in flight": the
+    // pass has already begun but has not reached `_reload`/`_clearStep` yet.
+    await Promise.resolve();
+    await controller.dispose();
+    await settle();
+    expect(slots.getSnapshot(dialogsSlot), "dialogs at dispose 1 after settle 1").toHaveLength(0);
   });
 });

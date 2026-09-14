@@ -109,20 +109,27 @@ export class TodoController {
         const removals = control.takeRemovals();
         if (adds.length + toggles.length + removals.length > 0) {
           didWork = true;
+          // Toggles that land earlier in this same pass must be visible to a removal
+          // later in the same pass — the model isn't reloaded until the pass settles,
+          // so `control.getTodos()` alone would still read the pre-toggle `done`.
+          const toggledThisPass = new Map<string, boolean>();
           for (const { title } of adds) {
             const f = await this._add(title);
             failure ??= f;
           }
           for (const { id } of toggles) {
-            const f = await this._toggle(id);
+            const f = await this._toggle(id, toggledThisPass);
             failure ??= f;
           }
           for (const { id } of removals) {
-            const f = await this._remove(id);
+            const f = await this._remove(id, toggledThisPass);
             failure ??= f;
           }
           this._loadOwed = true;
         }
+        // Dispose can land inside any of the awaits above; never let a pass that
+        // outlived its controller reach the reload or the dialog it might open.
+        if (this._disposed) break;
 
         if (this._loadOwed && !reloadFailed) {
           didWork = true;
@@ -154,6 +161,7 @@ export class TodoController {
 
   /** Runs after a reload, so the completed count is current. */
   private async _clearStep(): Promise<{ didWork: boolean; failure?: string }> {
+    if (this._disposed) return { didWork: false };
     const control = this.model.control;
     if (this._dialog) {
       const answer = this._dialog.control.takeAnswer();
@@ -185,6 +193,9 @@ export class TodoController {
   }
 
   private _openDialog(question: string): void {
+    // Belt-and-suspenders: `_clearStep` already refuses to reach here once disposed,
+    // but a dialog must never be provided/registered against a torn-down registry.
+    if (this._disposed) return;
     const [register] = this._registry;
     const dialog = createConfirmDialogModel(question);
     const offSlot = this._slots.provide(dialogsSlot, { kind: confirmDialogKind, model: dialog.view });
@@ -234,10 +245,11 @@ export class TodoController {
     }
   }
 
-  private async _toggle(id: string): Promise<string | undefined> {
+  private async _toggle(id: string, toggledThisPass?: Map<string, boolean>): Promise<string | undefined> {
     if (this._disposed) return undefined;
     try {
       const { done } = await this._commands.call(todosToggle, { id }).promise;
+      toggledThisPass?.set(id, done);
       if (!this._disposed) this._log.info(done ? "todos:closed" : "todos:reopened", { id });
       return undefined;
     } catch (error) {
@@ -245,9 +257,12 @@ export class TodoController {
     }
   }
 
-  private async _remove(id: string): Promise<string | undefined> {
+  private async _remove(id: string, toggledThisPass?: Map<string, boolean>): Promise<string | undefined> {
     if (this._disposed) return undefined;
-    const done = this.model.control.getTodos().find((t) => t.id === id)?.done ?? false;
+    // A toggle earlier in THIS pass hasn't reached the model yet (the reload runs
+    // once, at the end of the pass), so prefer the fresh in-pass state over the
+    // still-stale `control.getTodos()` read.
+    const done = toggledThisPass?.get(id) ?? this.model.control.getTodos().find((t) => t.id === id)?.done ?? false;
     try {
       const { removed } = await this._commands.call(todosRemove, { id }).promise;
       if (removed && !this._disposed) this._log.info("todos:removed", { id, done });
