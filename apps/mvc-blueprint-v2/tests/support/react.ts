@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 /**
- * DOM plumbing for the browser rungs (B5+). Nothing here knows a view, a model
+ * DOM plumbing for the React browser tests (B3 hosts and views, B4 the app). Nothing here knows a view, a model
  * or the bus — it mounts a React element and waits for the DOM to agree.
  */
 
@@ -44,8 +44,9 @@ export function render(element: ReactNode): { host: HTMLElement; root: Root; unm
 }
 
 /** Every element under `scope` matching `selector`, as an array. */
-export const all = <E extends Element = HTMLElement>(scope: ParentNode, selector: string): E[] =>
-  [...scope.querySelectorAll<E>(selector)];
+export const all = <E extends Element = HTMLElement>(scope: ParentNode, selector: string): E[] => [
+  ...scope.querySelectorAll<E>(selector),
+];
 
 /** The first button under `scope` whose visible text or aria-label is exactly `name`. */
 export function button(scope: ParentNode, name: string): HTMLButtonElement | undefined {

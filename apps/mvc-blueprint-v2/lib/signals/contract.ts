@@ -1,8 +1,9 @@
 /**
  * The one reactive surface this app uses — alien-signals' own shape (call
  * syntax: `s()` reads, `s(v)` writes), minus what the app does not need. Types
- * only: no library is named here. `alien.ts` and `preact.ts` implement it;
- * `deps.ts` chooses one; the contract suite (B1) proves both meet it.
+ * only: no library is named here. `alien.ts` implements it and `deps.ts`
+ * (imported as `@signals`) chooses it; the model contract suite (B1) pins the
+ * todo models built on it.
  */
 
 /** A writable reactive cell. */
@@ -27,4 +28,5 @@ export interface Signals {
   untracked<T>(fn: () => T): T;
 }
 
+/** Which library backs the contract. Only "alien" ships here; "preact" names the seed's other one. */
 export type SignalsImplementation = "alien" | "preact";

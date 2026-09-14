@@ -21,8 +21,8 @@ Two rules make the separation real, and `B0-boundaries` checks both:
 
 ```
 pnpm dev          # the app
-pnpm test         # 119 node tests, 16 files (boundaries, contract, controllers, coverage, emitted CSS)
-pnpm test:browser # 13 Chromium tests, 5 files: DOM host and views with React refused; React host, views, end to end
+pnpm test         # Node: boundaries, model contract, controllers, coverage, emitted CSS
+pnpm test:browser # Chromium: DOM host and views with React refused; React host, views, the app end to end
 pnpm typecheck
 pnpm build
 ```

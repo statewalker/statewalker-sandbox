@@ -39,9 +39,9 @@ export function batch<T>(fn: () => T): T {
 export function effect(fn: () => void): () => void {
   // Created with no active subscriber, so nobody owns it. alien otherwise
   // disposes an effect created during another effect's run when that effect
-  // re-runs; preact never does. Contract guarantee 8 makes both behave like
-  // preact — a controller activated from inside some reaction must not die
-  // with it.
+  // re-runs (preact, the seed's other library, never does). Contract guarantee 8
+  // requires the preact behaviour — a controller activated from inside some
+  // reaction must not die with it.
   return untracked(() =>
     A.effect(() => {
       fn();

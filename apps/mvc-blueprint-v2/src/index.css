@@ -1,14 +1,14 @@
 @import "tailwindcss";
 
 /*
- * Content discovery — spec §4.5.
+ * Content discovery.
  *
  * The kit ships its own: `@statewalker/ui.view.shadcn/styles` is a CSS file
  * whose self-relative `@source` globs find the kit's classes wherever the
  * package is installed. Import it; never hand-roll a glob into the package's
  * directory. A dead `@source` path emits nothing and reports no error —
  * `apps/byok-config-prototype` ships an unstyled kit that way.
- * `B6-app/tests/emitted-css.test.ts` fails if a kit-only class stops reaching
+ * `tests/B4-app/emitted-css.test.ts` fails if a kit-only class stops reaching
  * the bundle, and proves it can fail by building once without this import.
  */
 @import "@statewalker/ui.view.shadcn/styles";
@@ -21,7 +21,7 @@
  * Theme tokens, as in `apps/byok-config-prototype/src/index.css` (minus its
  * prototype-only `--brand` accent). The `@theme` block must live HERE, in the
  * file that imports "tailwindcss": `@theme` does not merge from a separately
- * processed entry (spec §4.5, the second trap).
+ * processed entry.
  */
 :root {
   --radius: 0.625rem;

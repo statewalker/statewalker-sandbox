@@ -57,8 +57,11 @@ export function startApp(root: HTMLElement, options: StartOptions = {}): Running
   const regions = createLayout(root);
   register(() => root.replaceChildren());
 
-  // LogsController FIRST: it overwrites the logger, and every other controller
-  // resolves the logger in activate(). The rest may come in any order.
+  // Order matters. LogsController FIRST: it overwrites the logger, and every other
+  // controller resolves the logger in activate(). TodoController before
+  // StatsController: stats asks todos:summary once, on activation, and with no
+  // handler yet its baseline stays unknown. ProgressController may come at any
+  // point: it only observes ops:running, which delivers earlier contributions.
   const controllers = [
     new LogsController(),
     new TodoController({ sampleDelayMs: options.sampleDelayMs }),

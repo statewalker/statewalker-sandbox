@@ -71,8 +71,14 @@ throwing listener stop the rest — which `lib/stats/app/model-base.ts` does.
 `src/tracing.ts` is applied only by the composition root: `TracingCommands` logs every call and how
 it settled; `TracingSlots` logs every contribution and withdrawal and replaces each `ui:*` model
 with a traced copy that logs every notification. The copy is a fresh frozen object, not a Proxy —
-the facets are frozen. Tracing marks every command promise as handled, so an ignored rejection
-raises no unhandled-rejection warning while tracing is on.
+the facets are frozen — so it supports plain facet objects only (their own enumerable keys). Tracing
+marks every command promise as handled, so an ignored rejection raises no unhandled-rejection
+warning while tracing is on.
+
+Two consequences show in the inspector. `model:notify` includes the immediate call a model makes on
+subscribe, not only changes. And the *suppressed* counter rises by about one per record while
+tracing is on: each record the stats backend receives makes the inspector's model notify, its traced
+copy logs `model:notify` while that record is still being delivered, and the fan-out drops it (V8).
 
 ## 7. Lifetimes
 

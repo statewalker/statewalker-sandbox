@@ -50,7 +50,7 @@ export function InspectorPanel({ model }: { model: InspectorView }) {
           </label>
           <span
             data-dropped
-            title="Records suppressed because they were logged while a record was being delivered"
+            title="Records suppressed because they were logged while a record was being delivered. With tracing on it rises about one per record: the inspector's own traced model:notify is dropped."
           >
             suppressed: {dropped}
           </span>

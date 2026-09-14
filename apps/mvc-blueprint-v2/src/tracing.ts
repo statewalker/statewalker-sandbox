@@ -18,9 +18,11 @@ const kindOf = (value: unknown): string | undefined => {
 };
 
 /**
- * A frozen copy of a model facet. Every function is bound to the original, so
- * closure facets and class-backed facets both work; each `on…Update` listener
- * is wrapped to log one `model:notify` per delivery. Not a Proxy: facets are
+ * A frozen copy of a model facet. Only plain facet objects are supported: the
+ * copy takes the facet's OWN enumerable keys, so methods on a prototype (a
+ * class-backed facet) are not copied. Every copied function is bound to the
+ * original; each `on…Update` listener is wrapped to log one `model:notify` per
+ * delivery — the immediate call on subscribe included. Not a Proxy: facets are
  * frozen, and a Proxy must return a frozen object's own functions.
  */
 export function traceModel<M>(model: M, meta: Record<string, unknown>, logger: LoggerSource): M {

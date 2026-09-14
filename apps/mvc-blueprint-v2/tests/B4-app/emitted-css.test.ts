@@ -6,7 +6,7 @@ import { build, type Plugin } from "vite";
 import { describe, expect, it } from "vitest";
 
 /**
- * B4 · the styling stack reaches the bundle (spec §4.5).
+ * B4 · the styling stack reaches the bundle.
  *
  * `apps/byok-config-prototype` lists `@source "../../../packages/ui.view.shadcn/src/**"`
  * — a directory that does not exist. Tailwind scans nothing there and says
@@ -69,7 +69,7 @@ function withoutKitStyles(): Plugin {
   // A control that removes nothing proves nothing.
   expect(stripped, "src/index.css must import the kit's ./styles").not.toBe(original);
   return {
-    name: "b6:without-kit-styles",
+    name: "b4:without-kit-styles",
     enforce: "pre",
     load(id) {
       if (id.split("?")[0] === INDEX_CSS) return stripped;

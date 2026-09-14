@@ -7,9 +7,10 @@ import { z } from "zod";
  * fallback convention — so a host can route add through an approval step, or
  * delete through a trash list, by listening at 0.
  *
- * `label` and `icon` are not decoration: the controller copies them into the
- * menu model (spec §4.4), because the view may not read the registry. Icon names
- * are lucide's, which the shadcn layer (B5) renders.
+ * `label`, `icon` and `description` are catalog metadata for whatever lists
+ * these commands. Nothing in this app reads them: a view may not read the
+ * registry, and the todo list spells its own button labels. Icon names are
+ * lucide's.
  */
 export const todosAdd = Command.required("todos:add")
   .input(z.object({ title: z.string().min(1) }))
@@ -44,10 +45,10 @@ export const todosClearCompleted = Command.required("todos:clear-completed")
   .build();
 
 /**
- * A registry is a flat catalog with no notion of applicability (drive file 06
- * §3), so a right-click without this renders every declaration in it — the
- * `ui:*` vocabulary included. When nothing claims it, the whole namespace is
- * offered, which is the documented fallback.
+ * Which todo commands apply to a selection — an overridable query kept from the
+ * seed. The core default offers the whole namespace; a host listening at
+ * priority 0 narrows it (both pinned in `B2 · todo commands`). Nothing in this
+ * app asks it: there is no menu to fill.
  */
 export const todosResolveActions = Command.required("todos:resolve-actions")
   .input(z.object({ ids: z.array(z.string()) }))
