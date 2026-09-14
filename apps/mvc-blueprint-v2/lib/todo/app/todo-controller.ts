@@ -2,7 +2,14 @@ import type { Commands } from "@statewalker/shared-commands";
 import { getLogger, type Logger } from "@statewalker/shared-logger";
 import { newRegistry } from "@statewalker/shared-registry";
 import type { Slots } from "@statewalker/shared-slots";
-import { type AppContext, dialogsSlot, getCommands, getSlots, panelsSlot, runningOperationsSlot } from "@sys";
+import {
+  type AppContext,
+  dialogsSlot,
+  getCommands,
+  getSlots,
+  panelsSlot,
+  runningOperationsSlot,
+} from "@sys";
 import {
   getTodoApi,
   type TodoApi,
@@ -198,8 +205,16 @@ export class TodoController {
     if (this._disposed) return;
     const [register] = this._registry;
     const dialog = createConfirmDialogModel(question);
-    const offSlot = this._slots.provide(dialogsSlot, { kind: confirmDialogKind, model: dialog.view });
-    const offAnswer = dialog.control.onAnswerUpdate(() => void this._reconcile());
+    const offSlot = this._slots.provide(dialogsSlot, {
+      kind: confirmDialogKind,
+      model: dialog.view,
+    });
+    // In a microtask, as the intent listener does: the pass writes to models, and
+    // MODELS.md §4 point 5 forbids that from inside a listener. The immediate
+    // call on subscribe only queues a pass that finds no answer yet.
+    const offAnswer = dialog.control.onAnswerUpdate(() =>
+      queueMicrotask(() => void this._reconcile()),
+    );
     const release = register(() => {
       offAnswer();
       offSlot();
@@ -245,7 +260,10 @@ export class TodoController {
     }
   }
 
-  private async _toggle(id: string, toggledThisPass?: Map<string, boolean>): Promise<string | undefined> {
+  private async _toggle(
+    id: string,
+    toggledThisPass?: Map<string, boolean>,
+  ): Promise<string | undefined> {
     if (this._disposed) return undefined;
     try {
       const { done } = await this._commands.call(todosToggle, { id }).promise;
@@ -257,12 +275,18 @@ export class TodoController {
     }
   }
 
-  private async _remove(id: string, toggledThisPass?: Map<string, boolean>): Promise<string | undefined> {
+  private async _remove(
+    id: string,
+    toggledThisPass?: Map<string, boolean>,
+  ): Promise<string | undefined> {
     if (this._disposed) return undefined;
     // A toggle earlier in THIS pass hasn't reached the model yet (the reload runs
     // once, at the end of the pass), so prefer the fresh in-pass state over the
     // still-stale `control.getTodos()` read.
-    const done = toggledThisPass?.get(id) ?? this.model.control.getTodos().find((t) => t.id === id)?.done ?? false;
+    const done =
+      toggledThisPass?.get(id) ??
+      this.model.control.getTodos().find((t) => t.id === id)?.done ??
+      false;
     try {
       const { removed } = await this._commands.call(todosRemove, { id }).promise;
       if (removed && !this._disposed) this._log.info("todos:removed", { id, done });
