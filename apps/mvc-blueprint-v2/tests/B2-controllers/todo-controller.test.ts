@@ -12,7 +12,9 @@ function boot(rows: Todo[] = [todo("1", "seed")]) {
   const controller = new TodoController({ sampleDelayMs: 1 });
   controller.activate(t.ctx);
   const events = () =>
-    t.recorder.calls.filter((c) => c.metadata.module === "todos").map((c) => ({ event: c.args[0], data: c.args[1] }));
+    t.recorder.calls
+      .filter((c) => c.metadata.module === "todos")
+      .map((c) => ({ event: c.args[0], data: c.args[1] }));
   return { ...t, controller, events };
 }
 
@@ -43,7 +45,9 @@ describe("B2 · todo controller", () => {
     controller.model.view.queueSubmit("");
     await settle();
     expect(controller.model.view.getVisible().map((t) => t.title)).toEqual(["seed", "milk"]);
-    expect(events()).toEqual([{ event: "todos:created", data: { id: expect.any(String), title: "milk" } }]);
+    expect(events()).toEqual([
+      { event: "todos:created", data: { id: expect.any(String), title: "milk" } },
+    ]);
     expect(controller.model.view.getOutcome()).toMatch(/^add "" failed/);
     await controller.dispose();
   });
@@ -90,9 +94,10 @@ describe("B2 · todo controller", () => {
 
     controller.model.view.queueSubmit("while the dialog is open");
     await settle();
-    expect(controller.model.view.getVisible().map((t) => t.title), "the loop kept working").toContain(
-      "while the dialog is open",
-    );
+    expect(
+      controller.model.view.getVisible().map((t) => t.title),
+      "the loop kept working",
+    ).toContain("while the dialog is open");
     expect(slots.getSnapshot(dialogsSlot), "the dialog is still open").toHaveLength(1);
 
     dialog.answer(true);
@@ -106,13 +111,29 @@ describe("B2 · todo controller", () => {
 
   it("a declined question clears nothing, and consumes the presses made before the answer", async () => {
     const { controller, slots, api } = boot([todo("2", "done", true)]);
+    const asked = new Set<object>();
+    slots.observe(dialogsSlot, (items) => {
+      for (const item of items) asked.add(item);
+    });
     await settle();
     controller.model.view.requestClearCompleted();
     await settle();
+    // A second press while the question is open: the answer must consume it too.
+    controller.model.view.requestClearCompleted();
+    await settle();
+    expect(asked, "one question for both presses").toHaveProperty("size", 1);
     (slots.getSnapshot(dialogsSlot)[0].model as { answer(c: boolean): void }).answer(false);
     await settle();
     expect(slots.getSnapshot(dialogsSlot)).toHaveLength(0);
     expect(api.calls).not.toContain("clearCompleted");
+    // An unrelated intent runs a pass: a declined question must not come back with it.
+    controller.model.view.queueSubmit("unrelated");
+    await settle();
+    expect(controller.model.view.getVisible().map((t) => t.title)).toContain("unrelated");
+    expect(slots.getSnapshot(dialogsSlot), "the declined question is not asked again").toHaveLength(
+      0,
+    );
+    expect(asked, "no new dialog appeared").toHaveProperty("size", 1);
     controller.model.view.requestClearCompleted();
     await settle();
     expect(slots.getSnapshot(dialogsSlot), "a new press asks again").toHaveLength(1);
@@ -146,11 +167,11 @@ describe("B2 · todo controller", () => {
     await until(() => slots.getSnapshot(runningOperationsSlot).length === 0);
     await settle();
     expect(seen).toContain(3);
-    expect(events().filter((e) => e.event === "todos:created").map((e) => (e.data as { title: string }).title)).toEqual([
-      "Sample todo 1",
-      "Sample todo 2",
-      "Sample todo 3",
-    ]);
+    expect(
+      events()
+        .filter((e) => e.event === "todos:created")
+        .map((e) => (e.data as { title: string }).title),
+    ).toEqual(["Sample todo 1", "Sample todo 2", "Sample todo 3"]);
     expect(controller.model.view.getVisible()).toHaveLength(3);
     await controller.dispose();
   });
@@ -163,7 +184,9 @@ describe("B2 · todo controller", () => {
     await controller.dispose();
     expect(slots.get(panelsSlot, "todos:list")).toBeNull();
     expect(slots.getSnapshot(dialogsSlot)).toHaveLength(0);
-    await expect(commands.call(todosSummary, {}).promise).rejects.toMatchObject({ kind: "no-handlers" });
+    await expect(commands.call(todosSummary, {}).promise).rejects.toMatchObject({
+      kind: "no-handlers",
+    });
   });
 
   it("dispose while a pass is in flight never lets a dialog reach ui:dialogs", async () => {
