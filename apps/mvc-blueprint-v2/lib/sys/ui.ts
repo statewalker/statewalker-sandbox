@@ -42,3 +42,10 @@ export const progressSlot = defineSlot<ProgressContribution>("ui:progress");
 
 /** What a UI host may do with the bus: observe and read. Never provide. */
 export type SlotsReader = Pick<Slots, "observe" | "getSnapshot" | "get">;
+
+/** What the composition root holds for a mounted UI host. */
+export interface UiHost {
+  /** The view kinds this host has renderers for. */
+  kinds(): readonly string[];
+  dispose(): void;
+}
