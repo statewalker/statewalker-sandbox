@@ -80,6 +80,7 @@ describe("pacedFiles", () => {
     const paced = pacedFiles(files, 1);
     expect(await paced.exists("/a")).toBe(true);
     expect(await paced.exists("/nope")).toBe(false);
-    expect((await paced.stats("/a"))?.size).toBe(4);
+    // `stats()` returns a union discriminated on `kind` (webrun-files 0.9); only a file has a size.
+    expect(await paced.stats("/a")).toMatchObject({ kind: "file", size: 4 });
   });
 });

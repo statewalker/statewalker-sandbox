@@ -96,6 +96,8 @@ function fakeHandle(joinedBy: JoinMethod, hubPeerId = HUB): FakeHandle {
     relayAddr: RELAY,
     joinedBy,
     meshView: () => null,
+    // A fake session holds no connections, so it reaches no peer.
+    connectionKind: () => "none",
     stop: async () => {
       handle.stopped++;
     },

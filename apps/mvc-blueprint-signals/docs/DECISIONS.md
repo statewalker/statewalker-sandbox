@@ -253,7 +253,9 @@ Swapping libraries is editing that line and running the ladder.
 
 ### S2 — What the contract guarantees, and the five things it leaves open · adopted
 
-Eight guarantees, pinned on both libraries by B1's contract suite. Five behaviours differ (ARCHITECTURE
+Nine guarantees, pinned on both libraries by B1's contract suite (the ninth — outside a batch, a
+write runs the effects it wakes synchronously — is pinned by test 4's unbatched half, and is what
+the controller's coalescing rests on). Five behaviours differ (ARCHITECTURE
 §12): four are left open, and the suite records each per library, so an upgrade that changes one
 fails where it is named; the fifth — effect ownership — is normalized (S3) and pinned as guarantee 8
 instead. The app relies on none of the five, hence two rules: no effect throws, and a reaction must

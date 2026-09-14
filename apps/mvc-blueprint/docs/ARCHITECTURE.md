@@ -208,8 +208,10 @@ onQueryChange   = onChangeNotifier(this.onUpdate,
 A channel fires only when its value changes by `!==`. A channel over **two** fields folds them
 into one comparable value, and the separator is load-bearing: the fixed one-character prefix
 plus a character no title can contain is what stops two different states colliding into the
-same key. A controller subscribed to `onRefresh` is
-**not woken at all** when someone types in the filter.
+same key. A controller subscribed to `onRefresh` does not **act** when someone types in the
+filter — but its channel wrapper still runs: `notify()` calls every `onUpdate` listener, and each
+channel declines *inside* its callback after comparing. Channels narrow what reaches your code,
+not how many callbacks run (measured: 10 listener calls per keystroke in this app).
 
 Four things to know before relying on one:
 

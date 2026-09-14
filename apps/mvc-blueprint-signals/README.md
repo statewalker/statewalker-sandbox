@@ -4,8 +4,11 @@ The MVC blueprint, on signals. The same TODO app, the same three layers, the sam
 view protocol, and the same test ladder as `apps/mvc-blueprint` — with every model built on signals
 behind one small contract, so the question it answers is: **which of the blueprint's rules were
 about the architecture, and which only about its `BaseClass`?** The answer is in
-[docs/DECISIONS.md](docs/DECISIONS.md): three rules disappeared (named channels, forwarding derived
-getters, the view-side method grep), and none of the architecture did.
+[docs/DECISIONS.md](docs/DECISIONS.md): one rule disappeared outright — the view-side method grep,
+replaced by a view that is handed only its facet — and two changed shape rather than vanished:
+named channels became a declared `edges` set the controller's effect reads, and forwarding
+derived getters became a rule about reading every input unconditionally, which fails silently and
+only for some data when broken. None of the architecture changed.
 
 The signals library is a one-line choice (`lib/signals/deps.ts`): alien-signals by default,
 `@preact/signals-core` as the other implementation. The ladder runs on both.
@@ -128,7 +131,8 @@ The app starts with three seeded todos in memory. There is no persistence yet �
 
 288 node tests and 90 browser tests in all — B1 through B5 run once per signals library
 (`node:alien`/`node:preact`, `browser:alien`/`browser:preact`); the contract suite (counted in B1)
-and B0/B6 run once.
+and B0 run once, and B6 runs once on the default library — its browser half as its own project,
+`browser:app`, resolving through `deps.ts`.
 
 **Not done:** B7 (a persistent `TodoApi`), and B8–B9 (extracting the substrate into `app-kit` —
 which the spec gates on the Files Manager being ported onto it as a second caller).
