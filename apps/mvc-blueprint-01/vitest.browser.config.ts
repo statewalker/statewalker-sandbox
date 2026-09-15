@@ -29,7 +29,7 @@ const b5Project = (signals: SignalsImpl) => ({
   resolve: { alias: aliasFor(signals) },
   test: {
     name: `browser:${signals}`,
-    include: ["B5-*/tests/**/*.test.tsx"],
+    include: ["tests/B5-*/**/*.test.tsx"],
     provide: { signals },
     browser: chromium(),
   },
@@ -46,7 +46,7 @@ const b6Project = () => ({
   resolve: { alias },
   test: {
     name: "browser:app",
-    include: ["B6-*/tests/**/*.test.tsx"],
+    include: ["tests/B6-*/**/*.test.tsx"],
     browser: chromium(),
   },
 });

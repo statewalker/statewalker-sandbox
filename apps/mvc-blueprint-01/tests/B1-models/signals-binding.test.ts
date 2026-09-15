@@ -1,7 +1,7 @@
 import { implementation } from "@todo/signals";
 import { describe, expect, inject, it } from "vitest";
-import * as deps from "../../lib/signals/deps.js";
-import "../../test-support/signals.js";
+import * as deps from "../../src/lib/signals/deps.js";
+import "../support/signals.js";
 
 describe("B1 · which signals this run is on", () => {
   it("@todo/signals resolves to the implementation this project runs", () => {

@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { createTodoListModel, type Todo, type TodoListModel, type TodoListView } from "@todo/app/models";
 import { ListView } from "@todo/ui";
-import { all, button, flush, render, waitFor } from "../../test-support/react.js";
-import { snapshotOf } from "../../test-support/signals.js";
+import { all, button, flush, render, waitFor } from "../support/react.js";
+import { snapshotOf } from "../support/signals.js";
 
 /**
  * B5 · the list panel — spec §1.1: views know only models.

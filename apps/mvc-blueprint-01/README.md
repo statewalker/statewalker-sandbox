@@ -1,13 +1,13 @@
-# @statewalker/mvc-blueprint-signals
+# @statewalker/mvc-blueprint-01
 
 The MVC blueprint, on signals. The same TODO app, the same three layers, the same command bus and
-view protocol, and the same test ladder as `apps/mvc-blueprint` — with every model built on signals
+view protocol, and the same test ladder as `apps/mvc-blueprint-00` — with every model built on signals
 behind one small contract, so the question it answers is: **which of the blueprint's rules were
 about the architecture, and which only about its `BaseClass`?** The answer is in
 [docs/DECISIONS.md](docs/DECISIONS.md): three rules disappeared (named channels, forwarding derived
 getters, the view-side method grep), and none of the architecture did.
 
-The signals library is a one-line choice (`lib/signals/deps.ts`): alien-signals by default,
+The signals library is a one-line choice (`src/lib/signals/deps.ts`): alien-signals by default,
 `@preact/signals-core` as the other implementation. The ladder runs on both.
 
 ```
@@ -77,15 +77,15 @@ design wrong.
 ## Layout
 
 ```
-lib/signals          contract.ts, alien.ts, preact.ts, and deps.ts — the one import point
-lib/todo-core/src    declarations, TodoApi (the port), MemTodoApi, the command defaults
-lib/todo-app/src     models, controllers, bootstrap, the model kit
+src/lib/signals      contract.ts, alien.ts, preact.ts, and deps.ts — the one import point
+src/lib/todo-core/src   declarations, TodoApi (the port), MemTodoApi, the command defaults
+src/lib/todo-app/src    models, controllers, bootstrap, the model kit
                      models.ts is the ONLY entry the view layer may use
-lib/todo-ui/src      view-adapter.ts (headless — no React), use-value.ts,
+src/lib/todo-ui/src     view-adapter.ts (headless — no React), use-value.ts,
                      views/*.tsx, register-views.tsx
 src/                 app.ts (composition root), main.tsx (page entry), index.css
-B0-…B6-*/tests       the ladder — one directory per rung, each a proven property
-test-support/        view-layer stand-ins, a seeded MemTodoApi, DOM helpers for the browser suites
+tests/B0-…B6-*       the ladder — one directory per rung, each a proven property
+tests/support/       view-layer stand-ins, a seeded MemTodoApi, DOM helpers for the browser suites
 aliases.ts           the alias table — one copy, imported by all three Vite/Vitest configs
 ```
 
@@ -112,7 +112,7 @@ pnpm build && pnpm preview
 ```
 
 The app starts with three seeded todos in memory. There is no persistence yet — a persistent
-`TodoApi` is rung B7, out of scope here; the seam for it is `TodoApi` in `lib/todo-core`.
+`TodoApi` is rung B7, out of scope here; the seam for it is `TodoApi` in `src/lib/todo-core`.
 
 ## Status
 
@@ -137,7 +137,7 @@ which the spec gates on the Files Manager being ported onto it as a second calle
 
 The command-override rule reads `cmd.claimed`, which `@statewalker/shared-commands@0.2.1` sets at
 run time but declares only on its **unexported** `CommandInternal` type; the public `Command` type
-does not carry it. `B2-commands/tests/claimed-contract.test.ts` guards the behaviour, so an upstream
+does not carry it. `tests/B2-commands/claimed-contract.test.ts` guards the behaviour, so an upstream
 change fails loudly rather than silently letting every default handler run alongside a host's
 override. An upstream issue asking for `claimed` on the public type is **not yet filed** — it must
 be before this substrate is published.

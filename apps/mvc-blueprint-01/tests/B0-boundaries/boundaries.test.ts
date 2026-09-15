@@ -15,11 +15,11 @@ const isSource = (f: string) => f.endsWith(".ts") || f.endsWith(".tsx");
 const stripComments = (t: string) => t.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, "");
 
 const sources = (pkg: string) =>
-  readdirSync(`${ROOT}lib/${pkg}/src`, { recursive: true, encoding: "utf8" })
+  readdirSync(`${ROOT}src/lib/${pkg}/src`, { recursive: true, encoding: "utf8" })
     .filter(isSource)
     .map((f) => ({
       file: `${pkg}/src/${f}`,
-      code: stripComments(readFileSync(`${ROOT}lib/${pkg}/src/${f}`, "utf8")),
+      code: stripComments(readFileSync(`${ROOT}src/lib/${pkg}/src/${f}`, "utf8")),
     }));
 
 const QUOTE = "[\"'`]";
@@ -45,12 +45,17 @@ const importOf = (pkg: string) =>
  */
 const isModelModule = (file: string): boolean => file.startsWith("todo-app/src/") && file.endsWith("-model.ts");
 
-/** Every rung's suites, found by walking `<rung>/tests` recursively. */
+/**
+ * Every rung's suites, found by walking `tests/<rung>` recursively. `support`
+ * is not a rung — it holds the shared test helpers, read separately by
+ * `headlessModules()` — so it is excluded here or its non-`.test.` sources
+ * would be counted as suites.
+ */
 const allSuites = () =>
-  readdirSync(ROOT, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && !["lib", "node_modules", "src"].includes(d.name))
+  readdirSync(`${ROOT}tests`, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && d.name !== "support")
     .flatMap((d) => {
-      const dir = `${ROOT}${d.name}/tests`;
+      const dir = `${ROOT}tests/${d.name}`;
       let files: string[] = [];
       try {
         files = (readdirSync(dir, { recursive: true, encoding: "utf8" }) as string[]).filter(isSource);
@@ -58,7 +63,7 @@ const allSuites = () =>
         return [];
       }
       return files.map((f) => ({
-        file: `${d.name}/tests/${f}`,
+        file: `tests/${d.name}/${f}`,
         code: stripComments(readFileSync(`${dir}/${f}`, "utf8")),
       }));
     });
@@ -107,12 +112,12 @@ const ADAPTER_MAY_IMPORT = /^@statewalker\/shared-(commands|registry)$/;
  * it is the grep, not an importer.
  */
 const headlessModules = () => [
-  ...allSuites().filter(({ file }) => file.endsWith(".test.ts") && !file.startsWith("B0-boundaries/")),
-  ...(readdirSync(`${ROOT}test-support`, { recursive: true, encoding: "utf8" }) as string[])
+  ...allSuites().filter(({ file }) => file.endsWith(".test.ts") && !file.startsWith("tests/B0-boundaries/")),
+  ...(readdirSync(`${ROOT}tests/support`, { recursive: true, encoding: "utf8" }) as string[])
     .filter((f) => f.endsWith(".ts"))
     .map((f) => ({
-      file: `test-support/${f}`,
-      code: stripComments(readFileSync(`${ROOT}test-support/${f}`, "utf8")),
+      file: `tests/support/${f}`,
+      code: stripComments(readFileSync(`${ROOT}tests/support/${f}`, "utf8")),
     })),
 ];
 
@@ -136,12 +141,19 @@ const usesReactEntry = (code: string): boolean => specifiers(code).some(reachesU
 const knowsEveryLayer = (code: string): boolean =>
   importOf("core").test(code) && importOf("app").test(code) && usesReactEntry(code);
 
-/** The page's own modules under `src/` — the entry and the composition root. */
+/**
+ * The page's own modules under `src/` — the entry and the composition root.
+ * `src/lib/**` is excluded: it is the three layers (read by `sources()` and
+ * `signalSources()`), and walking it here too would double-count every layer
+ * file as a "page source" as well.
+ */
 const pageSources = () =>
-  (readdirSync(`${ROOT}src`, { recursive: true, encoding: "utf8" }) as string[]).filter(isSource).map((f) => ({
-    file: `src/${f}`,
-    code: stripComments(readFileSync(`${ROOT}src/${f}`, "utf8")),
-  }));
+  (readdirSync(`${ROOT}src`, { recursive: true, encoding: "utf8" }) as string[])
+    .filter((f) => isSource(f) && !f.startsWith("lib/"))
+    .map((f) => ({
+      file: `src/${f}`,
+      code: stripComments(readFileSync(`${ROOT}src/${f}`, "utf8")),
+    }));
 
 /**
  * Every module specifier reachable from a root-level config file, following
@@ -161,11 +173,11 @@ const reachableSpecifiers = (file: string, seen = new Set<string>()): string[] =
 /** The test runner, by package or by one of this app's own test configs. */
 const TEST_RUNNER = /^vitest(\/|$)|(^|\/)vitest(\.[\w-]+)?\.config(\.[jt]s)?$/;
 
-/** `lib/signals` — the substrate. Not under a `src/`, so `sources()` does not reach it. */
+/** `src/lib/signals` — the substrate. Has no nested `src/`, so `sources()` does not reach it. */
 const signalSources = () =>
-  (readdirSync(`${ROOT}lib/signals`, { encoding: "utf8" }) as string[]).filter(isSource).map((f) => ({
+  (readdirSync(`${ROOT}src/lib/signals`, { encoding: "utf8" }) as string[]).filter(isSource).map((f) => ({
     file: `signals/${f}`,
-    code: stripComments(readFileSync(`${ROOT}lib/signals/${f}`, "utf8")),
+    code: stripComments(readFileSync(`${ROOT}src/lib/signals/${f}`, "utf8")),
   }));
 
 /** Every module this app compiles or runs, B0 itself excepted — it spells the patterns as fixtures. */
@@ -175,8 +187,8 @@ const everyModule = () => [
   ...sources("todo-app"),
   ...sources("todo-ui"),
   ...pageSources(),
-  ...allSuites().filter(({ file }) => !file.startsWith("B0-boundaries/")),
-  ...headlessModules().filter(({ file }) => file.startsWith("test-support/")),
+  ...allSuites().filter(({ file }) => !file.startsWith("tests/B0-boundaries/")),
+  ...headlessModules().filter(({ file }) => file.startsWith("tests/support/")),
 ];
 
 /** Each library, and the one file that may import it. */
@@ -189,7 +201,7 @@ const importsLibrary = (lib: string) => (spec: string) => spec === lib || spec.s
 /** A specifier naming an implementation file rather than the swap point. */
 const IMPLEMENTATION_FILE = /(?:^\.\/|\/signals\/)(?:alien|preact)(?:\.[jt]s)?$/;
 
-/** What `lib/signals` may import: the two libraries and its own files. */
+/** What `src/lib/signals` may import: the two libraries and its own files. */
 const SIGNALS_MAY_IMPORT = /^(?:alien-signals|@preact\/signals-core|\.\/(?:contract|alien|preact)\.js)$/;
 
 /** A specifier reaching the signals, by alias or relative path. */
@@ -524,7 +536,7 @@ describe("B0 · package boundaries", () => {
     // `src/app.ts` imports the core (the api), the app (bootstrap, models) and
     // the ui (the React views) — legitimately: wiring them is its whole job.
     // That is an exemption scoped to ONE file, not a relaxation of any rule
-    // above: the per-library rules still apply to every `lib/` file, and
+    // above: the per-library rules still apply to every `src/lib/` file, and
     // none of them reads `src/`. What this adds is the other half — nothing
     // else may import all three with the ui as its React entry: no library,
     // no suite, no test support, and not the page entry `src/main.tsx`, which
@@ -565,7 +577,7 @@ describe("B0 · package boundaries", () => {
         ...sources("todo-app"),
         ...sources("todo-ui"),
         // B0 itself names the pattern; it is the grep, not a minter.
-        ...allSuites().filter(({ file }) => !file.startsWith("B0-boundaries/")),
+        ...allSuites().filter(({ file }) => !file.startsWith("tests/B0-boundaries/")),
       ];
       const minters = everything.filter(({ code }) => MINT.test(code)).map(({ file }) => file);
       // Equality, not "is a subset": if bootstrap stopped minting, the pattern
@@ -583,7 +595,7 @@ describe("B0 · package boundaries", () => {
         ...sources("todo-core"),
         ...sources("todo-app"),
         ...sources("todo-ui"),
-        ...allSuites().filter(({ file }) => !file.startsWith("B0-boundaries/")),
+        ...allSuites().filter(({ file }) => !file.startsWith("tests/B0-boundaries/")),
       ];
       const holders = everything.filter(({ code }) => importsIt.test(code)).map(({ file }) => file);
       expect(holders.sort(), "only bootstrap and the controller may import views-ready").toEqual([
@@ -655,13 +667,13 @@ describe("B0 · package boundaries", () => {
         .filter(({ code }) => specifiers(code).some((s) => IMPLEMENTATION_FILE.test(s)))
         .map(({ file }) => file)
         .sort();
-      expect(importers).toEqual(["B1-models/tests/signals-contract.test.ts", "signals/deps.ts"]);
+      expect(importers).toEqual(["signals/deps.ts", "tests/B1-models/signals-contract.test.ts"]);
     });
 
-    it("lib/signals imports only the libraries and itself; todo-core imports no signals", () => {
+    it("src/lib/signals imports only the libraries and itself; todo-core imports no signals", () => {
       const specs = signalSources().flatMap(({ code }) => specifiers(code));
-      expect(specs.length, "found no import in lib/signals — the check below would be vacuous").toBeGreaterThan(0);
-      for (const spec of specs) expect(spec, `lib/signals must not import "${spec}"`).toMatch(SIGNALS_MAY_IMPORT);
+      expect(specs.length, "found no import in src/lib/signals — the check below would be vacuous").toBeGreaterThan(0);
+      for (const spec of specs) expect(spec, `src/lib/signals must not import "${spec}"`).toMatch(SIGNALS_MAY_IMPORT);
       for (const { file, code } of sources("todo-core")) {
         for (const spec of specifiers(code)) {
           expect(SIGNALS_SPEC.test(spec), `${file} must not import "${spec}"`).toBe(false);

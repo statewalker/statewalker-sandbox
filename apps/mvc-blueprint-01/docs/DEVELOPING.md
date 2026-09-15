@@ -18,7 +18,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) first for *why* the rules exist.
 
 ## The rules, and what enforces them
 
-Every rule below is a test in `B0-boundaries/tests/boundaries.test.ts` unless noted. The suite reads
+Every rule below is a test in `tests/B0-boundaries/boundaries.test.ts` unless noted. The suite reads
 the source tree **recursively** (a guard test fails if it ever stops), strips comments, and matches.
 It also carries **negative controls**: fixtures of known-bad code that each rule must reject, so a
 rule weakened by a careless edit fails loudly rather than passing everything.
@@ -41,7 +41,7 @@ it, the row or the note under the table says what.
 | a suite that renders views — imports `@todo/ui` or a view, by alias or path — imports no `@todo/core`. A suite taking only `@todo/ui/adapter` tests the bus protocol and may use the real core | B0 · *holds for VIEW suites too* |
 | `view-adapter.ts` imports `@statewalker/shared-commands` and `@statewalker/shared-registry`, and nothing else | B0 · *view-adapter.ts imports the bus and the registry — no React* |
 | a **node** suite, and the test support it loads, names `@todo/ui` only as `@todo/ui/adapter` | B0 · *a node suite… takes @todo/ui only as @todo/ui/adapter* |
-| a node suite cannot **load** `react`, `react-dom` or `@statewalker/ui.view.shadcn` — by name or through any module that imports them, `src/app.ts` included: resolution fails, naming the rule | the `mvc-blueprint-signals:headless` plugin in `vitest.config.ts`; B0 · *the node project refuses to LOAD React…* proves it is on, every run |
+| a node suite cannot **load** `react`, `react-dom` or `@statewalker/ui.view.shadcn` — by name or through any module that imports them, `src/app.ts` included: resolution fails, naming the rule | the `mvc-blueprint-01:headless` plugin in `vitest.config.ts`; B0 · *the node project refuses to LOAD React…* proves it is on, every run |
 | only `src/app.ts` imports the core, the app and the view layer's **React entry** together | B0 · *only src/app.ts imports todo-core, todo-app and todo-ui's React entry together* |
 | `vite.config.ts` reaches no `vitest` module, directly or through a local import | B0 · *vite.config.ts reaches no vitest module…* |
 
@@ -53,7 +53,7 @@ none of the headless suites' dependencies does.
 
 | Rule | Enforced by |
 | --- | --- |
-| `alien-signals` is imported only by `lib/signals/alien.ts`; `@preact/signals-core` only by `lib/signals/preact.ts` | B0 · *each library is imported by exactly its own implementation file* |
+| `alien-signals` is imported only by `src/lib/signals/alien.ts`; `@preact/signals-core` only by `src/lib/signals/preact.ts` | B0 · *each library is imported by exactly its own implementation file* |
 | those two files are imported only by `deps.ts` and the contract suite | B0 · *the implementation files are imported only by deps.ts and the contract suite* |
 | in `todo-app`, `signal(` `computed(` `batch(` appear only in `todo-model.ts`; `effect(` only in `list-controller.ts` and `model-kit.ts`; `untracked(` only in those three | B0 · *in todo-app, signals are created only in a model…* |
 | in `todo-ui`, only `use-value.ts` imports `@todo/signals` | B0 · *in todo-ui, only use-value.ts reaches the signals* |
@@ -78,17 +78,17 @@ every current test still passes. Kept by review, not by a test.
 | `createList()` after `dispose()` throws | B4 · *refuses createList() once the app is disposed* |
 | `TodoApi`'s port files (`types.ts`, `*-api.ts`) spell no `Command`, `Model` or `BaseClass`, and import neither the bus, the model base nor the declarations | B0 · *keeps TodoApi and its adapters free of commands, models and the bus* |
 | `ListController.dispose()` lands no model write after it resolves | B3 · *is WRITE-quiescent…* in `list-controller.test.ts`, and `dispose-liveness.test.ts` |
-| `app.dispose()` resolves while a controller's run awaits a view-settled command — a host's approval dialog, or the controller's own confirm | `B3-controller/tests/dispose-liveness.test.ts` |
+| `app.dispose()` resolves while a controller's run awaits a view-settled command — a host's approval dialog, or the controller's own confirm | `tests/B3-controller/dispose-liveness.test.ts` |
 | when a view that held the focus closes, focus returns to where it was when the view opened | B5 · *an answered dialog returns focus…* and *a view that did not hold focus leaves it where it is*; B6 end to end |
-| the shadcn kit's styles actually reach the built CSS | `B6-app/tests/emitted-css.test.ts` |
+| the shadcn kit's styles actually reach the built CSS | `tests/B6-app/emitted-css.test.ts` |
 
 ## Recipes
 
 ### Add a command
 
-1. Declare it in `lib/todo-core/src/declarations.ts` with `Command.required`, a zod input and
+1. Declare it in `src/lib/todo-core/src/declarations.ts` with `Command.required`, a zod input and
    output, and a `label` (the menu reads it). Add it to `TODO_COMMANDS` if a user can invoke it.
-2. Add a method to `TodoApi` (`lib/todo-core/src/types.ts`) and `MemTodoApi` — **async**, returning
+2. Add a method to `TodoApi` (`src/lib/todo-core/src/types.ts`) and `MemTodoApi` — **async**, returning
    a Promise, knowing nothing of commands or models.
 3. Register a default in `registerTodoCommands` (`todo-commands.ts`) through `fallback(...)` at
    `{ priority: -1 }`, delegating to the api in one line.
@@ -109,7 +109,7 @@ A view can only reach a controller through the model, so every new gesture is a 
 2. Add the signal to `createTodoListModel` with a comment naming its class, its mutator to `view`,
    and — for an edge — its read to `control.edges` and its drain to `control`. Update the key lists
    in B1 · *the two facets*.
-3. Test in `B1-models` with `watch` (test-support), which counts at the source.
+3. Test in `B1-models` with `watch` (tests/support), which counts at the source.
 
 ### Handle an intent in the controller
 
@@ -126,10 +126,10 @@ A view can only reach a controller through the model, so every new gesture is a 
 
 ### Add a view
 
-1. Declare its command in `lib/todo-app/src/ui-declarations.ts` (never in `todo-core`, which may not
+1. Declare its command in `src/lib/todo-app/src/ui-declarations.ts` (never in `todo-core`, which may not
    name `ui:`), with the view's model as input and the view's result as output. Export it from
    `models.ts`.
-2. Write the component in `lib/todo-ui/src/views/`. Import from `@todo/app/models` and nothing else
+2. Write the component in `src/lib/todo-ui/src/views/`. Import from `@todo/app/models` and nothing else
    in `todo-app`. Take `{ model, settle }`. Bind with `useValue(model.x)` — and pass `shallowEqual`
    for any read returning an array or object. Turn every gesture into a call to a view-side mutator
    (one on the `view` facet); settle from the explicit gesture handlers (not from a derived "the

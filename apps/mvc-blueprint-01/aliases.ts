@@ -23,21 +23,21 @@ const layers = {
   // Before "@todo/app": Vite matches string aliases by PREFIX in declaration
   // order, so the other way round "@todo/app/models" resolves to
   // ".../index.ts/models".
-  "@todo/app/models": r("./lib/todo-app/src/models.ts"),
-  "@todo/core": r("./lib/todo-core/src/index.ts"),
-  "@todo/app": r("./lib/todo-app/src/index.ts"),
+  "@todo/app/models": r("./src/lib/todo-app/src/models.ts"),
+  "@todo/core": r("./src/lib/todo-core/src/index.ts"),
+  "@todo/app": r("./src/lib/todo-app/src/index.ts"),
   // Before "@todo/ui", for the same prefix reason. The adapter's own entry:
   // the bus-facing half of the view layer, with no React in its import graph,
   // so a headless suite can take it without loading react-dom and the kit.
-  "@todo/ui/adapter": r("./lib/todo-ui/src/view-adapter.ts"),
-  "@todo/ui": r("./lib/todo-ui/src/index.ts"),
+  "@todo/ui/adapter": r("./src/lib/todo-ui/src/view-adapter.ts"),
+  "@todo/ui": r("./src/lib/todo-ui/src/index.ts"),
 };
 
 /**
  * What the APP is built with: `@todo/signals` is the swap point `deps.ts`,
  * never an implementation directly — so the build uses whatever `deps.ts` says.
  */
-export const alias = { "@todo/signals": r("./lib/signals/deps.ts"), ...layers };
+export const alias = { "@todo/signals": r("./src/lib/signals/deps.ts"), ...layers };
 
 /**
  * What a TEST project resolves with: `@todo/signals` pinned to one
@@ -45,6 +45,6 @@ export const alias = { "@todo/signals": r("./lib/signals/deps.ts"), ...layers };
  * pin took effect in every project.
  */
 export const aliasFor = (signals: SignalsImpl) => ({
-  "@todo/signals": r(`./lib/signals/${signals}.ts`),
+  "@todo/signals": r(`./src/lib/signals/${signals}.ts`),
   ...layers,
 });

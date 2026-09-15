@@ -11,13 +11,13 @@
     "jsx": "react-jsx",
     "types": ["node"],
     "paths": {
-      "@todo/signals": ["./lib/signals/deps.ts"],
-      "@todo/core": ["./lib/todo-core/src/index.ts"],
-      "@todo/app": ["./lib/todo-app/src/index.ts"],
-      "@todo/app/models": ["./lib/todo-app/src/models.ts"],
-      "@todo/ui/adapter": ["./lib/todo-ui/src/view-adapter.ts"],
-      "@todo/ui": ["./lib/todo-ui/src/index.ts"]
+      "@todo/signals": ["./src/lib/signals/deps.ts"],
+      "@todo/core": ["./src/lib/todo-core/src/index.ts"],
+      "@todo/app": ["./src/lib/todo-app/src/index.ts"],
+      "@todo/app/models": ["./src/lib/todo-app/src/models.ts"],
+      "@todo/ui/adapter": ["./src/lib/todo-ui/src/view-adapter.ts"],
+      "@todo/ui": ["./src/lib/todo-ui/src/index.ts"]
     }
   },
-  "include": ["lib/**/*", "src/**/*", "*/tests/**/*", "test-support/**/*", "aliases.ts", "vitest.config.ts", "vitest.browser.config.ts", "vite.config.ts"]
+  "include": ["src/**/*", "tests/**/*", "aliases.ts", "vitest.config.ts", "vitest.browser.config.ts", "vite.config.ts"]
 }

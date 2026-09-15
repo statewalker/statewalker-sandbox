@@ -5,8 +5,8 @@ import { Commands } from "@statewalker/shared-commands";
 import { bootstrap, createTodoListModel, MenuController, uiShowMenu } from "@todo/app";
 import { ViewAdapter } from "@todo/ui/adapter";
 import { describe, expect, it } from "vitest";
-import { seededApi } from "../../test-support/api.js";
-import { claimListView } from "../../test-support/views.js";
+import { seededApi } from "../support/api.js";
+import { claimListView } from "../support/views.js";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 

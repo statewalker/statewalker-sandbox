@@ -32,7 +32,7 @@ beside the declaration: two names for one thing, which can disagree.
 
 ### D4 — Three directories, not three packages · adopted, reverses an earlier design
 
-The layers are `lib/todo-{core,app,ui}` behind aliases. The earlier plan chose three packages
+The layers are `src/lib/todo-{core,app,ui}` behind aliases. The earlier plan chose three packages
 "because that is the split a boundary suite can police". It was wrong on both counts: the sibling
 app is one package and its suite polices it fine, and what let a boundary rot there was never having
 a grep for it. Packages would have bought build steps and stale-`dist` hazards for nothing.
@@ -247,7 +247,7 @@ React views. A headless harness over the adapter uses the real `MemTodoApi` and 
 
 ### S1 — Signals behind one alien-shaped contract, one import point · adopted
 
-Five functions, `lib/signals/contract.ts`, implemented by `alien.ts` and `preact.ts`; the app
+Five functions, `src/lib/signals/contract.ts`, implemented by `alien.ts` and `preact.ts`; the app
 imports `@todo/signals` = `deps.ts`, one line. B0 fails if either library is imported anywhere else.
 Swapping libraries is editing that line and running the ladder.
 

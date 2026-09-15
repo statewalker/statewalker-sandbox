@@ -2,7 +2,7 @@ import { createTodoListModel, type Todo } from "@todo/app/models";
 import { shallowEqual, useValue } from "@todo/ui";
 import { Component, createElement, type ReactNode, useLayoutEffect } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { flush, render, waitFor } from "../../test-support/react.js";
+import { flush, render, waitFor } from "../support/react.js";
 
 /**
  * B5 — the whole React binding, over a real Chromium, on the signals contract

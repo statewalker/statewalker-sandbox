@@ -36,7 +36,7 @@ const KIT_ONLY_RULE = new RegExp(`\\.${KIT_ONLY_CLASS}\\s*\\{`);
 
 /** Builds the app into a scratch directory and returns its one emitted stylesheet. */
 async function emittedCss(plugins: Plugin[] = []): Promise<string> {
-  const outDir = mkdtempSync(join(tmpdir(), "mvc-blueprint-signals-b6-"));
+  const outDir = mkdtempSync(join(tmpdir(), "mvc-blueprint-01-b6-"));
   try {
     await build({
       root: APP,

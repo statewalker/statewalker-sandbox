@@ -1,6 +1,6 @@
 import { effect, untracked } from "@todo/signals";
 import type { TodoListModel } from "@todo/app/models";
-import type { SignalsImplementation } from "../lib/signals/contract.js";
+import type { SignalsImplementation } from "../../src/lib/signals/contract.js";
 
 /**
  * Test-side helpers for signals: the type of what each Vitest project

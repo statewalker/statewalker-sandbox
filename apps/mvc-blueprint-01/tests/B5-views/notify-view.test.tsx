@@ -2,7 +2,7 @@ import { Commands } from "@statewalker/shared-commands";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NotifyModel, uiNotify } from "@todo/app/models";
 import { NotifyView, registerViews } from "@todo/ui";
-import { createHost, render, waitFor } from "../../test-support/react.js";
+import { createHost, render, waitFor } from "../support/react.js";
 
 /** B5 · the toast. It settles itself; the timeout is injected so this suite waits milliseconds, not seconds. */
 

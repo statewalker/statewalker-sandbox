@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import * as alien from "../../lib/signals/alien.js";
-import type { Signals, SignalsImplementation } from "../../lib/signals/contract.js";
-import * as preact from "../../lib/signals/preact.js";
+import * as alien from "../../src/lib/signals/alien.js";
+import type { Signals, SignalsImplementation } from "../../src/lib/signals/contract.js";
+import * as preact from "../../src/lib/signals/preact.js";
 
 /**
  * B1 · the signals contract. Every guarantee the app relies on, run against

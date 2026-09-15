@@ -1,6 +1,6 @@
 import { createTodoListModel, expectReplacedNotMutated, type TodoListModel } from "@todo/app";
 import { describe, expect, it } from "vitest";
-import { watch } from "../../test-support/signals.js";
+import { watch } from "../support/signals.js";
 
 /**
  * B1 · the todo model. Change is counted at the source (`watch`, an effect on

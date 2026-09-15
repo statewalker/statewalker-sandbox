@@ -22,7 +22,7 @@ const REACT_STACK = /^(react|react-dom|@statewalker\/ui\.view\.shadcn)(\/.*)?$/;
  * project's headless dependencies does.
  */
 const headless = (): Plugin => ({
-  name: "mvc-blueprint-signals:headless",
+  name: "mvc-blueprint-01:headless",
   enforce: "pre",
   resolveId(source, importer) {
     if (!REACT_STACK.test(source)) return null;
@@ -34,8 +34,8 @@ const headless = (): Plugin => ({
   },
 });
 
-const NODE_SUITES = "*/tests/**/*.test.ts";
-const BROWSER_SUITES = ["B5-*/tests/**/*.test.tsx", "B6-*/tests/**/*.test.tsx"];
+const NODE_SUITES = "tests/**/*.test.ts";
+const BROWSER_SUITES = ["tests/B5-*/**/*.test.tsx", "tests/B6-*/**/*.test.tsx"];
 
 /**
  * One node project per signals implementation. `node:alien` runs every node
@@ -61,9 +61,9 @@ export default defineConfig({
     projects: [
       nodeProject("alien", []),
       nodeProject("preact", [
-        "B0-boundaries/**",
-        "B1-models/tests/signals-contract.test.ts",
-        "B6-app/**",
+        "tests/B0-boundaries/**",
+        "tests/B1-models/signals-contract.test.ts",
+        "tests/B6-app/**",
       ]),
     ],
   },

@@ -16,19 +16,19 @@ as correct, and could not fail. The catalogue below is the most reusable thing i
    count notifies — not a derived value that some other mechanism also keeps stable.
 4. **Headless first.** Node for everything that can be proven without a browser: models, commands,
    controllers, and the view *protocol*. Real Chromium only for what needs one.
-5. **One rung, one property.** Each `B*/` directory proves one thing about the design. When a rung's
-   suite fails, it names which part of the architecture broke.
+5. **One rung, one property.** Each `tests/B*/` directory proves one thing about the design. When a
+   rung's suite fails, it names which part of the architecture broke.
 
 ## Layout: the ladder
 
 ```
-B0-boundaries     the layering, as a fact about the files                  node
-B1-models         models, facets, the three input classes, the signals contract    node
-B2-commands       the command surface, defaults, override, `claimed`       node
-B3-controller     reconciliation, coalescing, failure, disposal            node
-B4-view-protocol  the adapter, bootstrap order, the panel lifecycle        node
-B5-views          the React views and useValue                            Chromium
-B6-app            the running app end to end; the kit's CSS is emitted     Chromium + node
+tests/B0-boundaries     the layering, as a fact about the files                  node
+tests/B1-models         models, facets, the three input classes, the signals contract    node
+tests/B2-commands       the command surface, defaults, override, `claimed`       node
+tests/B3-controller     reconciliation, coalescing, failure, disposal            node
+tests/B4-view-protocol  the adapter, bootstrap order, the panel lifecycle        node
+tests/B5-views          the React views and useValue                            Chromium
+tests/B6-app            the running app end to end; the kit's CSS is emitted     Chromium + node
 ```
 
 B1–B5 run on both signals libraries (`node:alien`, `node:preact`, `browser:alien`, `browser:preact`).
@@ -44,7 +44,7 @@ The browser project is `vitest.browser.config.ts`: `@vitest/browser-playwright`,
 
 ## The tools
 
-### The model kit — `lib/todo-app/src/model-kit.ts`
+### The model kit — `src/lib/todo-app/src/model-kit.ts`
 
 Assertion helpers that hold models and controllers to the design's rules. Each takes **mutators**,
 never a field path — a helper that pokes `input[field] = …` would teach the opposite of the rule it
@@ -56,7 +56,7 @@ enforces.
 | `expectCoalescedEdge({ bump, read, actions })` | a state-latest edge collapses repeated bumps | a controller that acts per bump, one that never acts, and a "mutator" that does not raise the counter |
 | `expectReplacedNotMutated(read, mutate)` | the value was replaced and an effect over `read` saw it | an in-place `push` |
 
-### `MemTodoApi` — `lib/todo-core/src/mem-todo-api.ts`
+### `MemTodoApi` — `src/lib/todo-core/src/mem-todo-api.ts`
 
 The reference adapter every headless suite runs against. Two properties make it a good test double:
 
@@ -65,7 +65,7 @@ The reference adapter every headless suite runs against. Two properties make it 
 - **`calls: string[]`** records every method invoked. Use it to witness that a handler ran — the
   store's contents often look identical whether it ran or not.
 
-### `test-support/`
+### `tests/support/`
 
 - **`views.ts`** — view-layer stand-ins suites boot with. Since the list controller shows its own
   panel on `activate()`, any suite that activates one must register a `ui:show-list` renderer — the

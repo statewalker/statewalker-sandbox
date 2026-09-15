@@ -12,13 +12,13 @@
     "test:watch": "vitest",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "typecheck": "tsc --noEmit",
-    "test:B0": "vitest run B0-boundaries",
-    "test:B1": "vitest run B1-models",
-    "test:B2": "vitest run B2-commands",
-    "test:B3": "vitest run B3-controller",
-    "test:B4": "vitest run B4-view-protocol",
-    "test:B5": "vitest run --config vitest.browser.config.ts B5-views",
-    "test:B6": "vitest run B6-app && vitest run --config vitest.browser.config.ts B6-app"
+    "test:B0": "vitest run tests/B0-boundaries",
+    "test:B1": "vitest run tests/B1-models",
+    "test:B2": "vitest run tests/B2-commands",
+    "test:B3": "vitest run tests/B3-controller",
+    "test:B4": "vitest run tests/B4-view-protocol",
+    "test:B5": "vitest run --config vitest.browser.config.ts tests/B5-views",
+    "test:B6": "vitest run tests/B6-app && vitest run --config vitest.browser.config.ts tests/B6-app"
   },
   "dependencies": {
     "@preact/signals-core": "1.14.4",
