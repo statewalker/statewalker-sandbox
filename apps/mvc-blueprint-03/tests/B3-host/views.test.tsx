@@ -98,6 +98,35 @@ describe("B3 · todo list panel", () => {
     view.unmount();
   });
 
+  it("a row's controls are disabled and busy while their action runs", async () => {
+    const { model, view } = listSetup();
+    const checkboxes = () => all<HTMLInputElement>(view.host, 'input[aria-label^="Done: "]');
+    const rowButtons = (verb: string) =>
+      all<HTMLButtonElement>(view.host, `button[aria-label^="${verb} "]`);
+    await waitFor(() => checkboxes().length === 2);
+    expect(checkboxes().map((c) => c.disabled)).toEqual([false, false]);
+
+    model.control.actions.toggle.update({ running: true });
+    await waitFor(() => checkboxes().every((c) => c.disabled));
+    expect(checkboxes().map((c) => c.getAttribute("aria-busy"))).toEqual(["true", "true"]);
+    expect(rowButtons("Delete").map((b) => b.disabled)).toEqual([false, false]);
+    model.control.actions.toggle.update({ running: false });
+    await waitFor(() => checkboxes().every((c) => !c.disabled));
+
+    model.control.actions.remove.update({ running: true });
+    await waitFor(() => rowButtons("Delete").every((b) => b.disabled));
+    expect(rowButtons("Delete").map((b) => b.getAttribute("aria-busy"))).toEqual(["true", "true"]);
+    expect(rowButtons("Edit").map((b) => b.disabled)).toEqual([false, false]);
+    model.control.actions.remove.update({ running: false });
+    await waitFor(() => rowButtons("Delete").every((b) => !b.disabled));
+
+    model.control.actions.edit.update({ running: true });
+    await waitFor(() => rowButtons("Edit").every((b) => b.disabled));
+    model.control.actions.edit.update({ running: false });
+    await waitFor(() => rowButtons("Edit").every((b) => !b.disabled));
+    view.unmount();
+  });
+
   it("click selects, Ctrl-click extends, and the selection shows", async () => {
     const { model, view, row } = listSetup();
     await waitFor(() => row("t1") !== null);

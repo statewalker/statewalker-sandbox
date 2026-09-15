@@ -26,6 +26,12 @@ export function TodoListPanel({ model }: { model: TodoListView }) {
   const selection = useModel(model.getSelection, model.onSelectionUpdate);
   const newTitle = useModel(model.getNewTitle, model.onNewTitleUpdate);
   const outcome = useModel(model.getOutcome, model.onOutcomeUpdate);
+  // A row control is disabled while its own action runs: a second gesture would move the selection
+  // while its submit is ignored. Enablement is not read here — the gesture selects the row first.
+  const { toggle, edit, remove } = model.actions;
+  const toggling = useModel(toggle.getState, toggle.onStateUpdate).running;
+  const editing = useModel(edit.getState, edit.onStateUpdate).running;
+  const removing = useModel(remove.getState, remove.onStateUpdate).running;
   const [menu, setMenu] = useState<{ x: number; y: number } | undefined>(undefined);
   const selected = new Set(selection);
 
@@ -108,10 +114,12 @@ export function TodoListPanel({ model }: { model: TodoListView }) {
               <Checkbox
                 aria-label={`Done: ${todo.title}`}
                 checked={todo.done}
+                disabled={toggling}
+                aria-busy={toggling}
                 onClick={(event) => event.stopPropagation()}
                 onChange={() => {
                   model.select([todo.id]);
-                  model.actions.toggle.submit();
+                  toggle.submit();
                 }}
               />
               <span
@@ -124,7 +132,9 @@ export function TodoListPanel({ model }: { model: TodoListView }) {
                 variant="ghost"
                 size="sm"
                 aria-label={`Edit "${todo.title}"`}
-                onClick={onRow(todo.id, model.actions.edit)}
+                disabled={editing}
+                aria-busy={editing}
+                onClick={onRow(todo.id, edit)}
               >
                 Edit
               </Button>
@@ -133,7 +143,9 @@ export function TodoListPanel({ model }: { model: TodoListView }) {
                 variant="ghost"
                 size="sm"
                 aria-label={`Delete "${todo.title}"`}
-                onClick={onRow(todo.id, model.actions.remove)}
+                disabled={removing}
+                aria-busy={removing}
+                onClick={onRow(todo.id, remove)}
               >
                 Delete
               </Button>
