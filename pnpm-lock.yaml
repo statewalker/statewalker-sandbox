@@ -508,9 +508,6 @@ importers:
 
   apps/httpeers-shell-protos:
     dependencies:
-      '@biscuit-auth/biscuit-wasm':
-        specifier: 0.6.0
-        version: 0.6.0
       '@statewalker/shared-adapters':
         specifier: 0.1.1
         version: 0.1.1
@@ -518,6 +515,9 @@ importers:
         specifier: 0.2.1
         version: 0.2.1(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.7.1(valibot@1.4.2(typescript@5.9.3)))(quansync@1.0.0)(typebox@1.1.38)(valibot@1.4.2(typescript@5.9.3))(zod-to-json-schema@3.25.2(zod@4.5.4))(zod@4.5.4)
       '@statewalker/shared-slots':
+        specifier: 0.2.1
+        version: 0.2.1
+      '@statewalker/webrun-biscuit':
         specifier: 0.2.1
         version: 0.2.1
       basecoat-css:
@@ -3515,6 +3515,9 @@ packages:
 
   '@statewalker/webrun-biscuit@0.2.0':
     resolution: {integrity: sha512-yKFF/4TlL3lbum6HCIxZElecav6OHf3ed9BZoDqd8SqP/EwW4IGJzbQLHBKBRWUiiX/AuStcQfVpknXKOqco3w==}
+
+  '@statewalker/webrun-biscuit@0.2.1':
+    resolution: {integrity: sha512-Qv7Ax3rbnACBba7qKTzd/7ZnRRPh77aIMTqXkfSgfJrDkUYeQasIkG+oDkggGyfd46DnJjyL4saXYSQYFCQw7Q==}
 
   '@statewalker/webrun-builder@0.1.1':
     resolution: {integrity: sha512-gb+ynxW/a4VBDKGY1ttjZ4tJVk7fijxjqL7BVn6iMIY190gy3I6S/yijc52shOyxjBw+CUhGSb2Uu9O/hAxD6w==}
@@ -9540,6 +9543,11 @@ snapshots:
       - '@types/react-dom'
 
   '@statewalker/webrun-biscuit@0.2.0':
+    dependencies:
+      '@noble/curves': 2.4.0
+      '@noble/hashes': 2.4.0
+
+  '@statewalker/webrun-biscuit@0.2.1':
     dependencies:
       '@noble/curves': 2.4.0
       '@noble/hashes': 2.4.0

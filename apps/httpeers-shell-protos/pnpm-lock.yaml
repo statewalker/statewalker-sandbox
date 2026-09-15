@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@biscuit-auth/biscuit-wasm':
-        specifier: 0.6.0
-        version: 0.6.0
       '@statewalker/shared-adapters':
         specifier: 0.1.1
         version: 0.1.1
@@ -18,6 +15,9 @@ importers:
         specifier: 0.2.1
         version: 0.2.1(@types/json-schema@7.0.15)(quansync@0.2.11)(zod@4.5.4)
       '@statewalker/shared-slots':
+        specifier: 0.2.1
+        version: 0.2.1
+      '@statewalker/webrun-biscuit':
         specifier: 0.2.1
         version: 0.2.1
       basecoat-css:
@@ -51,10 +51,6 @@ importers:
 
 packages:
 
-  '@biscuit-auth/biscuit-wasm@0.6.0':
-    resolution: {integrity: sha512-QM4rZU+f/WI1tr2vPMCErrGXrJdfK4mTiY1m/JyR1eIiOIJOzoHUHf3Z+hE2a1+Dt9vm6wgGyJg89S871JN7BQ==}
-    engines: {node: '>=22.0.0'}
-
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
 
@@ -70,6 +66,14 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@noble/curves@2.4.0':
+    resolution: {integrity: sha512-P4/62zrgfH33CneE3Dn4WhJVA22YUU0eR51wKIan4NVRvwsA0YnPTwWGpNbpuacSujmSFLvyzpyuR30+fbq2Ew==}
+    engines: {node: '>= 20.19.0'}
+
+  '@noble/hashes@2.4.0':
+    resolution: {integrity: sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==}
+    engines: {node: '>= 20.19.0'}
 
   '@oxc-project/types@0.148.0':
     resolution: {integrity: sha512-Nm4s/jB+4FpFsPhWGEC4h7rzksesmtnMXomo6rCMcg/b8zLQuOziRgkCS1fxDCXOlJB/6Q8oABOZ/OP6RIPj9A==}
@@ -292,6 +296,9 @@ packages:
 
   '@statewalker/shared-slots@0.2.1':
     resolution: {integrity: sha512-Hk6aW70bmjs/LssDjZxfKv+RA5MklbgQusJcWmaimVUFEWewWa+K7FiSZ936nNqyHTNbOQUx/4grwQC2whb6Tw==}
+
+  '@statewalker/webrun-biscuit@0.2.1':
+    resolution: {integrity: sha512-Qv7Ax3rbnACBba7qKTzd/7ZnRRPh77aIMTqXkfSgfJrDkUYeQasIkG+oDkggGyfd46DnJjyL4saXYSQYFCQw7Q==}
 
   '@tailwindcss/cli@4.3.3':
     resolution: {integrity: sha512-ZvS/n1ZHOBKcVlhkt8l5NNr1EDXk1NboYO5CYDOs6NUmvT9z6bzkwsosaJftY57T/3gWNzWMJzIXLodZC8ssdw==}
@@ -871,8 +878,6 @@ packages:
 
 snapshots:
 
-  '@biscuit-auth/biscuit-wasm@0.6.0': {}
-
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
@@ -891,6 +896,12 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  '@noble/curves@2.4.0':
+    dependencies:
+      '@noble/hashes': 2.4.0
+
+  '@noble/hashes@2.4.0': {}
 
   '@oxc-project/types@0.148.0': {}
 
@@ -1030,6 +1041,11 @@ snapshots:
       - zod-to-json-schema
 
   '@statewalker/shared-slots@0.2.1': {}
+
+  '@statewalker/webrun-biscuit@0.2.1':
+    dependencies:
+      '@noble/curves': 2.4.0
+      '@noble/hashes': 2.4.0
 
   '@tailwindcss/cli@4.3.3':
     dependencies:
