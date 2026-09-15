@@ -634,7 +634,7 @@ importers:
         specifier: 'catalog:'
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@25.9.5)(happy-dom@20.14.0)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0))
 
-  apps/mvc-blueprint:
+  apps/mvc-blueprint-00:
     dependencies:
       '@statewalker/shared-baseclass':
         specifier: 0.1.1
@@ -692,7 +692,7 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0(@opentelemetry/api@1.9.1)(@types/node@25.9.5)(@vitest/browser-playwright@5.0.0)(@vitest/ui@5.0.0)(happy-dom@20.14.0)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0))
 
-  apps/mvc-blueprint-signals:
+  apps/mvc-blueprint-01:
     dependencies:
       '@preact/signals-core':
         specifier: 1.14.4
@@ -753,7 +753,7 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0(@opentelemetry/api@1.9.1)(@types/node@25.9.5)(@vitest/browser-playwright@5.0.0)(@vitest/ui@5.0.0)(happy-dom@20.14.0)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0))
 
-  apps/mvc-blueprint-v2:
+  apps/mvc-blueprint-02:
     dependencies:
       '@statewalker/shared-adapters':
         specifier: 'catalog:'

@@ -1,9 +1,9 @@
 {
-  "name": "@statewalker/mvc-blueprint-signals",
+  "name": "@statewalker/mvc-blueprint-00",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The MVC blueprint on signals — the same architecture, with its model substrate behind one signals contract.",
+  "description": "The MVC blueprint — a TODO app whose purpose is to separate substrate from application.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -21,11 +21,10 @@
     "test:B6": "vitest run B6-app && vitest run --config vitest.browser.config.ts B6-app"
   },
   "dependencies": {
-    "@preact/signals-core": "1.14.4",
+    "@statewalker/shared-baseclass": "0.1.1",
     "@statewalker/shared-commands": "0.2.1",
     "@statewalker/shared-registry": "catalog:",
     "@statewalker/ui.view.shadcn": "catalog:",
-    "alien-signals": "3.2.1",
     "react": "catalog:",
     "react-dom": "catalog:",
     "zod": "4.5.4"
