@@ -49,8 +49,9 @@ a draft the user changes before the pass reaches it must not retarget an already
 a Toggle or Delete submitted over an empty selection does nothing rather than acting on whatever is
 selected later. For the same reason, an edit session's open and close are serialised: an open waits for
 any close still in flight before it registers a new panel, so two opens never race for the same panel
-id, and a Save that has already reached the api is always broadcast, logged and toasted — even if its
-editor was replaced meanwhile — while only the bookkeeping that assumes the session is still current
+id, and a Save that has already reached the api is broadcast, logged and toasted even if its editor
+was replaced meanwhile — unless the controller has been disposed, since a disposed controller issues
+no command — while only the bookkeeping that assumes the session is still current
 (clearing `running`, marking the form saved) is skipped once it is not. Clear-completed broadcasts
 `todos:changed` on the same principle: whenever at least one todo was actually removed, even if the
 rest of the pass then fails.

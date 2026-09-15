@@ -1,11 +1,33 @@
 import { notify } from "@notifications/commands";
 import { panelsSlot } from "@sys/extension-points";
+import { setTodoApi } from "@todos/core";
 import { createEditModel, TodoEditController, todoEditKind, todosEditOpen } from "@todos/edit";
 import { todosChanged } from "@todos/events";
 import { describe, expect, it, vi } from "vitest";
+import { ScriptedTodoApi } from "../support/api.js";
 import { newTestContext, settle } from "../support/context.js";
 
 const milk = { id: "t1", title: "Buy milk", done: false };
+
+/** Holds every `update` until `release()`, so a test can act while a Save is in flight. */
+class HeldUpdateApi extends ScriptedTodoApi {
+  private _release: () => void = () => {};
+  private readonly _held = new Promise<void>((resolve) => {
+    this._release = resolve;
+  });
+  /** `update` calls that have started and are held. */
+  waiting = 0;
+
+  release(): void {
+    this._release();
+  }
+
+  override async update(...args: Parameters<ScriptedTodoApi["update"]>) {
+    this.waiting++;
+    await this._held;
+    return super.update(...args);
+  }
+}
 
 describe("B2 · edit model", () => {
   it("starts from the todo: a clean, valid draft, Save disabled, Cancel enabled", () => {
@@ -62,8 +84,9 @@ describe("B2 · edit model", () => {
 });
 
 describe("B2 · edit controller", () => {
-  async function start() {
+  async function start(api?: ScriptedTodoApi) {
     const env = newTestContext([milk, { id: "t2", title: "Walk dog", done: true }]);
+    if (api) setTodoApi(env.ctx, api);
     const controller = new TodoEditController();
     controller.activate(env.ctx);
     const toasts: { text: string; level: string }[] = [];
@@ -75,7 +98,7 @@ describe("B2 · edit controller", () => {
     env.commands.listen(todosChanged, (cmd) => {
       changed.push(cmd.payload.source);
     });
-    return { ...env, controller, toasts, changed };
+    return { ...env, api: api ?? env.api, controller, toasts, changed };
   }
 
   it("open shows the editor as a side panel and resolves opened", async () => {
@@ -214,6 +237,24 @@ describe("B2 · edit controller", () => {
     // The replacement editor (t2) is unaffected: the stale save did not close it.
     expect(controller.current?.view.details.getTodo().id).toBe("t2");
     await controller.dispose();
+  });
+
+  it("a Save whose write lands after dispose issues no command: no broadcast, no toast, no log", async () => {
+    const held = new HeldUpdateApi([milk]);
+    const { api, commands, controller, recorder, toasts, changed } = await start(held);
+    await commands.call(todosEditOpen, { id: "t1" }).promise;
+    controller.current?.view.form.setTitle("Buy oat milk");
+    controller.current?.view.form.actions.save.submit();
+    await settle();
+    expect(held.waiting).toBe(1);
+    await controller.dispose();
+    held.release();
+    await settle();
+    // The write itself landed: the api call was already under way when dispose came.
+    expect((await api.list()).find((t) => t.id === "t1")).toMatchObject({ title: "Buy oat milk" });
+    expect(changed).toEqual([]);
+    expect(toasts).toEqual([]);
+    expect(recorder.calls.some((c) => c.args[0] === "action:save")).toBe(false);
   });
 
   it("Cancel closes the editor without saving", async () => {

@@ -73,7 +73,8 @@ runs.
   opened from, so a change made elsewhere meanwhile is not reverted (nothing changed: no call, the
   editor just closes); once that write reaches the api, `todos:changed` is broadcast, the
   save is logged and a "Saved" toast is shown, whether or not this editor is still the current one —
-  only clearing `running` and marking the form saved are skipped once the session has moved on. A
+  unless the controller has been disposed; only clearing `running` and marking the form saved are
+  skipped once the session has moved on. A
   failure keeps the draft and shows the error.
 - **Clear-completed.** Answers `…:ask` by showing a dialog and returning at once. Clear removes the done
   todos and toasts; `todos:changed` is broadcast whenever at least one todo was actually removed, even
@@ -94,7 +95,8 @@ success, and in a toast until it expires.
 Everything is released through `newRegistry()`: controllers, model implementations (their channels and
 child actions), per-editor and per-dialog sessions, React roots, and the app root. A registry releases
 LIFO and asynchronously, so a model's `dispose()` first sets a synchronous flag (and an `alive` signal
-that disables its actions) before releasing.
+that disables its actions) before releasing. A disposed controller issues no command: work that lands
+after `dispose()` is neither broadcast, logged nor toasted, and its models are not written.
 
 ## 8. Tests
 

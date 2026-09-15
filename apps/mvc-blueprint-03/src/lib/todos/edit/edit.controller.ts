@@ -204,13 +204,13 @@ export class TodoEditController {
     const result = await attempt(services.log, "save", () => services.api.update(id, patch));
 
     if (result.ok) {
-      // The write already landed in the api: broadcast regardless of whether
-      // this session is still current, so other listeners (the list) see it.
-      // Log and toast only while the controller still owns them — once
-      // disposed, broadcasting is this pass's only remaining job.
-      if (!this._disposed) services.log.info("action:save", { id });
-      services.commands.call(todosChanged, { source: "todos.edit" });
+      // The write already landed in the api: broadcast, log and toast it
+      // regardless of whether this session is still current, so other
+      // listeners (the list) see it. A disposed controller issues no command
+      // at all (spec §9), so all three wait on that alone.
       if (!this._disposed) {
+        services.log.info("action:save", { id });
+        services.commands.call(todosChanged, { source: "todos.edit" });
         notifyUser(services.commands, services.log, { text: "Saved", level: "info" });
       }
     }
