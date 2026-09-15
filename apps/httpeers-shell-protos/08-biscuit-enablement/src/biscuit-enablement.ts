@@ -1,6 +1,16 @@
 // RECOVERED-FROM-ARCHIVE: notes/drive/2026-09-02.Httpeers-Shell/
 //   17-prototype-08-biscuit-enablement.tar.gz -> proto8-biscuit/src/biscuit-enablement.ts
-// Verbatim apart from this header. Nothing in the body was rewritten.
+// ADAPTED 2026-09-15 — no longer verbatim. The engine is `@statewalker/webrun-biscuit`
+// (pure TypeScript), not `@biscuit-auth/biscuit-wasm`. The recovered body survives
+// unchanged at statewalker-sandbox `cd5bb00`, this same path. The `Enablement`
+// surface, the clause grammar and the parameter-injection rule did not change; what
+// did, and why, is in PROVENANCE.md.
+import {
+  type Evaluation,
+  evaluate as evaluateProgram,
+  type Predicate,
+  type Term,
+} from "@statewalker/webrun-biscuit";
 import type { Enablement, Fact } from "./enablement.js";
 
 /**
@@ -10,25 +20,26 @@ import type { Enablement, Fact } from "./enablement.js";
  * capability checks, so "hidden because you lack the right" and "hidden
  * because nothing is selected" become one code path over one fact set.
  *
- * Loading is async and the payload is ~2.35 MB of WASM, so the module is
- * dynamically imported and memoised. Nothing above this file changes: the
- * exported object satisfies `Enablement` exactly as the stub does.
+ * Loading stays async and memoised, so nothing above this file changes: the
+ * exported object satisfies `Enablement` exactly as the stub does. The payload
+ * that made that necessary — ~2.35 MB of WASM — is gone; the engine is about
+ * 100 KB of JavaScript.
  */
 
-type BiscuitModule = typeof import("@biscuit-auth/biscuit-wasm");
+type BiscuitModule = typeof import("@statewalker/webrun-biscuit");
 
 let loading: Promise<BiscuitModule> | undefined;
 
 /**
- * Load and memoise the WASM module.
+ * Load and memoise the engine module.
  *
  * NOTE the memo is NOT cleared on rejection here, unlike prototype 5's
- * activation. A missing WASM binary is not a transient condition, and
- * retrying a failed load on every menu render would be pathological. If
- * retry is ever wanted it should be explicit, not implicit.
+ * activation. A missing module is not a transient condition, and retrying a
+ * failed load on every menu render would be pathological. If retry is ever
+ * wanted it should be explicit, not implicit.
  */
 export function loadBiscuit(): Promise<BiscuitModule> {
-  loading ??= import("@biscuit-auth/biscuit-wasm");
+  loading ??= import("@statewalker/webrun-biscuit");
   return loading;
 }
 
@@ -60,6 +71,22 @@ function clauses(when: string): string[] {
   return out;
 }
 
+/** A term as Datalog prints it — the form the wasm `Fact.toString()` returned. */
+function printTerm(term: Term): string {
+  switch (term.t) {
+    case "str":
+      return JSON.stringify(term.v);
+    case "int":
+    case "bool":
+      return String(term.v);
+    default:
+      return JSON.stringify(term);
+  }
+}
+
+const printFact = (fact: Predicate): string =>
+  `${fact.name}(${fact.terms.map(printTerm).join(", ")})`;
+
 export interface BiscuitEnablement extends Enablement {
   /** Run a Datalog rule and return the first term of each result. */
   query(ruleSource: string): string[];
@@ -75,27 +102,29 @@ export interface BiscuitEnablement extends Enablement {
 export async function createBiscuitEnablement(
   initial: readonly Fact[] = [],
 ): Promise<BiscuitEnablement> {
-  const bis = await loadBiscuit();
+  await loadBiscuit();
   let facts = new Set(initial.map(factId));
   const listeners = new Set<() => void>();
 
-  const fire = () => {
-    for (const cb of [...listeners]) cb();
+  /**
+   * ONE evaluation per fact set, reused by every query until the facts change.
+   *
+   * The recovered adapter built a fresh authorizer PER QUERY, because a wasm
+   * Authorizer failed on reuse with a bare `{RunLimit: "Timeout"}` (note 18
+   * §4.1, which constraints.test.ts had shown to be a cold-engine timing
+   * artefact). The TypeScript engine has no such limit: an evaluation is a plain
+   * world any number of queries read. So the mitigation becomes a cache, and the
+   * dominant cost of the substitution goes with it.
+   */
+  let evaluation: Evaluation | undefined;
+  const world = (): Evaluation => {
+    evaluation ??= evaluateProgram(null, [...facts].map((f) => `${f};`).join("\n"));
+    return evaluation;
   };
 
-  /**
-   * Build a fresh authorizer over the current fact set.
-   *
-   * MEASURED CONSTRAINT: the WASM Authorizer is SINGLE-USE. A second
-   * `query()` on the same instance fails with RunLimit::Timeout rather than
-   * returning a result. So one authorizer is built per query, not per
-   * evaluation and certainly not once. This is the dominant performance
-   * cost of the substitution -- see the functional description.
-   */
-  const authorizer = () => {
-    const builder = new bis.AuthorizerBuilder();
-    for (const f of facts) builder.addCode(`${f};`);
-    return builder.buildUnauthenticated();
+  const fire = () => {
+    evaluation = undefined;
+    for (const cb of [...listeners]) cb();
   };
 
   /**
@@ -103,10 +132,7 @@ export async function createBiscuitEnablement(
    * by the shell). A rule head must carry at least one term -- `_m()` is a
    * parse error -- hence `_m(true)`.
    */
-  const ask = (ruleSource: string): string[] =>
-    authorizer()
-      .query(bis.Rule.fromString(ruleSource))
-      .map((f) => f.toString());
+  const ask = (ruleSource: string): string[] => world().query(ruleSource).map(printFact);
 
   return {
     setFacts(next) {
@@ -158,19 +184,19 @@ export async function createBiscuitEnablement(
     },
 
     queryAny(ruleSources) {
-      // Each rule needs its own authorizer, so disjunction costs one build
-      // per branch. Acceptable for menu-sized rule counts.
+      // One evaluation serves every branch now, so disjunction costs one query
+      // per branch rather than one authorizer build.
       return ruleSources.some((r) => ask(r).length > 0);
     },
 
     matchesTerm(predicate, value) {
-      // `value` is UNTRUSTED -- it may come from a foreign peer's manifest.
-      // The tagged template is invoked manually with a synthetic strings
-      // array so the predicate (trusted, from shell code) is part of the
-      // source while the value becomes a bound PARAMETER. Biscuit escapes
-      // it, so Datalog syntax inside it is data, never code.
-      const r = bis.rule([`_m(true) <- ${predicate}(`, `)`] as never, value);
-      return authorizer().query(r).length > 0;
+      // `value` is UNTRUSTED -- it may come from a foreign peer's manifest. The
+      // predicate (trusted, from shell code) is part of the source; the value is
+      // a bound `{value}` PARAMETER, so Datalog syntax inside it is data, never
+      // code.
+      return (
+        world().query(`_m(true) <- ${predicate}({value})`, { params: { value } }).length > 0
+      );
     },
   };
 }

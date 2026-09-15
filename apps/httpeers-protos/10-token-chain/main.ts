@@ -18,7 +18,6 @@ import {
   mintAuthority,
   newKeyPair,
   verify,
-  warmUp,
   type VerifyContext,
 } from "./tokens.js";
 
@@ -78,8 +77,6 @@ function scenario(id: string, what: string, expected: "allow" | "deny", run: () 
 console.log("=".repeat(78));
 console.log("prototype 10 — mint -> attenuate -> verify");
 console.log("=".repeat(78));
-warmUp();   // MANDATORY: biscuit-wasm 0.6.0 trips a spurious Timeout on the first
-            // authorization in a process, at any limit. See README finding F2.
 console.log(`hub key   ${HUB.getPublicKey().toString().slice(0, 24)}...`);
 console.log(`alice key ${ALICE.getPublicKey().toString().slice(0, 24)}...`);
 

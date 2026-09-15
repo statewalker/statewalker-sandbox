@@ -22,10 +22,10 @@
     "report:gap": "vitest run --config vitest.gap.config.ts"
   },
   "dependencies": {
-    "@biscuit-auth/biscuit-wasm": "0.6.0",
     "@libp2p/interface": "3.2.5",
     "@libp2p/peer-id": "6.0.14",
-    "@statewalker/httpeers.core": "workspace:*"
+    "@statewalker/httpeers.core": "workspace:*",
+    "@statewalker/webrun-biscuit": "^0.2.0"
   },
   "devDependencies": {
     "@types/node": "catalog:",

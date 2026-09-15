@@ -10,63 +10,62 @@
  * mechanically by `main.ts`, not merely intended.
  */
 import {
-  biscuit,
-  block,
-  AuthorizerBuilder,
+  type AuthorizationResult,
   Biscuit,
-  BlockBuilder,
-  KeyPair,
-  PrivateKey,
-  PublicKey,
-  SignatureAlgorithm,
-} from "@biscuit-auth/biscuit-wasm";
+  generateKeypair,
+  type RunLimits,
+  thirdPartyBlock,
+} from "@statewalker/webrun-biscuit";
 
 /**
- * Evaluation budget (spec P9).
- *
- * NOT optional, and not merely a hardening measure: `Authorizer.authorize()` with
- * this build's DEFAULT limits throws `{ RunLimit: 'Timeout' }` on a single-fact
- * policy. Every call therefore goes through `authorizeWithLimits`. See the README,
- * finding F1.
+ * Evaluation budget (spec P9). Its shape is kept from the wasm era, where finding
+ * F1 made it mandatory; the TypeScript engine takes it as `RunLimits`.
  */
 export const LIMITS = { max_facts: 5_000, max_iterations: 200, max_time_micro: 1_000_000 };
+
+const toRunLimits = (l: typeof LIMITS): RunLimits => ({
+  maxFacts: l.max_facts,
+  maxIterations: l.max_iterations,
+  maxTimeMs: l.max_time_micro / 1000,
+});
 
 export type PeerKeyId = string;
 export type SubjectId = string;
 export type MeshId = string;
 
-export const newKeyPair = (): KeyPair => new KeyPair(SignatureAlgorithm.Ed25519);
+const hex = (bytes: Uint8Array): string =>
+  Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
-/**
- * Absorb the first authorization in a process. MANDATORY — see README finding F2.
- *
- * In `@biscuit-auth/biscuit-wasm@0.6.0` the TIME-based run limit is unreliable: the
- * first `authorizeWithLimits` call in a process throws `{ RunLimit: 'Timeout' }`
- * REGARDLESS of `max_time_micro`. Measured: it fires identically at 1_000 and at
- * 1_000_000_000 (≈1000 s) while the call itself takes ~30 ms of one-time warm-up.
- * The limit is not being honoured; the clock underneath it is wrong under WASM.
- *
- * The fact and iteration limits are unaffected and do work (see T10-22).
- *
- * This throws away one authorization on a disposable key so that no real request
- * pays for it. A peer must call this at start-up, or its first authorized request
- * fails closed for no reason.
- */
-export function warmUp(attempts = 3): void {
-  const k = newKeyPair();
-  const t = biscuit`w(true); check if time($t), $t < 2100-01-01T00:00:00Z;`.build(k.getPrivateKey());
-  const parsed = Biscuit.fromBase64(t.toBase64(), k.getPublicKey());
-  for (let i = 0; i < attempts; i++) {
-    const a = new AuthorizerBuilder();
-    a.addCode("time(2000-01-01T00:00:00Z); allow if w(true);");
-    try {
-      a.buildAuthenticated(parsed).authorizeWithLimits(LIMITS);
-      return;
-    } catch {
-      /* the defect this function exists for; retry */
-    }
+/** An Ed25519 public key; prints the way Biscuit source spells it in `trusting`. */
+export class PublicKey {
+  constructor(readonly bytes: Uint8Array) {}
+  toString(): string {
+    return `ed25519/${hex(this.bytes)}`;
   }
 }
+
+export class PrivateKey {
+  constructor(readonly bytes: Uint8Array) {}
+}
+
+export class KeyPair {
+  private readonly pair = generateKeypair();
+  getPublicKey(): PublicKey {
+    return new PublicKey(this.pair.publicKey);
+  }
+  getPrivateKey(): PrivateKey {
+    return new PrivateKey(this.pair.secretKey);
+  }
+}
+
+export const newKeyPair = (): KeyPair => new KeyPair();
+
+/**
+ * A no-op on the TypeScript engine. README finding F2 recorded that biscuit-wasm's
+ * first authorization in a process threw a spurious `Timeout`; that was a defect of
+ * the wasm build's clock, and it has nothing to absorb here.
+ */
+export function warmUp(_attempts = 3): void {}
 
 export interface AuthorityInit {
   mesh: MeshId;
@@ -90,27 +89,42 @@ export interface AuthorityInit {
 
 /** The hub mints. Only the hub's key signs an authority block. */
 export function mintAuthority(init: AuthorityInit, rootKey: PrivateKey): string {
-  const b = init.delegationKey
-    ? biscuit`check if bound($k), connection_peer($k)
-              or delegate($k), connection_peer($k) trusting ${init.delegationKey};`
-    : biscuit`check if bound($k), connection_peer($k);`;
-
-  b.addCode(`mesh("${init.mesh}"); subject("${init.subject}"); bound("${init.bound}");`);
-  for (const r of init.roles) b.addCode(`role("${r}");`);
+  // Every value is a `{name}` PARAMETER, bound as a term. The wasm version spliced
+  // them into source text; the public key in `trusting` is the one exception, since
+  // a key is not a term and its hex spelling carries no Datalog syntax.
+  const params: Record<string, string | Date> = {
+    mesh: init.mesh,
+    subject: init.subject,
+    bound: init.bound,
+    expiresAt: init.expiresAt,
+  };
+  const code: string[] = [
+    init.delegationKey
+      ? `check if bound($k), connection_peer($k) or delegate($k), connection_peer($k) trusting ${init.delegationKey};`
+      : "check if bound($k), connection_peer($k);",
+    "mesh({mesh}); subject({subject}); bound({bound});",
+  ];
+  init.roles.forEach((r, i) => {
+    params[`role${i}`] = r;
+    code.push(`role({role${i}});`);
+  });
 
   if (init.audience && init.audience.length > 0) {
-    for (const a of init.audience) b.addCode(`audience("${a}");`);
-    b.addCode("check if audience($k), self_peer($k);");
+    init.audience.forEach((a, i) => {
+      params[`audience${i}`] = a;
+      code.push(`audience({audience${i}});`);
+    });
+    code.push("check if audience($k), self_peer($k);");
   } else {
     // Biscuit predicates take at least one term: `audience_unrestricted()` is a
     // parse error, so the explicit state carries a term.
-    b.addCode("audience_unrestricted(true);");
-    b.addCode("check if audience_unrestricted(true);");
+    code.push("audience_unrestricted(true);");
+    code.push("check if audience_unrestricted(true);");
   }
 
-  b.addCode(`check if time($t), $t < ${init.expiresAt.toISOString().replace(/\.\d{3}Z$/, "Z")};`);
-  for (const c of init.extraChecks ?? []) b.addCode(c);
-  return b.build(rootKey).toBase64();
+  code.push("check if time($t), $t < {expiresAt};");
+  for (const c of init.extraChecks ?? []) code.push(c);
+  return Biscuit.build(rootKey.bytes, code.join("\n"), { params }).toBase64();
 }
 
 /**
@@ -125,13 +139,17 @@ export function delegateTo(
   holder: KeyPair,
   opts: { to: PeerKeyId; restrict?: string[] },
 ): string {
-  const token = Biscuit.fromBase64(tokenB64, root);
-  const bb = block`delegate(${opts.to});`;
-  for (const c of opts.restrict ?? []) bb.addCode(c);
-  const tp = token.getThirdPartyRequest().createBlock(holder.getPrivateKey(), bb);
-  return token.appendThirdPartyBlock(holder.getPublicKey(), tp).toBase64();
+  const token = Biscuit.fromBase64(tokenB64);
+  token.verify(root.bytes);
+  const block = thirdPartyBlock(
+    token.thirdPartyRequest(),
+    holder.getPrivateKey().bytes,
+    ["delegate({to});", ...(opts.restrict ?? [])].join("\n"),
+    0,
+    { to: opts.to },
+  );
+  return token.appendThirdParty(block).toBase64();
 }
-
 /**
  * The ATTACK: anyone holding the token bytes can append a plain block. Biscuit signs
  * appended blocks with a next-key that travels WITH the token, so a plain block
@@ -139,17 +157,16 @@ export function delegateTo(
  * makes delegation safe.
  */
 export function forgeDelegation(tokenB64: string, root: PublicKey, to: PeerKeyId): string {
-  return Biscuit.fromBase64(tokenB64, root).appendBlock(block`delegate(${to});`).toBase64();
+  const token = Biscuit.fromBase64(tokenB64);
+  token.verify(root.bytes);
+  return token.attenuate("delegate({to});", { params: { to } }).toBase64();
 }
-
 /** A holder narrowing its own token, with no delegation involved. */
 export function attenuate(tokenB64: string, root: PublicKey, checks: string[]): string {
-  const token = Biscuit.fromBase64(tokenB64, root);
-  const bb = new BlockBuilder();
-  for (const c of checks) bb.addCode(c);
-  return token.appendBlock(bb).toBase64();
+  const token = Biscuit.fromBase64(tokenB64);
+  token.verify(root.bytes);
+  return token.attenuate(checks.join("\n")).toBase64();
 }
-
 export interface RevocationSnapshot {
   subjects?: SubjectId[];
   bindings?: PeerKeyId[];
@@ -186,51 +203,76 @@ export interface VerifyResult {
 }
 
 export function verify(tokenB64: string, ctx: VerifyContext): VerifyResult {
-  let token: Biscuit;
+  let token: ReturnType<Biscuit["verify"]>;
   try {
-    token = Biscuit.fromBase64(tokenB64, ctx.root);
+    token = Biscuit.fromBase64(tokenB64).verify(ctx.root.bytes);
   } catch (e) {
     return { allowed: false, signatureError: describe(e) };
   }
 
-  const a = new AuthorizerBuilder();
-  const iso = ctx.now.toISOString().replace(/\.\d{3}Z$/, "Z");
-  a.addCode(`connection_peer("${ctx.connectionPeer}"); self_peer("${ctx.selfPeer}"); time(${iso});`);
-  a.addCode(`operation("${ctx.operation}"); resource("${ctx.resource}");`);
-  for (const [t, v] of ctx.selfFacts ?? []) a.addCode(`self_fact("${t}", "${v}");`);
-  for (const f of ctx.extraFacts ?? []) a.addCode(f);
-  for (const s of ctx.revoked?.subjects ?? []) a.addCode(`revoked_subject("${s}");`);
-  for (const k of ctx.revoked?.bindings ?? []) a.addCode(`revoked_binding("${k}");`);
-  for (const r of ctx.rules ?? []) a.addCode(r);
+  const params: Record<string, string | Date> = {
+    connectionPeer: ctx.connectionPeer,
+    selfPeer: ctx.selfPeer,
+    now: ctx.now,
+    operation: ctx.operation,
+    resource: ctx.resource,
+  };
+  const code: string[] = [
+    "connection_peer({connectionPeer}); self_peer({selfPeer}); time({now});",
+    "operation({operation}); resource({resource});",
+  ];
+  (ctx.selfFacts ?? []).forEach(([t, v], i) => {
+    params[`selfType${i}`] = t;
+    params[`selfValue${i}`] = v;
+    code.push(`self_fact({selfType${i}}, {selfValue${i}});`);
+  });
+  for (const f of ctx.extraFacts ?? []) code.push(f);
+  (ctx.revoked?.subjects ?? []).forEach((s, i) => {
+    params[`revokedSubject${i}`] = s;
+    code.push(`revoked_subject({revokedSubject${i}});`);
+  });
+  (ctx.revoked?.bindings ?? []).forEach((k, i) => {
+    params[`revokedBinding${i}`] = k;
+    code.push(`revoked_binding({revokedBinding${i}});`);
+  });
+  for (const r of ctx.rules ?? []) code.push(r);
 
   // Deny policies first: policies are evaluated in order and the first match wins.
-  a.addCode("deny if subject($s), revoked_subject($s);");
-  a.addCode("deny if bound($k), revoked_binding($k);");
-  for (const p of ctx.policies ?? []) a.addCode(p);
+  code.push("deny if subject($s), revoked_subject($s);");
+  code.push("deny if bound($k), revoked_binding($k);");
+  for (const p of ctx.policies ?? []) code.push(p);
 
-  try {
-    return { allowed: true, policy: a.buildAuthenticated(token).authorizeWithLimits(ctx.limits ?? LIMITS) };
-  } catch (e) {
-    const budget = isRunLimit(e);
-    return { allowed: false, failed: failedChecks(e), budgetExceeded: budget };
-  }
-}
-
-function isRunLimit(e: unknown): boolean {
-  return typeof e === "object" && e !== null && "RunLimit" in (e as object);
-}
-
-/** Pull `block_id` / `rule` out of biscuit's structured failure (spec P8). */
-function failedChecks(e: unknown): string[] {
-  const checks = (e as any)?.FailedLogic?.Unauthorized?.checks;
-  if (!Array.isArray(checks)) return [describe(e)];
-  return checks.map((c: any) => {
-    const b = c?.Block;
-    if (b) return `block ${b.block_id} check ${b.check_id}: ${b.rule}`;
-    const auth = c?.Authorizer;
-    if (auth) return `authorizer check ${auth.check_id}: ${auth.rule}`;
-    return JSON.stringify(c);
+  const { result } = token.evaluate(code.join("\n"), {
+    limits: toRunLimits(ctx.limits ?? LIMITS),
+    params,
   });
+  if (result.kind === "ok") return { allowed: true, policy: result.policy };
+  return { allowed: false, failed: failedChecks(result), budgetExceeded: isRunLimit(result) };
+}
+
+/** The three limits that count work or time; other execution errors are not a budget. */
+function isRunLimit(result: AuthorizationResult): boolean {
+  return (
+    result.kind === "execution" &&
+    ["TooManyFacts", "TooManyIterations", "Timeout"].includes(result.error)
+  );
+}
+
+/** Every failed check, with its block id and rule text (spec P8). */
+function failedChecks(result: AuthorizationResult): string[] {
+  if (result.kind === "execution") return [JSON.stringify({ RunLimit: result.error })];
+  if (result.kind !== "unauthorized" && result.kind !== "noMatchingPolicy") {
+    return [JSON.stringify(result)];
+  }
+  // As in the wasm version: only an unauthorized result lists checks (a matched
+  // `deny` names itself through `policy`); anything else is described whole, so a
+  // denial never reaches the caller as a bare boolean.
+  if (result.kind === "noMatchingPolicy") return [JSON.stringify(result)];
+  return result.checks.map((c) =>
+    c.source === "block"
+      ? `block ${c.blockId} check ${c.checkId}: ${c.rule}`
+      : `authorizer check ${c.checkId}: ${c.rule}`,
+  );
 }
 
 function describe(e: unknown): string {

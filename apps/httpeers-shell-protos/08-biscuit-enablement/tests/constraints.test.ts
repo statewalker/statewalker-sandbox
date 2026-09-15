@@ -6,66 +6,64 @@
 // SUBSTITUTION: Biscuit satisfies `Enablement` unchanged. It does not pin the
 // three constraints the rung paid for on the way there. Those are here,
 // because each one is a trap a later caller will otherwise fall into again.
+//
+// REVISED 2026-09-15, when the adapter moved from `@biscuit-auth/biscuit-wasm`
+// to `@statewalker/webrun-biscuit`. Each constraint is re-asked of the new
+// engine rather than deleted: two of the three belonged to the WASM build and
+// are now asserted GONE, which is itself a finding a later caller needs. The
+// wasm-era tests are at statewalker-sandbox `cd5bb00`, this same path.
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { fact, factSetEnablement } from "../src/enablement.js";
 import { createBiscuitEnablement, loadBiscuit } from "../src/biscuit-enablement.js";
+import { fact, factSetEnablement } from "../src/enablement.js";
 
 /** The 20-fact background the note measured against (§5). */
 const NOISE = Array.from({ length: 20 }, (_, i) => fact(`f${i}`, `v${i}`));
 const FACTS = [...NOISE, fact("selection", "file"), fact("mesh", "connected")];
 const TWO_CLAUSE = 'selection("file"), mesh("connected")';
 
-describe("the WASM module loads without a Node flag", () => {
-  // Note 06 §6 warned that "WASM support in Node needs an explicit flag, which
-  // affects the test runner". Note 18 §3 retracts that: the package README is
-  // stale and the module loads with only an ExperimentalWarning. This test
-  // exists so the retraction stays checked rather than remembered.
-  it("resolves with no --experimental-wasm-modules in execArgv", async () => {
+describe("the engine is not WebAssembly at all", () => {
+  // Note 06 §6 warned that WASM in Node needs a flag; note 18 §3 retracted it
+  // (the wasm build loaded with only an ExperimentalWarning). The question is
+  // now moot, and this pins WHY: nothing in the import graph is WebAssembly.
+  it("loads with no wasm in execArgv and no wasm dependency", async () => {
     const flags = [...process.execArgv, ...(process.env["NODE_OPTIONS"] ?? "").split(/\s+/)];
     expect(flags.filter((f) => f.includes("wasm"))).toEqual([]);
     await expect(loadBiscuit()).resolves.toBeDefined();
+    // cwd, not import.meta.url: under the app's happy-dom environment the latter
+    // is not a file: URL. The cold-process test below relies on cwd the same way.
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as {
+      dependencies: Record<string, string>;
+    };
+    expect(Object.keys(pkg.dependencies).filter((d) => d.includes("wasm"))).toEqual([]);
   });
 });
 
-describe("reusing an Authorizer", () => {
+describe("reusing an evaluation", () => {
   /**
-   * §4.1 is the rung's most important discovery, and the reason `authorizer()`
-   * is called per query rather than per evaluation. Reproducing it here
-   * CORRECTED it, and the correction matters more than the original claim.
+   * §4.1 was the rung's most important discovery: the wasm Authorizer was
+   * single-use — a second `query()` failed with `RunLimit::Timeout` — and that
+   * is why the recovered adapter built an authorizer per query. The wasm-era
+   * version of this file then CORRECTED the note: it was a cold-engine timing
+   * artefact (10/10 cold, 1/200 warm), and the thrown value was a bare object,
+   * not an `Error`.
    *
-   * The note says the Authorizer is single-use: a second `query()` fails with
-   * `RunLimit::Timeout`. That reproduces exactly — in a cold process. It does
-   * NOT reproduce once the engine is warm: after a few hundred queries the
-   * same reuse succeeds essentially always (measured below; 1 failure in 300,
-   * and 0 in 20 even with 5,000 facts in the world).
-   *
-   * So the rule is not structural, it is a TIMING LIMIT — biscuit's default
-   * `max_time` is 1 ms and a cold WASM run overruns it. That is worse than a
-   * hard rule, not better: reuse is code that passes its own tests on a warm
-   * engine and fails on a user's first click. The mitigation the rung chose —
-   * one authorizer per query — is unchanged and now better justified.
+   * The TypeScript engine has neither defect. These tests assert the constraint
+   * is GONE — in the same cold process the wasm failed in, not only warm — which
+   * is what licenses the adapted adapter to reuse one evaluation per fact set.
    */
-
-  /**
-   * Cold by construction: a fresh Node process, so this is the condition the
-   * rung measured under. Reproduced 10/10 by hand before being written down.
-   */
-  it("fails in a cold process, and the thrown value is not an Error at all", () => {
+  it("answers a second query in a cold process, where the wasm build failed 10/10", () => {
     const script = `
-      const bis = await import("@biscuit-auth/biscuit-wasm");
-      const b = new bis.AuthorizerBuilder();
-      b.addCode('selection("file");');
-      b.addCode('mesh("connected");');
-      const a = b.buildUnauthenticated();
-      const out = { first: a.query(bis.Rule.fromString('_m(true) <- selection("file")')).length };
-      try {
-        out.second = { ok: a.query(bis.Rule.fromString('_m(true) <- mesh("connected")')).length };
-      } catch (e) {
-        out.second = { threw: true, isError: e instanceof Error, message: e?.message ?? null,
-                       json: JSON.parse(JSON.stringify(e)) };
-      }
+      const bis = await import("@statewalker/webrun-biscuit");
+      const ev = bis.evaluate(null, 'selection("file");\\nmesh("connected");');
+      const out = {
+        first: ev.query('_m(true) <- selection("file")').length,
+        second: ev.query('_m(true) <- mesh("connected")').length,
+        third: ev.query('_m(true) <- selection("folder")').length,
+      };
       process.stdout.write("RESULT " + JSON.stringify(out));
     `;
     const stdout = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
@@ -73,87 +71,51 @@ describe("reusing an Authorizer", () => {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-    const result = JSON.parse(stdout.slice(stdout.indexOf("RESULT ") + 7)) as {
-      first: number;
-      second: { threw?: boolean; isError?: boolean; message?: string | null; json?: unknown };
-    };
-
-    expect(result.first).toBe(1);
-    expect(result.second.threw).toBe(true);
-    // The failure is nastier than the note records. It is not merely that the
-    // message says "timeout" instead of "misuse": the thrown VALUE IS NOT AN
-    // ERROR. It is a bare object. A caller writing the ordinary
-    // `catch (e) { log(e.message) }` logs `undefined` and learns nothing.
-    expect(result.second.isError).toBe(false);
-    expect(result.second.message).toBeNull();
-    expect(result.second.json).toEqual({ RunLimit: "Timeout" });
+    expect(JSON.parse(stdout.slice(stdout.indexOf("RESULT ") + 7))).toEqual({
+      first: 1,
+      second: 1,
+      third: 0,
+    });
   });
 
-  it("stops failing once the engine is warm — so 'single-use' is a timing artefact, not a rule", async () => {
+  it("reports a bad query as an Error — the wasm threw a bare object", async () => {
     const bis = await loadBiscuit();
-    const build = () => {
-      const b = new bis.AuthorizerBuilder();
-      b.addCode('selection("file");');
-      b.addCode('mesh("connected");');
-      return b.buildUnauthenticated();
-    };
-    const reuse = (): unknown | undefined => {
-      const a = build();
-      a.query(bis.Rule.fromString('_m(true) <- selection("file")'));
-      try {
-        a.query(bis.Rule.fromString('_m(true) <- mesh("connected")'));
-        return undefined;
-      } catch (err) {
-        return err;
-      }
-    };
-
-    for (let i = 0; i < 200; i++) reuse(); // warm the engine
-
-    const TRIALS = 200;
-    const failures: unknown[] = [];
-    for (let i = 0; i < TRIALS; i++) {
-      const err = reuse();
-      if (err !== undefined) failures.push(err);
+    const ev = bis.evaluate(null, 'selection("file");');
+    let thrown: unknown;
+    try {
+      ev.query("_m(true) <- ");
+    } catch (error) {
+      thrown = error;
     }
-
-    process.stdout.write(
-      `\n  reusing a WARM authorizer: ${failures.length}/${TRIALS} second queries failed ` +
-        `(cold, it is 10/10 — see the test above)\n`,
-    );
-
-    // Deliberately NOT asserting a rate: it is a wall-clock race, and any
-    // threshold here would be a flaky test making a claim it cannot support.
-    // What IS asserted is the part that never varies — a reused authorizer
-    // never yields a catchable Error, so no caller can handle it cleanly.
-    for (const f of failures) {
-      expect(f).not.toBeInstanceOf(Error);
-      expect(JSON.parse(JSON.stringify(f))).toEqual({ RunLimit: "Timeout" });
-    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).not.toBe("");
   });
 
-  it("is why a fresh authorizer per query keeps evaluate() usable", async () => {
-    // The wrapper's mitigation, asserted from the outside: repeated
-    // evaluation over one Enablement instance must not degrade. If
-    // `authorizer()` were hoisted out of `ask()`, these calls would start
-    // throwing the bare object above instead of returning booleans — which
-    // is what a mutation of that line does.
+  it("keeps evaluate() correct across fact changes while the evaluation is cached", async () => {
+    // The adapted adapter caches one evaluation per fact set. If the cache were
+    // not dropped on change, the second and fourth answers below would be stale
+    // — which is what a mutation of `fire()` produces.
     const e = await createBiscuitEnablement([fact("selection", "file")]);
     expect(e.evaluate('selection("file")')).toBe(true);
     expect(e.evaluate('selection("folder")')).toBe(false);
-    expect(e.evaluate('selection("file")')).toBe(true);
-    // A two-clause `when` is already two queries inside one evaluate().
-    expect(e.evaluate('selection("file"), !mesh("connected")')).toBe(true);
+    e.assert(fact("selection", "folder"));
+    expect(e.evaluate('selection("folder")')).toBe(true);
+    e.retract(fact("selection", "file"));
+    expect(e.evaluate('selection("file")')).toBe(false);
+    // A two-clause `when` is two queries against the same evaluation.
+    expect(e.evaluate('selection("folder"), !mesh("connected")')).toBe(true);
   });
 });
 
 describe("a rule head must carry at least one term", () => {
-  // §4.2. Minor, but it silently shapes every rule the shell generates, and
-  // it is invisible at the `Enablement` interface — only rule authors meet it.
+  // §4.2 — the one constraint that is a property of the LANGUAGE, not of the
+  // build, and it survives the engine change. (webrun-biscuit 0.2.0 accepted
+  // `f()` and rejected `_m` outright; 0.2.1 matches the reference on both.)
   it("rejects a zero-term head and accepts _m(true)", async () => {
     const bis = await loadBiscuit();
-    expect(() => bis.Rule.fromString('_m() <- selection("file")')).toThrow();
-    expect(() => bis.Rule.fromString('_m(true) <- selection("file")')).not.toThrow();
+    const ev = bis.evaluate(null, 'selection("file");');
+    expect(() => ev.query('_m() <- selection("file")')).toThrow();
+    expect(ev.query('_m(true) <- selection("file")')).toHaveLength(1);
   });
 });
 
@@ -161,16 +123,16 @@ describe("the cost of substitution", () => {
   /**
    * §5 measured 0.586 ms per evaluation and 17.6 ms for a 30-entry menu, and
    * concluded that caching is REQUIRED rather than optional because 17.6 ms
-   * exceeds a 16.7 ms frame budget.
+   * exceeds a 16.7 ms frame budget. On the wasm build this file measured
+   * ~0.28 ms and 8.3 ms, a ratio of ~44x against the stub.
    *
-   * This test does not assert that threshold. A threshold assertion here
-   * would be a timing race on a loaded machine, and — worse — a green run
-   * would be read as "the cost is fine", which is the opposite of the
-   * finding. What it does instead is MEASURE and RECORD, so the number is
-   * visible in the run output next to the number the note recorded, and so a
-   * catastrophic regression (an authorizer built per fact, say) still fails.
+   * This test does not assert a threshold: a threshold is a timing race on a
+   * loaded machine, and a green run would be read as "the cost is fine". It
+   * MEASURES and RECORDS, and keeps a tripwire for a catastrophic regression.
    */
-  it("records the per-evaluation and 30-entry menu cost of both implementations", async ({ annotate }) => {
+  it("records the per-evaluation and 30-entry menu cost of both implementations", async ({
+    annotate,
+  }) => {
     const stub = factSetEnablement(FACTS);
     const biscuit = await createBiscuitEnablement(FACTS);
 
@@ -186,26 +148,25 @@ describe("the cost of substitution", () => {
     const MENU = 30;
     const FRAME_BUDGET_MS = 16.7;
 
-    // Recorded, not asserted. The run output is the artefact.
-    // NOTE: written to stdout directly. Under the app's happy-dom
-    // environment `console.log` goes to the DOM's virtual console and never
-    // reaches the terminal, so a measurement logged that way would be
-    // invisible — which would defeat the whole point of this test.
+    // Recorded, not asserted. Written to stdout directly: under happy-dom
+    // `console.log` goes to the DOM's virtual console and never reaches the
+    // terminal, which would make the measurement invisible.
     const report = [
-        "",
-        "  enablement cost — 20 facts, two-clause `when`, 200 iterations after warm-up",
-        "  ┌───────────┬──────────────────┬───────────────┐",
-        "  │           │  per evaluation  │ 30-entry menu │",
-        "  ├───────────┼──────────────────┼───────────────┤",
-        `  │ stub      │ ${stubMs.toFixed(3).padStart(11)} ms  │ ${(stubMs * MENU).toFixed(1).padStart(9)} ms  │`,
-        `  │ biscuit   │ ${biscuitMs.toFixed(3).padStart(11)} ms  │ ${(biscuitMs * MENU).toFixed(1).padStart(9)} ms  │`,
-        "  └───────────┴──────────────────┴───────────────┘",
-        `  ratio ${(biscuitMs / stubMs).toFixed(1)}x · note 18 §5 recorded 0.586 ms / 17.6 ms / ~8x`,
-        `  frame budget ${FRAME_BUDGET_MS} ms — a 30-entry menu ${
-          biscuitMs * MENU > FRAME_BUDGET_MS ? "EXCEEDS" : "fits within"
-        } it on this machine`,
-        "",
-      ].join("\n");
+      "",
+      "  enablement cost — 20 facts, two-clause `when`, 200 iterations after warm-up",
+      "  ┌───────────┬──────────────────┬───────────────┐",
+      "  │           │  per evaluation  │ 30-entry menu │",
+      "  ├───────────┼──────────────────┼───────────────┤",
+      `  │ stub      │ ${stubMs.toFixed(3).padStart(11)} ms  │ ${(stubMs * MENU).toFixed(1).padStart(9)} ms  │`,
+      `  │ biscuit   │ ${biscuitMs.toFixed(3).padStart(11)} ms  │ ${(biscuitMs * MENU).toFixed(1).padStart(9)} ms  │`,
+      "  └───────────┴──────────────────┴───────────────┘",
+      `  ratio ${(biscuitMs / stubMs).toFixed(1)}x · note 18 §5 recorded 0.586 ms / 17.6 ms / ~8x;` +
+        " the wasm build measured ~0.28 ms / 8.3 ms / ~44x",
+      `  frame budget ${FRAME_BUDGET_MS} ms — a 30-entry menu ${
+        biscuitMs * MENU > FRAME_BUDGET_MS ? "EXCEEDS" : "fits within"
+      } it on this machine`,
+      "",
+    ].join("\n");
     process.stdout.write(`${report}\n`);
     await annotate(
       `stub ${stubMs.toFixed(3)} ms/eval, ${(stubMs * MENU).toFixed(1)} ms per ${MENU}-entry menu; ` +
@@ -213,13 +174,9 @@ describe("the cost of substitution", () => {
         `(${(biscuitMs / stubMs).toFixed(1)}x); frame budget ${FRAME_BUDGET_MS} ms`,
     );
 
-    // The only assertions are ones that cannot race:
     expect(Number.isFinite(biscuitMs)).toBe(true);
     expect(biscuitMs).toBeGreaterThan(0);
-    // A ~135x ceiling on the note's figure. Not a frame budget, not a
-    // performance target — a tripwire for a change that makes evaluation
-    // pathological (rebuilding an authorizer per FACT rather than per query
-    // costs far more than this).
+    // A tripwire, not a target: rebuilding the world per FACT would blow far past it.
     expect(biscuitMs).toBeLessThan(80);
   });
 });
