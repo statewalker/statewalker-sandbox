@@ -174,6 +174,88 @@ describe("B2 · todo list controller", () => {
     await controller.dispose();
   });
 
+  it("Toggle snapshots the selection at submit time, not when the pass runs", async () => {
+    const { controller, view } = await start();
+    view.select(["t1"]);
+    view.actions.toggle.submit();
+    view.select(["t3"]);
+    await settle();
+    expect(view.getItems().find((t) => t.id === "t1")?.done).toBe(true);
+    expect(view.getItems().find((t) => t.id === "t3")?.done).toBe(false);
+    await controller.dispose();
+  });
+
+  it("Add snapshots the title at submit time; a title typed afterward survives", async () => {
+    const { controller, view } = await start();
+    view.setNewTitle("A");
+    view.actions.add.submit();
+    view.setNewTitle("B");
+    await settle();
+    expect(view.getItems().map((t) => t.title)).toContain("A");
+    expect(view.getNewTitle()).toBe("B");
+    await controller.dispose();
+  });
+
+  it("Delete snapshots the selection at submit time, not when the pass runs", async () => {
+    const { controller, view } = await start();
+    view.select(["t2", "t3"]);
+    view.actions.remove.submit();
+    view.select([]);
+    await settle();
+    expect(view.getItems().map((t) => t.id)).toEqual(["t1"]);
+    await controller.dispose();
+  });
+
+  it("dispose right after a submit, before the pass runs: no api call, no outcome, no toast", async () => {
+    const { api, commands, controller, view } = await start();
+    const toasts: { text: string; level: string }[] = [];
+    commands.listen(notify, (cmd) => {
+      toasts.push(cmd.payload);
+      return Promise.resolve({ shown: true });
+    });
+    view.setNewTitle("Ghost");
+    view.actions.add.submit();
+    await controller.dispose();
+    await settle();
+    expect(api.calls.filter((c) => c === "add")).toHaveLength(0);
+    expect(view.getOutcome()).toBeUndefined();
+    expect(toasts).toEqual([]);
+  });
+
+  it("a failed intent writes an error log record", async () => {
+    const { api, recorder, controller, view } = await start();
+    api.fail("add", "disk full");
+    view.setNewTitle("Doomed");
+    view.actions.add.submit();
+    await settle();
+    expect(recorder.calls).toContainEqual({
+      level: "error",
+      args: ['add "Doomed" failed: disk full'],
+      metadata: { module: "todos.list" },
+    });
+    await controller.dispose();
+  });
+
+  it("a failing reload sets the outcome", async () => {
+    const { api, commands, controller, view } = await start();
+    api.fail("list", "db down");
+    commands.call(todosChanged, { source: "todos.edit" });
+    await settle();
+    expect(view.getOutcome()).toBe("load todos failed: db down");
+    await controller.dispose();
+  });
+
+  it("Clear completed with no handler is reported and disables its action", async () => {
+    const { controller, view } = await start();
+    view.actions.clearCompleted.submit();
+    await settle();
+    expect(view.getOutcome()).toBe(
+      "clear completed failed: no-handlers: todos:clear-completed:ask",
+    );
+    expect(view.actions.clearCompleted.getState().enabled).toBe(false);
+    await controller.dispose();
+  });
+
   it("dispose withdraws the panel and every action, and stops listening", async () => {
     const { api, commands, slots, controller } = await start();
     await controller.dispose();

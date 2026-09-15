@@ -16,7 +16,7 @@ import { getTodoApi, type TodoApi } from "@todos/core";
 import { todosEditOpen } from "@todos/edit/commands";
 import { todosChanged } from "@todos/events";
 import { createTodoListModel } from "./list.model.impl.js";
-import { type TodoListActions, type TodoListModel, todoListKind } from "./list.model.js";
+import { type Todo, type TodoListActions, type TodoListModel, todoListKind } from "./list.model.js";
 
 type ActionKey = keyof TodoListActions<unknown>;
 const ACTION_KEYS: readonly ActionKey[] = ["add", "toggle", "remove", "edit", "clearCompleted"];
@@ -30,6 +30,17 @@ interface Services {
 }
 
 /**
+ * What an intent reads from the model, captured at submit time — not when the
+ * pass reaches it. A selection or a draft the user changes before the
+ * microtask runs must not retarget an already-submitted intent.
+ */
+interface IntentSnapshot {
+  readonly selection: readonly string[];
+  readonly items: readonly Todo[];
+  readonly title: string;
+}
+
+/**
  * The todo list domain. Owns the list model and its five actions, contributes
  * the panel and the actions, and turns submitted intents into api calls and
  * commands — in one update loop, kicked by the actions' submit channels.
@@ -40,6 +51,7 @@ export class TodoListController {
   private _model?: TodoListModel;
   private _services?: Services;
   private _reloadOwed = true;
+  private readonly _snapshots: Partial<Record<ActionKey, IntentSnapshot>> = {};
 
   get model(): TodoListModel {
     if (!this._model) throw new Error("TodoListController is not activated");
@@ -68,7 +80,23 @@ export class TodoListController {
     ) as Record<ActionKey, SubmitWatch>;
     this._services = { commands, api, log, loop, watches };
 
-    for (const key of ACTION_KEYS) register(actions[key].onSubmitsUpdate(loop.kick));
+    // Captured right before the kick, in the submit listener: reading the
+    // model here is allowed — only writing it inside a listener is not. The
+    // pass then acts on what the user meant at submit time, not on whatever
+    // the model holds when the microtask happens to reach it.
+    const captureSnapshot = (): IntentSnapshot => ({
+      selection: model.view.getSelection(),
+      items: model.view.getItems(),
+      title: model.view.getNewTitle(),
+    });
+    for (const key of ACTION_KEYS) {
+      register(
+        actions[key].onSubmitsUpdate(() => {
+          this._snapshots[key] = captureSnapshot();
+          loop.kick();
+        }),
+      );
+    }
     register(
       commands.listen(todosChanged, () => {
         this._reloadOwed = true;
@@ -144,33 +172,41 @@ export class TodoListController {
     const { view, control } = model;
 
     if (watches.add.take()) {
-      const title = view.getNewTitle().trim();
+      const rawTitle = this._snapshots.add?.title ?? "";
+      const title = rawTitle.trim();
       if (title !== "") {
         await this._run("add", `add "${title}"`, async () => {
           const todo = await api.add(title);
-          control.clearNewTitle();
+          // Only clear what the user hasn't since replaced with a new draft.
+          if (view.getNewTitle() === rawTitle) control.clearNewTitle();
           log.info("action:add", { id: todo.id });
         });
       }
     }
     if (watches.toggle.take()) {
-      const selected = new Set(view.getSelection());
-      const targets = view.getItems().filter((t) => selected.has(t.id));
-      await this._run("toggle", "toggle", async () => {
-        for (const todo of targets) await api.update(todo.id, { done: !todo.done });
-        log.info("action:toggle", { ids: targets.map((t) => t.id) });
-      });
+      const snapshot = this._snapshots.toggle;
+      const selected = new Set(snapshot?.selection ?? []);
+      const targets = (snapshot?.items ?? []).filter((t) => selected.has(t.id));
+      if (targets.length > 0) {
+        await this._run("toggle", "toggle", async () => {
+          for (const todo of targets) await api.update(todo.id, { done: !todo.done });
+          log.info("action:toggle", { ids: targets.map((t) => t.id) });
+        });
+      }
     }
     if (watches.remove.take()) {
-      const ids = [...view.getSelection()];
-      await this._run("remove", "delete", async () => {
-        for (const id of ids) await api.remove(id);
-        log.info("action:remove", { ids });
-      });
+      const ids = [...(this._snapshots.remove?.selection ?? [])];
+      if (ids.length > 0) {
+        await this._run("remove", "delete", async () => {
+          for (const id of ids) await api.remove(id);
+          log.info("action:remove", { ids });
+        });
+      }
     }
     if (watches.edit.take()) {
-      const [id] = view.getSelection();
-      if (id !== undefined) {
+      const selection = this._snapshots.edit?.selection ?? [];
+      if (selection.length === 1) {
+        const [id] = selection;
         await this._run(
           "edit",
           "open the editor",
