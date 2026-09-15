@@ -17,11 +17,11 @@ const isSource = (f: string) => f.endsWith(".ts") || f.endsWith(".tsx");
 const stripComments = (t: string) => t.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, "");
 
 const sources = (pkg: string) =>
-  readdirSync(`${ROOT}lib/${pkg}/src`, { recursive: true, encoding: "utf8" })
+  readdirSync(`${ROOT}src/lib/${pkg}/src`, { recursive: true, encoding: "utf8" })
     .filter(isSource)
     .map((f) => ({
       file: `${pkg}/src/${f}`,
-      code: stripComments(readFileSync(`${ROOT}lib/${pkg}/src/${f}`, "utf8")),
+      code: stripComments(readFileSync(`${ROOT}src/lib/${pkg}/src/${f}`, "utf8")),
     }));
 
 const QUOTE = "[\"'`]";
@@ -120,12 +120,20 @@ const memberOf = (names: string[]) =>
   new RegExp(`\\.\\s*(?:${names.join("|")})\\b|\\[\\s*${QUOTE}(?:${names.join("|")})${QUOTE}\\s*\\]`);
 const CONTROLLER_CALL = memberOf(CONTROLLER_SIDE);
 
-/** Every rung's suites, found by walking `<rung>/tests` recursively. */
+/**
+ * Every rung's suites, found by walking `tests/<rung>` recursively. `file`
+ * still reads `<rung>/tests/<name>` — that label is this suite's own naming
+ * convention for "which rung, which file", not a claim about where the file
+ * lives on disk, and every check below that compares against it (a
+ * `startsWith("B0-boundaries/")`, say) keys off that convention rather than
+ * the physical layout. `support/` sits beside the rungs under `tests/` but is
+ * not one — `headlessModules()` reads it separately — so it is excluded here.
+ */
 const allSuites = () =>
-  readdirSync(ROOT, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && !["lib", "node_modules", "src"].includes(d.name))
+  readdirSync(`${ROOT}tests`, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && d.name !== "support")
     .flatMap((d) => {
-      const dir = `${ROOT}${d.name}/tests`;
+      const dir = `${ROOT}tests/${d.name}`;
       let files: string[] = [];
       try {
         files = (readdirSync(dir, { recursive: true, encoding: "utf8" }) as string[]).filter(isSource);
@@ -183,11 +191,11 @@ const ADAPTER_MAY_IMPORT = /^@statewalker\/shared-(commands|registry)$/;
  */
 const headlessModules = () => [
   ...allSuites().filter(({ file }) => file.endsWith(".test.ts") && !file.startsWith("B0-boundaries/")),
-  ...(readdirSync(`${ROOT}test-support`, { recursive: true, encoding: "utf8" }) as string[])
+  ...(readdirSync(`${ROOT}tests/support`, { recursive: true, encoding: "utf8" }) as string[])
     .filter((f) => f.endsWith(".ts"))
     .map((f) => ({
-      file: `test-support/${f}`,
-      code: stripComments(readFileSync(`${ROOT}test-support/${f}`, "utf8")),
+      file: `tests/support/${f}`,
+      code: stripComments(readFileSync(`${ROOT}tests/support/${f}`, "utf8")),
     })),
 ];
 
@@ -211,12 +219,22 @@ const usesReactEntry = (code: string): boolean => specifiers(code).some(reachesU
 const knowsEveryLayer = (code: string): boolean =>
   importOf("core").test(code) && importOf("app").test(code) && usesReactEntry(code);
 
-/** The page's own modules under `src/` — the entry and the composition root. */
+/**
+ * The page's own modules under `src/` — the entry and the composition root.
+ * NOT `src/lib/**`: the three layers now live there too (`sources()` reads
+ * them already, under their own `<pkg>/src/…` labels), and a plain recursive
+ * walk of `src/` would count every layer file a second time here — which
+ * would make the composition-root check below see phantom "roots" the moment
+ * any layer file happened to match `knowsEveryLayer`.
+ */
 const pageSources = () =>
-  (readdirSync(`${ROOT}src`, { recursive: true, encoding: "utf8" }) as string[]).filter(isSource).map((f) => ({
-    file: `src/${f}`,
-    code: stripComments(readFileSync(`${ROOT}src/${f}`, "utf8")),
-  }));
+  (readdirSync(`${ROOT}src`, { recursive: true, encoding: "utf8" }) as string[])
+    .filter(isSource)
+    .filter((f) => !f.startsWith("lib/"))
+    .map((f) => ({
+      file: `src/${f}`,
+      code: stripComments(readFileSync(`${ROOT}src/${f}`, "utf8")),
+    }));
 
 /**
  * Every module specifier reachable from a root-level config file, following
@@ -495,7 +513,7 @@ describe("B0 · package boundaries", () => {
     // `src/app.ts` imports the core (the api), the app (bootstrap, models) and
     // the ui (the React views) — legitimately: wiring them is its whole job.
     // That is an exemption scoped to ONE file, not a relaxation of any rule
-    // above: the per-library rules still apply to every `lib/` file, and
+    // above: the per-library rules still apply to every `src/lib/` file, and
     // none of them reads `src/`. What this adds is the other half — nothing
     // else may import all three with the ui as its React entry: no library,
     // no suite, no test support, and not the page entry `src/main.tsx`, which

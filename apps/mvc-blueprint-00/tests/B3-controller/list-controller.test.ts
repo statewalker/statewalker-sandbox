@@ -10,7 +10,7 @@ import {
 } from "@todo/app";
 import { MemTodoApi, type Todo } from "@todo/core";
 import { beforeEach, describe, expect, it } from "vitest";
-import { answerDialogs, claimListView, type Dialogs } from "../../test-support/views.js";
+import { answerDialogs, claimListView, type Dialogs } from "../support/views.js";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 

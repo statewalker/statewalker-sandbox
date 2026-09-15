@@ -32,7 +32,7 @@ beside the declaration: two names for one thing, which can disagree.
 
 ### D4 — Three directories, not three packages · adopted, reverses an earlier design
 
-The layers are `lib/todo-{core,app,ui}` behind aliases. The earlier plan chose three packages
+The layers are `src/lib/todo-{core,app,ui}` behind aliases. The earlier plan chose three packages
 "because that is the split a boundary suite can police". It was wrong on both counts: the sibling
 app is one package and its suite polices it fine, and what let a boundary rot there was never having
 a grep for it. Packages would have bought build steps and stale-`dist` hazards for nothing.

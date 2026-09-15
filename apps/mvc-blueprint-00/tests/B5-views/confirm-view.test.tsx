@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { ConfirmModel, uiConfirm } from "@todo/app/models";
 import { ConfirmView, registerViews } from "@todo/ui";
-import { button, createHost, render, waitFor } from "../../test-support/react.js";
+import { button, createHost, render, waitFor } from "../support/react.js";
 
 /**
  * B5 · the confirm dialog. Its whole contract is the result it settles, so the

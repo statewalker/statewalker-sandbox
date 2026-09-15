@@ -2,7 +2,7 @@ import { Commands } from "@statewalker/shared-commands";
 import { bootstrap, TodoListModel, uiShowList } from "@todo/app";
 import { ViewAdapter } from "@todo/ui/adapter";
 import { describe, expect, it } from "vitest";
-import { seededApi } from "../../test-support/api.js";
+import { seededApi } from "../support/api.js";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 

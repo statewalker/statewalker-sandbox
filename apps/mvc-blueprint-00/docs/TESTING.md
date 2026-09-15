@@ -42,7 +42,7 @@ The browser project is `vitest.browser.config.ts`: `@vitest/browser-playwright`,
 
 ## The tools
 
-### The model kit — `lib/todo-app/src/model-kit.ts`
+### The model kit — `src/lib/todo-app/src/model-kit.ts`
 
 Assertion helpers that hold models and controllers to the design's rules. Each takes **mutators**,
 never a field path — a helper that pokes `input[field] = …` would teach the opposite of the rule it
@@ -54,7 +54,7 @@ enforces.
 | `expectCoalescedEdge({ bump, read, actions })` | a state-latest edge collapses repeated bumps | a controller that acts per bump, one that never acts, and a "mutator" that does not raise the counter |
 | `expectReplacedNotMutated(model, read, mutate)` | the field was replaced **and** the replacement was observed through the notify channel | an in-place `push`, and a replacement that forgot to notify |
 
-### `MemTodoApi` — `lib/todo-core/src/mem-todo-api.ts`
+### `MemTodoApi` — `src/lib/todo-core/src/mem-todo-api.ts`
 
 The reference adapter every headless suite runs against. Two properties make it a good test double:
 
@@ -63,7 +63,7 @@ The reference adapter every headless suite runs against. Two properties make it 
 - **`calls: string[]`** records every method invoked. Use it to witness that a handler ran — the
   store's contents often look identical whether it ran or not.
 
-### `test-support/`
+### `tests/support/`
 
 - **`views.ts`** — view-layer stand-ins suites boot with. Since the list controller shows its own
   panel on `activate()`, any suite that activates one must register a `ui:show-list` renderer — the

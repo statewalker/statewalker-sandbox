@@ -3,8 +3,8 @@ import { bootstrap, ConfirmModel, TodoListModel, uiConfirm } from "@todo/app";
 import { todosAdd } from "@todo/core";
 import { ViewAdapter } from "@todo/ui/adapter";
 import { describe, expect, it } from "vitest";
-import { seededApi } from "../../test-support/api.js";
-import { mountListView } from "../../test-support/views.js";
+import { seededApi } from "../support/api.js";
+import { mountListView } from "../support/views.js";
 
 /**
  * The canonical deadlock `declarations.ts` advertises: a host routes

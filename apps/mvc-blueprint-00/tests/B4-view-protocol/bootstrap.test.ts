@@ -2,7 +2,7 @@ import { CommandError, Commands } from "@statewalker/shared-commands";
 import { bootstrap, ListController, TodoListModel } from "@todo/app";
 import { MemTodoApi, todosAdd } from "@todo/core";
 import { describe, expect, it } from "vitest";
-import { claimListView } from "../../test-support/views.js";
+import { claimListView } from "../support/views.js";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 

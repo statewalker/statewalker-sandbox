@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { type RunningApp, seedTodos, startApp } from "../../src/app.js";
-import { all, button, createHost, waitFor } from "../../test-support/react.js";
+import { all, button, createHost, waitFor } from "../support/react.js";
 
 /**
  * B6 · the real application, driven the way a user drives it.

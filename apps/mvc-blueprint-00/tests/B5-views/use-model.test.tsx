@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createElement, useLayoutEffect } from "react";
 import { TodoListModel, type Todo } from "@todo/app/models";
 import { shallowEqual, useModel } from "@todo/ui";
-import { flush, render, waitFor } from "../../test-support/react.js";
+import { flush, render, waitFor } from "../support/react.js";
 
 /**
  * B5 — the whole React binding, over a real Chromium (spec §4.3).

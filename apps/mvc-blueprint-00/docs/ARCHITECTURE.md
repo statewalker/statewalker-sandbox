@@ -22,9 +22,9 @@ failure is usually the most useful part.
 
 | Layer | Directory | Knows | Never knows |
 | --- | --- | --- | --- |
-| **core** | `lib/todo-core` | the domain record, the `TodoApi` port, the `todos:*` declarations and their default handlers | any `ui:` command, the app, the DOM |
-| **app** | `lib/todo-app` | models, controllers, `bootstrap`, the `ui:*` declarations | React, the DOM, any view |
-| **ui** | `lib/todo-ui` | React views, `useModel`, the view adapter | a controller, `bootstrap`, `todo-core` |
+| **core** | `src/lib/todo-core` | the domain record, the `TodoApi` port, the `todos:*` declarations and their default handlers | any `ui:` command, the app, the DOM |
+| **app** | `src/lib/todo-app` | models, controllers, `bootstrap`, the `ui:*` declarations | React, the DOM, any view |
+| **ui** | `src/lib/todo-ui` | React views, `useModel`, the view adapter | a controller, `bootstrap`, `todo-core` |
 
 The rules that make this real:
 
@@ -33,7 +33,7 @@ The rules that make this real:
 - **Views know only models. Nothing else. Never.**
 - **The only way across a layer boundary is a command.**
 
-`B0-boundaries/tests/boundaries.test.ts` enforces the parts of these that are facts about the
+`tests/B0-boundaries/boundaries.test.ts` enforces the parts of these that are facts about the
 files — who imports what, who names the bus, who notifies, which model methods a view names — and
 fails the run on a violation, as far as its patterns reach. Two are design rules kept by review, not
 by a test: nothing checks that a model "performs no action", and reads cross from a controller to the
@@ -51,7 +51,7 @@ suite polices it perfectly well. What lets a boundary rot is **not grepping it**
 `@statewalker/shared-commands` provides the bus. A **declaration** names a command and types it:
 
 ```ts
-// lib/todo-core/src/declarations.ts
+// src/lib/todo-core/src/declarations.ts
 export const todosAdd = Command.required("todos:add")
   .input(z.object({ title: z.string().min(1) }))
   .output(z.object({ id: z.string() }))
@@ -80,7 +80,7 @@ overrides any of them by listening at priority 0 — to route delete to a trash 
 step, or block writes:
 
 ```ts
-// lib/todo-core/src/todo-commands.ts
+// src/lib/todo-core/src/todo-commands.ts
 const fallback =
   <P, R>(handler: (cmd: Claimable<P, R>) => Promise<R>): CommandListener<P, R> =>
   (cmd) => {
@@ -92,7 +92,7 @@ const fallback =
 **Negative priority orders listeners; it does not stop them.** A fallback runs even after a host
 has claimed, so it must decline explicitly — which is what reading `claimed` does. That field is
 set by the bus but declared only on an unexported internal type, which is why this app names it
-(`Claimable`) and guards it with a test (`B2-commands/tests/claimed-contract.test.ts`).
+(`Claimable`) and guards it with a test (`tests/B2-commands/claimed-contract.test.ts`).
 
 ### The handlers are thin
 
@@ -198,7 +198,7 @@ A model does not hand subscribers one undifferentiated `onUpdate` and leave them
 moved. It declares a **channel per meaningful change**, with `onChangeNotifier`:
 
 ```ts
-// lib/todo-app/src/todo-model.ts
+// src/lib/todo-app/src/todo-model.ts
 onRefresh       = onChangeNotifier(this.onUpdate, () => this.refreshCount);
 onPendingChange = onChangeNotifier(this.onUpdate, () => this.pending);
 onQueryChange   = onChangeNotifier(this.onUpdate,
@@ -402,7 +402,7 @@ diagnosis for a wiring bug.
 ### A view knows only its model
 
 ```tsx
-// lib/todo-ui/src/views/list-view.tsx
+// src/lib/todo-ui/src/views/list-view.tsx
 export function ListView({ model }: { model: TodoListModel }) {
   const rows = useModel(model, (m) => m.visible(), shallowEqual);
   // ...
@@ -468,7 +468,7 @@ activate one with no view layer present.
 So the order is a **token**:
 
 ```ts
-// lib/todo-app/src/bootstrap.ts
+// src/lib/todo-app/src/bootstrap.ts
 register(registerTodoCommands(commands, api));
 let viewsCleanup;
 try {
@@ -480,7 +480,7 @@ try {
 if (viewsCleanup) register(viewsCleanup);
 const ready = ViewsReady._mint();          // minted only now
 
-// lib/todo-app/src/list-controller.ts
+// src/lib/todo-app/src/list-controller.ts
 activate(ready: ViewsReady): void {
   if (!(ready instanceof ViewsReady)) throw new Error("…before the view layer was registered…");
   // ...
@@ -596,7 +596,7 @@ export function startApp(root: HTMLElement, options: StartOptions = {}): Running
   const { controller } = app.createList(new TodoListModel());
   void controller.panelSettled.then((outcome) => {
     if (outcome.ok || disposed) return;
-    console.error("[mvc-blueprint] the todo list could not be shown:", outcome.error);
+    console.error("[mvc-blueprint-00] the todo list could not be shown:", outcome.error);
     failure = renderFailure(root, outcome.error);
   });
   // ...
@@ -615,7 +615,7 @@ must not depend on the view layer working.
 /* src/index.css */
 @import "tailwindcss";
 @import "@statewalker/ui.view.shadcn/styles";   /* the kit finds its own classes */
-@source "../lib/**/*.tsx";                       /* this app's own views */
+@source "./lib/**/*.tsx";                        /* this app's own views */
 @theme inline { /* … */ }
 ```
 
@@ -626,7 +626,7 @@ Two traps, both of which cost time:
    `@source` globs as `./styles`; import that. The neighbouring `byok-config-prototype` instead
    wrote `@source "../../../packages/ui.view.shadcn/..."` — a path that does not exist in this repo.
    A dead `@source` glob emits nothing and reports no error, so the app renders unstyled with every
-   build green. `B6-app/tests/emitted-css.test.ts` builds the app and asserts a class that exists
+   build green. `tests/B6-app/emitted-css.test.ts` builds the app and asserts a class that exists
    only in the kit's source reached the CSS; it fails for a missing import **and** for byok's glob.
 2. **A `@theme` block must live in the CSS file Tailwind processes** — the one that
    `@import "tailwindcss"`. It does not merge from a separately-processed entry.

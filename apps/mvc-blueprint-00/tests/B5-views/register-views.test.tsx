@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BootstrapOptions } from "@todo/app";
 import { ConfirmModel, MenuModel, TodoListModel, uiConfirm, uiShowList, uiShowMenu } from "@todo/app/models";
 import { registerViews } from "@todo/ui";
-import { createHost, waitFor } from "../../test-support/react.js";
+import { createHost, waitFor } from "../support/react.js";
 
 /**
  * B5 · the view layer, as bootstrap sees it: `registerViews(mount)` is the

@@ -1,4 +1,4 @@
-# @statewalker/mvc-blueprint
+# @statewalker/mvc-blueprint-00
 
 A TODO application whose purpose is not todos.
 
@@ -73,15 +73,15 @@ wrong.
 ## Layout
 
 ```
-lib/todo-core/src    declarations, TodoApi (the port), MemTodoApi, the command defaults
-lib/todo-app/src     models, controllers, bootstrap, the model kit
-                     models.ts is the ONLY entry the view layer may use
-lib/todo-ui/src      view-adapter.ts (headless — no React), use-model.ts,
-                     views/*.tsx, register-views.tsx
-src/                 app.ts (composition root), main.tsx (page entry), index.css
-B0-…B6-*/tests       the ladder — one directory per rung, each a proven property
-test-support/        view-layer stand-ins, a seeded MemTodoApi, DOM helpers for the browser suites
-aliases.ts           the alias table — one copy, imported by all three Vite/Vitest configs
+src/lib/todo-core/src    declarations, TodoApi (the port), MemTodoApi, the command defaults
+src/lib/todo-app/src     models, controllers, bootstrap, the model kit
+                         models.ts is the ONLY entry the view layer may use
+src/lib/todo-ui/src      view-adapter.ts (headless — no React), use-model.ts,
+                         views/*.tsx, register-views.tsx
+src/                     app.ts (composition root), main.tsx (page entry), index.css
+tests/B0-…B6-*/          the ladder — one directory per rung, each a proven property
+tests/support/           view-layer stand-ins, a seeded MemTodoApi, DOM helpers for the browser suites
+aliases.ts               the alias table — one copy, imported by all three Vite/Vitest configs
 ```
 
 Three layers are three **directories** behind `@todo/core`, `@todo/app` and `@todo/ui` aliases —
@@ -107,7 +107,7 @@ pnpm build && pnpm preview
 ```
 
 The app starts with three seeded todos in memory. There is no persistence yet — a persistent
-`TodoApi` is rung B7, out of scope here; the seam for it is `TodoApi` in `lib/todo-core`.
+`TodoApi` is rung B7, out of scope here; the seam for it is `TodoApi` in `src/lib/todo-core`.
 
 ## Status
 
@@ -130,7 +130,7 @@ which the spec gates on the Files Manager being ported onto it as a second calle
 
 The command-override rule reads `cmd.claimed`, which `@statewalker/shared-commands@0.2.1` sets at
 run time but declares only on its **unexported** `CommandInternal` type; the public `Command` type
-does not carry it. `B2-commands/tests/claimed-contract.test.ts` guards the behaviour, so an upstream
+does not carry it. `tests/B2-commands/claimed-contract.test.ts` guards the behaviour, so an upstream
 change fails loudly rather than silently letting every default handler run alongside a host's
 override. An upstream issue asking for `claimed` on the public type is **not yet filed** — it must
 be before this substrate is published.

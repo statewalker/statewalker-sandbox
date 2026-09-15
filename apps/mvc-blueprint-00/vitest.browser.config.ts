@@ -13,7 +13,7 @@ export default defineConfig({
   resolve: { alias },
   test: {
     name: "browser",
-    include: ["B5-*/tests/**/*.test.tsx", "B6-*/tests/**/*.test.tsx"],
+    include: ["tests/B5-*/**/*.test.tsx", "tests/B6-*/**/*.test.tsx"],
     browser: {
       enabled: true,
       headless: true,
