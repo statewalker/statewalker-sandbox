@@ -54,7 +54,8 @@ was replaced meanwhile — unless the controller has been disposed, since a disp
 no command — while only the bookkeeping that assumes the session is still current
 (clearing `running`, marking the form saved) is skipped once it is not. Clear-completed broadcasts
 `todos:changed` on the same principle: whenever at least one todo was actually removed, even if the
-rest of the pass then fails.
+rest of the pass then fails. Its question is a snapshot too: the ids of the todos done when it was
+asked, which OK removes — never whatever is done by the time OK runs.
 
 ## Out of scope
 

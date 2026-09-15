@@ -25,6 +25,8 @@ interface Services {
 
 interface Session {
   readonly model: ConfirmModel;
+  /** The todos that were done when the question was asked — what OK removes. */
+  readonly ids: readonly string[];
   readonly ok: SubmitWatch;
   readonly cancel: SubmitWatch;
   readonly release: () => Promise<void>;
@@ -67,7 +69,8 @@ export class ClearCompletedController {
     const services = this._services;
     if (!services || this._disposed) return { asked: false };
     if (this._session) return { asked: true };
-    const count = (await services.api.list()).filter((t) => t.done).length;
+    const ids = (await services.api.list()).filter((t) => t.done).map((t) => t.id);
+    const count = ids.length;
     if (this._disposed || count === 0) return { asked: false };
     if (this._session) return { asked: true };
 
@@ -81,6 +84,7 @@ export class ClearCompletedController {
     own(model.control.actions.cancel.onSubmitsUpdate(services.loop.kick));
     this._session = {
       model,
+      ids,
       ok: watchSubmits(model.control.actions.ok),
       cancel: watchSubmits(model.control.actions.cancel),
       release: services.register(releaseAll),
@@ -106,31 +110,29 @@ export class ClearCompletedController {
     if (!session.ok.take()) return;
 
     session.model.control.actions.ok.update({ running: true });
+    // OK answers the question that was asked: it removes the todos that were
+    // done then, not whatever is done now; one already gone is skipped.
     // Counted inside the work, not derived from the result: a failure
     // part-way through still leaves earlier removals in effect, and those
     // must be broadcast even though the overall attempt did not succeed.
     let removed = 0;
     const result = await attempt(services.log, "clear completed", async () => {
-      const done = (await services.api.list()).filter((t) => t.done);
-      for (const todo of done) {
-        await services.api.remove(todo.id);
-        removed++;
+      for (const id of session.ids) {
+        if (await services.api.remove(id)) removed++;
       }
-      return done.length;
     });
     if (this._disposed || this._session !== session) return;
     session.model.control.actions.ok.update({ running: false });
-    if (result.ok) {
-      services.log.info("action:clear-completed", { count: result.value });
+    if (removed > 0) {
       services.commands.call(todosChanged, { source: "todos.clear-completed" });
+    }
+    if (result.ok) {
+      services.log.info("action:clear-completed", { count: removed });
       notifyUser(services.commands, services.log, {
-        text: `Cleared ${plural(result.value)}`,
+        text: `Cleared ${plural(removed)}`,
         level: "info",
       });
     } else {
-      if (removed > 0) {
-        services.commands.call(todosChanged, { source: "todos.clear-completed" });
-      }
       notifyUser(services.commands, services.log, { text: result.message, level: "error" });
     }
     await this._close();

@@ -59,7 +59,8 @@ its own content is gone.
 Every action's submit listener is read-only: it captures a snapshot of what the intent means right
 then — the list's selection, items and new-title draft; the edit form's baseline todo and draft — and the
 controller's pass acts on that snapshot, not on whatever the model holds once its microtask actually
-runs.
+runs. Clear-completed snapshots earlier still: the ids of the done todos are captured when the
+question is asked, and OK acts on exactly those.
 
 - **List.** Owns the list model and five actions; contributes its panel and actions. Add → `api.add`,
   clearing the new-title draft afterwards only if it is still what was submitted; Toggle/Delete →
@@ -76,8 +77,9 @@ runs.
   unless the controller has been disposed; only clearing `running` and marking the form saved are
   skipped once the session has moved on. A
   failure keeps the draft and shows the error.
-- **Clear-completed.** Answers `…:ask` by showing a dialog and returning at once. Clear removes the done
-  todos and toasts; `todos:changed` is broadcast whenever at least one todo was actually removed, even
+- **Clear-completed.** Answers `…:ask` by showing a dialog and returning at once. Clear removes the todos
+  that were done when the question was asked — skipping any already gone — and toasts how many it
+  removed; `todos:changed` is broadcast whenever at least one todo was actually removed, even
   when the pass then fails partway through the rest. Either answer resets OK's `running` before the
   dialog is withdrawn.
 - **Notifications.** Answers `notifications:notify` with a toast, withdrawn on dismiss or after a

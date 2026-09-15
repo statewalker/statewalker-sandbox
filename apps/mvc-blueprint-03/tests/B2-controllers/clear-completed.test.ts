@@ -116,6 +116,25 @@ describe("B2 · clear-completed", () => {
     await controller.dispose();
   });
 
+  it("OK acts on the question it asked: the todos done at ask time, skipping ones already gone", async () => {
+    const { api, commands, recorder, controller, toasts, changed } = await start();
+    await commands.call(todosClearCompletedAsk, {}).promise;
+    // While the question is open: t3 is ticked, and t2 is deleted elsewhere.
+    await api.update("t3", { done: true });
+    await api.remove("t2");
+    controller.current?.view.actions.ok.submit();
+    await settle();
+    expect((await api.list()).map((t) => t.id)).toEqual(["t3"]);
+    expect(changed).toEqual(["todos.clear-completed"]);
+    expect(toasts).toEqual([{ text: "Cleared 1 completed todo", level: "info" }]);
+    expect(recorder.calls).toContainEqual({
+      level: "info",
+      args: ["action:clear-completed", { count: 1 }],
+      metadata: { module: "todos.clear-completed" },
+    });
+    await controller.dispose();
+  });
+
   it("Cancel closes the question and deletes nothing", async () => {
     const { api, commands, controller, dialogs } = await start();
     await commands.call(todosClearCompletedAsk, {}).promise;
