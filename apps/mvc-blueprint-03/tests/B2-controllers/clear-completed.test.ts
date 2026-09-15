@@ -7,8 +7,10 @@ import {
   createConfirmModel,
   todosClearCompletedAsk,
 } from "@todos/clear-completed";
+import { setTodoApi } from "@todos/core";
 import { todosChanged } from "@todos/events";
 import { describe, expect, it } from "vitest";
+import { ScriptedTodoApi } from "../support/api.js";
 import { newTestContext, settle } from "../support/context.js";
 
 const rows = [
@@ -17,8 +19,20 @@ const rows = [
   { id: "t3", title: "Read book", done: false },
 ];
 
-async function start(seed = rows) {
+/** Succeeds its first `remove`, then fails every later one — unlike `ScriptedTodoApi.fail`, which fails every call. */
+class FlakyRemoveApi extends ScriptedTodoApi {
+  private _removeCalls = 0;
+
+  override async remove(id: string): Promise<boolean> {
+    this._removeCalls++;
+    if (this._removeCalls >= 2) throw new Error("locked");
+    return super.remove(id);
+  }
+}
+
+async function start(seed = rows, api?: ScriptedTodoApi) {
   const env = newTestContext(seed);
+  if (api) setTodoApi(env.ctx, api);
   const controller = new ClearCompletedController();
   controller.activate(env.ctx);
   const toasts: { text: string; level: string }[] = [];
@@ -31,7 +45,7 @@ async function start(seed = rows) {
     changed.push(cmd.payload.source);
   });
   const dialogs = () => env.slots.getSnapshot(dialogsSlot);
-  return { ...env, controller, toasts, changed, dialogs };
+  return { ...env, api: api ?? env.api, controller, toasts, changed, dialogs };
 }
 
 describe("B2 · clear-completed", () => {
@@ -120,6 +134,19 @@ describe("B2 · clear-completed", () => {
     await settle();
     expect(toasts).toEqual([{ text: "clear completed failed: locked", level: "error" }]);
     expect(changed).toEqual([]);
+    expect(dialogs()).toEqual([]);
+    await controller.dispose();
+  });
+
+  it("a failure part-way still broadcasts what was removed before it", async () => {
+    const flaky = new FlakyRemoveApi(rows);
+    const { api, commands, controller, toasts, changed, dialogs } = await start(rows, flaky);
+    await commands.call(todosClearCompletedAsk, {}).promise;
+    controller.current?.view.actions.ok.submit();
+    await settle();
+    expect((await api.list()).map((t) => t.id)).toEqual(["t2", "t3"]);
+    expect(changed).toEqual(["todos.clear-completed"]);
+    expect(toasts).toEqual([{ text: "clear completed failed: locked", level: "error" }]);
     expect(dialogs()).toEqual([]);
     await controller.dispose();
   });

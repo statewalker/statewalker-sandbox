@@ -106,9 +106,16 @@ export class ClearCompletedController {
     if (!session.ok.take()) return;
 
     session.model.control.actions.ok.update({ running: true });
+    // Counted inside the work, not derived from the result: a failure
+    // part-way through still leaves earlier removals in effect, and those
+    // must be broadcast even though the overall attempt did not succeed.
+    let removed = 0;
     const result = await attempt(services.log, "clear completed", async () => {
       const done = (await services.api.list()).filter((t) => t.done);
-      for (const todo of done) await services.api.remove(todo.id);
+      for (const todo of done) {
+        await services.api.remove(todo.id);
+        removed++;
+      }
       return done.length;
     });
     if (this._disposed || this._session !== session) return;
@@ -121,6 +128,9 @@ export class ClearCompletedController {
         level: "info",
       });
     } else {
+      if (removed > 0) {
+        services.commands.call(todosChanged, { source: "todos.clear-completed" });
+      }
       notifyUser(services.commands, services.log, { text: result.message, level: "error" });
     }
     await this._close();

@@ -164,6 +164,25 @@ describe("B2 · edit controller", () => {
     await controller.dispose();
   });
 
+  it("a successful Save still broadcasts and toasts even if the session was replaced meanwhile", async () => {
+    const { api, commands, controller, toasts, changed } = await start();
+    await commands.call(todosEditOpen, { id: "t1" }).promise;
+    const form = controller.current?.view.form;
+    form?.setTitle("Buy oat milk");
+    form?.actions.save.submit();
+    // In the same tick: a second open replaces the session before the save's
+    // api call resolves.
+    const reopened = commands.call(todosEditOpen, { id: "t2" }).promise;
+    await expect(reopened).resolves.toEqual({ opened: true });
+    await settle();
+    expect((await api.list()).find((t) => t.id === "t1")).toMatchObject({ title: "Buy oat milk" });
+    expect(changed).toEqual(["todos.edit"]);
+    expect(toasts).toEqual([{ text: "Saved", level: "info" }]);
+    // The replacement editor (t2) is unaffected: the stale save did not close it.
+    expect(controller.current?.view.details.getTodo().id).toBe("t2");
+    await controller.dispose();
+  });
+
   it("Cancel closes the editor without saving", async () => {
     const { api, commands, slots, controller } = await start();
     await commands.call(todosEditOpen, { id: "t1" }).promise;
@@ -188,6 +207,27 @@ describe("B2 · edit controller", () => {
     expect(first?.view.form.actions.save.getState().enabled).toBe(false);
     await controller.dispose();
   });
+
+  it.each([0, 1, 2])(
+    "an open landing while an unrelated close is still releasing does not throw (n=%i microtasks)",
+    async (n) => {
+      const { commands, slots, controller } = await start();
+      await commands.call(todosEditOpen, { id: "t1" }).promise;
+      const t1 = controller.current;
+      // Not awaited: this open's own `_close()` races whatever else is
+      // closing t1 at the same time.
+      const opened = commands.call(todosEditOpen, { id: "t2" }).promise;
+      for (let i = 0; i < n; i++) await Promise.resolve();
+      // A Cancel submitted on the still-live t1 model starts its own close,
+      // independent of the t2 open already in flight.
+      t1?.view.form.actions.cancel.submit();
+      await expect(opened).resolves.toEqual({ opened: true });
+      await settle();
+      expect(slots.get(panelsSlot, "todos:edit")).toMatchObject({ title: 'Edit "Walk dog"' });
+      expect(controller.current?.view.details.getTodo().id).toBe("t2");
+      await controller.dispose();
+    },
+  );
 
   it("dispose withdraws an open editor", async () => {
     const { commands, slots, controller } = await start();

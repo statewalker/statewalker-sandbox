@@ -49,6 +49,8 @@ export class TodoEditController {
   private _services?: Services;
   private _session?: Session;
   private _opening: Promise<unknown> = Promise.resolve();
+  /** The release promise of whichever close is currently in flight, if any — from any trigger. */
+  private _closing?: Promise<void>;
 
   /** The open editor's model, if any. */
   get current(): EditModel | undefined {
@@ -86,21 +88,36 @@ export class TodoEditController {
     const services = this._services;
     if (!services || this._disposed) return { opened: false };
     const todo = (await services.api.list()).find((t) => t.id === id);
+    if (this._disposed) return { opened: false };
     if (!todo) throw new Error(`todo not found: ${id}`);
     await this._close();
+    // A close from elsewhere (Cancel or a successful Save, run from the
+    // update loop) may still be releasing the previous panel registration
+    // when this open reaches here — `_session` is already clear, so our own
+    // `_close()` above was a no-op. Wait for that other close too, or the
+    // keyed-slot register below collides with the not-yet-withdrawn entry.
+    if (this._closing) await this._closing;
     if (this._disposed) return { opened: false };
 
     const model = createEditModel(todo);
     const [own, releaseAll] = newRegistry();
     own(() => model.dispose());
-    own(
-      services.slots.register(panelsSlot, "todos:edit", {
-        kind: todoEditKind,
-        title: `Edit "${todo.title}"`,
-        placement: "side",
-        model: model.view,
-      }),
-    );
+    try {
+      own(
+        services.slots.register(panelsSlot, "todos:edit", {
+          kind: todoEditKind,
+          title: `Edit "${todo.title}"`,
+          placement: "side",
+          model: model.view,
+        }),
+      );
+    } catch (error) {
+      // The registration failed (or anything registered before it in a future
+      // change might): release what we already own rather than leak the new
+      // model and its registry.
+      void releaseAll();
+      throw error;
+    }
     // Read-only: this listener may read the model but must not write it. It
     // records what the user meant at submit time, so the pass acts on that —
     // not on whatever the draft holds once the microtask reaches it.
@@ -127,7 +144,13 @@ export class TodoEditController {
     const session = this._session;
     if (!session) return;
     this._session = undefined;
-    await session.release();
+    const closing = session.release();
+    this._closing = closing;
+    try {
+      await closing;
+    } finally {
+      if (this._closing === closing) this._closing = undefined;
+    }
   }
 
   private async _pass(): Promise<void> {
@@ -142,8 +165,13 @@ export class TodoEditController {
       return;
     }
     if (!session.save.take()) return;
-    const snapshot = session.getSaveSnapshot();
-    if (!snapshot) return;
+    // `take()` only returns true after the submit listener ran and captured
+    // a snapshot, so this fallback should be unreachable — but a consumed
+    // Save must never be silently dropped for want of one.
+    const snapshot = session.getSaveSnapshot() ?? {
+      id: model.view.details.getTodo().id,
+      draft: model.view.form.getDraft(),
+    };
 
     const { save } = model.control.actions;
     model.control.reportError(undefined);
@@ -154,6 +182,19 @@ export class TodoEditController {
         done: snapshot.draft.done,
       }),
     );
+
+    if (result.ok) {
+      // The write already landed in the api: broadcast regardless of whether
+      // this session is still current, so other listeners (the list) see it.
+      // Log and toast only while the controller still owns them — once
+      // disposed, broadcasting is this pass's only remaining job.
+      if (!this._disposed) services.log.info("action:save", { id: snapshot.id });
+      services.commands.call(todosChanged, { source: "todos.edit" });
+      if (!this._disposed) {
+        notifyUser(services.commands, services.log, { text: "Saved", level: "info" });
+      }
+    }
+
     if (this._disposed || this._session !== session) return;
     save.update({ running: false });
     if (!result.ok) {
@@ -162,9 +203,6 @@ export class TodoEditController {
       return;
     }
     model.control.markSaved(result.value);
-    services.log.info("action:save", { id: snapshot.id });
-    services.commands.call(todosChanged, { source: "todos.edit" });
-    notifyUser(services.commands, services.log, { text: "Saved", level: "info" });
     await this._close();
   }
 }
