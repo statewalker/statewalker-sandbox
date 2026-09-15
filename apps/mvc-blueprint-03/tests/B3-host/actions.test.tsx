@@ -3,6 +3,7 @@ import { createAction } from "@sys/action";
 import { todosSelectionActionsSlot, todosToolbarActionsSlot } from "@sys/extension-points";
 import { SlotsProvider } from "@ui/host";
 import { ActionBar, ActionButton, ActionMenu } from "@ui/sys/action";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { all, button, render, waitFor } from "../support/react.js";
 
@@ -100,6 +101,47 @@ describe("B3 · action components", () => {
       .querySelector('[role="menu"]')
       ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(onClose).toHaveBeenCalledTimes(2);
+    view.unmount();
+  });
+
+  it("ActionMenu returns focus to what had it when the menu closes", async () => {
+    const slots = new Slots();
+    const toggle = createAction({ label: "Toggle" });
+    slots.provide(todosSelectionActionsSlot, {
+      id: "todos.toggle",
+      order: 10,
+      action: toggle.view,
+    });
+
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <SlotsProvider slots={slots}>
+          <button type="button" onClick={() => setOpen(true)}>
+            Trigger
+          </button>
+          {open && (
+            <ActionMenu
+              slot={todosSelectionActionsSlot}
+              label="Selection actions"
+              position={{ x: 10, y: 10 }}
+              onClose={() => setOpen(false)}
+            />
+          )}
+        </SlotsProvider>
+      );
+    }
+
+    const view = render(<Harness />);
+    await waitFor(() => button(view.host, "Trigger") !== undefined);
+    const trigger = button(view.host, "Trigger") as HTMLButtonElement;
+    trigger.focus();
+    trigger.click();
+    await waitFor(() => all(view.host, '[role="menuitem"]').length === 1);
+    view.host
+      .querySelector('[role="menu"]')
+      ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await waitFor(() => document.activeElement === trigger);
     view.unmount();
   });
 });

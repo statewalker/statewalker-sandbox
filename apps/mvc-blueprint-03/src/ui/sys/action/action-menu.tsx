@@ -16,8 +16,18 @@ export function ActionMenu({ slot, label, position, onClose }: ActionMenuProps) 
   const items = useSlot(slot);
   const sorted = useMemo(() => sortActions(items), [items]);
   const menu = useRef<HTMLDivElement>(null);
+  // No trigger element to return focus to by ref — remember what had focus when the
+  // menu opened, and put it back when the menu closes, like the host's FocusReturn.
   useEffect(() => {
+    const opener = document.activeElement;
     menu.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    return () => {
+      setTimeout(() => {
+        if (document.activeElement && document.activeElement !== document.body) return;
+        if (opener instanceof HTMLElement && opener !== document.body && opener.isConnected)
+          opener.focus();
+      }, 0);
+    };
   }, []);
   return (
     <>
