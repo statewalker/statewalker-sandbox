@@ -45,42 +45,51 @@ export function startApp(root: HTMLElement, options: StartOptions = {}): Running
   setSlots(context, slots);
   setTodoApi(context, options.api ?? new MemTodoApi(seedTodos));
 
-  const regions = createLayout(root);
-  register(() => root.replaceChildren());
+  // If any step throws — an activate, the host mount — release what was
+  // already set up (LIFO) and rethrow. Not covered by a test: making a
+  // controller or the React host fail needs a seam the app does not have.
+  try {
+    const regions = createLayout(root);
+    register(() => root.replaceChildren());
 
-  const controllers = [
-    new NotificationsController({ timeoutMs: options.notificationTimeoutMs }),
-    new TodoEditController(),
-    new ClearCompletedController(),
-    new TodoListController(),
-  ];
-  for (const controller of controllers) {
-    controller.activate(context);
-    register(() => controller.dispose());
+    const controllers = [
+      new NotificationsController({ timeoutMs: options.notificationTimeoutMs }),
+      new TodoEditController(),
+      new ClearCompletedController(),
+      new TodoListController(),
+    ];
+    for (const controller of controllers) {
+      // Registered before activate: a controller whose activate throws part-way is released too.
+      register(() => controller.dispose());
+      controller.activate(context);
+    }
+
+    const host = mountReactHost({
+      slots,
+      regions: { main: regions.main, side: regions.side },
+      dialogs: regions.dialogs,
+      notifications: regions.notifications,
+      renderers: [
+        ...todoListRenderers,
+        ...todoEditRenderers,
+        ...clearCompletedRenderers,
+        ...notificationRenderers,
+      ],
+    });
+    register(() => host.dispose());
+
+    const uiLog = getLogger(context).child({ module: "ui" });
+    register(
+      observeCoverage(slots, [host], (unrendered) => {
+        console.warn("[mvc-blueprint-03] no host renders", unrendered);
+        uiLog.warn("ui:unrendered", unrendered);
+        options.onUnrendered?.(unrendered);
+      }),
+    );
+  } catch (error) {
+    void cleanup();
+    throw error;
   }
-
-  const host = mountReactHost({
-    slots,
-    regions: { main: regions.main, side: regions.side },
-    dialogs: regions.dialogs,
-    notifications: regions.notifications,
-    renderers: [
-      ...todoListRenderers,
-      ...todoEditRenderers,
-      ...clearCompletedRenderers,
-      ...notificationRenderers,
-    ],
-  });
-  register(() => host.dispose());
-
-  const uiLog = getLogger(context).child({ module: "ui" });
-  register(
-    observeCoverage(slots, [host], (unrendered) => {
-      console.warn("[mvc-blueprint-03] no host renders", unrendered);
-      uiLog.warn("ui:unrendered", unrendered);
-      options.onUnrendered?.(unrendered);
-    }),
-  );
 
   let disposed = false;
   return {

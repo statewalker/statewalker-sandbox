@@ -311,6 +311,6 @@ describe("B2 · edit controller", () => {
     const spy = vi.fn();
     commands.call(todosEditOpen, { id: "t1" }).promise.catch(spy);
     await settle();
-    expect(spy).toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ kind: "no-handlers" }));
   });
 });

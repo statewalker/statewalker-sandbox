@@ -261,6 +261,7 @@ export class TodoListController {
     } else {
       model.control.reportOutcome(result.message);
       notifyUser(services.commands, services.log, { text: result.message, level: "error" });
+      // Permanent: nothing re-enables the action if its domain activates later.
       if ((result.error as { kind?: unknown } | undefined)?.kind === "no-handlers")
         action.update({ enabled: false });
     }
