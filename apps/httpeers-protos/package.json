@@ -19,12 +19,12 @@
     "demo:10-token-chain": "tsx 10-token-chain/main.ts"
   },
   "dependencies": {
-    "@biscuit-auth/biscuit-wasm": "0.6.0",
     "@chainsafe/libp2p-noise": "17.0.0",
     "@chainsafe/libp2p-yamux": "8.0.1",
     "@libp2p/interface": "3.2.5",
     "@libp2p/tcp": "11.0.26",
     "@multiformats/multiaddr": "13.0.3",
+    "@statewalker/webrun-biscuit": "^0.2.0",
     "@statewalker/webrun-http-streams": "catalog:",
     "@statewalker/webrun-streams-libp2p": "catalog:",
     "libp2p": "3.3.8"

@@ -468,9 +468,6 @@ importers:
 
   apps/httpeers-protos:
     dependencies:
-      '@biscuit-auth/biscuit-wasm':
-        specifier: 0.6.0
-        version: 0.6.0
       '@chainsafe/libp2p-noise':
         specifier: 17.0.0
         version: 17.0.0
@@ -486,6 +483,9 @@ importers:
       '@multiformats/multiaddr':
         specifier: 13.0.3
         version: 13.0.3
+      '@statewalker/webrun-biscuit':
+        specifier: ^0.2.0
+        version: 0.2.0
       '@statewalker/webrun-http-streams':
         specifier: 'catalog:'
         version: 0.2.1
@@ -972,9 +972,6 @@ importers:
 
   packages/httpeers-conformance:
     dependencies:
-      '@biscuit-auth/biscuit-wasm':
-        specifier: 0.6.0
-        version: 0.6.0
       '@libp2p/interface':
         specifier: 3.2.5
         version: 3.2.5
@@ -984,6 +981,9 @@ importers:
       '@statewalker/httpeers.core':
         specifier: workspace:*
         version: link:../httpeers.core
+      '@statewalker/webrun-biscuit':
+        specifier: ^0.2.0
+        version: 0.2.0
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -997,9 +997,6 @@ importers:
 
   packages/httpeers.core:
     dependencies:
-      '@biscuit-auth/biscuit-wasm':
-        specifier: 0.6.0
-        version: 0.6.0
       '@chainsafe/libp2p-noise':
         specifier: 17.0.0
         version: 17.0.0
@@ -1024,6 +1021,9 @@ importers:
       '@multiformats/multiaddr':
         specifier: 13.0.3
         version: 13.0.3
+      '@statewalker/webrun-biscuit':
+        specifier: ^0.2.0
+        version: 0.2.0
       '@statewalker/webrun-http-streams':
         specifier: 'catalog:'
         version: 0.2.1
@@ -1034,6 +1034,9 @@ importers:
         specifier: 3.3.8
         version: 3.3.8
     devDependencies:
+      '@biscuit-auth/biscuit-wasm':
+        specifier: 0.6.0
+        version: 0.6.0
       '@types/node':
         specifier: 'catalog:'
         version: 25.9.5
@@ -3509,6 +3512,9 @@ packages:
     peerDependencies:
       react: '>=18'
       react-dom: '>=18'
+
+  '@statewalker/webrun-biscuit@0.2.0':
+    resolution: {integrity: sha512-yKFF/4TlL3lbum6HCIxZElecav6OHf3ed9BZoDqd8SqP/EwW4IGJzbQLHBKBRWUiiX/AuStcQfVpknXKOqco3w==}
 
   '@statewalker/webrun-builder@0.1.1':
     resolution: {integrity: sha512-gb+ynxW/a4VBDKGY1ttjZ4tJVk7fijxjqL7BVn6iMIY190gy3I6S/yijc52shOyxjBw+CUhGSb2Uu9O/hAxD6w==}
@@ -9532,6 +9538,11 @@ snapshots:
     transitivePeerDependencies:
       - '@types/react'
       - '@types/react-dom'
+
+  '@statewalker/webrun-biscuit@0.2.0':
+    dependencies:
+      '@noble/curves': 2.4.0
+      '@noble/hashes': 2.4.0
 
   '@statewalker/webrun-builder@0.1.1':
     dependencies:

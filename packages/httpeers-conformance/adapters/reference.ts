@@ -9,20 +9,21 @@
  * also the natural seed for `@statewalker/httpeers.biscuit` when §13's
  * reconciliation happens.
  *
- * The token half follows prototype 10, including its two hard-won findings: the
- * default evaluation limits are unusable, and delegation must be a THIRD-PARTY block
- * scoped with `trusting` because a plain appended block attests to nothing.
+ * The token half follows prototype 10, including its hard-won finding that
+ * delegation must be a THIRD-PARTY block scoped with `trusting`, because a plain
+ * appended block attests to nothing. The engine is `@statewalker/webrun-biscuit`
+ * (pure TypeScript); every value reaches Datalog as a `{name}` parameter.
  */
 import {
-  AuthorizerBuilder,
+  type AuthorizationResult,
   Biscuit,
-  BlockBuilder,
-  KeyPair,
-  PublicKey,
-  SignatureAlgorithm,
-  biscuit,
-  block,
-} from "@biscuit-auth/biscuit-wasm";
+  type Keypair,
+  type LoadedToken,
+  type RunLimits,
+  evaluate,
+  generateKeypair,
+  thirdPartyBlock,
+} from "@statewalker/webrun-biscuit";
 import type {
   FetchHandler,
   Implementation,
@@ -33,7 +34,7 @@ import type {
   VerifyOutcome,
 } from "../src/types.js";
 
-const LIMITS = { max_facts: 5_000, max_iterations: 200, max_time_micro: 1_000_000 };
+const LIMITS: RunLimits = { maxFacts: 5_000, maxIterations: 200, maxTimeMs: 1_000 };
 
 // ------------------------------------------------------------------ block R
 
@@ -78,43 +79,40 @@ function buildMounts(defs: Record<string, FetchHandler>): MountsTable {
 
 // ------------------------------------------------------------------ block A
 
-function warmUp(): void {
-  // Prototype 10, finding F2: the first authorization in a process throws a
-  // spurious Timeout regardless of max_time_micro. Absorb it on a disposable key.
-  const k = new KeyPair(SignatureAlgorithm.Ed25519);
-  const t = biscuit`w(true); check if time($t), $t < 2100-01-01T00:00:00Z;`.build(k.getPrivateKey());
-  const parsed = Biscuit.fromBase64(t.toBase64(), k.getPublicKey());
-  for (let i = 0; i < 3; i++) {
-    const a = new AuthorizerBuilder();
-    a.addCode("time(2000-01-01T00:00:00Z); allow if w(true);");
-    try {
-      a.buildAuthenticated(parsed).authorizeWithLimits(LIMITS);
-      return;
-    } catch {
-      /* the defect this exists for */
-    }
-  }
-}
+const hex = (bytes: Uint8Array): string =>
+  Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
-const iso = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/, "Z");
-
-function mint(init: MintInit, meshKey: KeyPair): string {
-  const b = init.delegationKey
-    ? biscuit`check if bound($k), connection_peer($k)
-              or delegate($k), connection_peer($k) trusting ${init.delegationKey as PublicKey};`
-    : biscuit`check if bound($k), connection_peer($k);`;
-  b.addCode(`mesh("${init.mesh}"); subject("${init.subject}"); bound("${init.bound}");`);
-  for (const r of init.roles) b.addCode(`role("${r}");`);
+function mint(init: MintInit, meshKey: Keypair): string {
+  const params: Record<string, string | Date> = {
+    mesh: init.mesh,
+    subject: init.subject,
+    bound: init.bound,
+    expiresAt: init.expiresAt,
+  };
+  const code: string[] = [
+    init.delegationKey
+      ? // A public key is not a term, so it cannot be a parameter; hex has no Datalog syntax.
+        `check if bound($k), connection_peer($k) or delegate($k), connection_peer($k) trusting ed25519/${hex(init.delegationKey as Uint8Array)};`
+      : "check if bound($k), connection_peer($k);",
+    "mesh({mesh}); subject({subject}); bound({bound});",
+  ];
+  init.roles.forEach((r, i) => {
+    params[`role${i}`] = r;
+    code.push(`role({role${i}});`);
+  });
   if (init.audience && init.audience.length > 0) {
-    for (const a of init.audience) b.addCode(`audience("${a}");`);
-    b.addCode("check if audience($k), self_peer($k);");
+    init.audience.forEach((a, i) => {
+      params[`audience${i}`] = a;
+      code.push(`audience({audience${i}});`);
+    });
+    code.push("check if audience($k), self_peer($k);");
   } else {
     // A predicate takes at least one term, so the explicit state carries one.
-    b.addCode("audience_unrestricted(true); check if audience_unrestricted(true);");
+    code.push("audience_unrestricted(true); check if audience_unrestricted(true);");
   }
-  b.addCode(`check if time($t), $t < ${iso(init.expiresAt)};`);
-  for (const c of init.extraChecks ?? []) b.addCode(c);
-  return b.build(meshKey.getPrivateKey()).toBase64();
+  code.push("check if time($t), $t < {expiresAt};");
+  for (const c of init.extraChecks ?? []) code.push(c);
+  return Biscuit.build(meshKey.secretKey, code.join("\n"), { params }).toBase64();
 }
 
 /**
@@ -137,27 +135,25 @@ const RESERVED = [
   "operation", "resource", "revoked_subject", "revoked_binding",
 ];
 
-function declaresReserved(token: Biscuit): string[] {
+function declaresReserved(token: LoadedToken): string[] {
   const found = new Set<string>();
-  for (let i = 0; i < token.countBlocks(); i++) {
-    const src = token.getBlockSource(i);
-    for (const p of RESERVED) {
-      // a FACT declaration, not a reference inside a check/rule body
-      if (new RegExp(String.raw`^\s*${p}\s*\(`, "m").test(src)) found.add(p);
-    }
+  for (const block of token.blocks) {
+    // a FACT declaration, or a rule deriving one — not a reference inside a body
+    const declared = [...block.facts.map((f) => f.predicate.name), ...block.rules.map((r) => r.head.name)];
+    for (const p of RESERVED) if (declared.includes(p)) found.add(p);
   }
   return [...found];
 }
 
 function verify(
   token: string,
-  meshPublic: PublicKey,
+  meshPublic: Uint8Array,
   ctx: VerifyContext,
   rules: PolicySource,
 ): VerifyOutcome {
-  let parsed: Biscuit;
+  let parsed: LoadedToken;
   try {
-    parsed = Biscuit.fromBase64(token, meshPublic);
+    parsed = Biscuit.fromBase64(token).verify(meshPublic).token;
   } catch {
     return { allowed: false, signatureError: true, failed: ["signature verification failed"] };
   }
@@ -168,37 +164,52 @@ function verify(
       failed: [`token declares verifier-owned predicate(s): ${usurped.join(", ")}`],
     };
   }
-  const a = new AuthorizerBuilder();
-  a.addCode(`connection_peer("${ctx.connectionPeer}"); self_peer("${ctx.selfPeer}"); time(${iso(ctx.now)});`);
-  a.addCode(`operation("${ctx.operation}"); resource("${ctx.resource}");`);
-  for (const [t, v] of ctx.selfFacts ?? []) a.addCode(`self_fact("${t}", "${v}");`);
-  for (const f of ctx.extraFacts ?? []) a.addCode(f);
-  for (const s of ctx.revokedSubjects ?? []) a.addCode(`revoked_subject("${s}");`);
-  for (const k of ctx.revokedBindings ?? []) a.addCode(`revoked_binding("${k}");`);
-  for (const r of rules.rules) a.addCode(r);
-  a.addCode("deny if subject($s), revoked_subject($s);");
-  a.addCode("deny if bound($k), revoked_binding($k);");
-  for (const p of rules.policies) a.addCode(p);
+  const params: Record<string, string | Date> = {
+    connectionPeer: ctx.connectionPeer,
+    selfPeer: ctx.selfPeer,
+    now: ctx.now,
+    operation: ctx.operation,
+    resource: ctx.resource,
+  };
+  const code: string[] = [
+    "connection_peer({connectionPeer}); self_peer({selfPeer}); time({now});",
+    "operation({operation}); resource({resource});",
+  ];
+  (ctx.selfFacts ?? []).forEach(([t, v], i) => {
+    params[`selfType${i}`] = t;
+    params[`selfValue${i}`] = v;
+    code.push(`self_fact({selfType${i}}, {selfValue${i}});`);
+  });
+  for (const f of ctx.extraFacts ?? []) code.push(f);
+  (ctx.revokedSubjects ?? []).forEach((s, i) => {
+    params[`revokedSubject${i}`] = s;
+    code.push(`revoked_subject({revokedSubject${i}});`);
+  });
+  (ctx.revokedBindings ?? []).forEach((k, i) => {
+    params[`revokedBinding${i}`] = k;
+    code.push(`revoked_binding({revokedBinding${i}});`);
+  });
+  for (const r of rules.rules) code.push(r);
+  code.push("deny if subject($s), revoked_subject($s);");
+  code.push("deny if bound($k), revoked_binding($k);");
+  for (const p of rules.policies) code.push(p);
 
-  const limits = ctx.budget
-    ? { max_facts: ctx.budget.maxFacts, max_iterations: ctx.budget.maxIterations, max_time_micro: ctx.budget.maxTimeMicro }
+  const limits: RunLimits = ctx.budget
+    ? { maxFacts: ctx.budget.maxFacts, maxIterations: ctx.budget.maxIterations, maxTimeMs: ctx.budget.maxTimeMicro / 1000 }
     : LIMITS;
-  try {
-    a.buildAuthenticated(parsed).authorizeWithLimits(limits);
-    return { allowed: true };
-  } catch (e) {
-    const budgetExceeded = typeof e === "object" && e !== null && "RunLimit" in (e as object);
-    return { allowed: false, budgetExceeded, failed: failedChecks(e) };
-  }
+  const { result } = evaluate(parsed, code.join("\n"), { limits, params });
+  if (result.kind === "ok") return { allowed: true };
+  const budgetExceeded =
+    result.kind === "execution" && ["TooManyFacts", "TooManyIterations", "Timeout"].includes(result.error);
+  return { allowed: false, budgetExceeded, failed: failedChecks(result) };
 }
 
-function failedChecks(e: unknown): string[] {
-  const checks = (e as { FailedLogic?: { Unauthorized?: { checks?: unknown[] } } })?.FailedLogic?.Unauthorized?.checks;
-  if (!Array.isArray(checks)) return [JSON.stringify(e)];
-  return checks.map((c) => {
-    const b = (c as { Block?: { block_id: number; check_id: number; rule: string } }).Block;
-    return b ? `block ${b.block_id} check ${b.check_id}: ${b.rule}` : JSON.stringify(c);
-  });
+function failedChecks(result: AuthorizationResult): string[] {
+  if (result.kind !== "unauthorized" && result.kind !== "noMatchingPolicy") return [JSON.stringify(result)];
+  if (result.checks.length === 0) return [JSON.stringify(result)];
+  return result.checks.map((c) =>
+    c.source === "block" ? `block ${c.blockId} check ${c.checkId}: ${c.rule}` : `authorizer check ${c.checkId}: ${c.rule}`,
+  );
 }
 
 // ------------------------------------------------------------------ block X
@@ -255,29 +266,28 @@ export const referenceImplementation: Implementation = {
   },
   intermediary: { asIntermediary },
   tokens: {
-    warmUp,
-    async newMeshKey() { return new KeyPair(SignatureAlgorithm.Ed25519); },
-    async newDeviceKey() { return new KeyPair(SignatureAlgorithm.Ed25519); },
-    publicOf(key) { return (key as KeyPair).getPublicKey(); },
-    async mint(init, meshKey) { return mint(init, meshKey as KeyPair); },
-    async verify(token, meshPublic, ctx, rules) { return verify(token, meshPublic as PublicKey, ctx, rules); },
+    async newMeshKey() { return generateKeypair(); },
+    async newDeviceKey() { return generateKeypair(); },
+    publicOf(key) { return (key as Keypair).publicKey; },
+    async mint(init, meshKey) { return mint(init, meshKey as Keypair); },
+    async verify(token, meshPublic, ctx, rules) { return verify(token, meshPublic as Uint8Array, ctx, rules); },
     async attenuate(token, meshPublic, constraints) {
-      const t = Biscuit.fromBase64(token, meshPublic as PublicKey);
-      const bb = new BlockBuilder();
-      for (const c of constraints) bb.addCode(c);
-      return t.appendBlock(bb).toBase64();
+      const t = Biscuit.fromBase64(token);
+      t.verify(meshPublic as Uint8Array);
+      return t.attenuate(constraints.join("\n")).toBase64();
     },
     async delegate(token, meshPublic, holderKey, to, restrict) {
-      const t = Biscuit.fromBase64(token, meshPublic as PublicKey);
-      const bb = block`delegate(${to});`;
-      for (const c of restrict) bb.addCode(c);
-      const holder = holderKey as KeyPair;
-      const tp = t.getThirdPartyRequest().createBlock(holder.getPrivateKey(), bb);
-      return t.appendThirdPartyBlock(holder.getPublicKey(), tp).toBase64();
+      const t = Biscuit.fromBase64(token);
+      t.verify(meshPublic as Uint8Array);
+      const holder = holderKey as Keypair;
+      const block = thirdPartyBlock(t.thirdPartyRequest(), holder.secretKey, ["delegate({to});", ...restrict].join("\n"), 0, { to });
+      return t.appendThirdParty(block).toBase64();
     },
     async forgeDelegation(token, meshPublic, to) {
       // The attack: a plain block anyone holding the token can append.
-      return Biscuit.fromBase64(token, meshPublic as PublicKey).appendBlock(block`delegate(${to});`).toBase64();
+      const t = Biscuit.fromBase64(token);
+      t.verify(meshPublic as Uint8Array);
+      return t.attenuate("delegate({to});", { params: { to } }).toBase64();
     },
   },
 };
