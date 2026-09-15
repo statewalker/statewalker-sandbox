@@ -36,7 +36,7 @@ archive, not uploaded individually". Their code survives in `shell-core`; their
 | `06a-tailwind-build` | **recovered**, byte-identical (sha-verified) | none — a build-and-measure rung | — |
 | `06b-basecoat-mapping` | `lib/` | recovered (1 corrected) + reconstructed | 24 |
 | `07-dockview-hosting` | `lib/dock.ts`, `lib/theme-bridge.ts` | written fresh | 41 |
-| `08-biscuit-enablement` | **recovered** | **recovered**, all 23 unmodified, + 6 | 29 |
+| `08-biscuit-enablement` | **recovered, then adapted** 2026-09-15 to webrun-biscuit (verbatim at `cd5bb00`) | **recovered**, all 23 unmodified, + 6 revised | 29 |
 | `09-apps-from-peers` | `lib/peer.ts` | written fresh | 22 |
 | `Z-static-schema` | reconstructed — note 29 | written fresh | 21 |
 
@@ -146,6 +146,11 @@ Found by implementing what they say. The code is right in every case; the prose 
   an explicit bound *replaces* rather than narrows that range.
 - **Note 06's `--experimental-wasm-modules` claim is stale**, as note 18 §3 already
   said: `biscuit-wasm` imports with no flag on Node v24.8.0.
+- **Rung 08's adapter is no longer recovered code.** On 2026-09-15 it moved from
+  `@biscuit-auth/biscuit-wasm` to `@statewalker/webrun-biscuit`; the recovered body is
+  at `cd5bb00`. The 23 recovered tests still run unmodified against it. Two of the three
+  constraints this app pinned (the flagless load, the cold single-use Authorizer) were
+  properties of the WASM build and are now asserted gone; the one-term head survives.
 - Rung 05's "a plain synchronous return does not claim a command" is enforced by the
   shipped `@statewalker/shared-commands` bus, not by the host — rung 5 *inherits* the
   property rather than establishing it.

@@ -1,6 +1,8 @@
 // RECOVERED-FROM-ARCHIVE: notes/drive/2026-09-02.Httpeers-Shell/
 //   17-prototype-08-biscuit-enablement.tar.gz -> proto8-biscuit/test/biscuit.test.ts
 // Verbatim apart from this header. Nothing in the body was rewritten.
+// Since 2026-09-15 it runs against the ADAPTED adapter (webrun-biscuit, not
+// biscuit-wasm), still with no assertion changed: the substitution claim, re-asked.
 import { describe, expect, it, vi } from "vitest";
 import { fact, factSetEnablement, type Enablement } from "../src/enablement.js";
 import { createBiscuitEnablement, loadBiscuit } from "../src/biscuit-enablement.js";

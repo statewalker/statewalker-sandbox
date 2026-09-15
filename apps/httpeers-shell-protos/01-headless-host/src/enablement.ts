@@ -9,8 +9,9 @@
 // This interface is the swap point for Biscuit. `factSetEnablement` is the stub
 // used by rungs 1-5; the Datalog-backed implementation satisfies the same
 // interface and lazy-loads at the rung where mesh capabilities arrive
-// (biscuit-wasm measures 2.35 MB of WASM + 96 KB of glue — correct engine,
-// wrong load time for a bootstrap shell).
+// (biscuit-wasm measured 2.35 MB of WASM + 96 KB of glue — correct engine,
+// wrong load time for a bootstrap shell. Rung 08 now uses webrun-biscuit, about
+// 100 KB of JavaScript, which weakens that argument without changing the seam.)
 
 /**
  * A ground Datalog fact. The shape mirrors Datalog deliberately —
