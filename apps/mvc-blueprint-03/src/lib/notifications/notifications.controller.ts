@@ -3,8 +3,8 @@ import { newRegistry } from "@statewalker/shared-registry";
 import { type AppContext, getCommands, getSlots } from "@sys/context";
 import { notificationsSlot } from "@sys/extension-points";
 import { notify } from "./notifications.commands.js";
-import { notificationKind } from "./notifications.model.js";
 import { createNotificationModel } from "./notifications.model.impl.js";
+import { notificationKind } from "./notifications.model.js";
 
 export const NOTIFICATION_TIMEOUT_MS = 4000;
 

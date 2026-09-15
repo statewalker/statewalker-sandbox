@@ -1,5 +1,5 @@
-import { Button, Card, CardContent, cn } from "@statewalker/ui.view.shadcn";
 import type { NotificationView } from "@notifications/model";
+import { Button, Card, CardContent, cn } from "@statewalker/ui.view.shadcn";
 
 /** One message. Errors are announced assertively; everything else politely. */
 export function NotificationToast({ model }: { model: NotificationView }) {

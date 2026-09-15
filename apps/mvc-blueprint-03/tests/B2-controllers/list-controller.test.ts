@@ -1,9 +1,9 @@
+import { notify } from "@notifications/commands";
 import {
   panelsSlot,
   todosSelectionActionsSlot,
   todosToolbarActionsSlot,
 } from "@sys/extension-points";
-import { notify } from "@notifications/commands";
 import { todosClearCompletedAsk } from "@todos/clear-completed/commands";
 import { todosEditOpen } from "@todos/edit/commands";
 import { todosChanged } from "@todos/events";

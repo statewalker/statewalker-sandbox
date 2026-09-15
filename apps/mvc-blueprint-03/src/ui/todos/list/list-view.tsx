@@ -103,7 +103,7 @@ export function TodoListPanel({ model }: { model: TodoListView }) {
             <li
               key={todo.id}
               data-todo={todo.id}
-              aria-selected={selected.has(todo.id)}
+              aria-current={selected.has(todo.id) ? "true" : undefined}
               className={cn(
                 "flex items-center gap-3 rounded px-2 py-2",
                 selected.has(todo.id) && "bg-accent",

@@ -1,5 +1,5 @@
-import { Slots } from "@statewalker/shared-slots";
 import { createNotificationModel } from "@notifications";
+import { Slots } from "@statewalker/shared-slots";
 import { todosSelectionActionsSlot, todosToolbarActionsSlot } from "@sys/extension-points";
 import { createConfirmModel } from "@todos/clear-completed";
 import { createEditModel } from "@todos/edit";
@@ -133,9 +133,11 @@ describe("B3 · todo list panel", () => {
     row("t1").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     row("t2").dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
     expect(model.view.getSelection()).toEqual(["t1", "t2"]);
-    await waitFor(() => row("t2").getAttribute("aria-selected") === "true");
+    await waitFor(() => row("t2").getAttribute("aria-current") === "true");
+    expect(row("t1").hasAttribute("aria-current")).toBe(true);
     row("t1").dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
     expect(model.view.getSelection()).toEqual(["t2"]);
+    await waitFor(() => !row("t1").hasAttribute("aria-current"));
     view.unmount();
   });
 

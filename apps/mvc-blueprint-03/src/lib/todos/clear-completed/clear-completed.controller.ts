@@ -1,8 +1,8 @@
+import { notifyUser } from "@notifications/commands";
 import type { Commands } from "@statewalker/shared-commands";
 import { getLogger, type Logger } from "@statewalker/shared-logger";
 import { newRegistry } from "@statewalker/shared-registry";
 import type { Slots } from "@statewalker/shared-slots";
-import { notifyUser } from "@notifications/commands";
 import { type SubmitWatch, watchSubmits } from "@sys/action";
 import { attempt } from "@sys/attempt";
 import { type AppContext, getCommands, getSlots } from "@sys/context";
@@ -11,8 +11,8 @@ import { newUpdateLoop, type UpdateLoop } from "@sys/update-loop";
 import { getTodoApi, type TodoApi } from "@todos/core";
 import { todosChanged } from "@todos/events";
 import { todosClearCompletedAsk } from "./clear-completed.commands.js";
-import { type ConfirmModel, clearCompletedConfirmKind } from "./clear-completed.model.js";
 import { createConfirmModel } from "./clear-completed.model.impl.js";
+import { type ConfirmModel, clearCompletedConfirmKind } from "./clear-completed.model.js";
 
 interface Services {
   readonly commands: Commands;

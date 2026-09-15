@@ -31,8 +31,7 @@ export function ActionMenu({ slot, label, position, onClose }: ActionMenuProps) 
   }, []);
   return (
     <>
-      {/* biome-ignore lint/a11y/noStaticElementInteractions: a click-away backdrop; Escape on the menu is the keyboard path */}
-      {/* biome-ignore lint/a11y/useKeyWithClickEvents: as above */}
+      {/* A click-away backdrop (aria-hidden, so no a11y interaction rule applies); Escape on the menu is the keyboard path. */}
       <div
         aria-hidden="true"
         className="fixed inset-0 z-40"

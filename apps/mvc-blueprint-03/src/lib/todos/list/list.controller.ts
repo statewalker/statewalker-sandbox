@@ -1,7 +1,7 @@
+import { notifyUser } from "@notifications/commands";
 import type { Commands } from "@statewalker/shared-commands";
 import { getLogger, type Logger } from "@statewalker/shared-logger";
 import { newRegistry } from "@statewalker/shared-registry";
-import { notifyUser } from "@notifications/commands";
 import { type SubmitWatch, watchSubmits } from "@sys/action";
 import { attempt } from "@sys/attempt";
 import { type AppContext, getCommands, getSlots } from "@sys/context";

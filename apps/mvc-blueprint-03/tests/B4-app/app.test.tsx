@@ -95,9 +95,9 @@ describe("B4 · the running app", () => {
     await waitFor(
       () => editPanel()?.querySelector('[role="alert"]')?.textContent === "save failed: disk full",
     );
-    expect(
-      (editPanel()?.querySelector('input[aria-label="Title"]') as HTMLInputElement).value,
-    ).toBe("Buy bread");
+    expect(editPanel()?.querySelector<HTMLInputElement>('input[aria-label="Title"]')?.value).toBe(
+      "Buy bread",
+    );
     await waitFor(() => toasts("alert").some((t) => t.includes("save failed: disk full")));
     expect(titles()).toContain("Buy milk");
   }, 10_000);

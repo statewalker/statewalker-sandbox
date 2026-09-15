@@ -1,8 +1,8 @@
+import { NotificationsController } from "@notifications";
 import { Commands } from "@statewalker/shared-commands";
 import { getLogger } from "@statewalker/shared-logger";
 import { newRegistry } from "@statewalker/shared-registry";
 import { Slots } from "@statewalker/shared-slots";
-import { NotificationsController } from "@notifications";
 import { type AppContext, setCommands, setSlots } from "@sys/context";
 import { ClearCompletedController } from "@todos/clear-completed";
 import { MemTodoApi, setTodoApi, type Todo, type TodoApi } from "@todos/core";

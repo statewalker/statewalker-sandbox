@@ -1,8 +1,8 @@
+import { notifyUser } from "@notifications/commands";
 import type { Commands } from "@statewalker/shared-commands";
 import { getLogger, type Logger } from "@statewalker/shared-logger";
 import { newRegistry } from "@statewalker/shared-registry";
 import type { Slots } from "@statewalker/shared-slots";
-import { notifyUser } from "@notifications/commands";
 import { type SubmitWatch, watchSubmits } from "@sys/action";
 import { attempt } from "@sys/attempt";
 import { type AppContext, getCommands, getSlots } from "@sys/context";
@@ -11,8 +11,8 @@ import { newUpdateLoop, type UpdateLoop } from "@sys/update-loop";
 import { getTodoApi, type TodoApi, type TodoPatch } from "@todos/core";
 import { todosChanged } from "@todos/events";
 import { todosEditOpen } from "./edit.commands.js";
-import { type EditModel, type Todo, type TodoDraft, todoEditKind } from "./edit.model.js";
 import { createEditModel } from "./edit.model.impl.js";
+import { type EditModel, type Todo, type TodoDraft, todoEditKind } from "./edit.model.js";
 
 interface Services {
   readonly commands: Commands;

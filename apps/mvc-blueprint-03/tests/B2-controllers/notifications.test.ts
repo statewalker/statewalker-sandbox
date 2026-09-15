@@ -1,10 +1,10 @@
 import {
-  NotificationsController,
   createNotificationModel,
+  NotificationsController,
+  type NotificationView,
   notificationKind,
   notify,
   notifyUser,
-  type NotificationView,
 } from "@notifications";
 import { notificationsSlot } from "@sys/extension-points";
 import { describe, expect, it, vi } from "vitest";
