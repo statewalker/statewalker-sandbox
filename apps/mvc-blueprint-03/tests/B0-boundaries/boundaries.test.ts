@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join, normalize, relative } from "node:path";
+import { basename, dirname, join, normalize, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -65,6 +65,35 @@ const DOMAINS = [
   "src/lib/notifications",
 ] as const;
 const domainOf = (file: string) => DOMAINS.find((d) => file.startsWith(`${d}/`));
+
+/** What a *.model.impl.ts may import, besides its own *.model.js. Type imports included. */
+const IMPL_ALLOWED =
+  /^(?:@statewalker\/shared-registry|@sys\/signals|@sys\/model-kit|@sys\/action)$/;
+
+/** A model implementation's imports: the allowed modules, or exactly `./<name>.model.js` beside it. */
+const implMayImport = (file: string, spec: string) =>
+  IMPL_ALLOWED.test(spec) ||
+  spec === `./${basename(file).replace(/\.model\.impl\.ts$/, ".model.js")}`;
+
+/** The signals library, subpaths included (an alias or package export matches as a prefix). */
+const ALIEN_SIGNALS = /^alien-signals(?:\/|$)/;
+
+/** The kernel's signals alias, subpaths included. */
+const SYS_SIGNALS = /^@sys\/signals(?:\/|$)/;
+
+/** Who may import `@sys/signals`: the kernel and model implementations. */
+const mayImportSignals = (file: string) =>
+  file.startsWith("src/lib/sys/") || file.endsWith(".model.impl.ts");
+
+/** A call to the todo api's setter. Walked past by an alias: `const s = setTodoApi; s(ctx, api)`. */
+const SETS_TODO_API = /\bsetTodoApi\s*\(/;
+
+/** A domain or UI alias — what src/lib/sys may never import. */
+const SYS_FORBIDDEN = /^@(?:todos|notifications|ui)(?:\/|$)/;
+
+/** A test file or a test folder beside the code. Walked past by `*.spec.ts` or a `fixtures/` folder. */
+const isTestLocation = (file: string) =>
+  /\.test\.tsx?$/.test(file) || /(?:^|\/)(?:tests?|__tests__)\//.test(file);
 
 /** A module-scope logger resolution. */
 const MODULE_SCOPE_LOGGER =
@@ -143,15 +172,21 @@ describe("B0 · boundaries", () => {
       }
     });
 
+    it("a *.model.impl.ts imports only the registry, the kernel's signals, model kit and action, and its own model", () => {
+      const impls = lib().filter((s) => s.file.endsWith(".model.impl.ts"));
+      expect(impls.length).toBe(5);
+      for (const { file, code } of impls) {
+        for (const spec of specifiers(code))
+          expect(implMayImport(file, spec), `${file} imports "${spec}"`).toBe(true);
+      }
+    });
+
     it("src/lib/sys imports no domain and no UI", () => {
       const files = sources("src/lib/sys");
       expect(files.length).toBeGreaterThan(8);
       for (const { file, code } of files) {
         for (const spec of specifiers(code)) {
-          expect(
-            /^@(?:todos|notifications|ui)(?:\/|$)/.test(spec),
-            `${file} imports "${spec}"`,
-          ).toBe(false);
+          expect(SYS_FORBIDDEN.test(spec), `${file} imports "${spec}"`).toBe(false);
           const target = resolveRelative(file, spec);
           if (target !== undefined)
             expect(target.startsWith("src/lib/sys/"), `${file} reaches "${target}"`).toBe(true);
@@ -168,21 +203,19 @@ describe("B0 · boundaries", () => {
         .sort();
 
     it("alien-signals is imported only by src/lib/sys/signals/alien.ts", () => {
-      expect(importers(/^alien-signals$/)).toEqual(["src/lib/sys/signals/alien.ts"]);
+      expect(importers(ALIEN_SIGNALS)).toEqual(["src/lib/sys/signals/alien.ts"]);
     });
 
     it("@sys/signals is imported only by the kernel and model implementations", () => {
-      const files = importers(/^@sys\/signals$/);
+      const files = importers(SYS_SIGNALS);
       expect(files.length).toBeGreaterThan(4);
-      for (const file of files) {
-        expect(file.startsWith("src/lib/sys/") || file.endsWith(".model.impl.ts"), file).toBe(true);
-      }
+      for (const file of files) expect(mayImportSignals(file), file).toBe(true);
     });
 
     it("only the composition root sets the todo api, and only it wires the UI host to controllers", () => {
       expect(
         all()
-          .filter(({ code }) => /\bsetTodoApi\s*\(/.test(code))
+          .filter(({ code }) => SETS_TODO_API.test(code))
           .map((s) => s.file),
       ).toEqual(["src/app.ts"]);
       const roots = all()
@@ -201,9 +234,7 @@ describe("B0 · boundaries", () => {
     it("every test lives under tests/ — none beside the code", () => {
       const misplaced = all()
         .map((s) => s.file)
-        .filter(
-          (file) => /\.test\.tsx?$/.test(file) || /(?:^|\/)(?:tests?|__tests__)\//.test(file),
-        );
+        .filter(isTestLocation);
       expect(misplaced).toEqual([]);
       expect(
         sources("tests").some((s) => s.file === "tests/B0-boundaries/boundaries.test.ts"),
@@ -239,6 +270,95 @@ describe("B0 · boundaries", () => {
       ]) {
         expect(UI_ALLOWED.test(good), good).toBe(true);
       }
+    });
+
+    it("the model-implementation rule rejects services, domains, extension points and another model", () => {
+      const impl = "src/lib/todos/list/list.model.impl.ts";
+      for (const good of [
+        "@statewalker/shared-registry",
+        "@sys/signals",
+        "@sys/model-kit",
+        "@sys/action",
+        "./list.model.js",
+      ]) {
+        expect(implMayImport(impl, good), good).toBe(true);
+      }
+      for (const bad of [
+        "alien-signals",
+        "@statewalker/shared-commands",
+        "@sys/extension-points",
+        "@sys/context",
+        "@sys/action/model",
+        "@todos/core",
+        "./list.controller.js",
+        "./edit.model.js",
+        "../edit/edit.model.js",
+        "./list.model.impl.js",
+      ]) {
+        expect(implMayImport(impl, bad), bad).toBe(false);
+      }
+    });
+
+    it("the signals rules match the library and the alias, subpaths included, and only them", () => {
+      expect(
+        specifiers('import * as A from "alien-signals";').some((s) => ALIEN_SIGNALS.test(s)),
+      ).toBe(true);
+      expect(ALIEN_SIGNALS.test("alien-signals/system")).toBe(true);
+      expect(ALIEN_SIGNALS.test("@sys/signals")).toBe(false);
+      expect(ALIEN_SIGNALS.test("alien-signals-extra")).toBe(false);
+      expect(
+        specifiers('import { signal } from "@sys/signals";').some((s) => SYS_SIGNALS.test(s)),
+      ).toBe(true);
+      expect(SYS_SIGNALS.test("@sys/signals/contract")).toBe(true);
+      expect(SYS_SIGNALS.test("@sys/signalsx")).toBe(false);
+      expect(SYS_SIGNALS.test("@sys/model-kit")).toBe(false);
+      expect(mayImportSignals("src/lib/sys/model-kit.ts")).toBe(true);
+      expect(mayImportSignals("src/lib/todos/edit/edit.model.impl.ts")).toBe(true);
+      expect(mayImportSignals("src/lib/todos/edit/edit.controller.ts")).toBe(false);
+      expect(mayImportSignals("src/lib/todos/edit/edit.model.ts")).toBe(false);
+      expect(mayImportSignals("src/ui/host/use-model.ts")).toBe(false);
+    });
+
+    it("the setTodoApi, test-location and sys-imports rules match their violations and nothing else", () => {
+      expect("setTodoApi(ctx, api);").toMatch(SETS_TODO_API);
+      expect("  setTodoApi (context, new MemTodoApi())").toMatch(SETS_TODO_API);
+      expect("getTodoApi(ctx);").not.toMatch(SETS_TODO_API);
+      expect("resetTodoApi(ctx);").not.toMatch(SETS_TODO_API);
+      expect('import { setTodoApi } from "@todos/core";').not.toMatch(SETS_TODO_API);
+
+      for (const bad of [
+        "src/lib/todos/list/list.test.ts",
+        "src/ui/host/host.test.tsx",
+        "src/lib/sys/__tests__/kit.ts",
+        "src/lib/test/helpers.ts",
+        "src/ui/tests/react.ts",
+      ]) {
+        expect(isTestLocation(bad), bad).toBe(true);
+      }
+      for (const good of [
+        "src/lib/sys/attempt.ts",
+        "src/lib/testing.ts",
+        "src/lib/contest/entry.ts",
+        "src/lib/todos/list/list.tests.ts",
+      ]) {
+        expect(isTestLocation(good), good).toBe(false);
+      }
+
+      for (const bad of [
+        "@todos/core",
+        "@todos/events",
+        "@notifications",
+        "@notifications/model",
+        "@ui/host",
+      ]) {
+        expect(SYS_FORBIDDEN.test(bad), bad).toBe(true);
+      }
+      for (const good of ["@sys/signals", "@statewalker/shared-registry", "@todosx", "@uikit"]) {
+        expect(SYS_FORBIDDEN.test(good), good).toBe(false);
+      }
+      expect(resolveRelative("src/lib/sys/action/index.ts", "../../todos/core/index.js")).toBe(
+        "src/lib/todos/core/index.js",
+      );
     });
 
     it("the helpers match their violations", () => {
