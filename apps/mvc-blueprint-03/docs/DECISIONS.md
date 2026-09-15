@@ -43,7 +43,7 @@ service or a bus.
 
 ### D9 — A submit listener only captures; the pass acts on what it captured
 Every action's `onSubmitsUpdate` listener is read-only — it snapshots what the intent means at that
-instant (the list's selection, items and new-title draft; the edit form's todo id and draft) and kicks
+instant (the list's selection, items and new-title draft; the edit form's baseline todo and draft) and kicks
 the update loop, rather than letting the pass reread the model once its microtask runs. A selection or
 a draft the user changes before the pass reaches it must not retarget an already-submitted intent, and
 a Toggle or Delete submitted over an empty selection does nothing rather than acting on whatever is

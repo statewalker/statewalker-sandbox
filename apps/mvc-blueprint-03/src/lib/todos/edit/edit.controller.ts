@@ -8,10 +8,10 @@ import { attempt } from "@sys/attempt";
 import { type AppContext, getCommands, getSlots } from "@sys/context";
 import { panelsSlot } from "@sys/extension-points";
 import { newUpdateLoop, type UpdateLoop } from "@sys/update-loop";
-import { getTodoApi, type TodoApi } from "@todos/core";
+import { getTodoApi, type TodoApi, type TodoPatch } from "@todos/core";
 import { todosChanged } from "@todos/events";
 import { todosEditOpen } from "./edit.commands.js";
-import { type EditModel, type TodoDraft, todoEditKind } from "./edit.model.js";
+import { type EditModel, type Todo, type TodoDraft, todoEditKind } from "./edit.model.js";
 import { createEditModel } from "./edit.model.impl.js";
 
 interface Services {
@@ -26,11 +26,25 @@ interface Services {
 /**
  * What Save acts on, captured in the submit listener — not read again when
  * the pass reaches it. A draft the user changes after submitting, in the
- * same tick, must not retarget an already-submitted Save.
+ * same tick, must not retarget an already-submitted Save. The baseline is
+ * the todo the draft was edited from: Save writes only what differs from it.
  */
 interface SaveSnapshot {
-  readonly id: string;
+  readonly baseline: Todo;
   readonly draft: TodoDraft;
+}
+
+/**
+ * The fields the draft changed against its baseline, or undefined when none.
+ * A field left out is not written, so a change made elsewhere while the
+ * editor was open (the list ticking the todo) survives the Save.
+ */
+function changedFields({ baseline, draft }: SaveSnapshot): TodoPatch | undefined {
+  const title = draft.title.trim();
+  const patch: { title?: string; done?: boolean } = {};
+  if (title !== baseline.title) patch.title = title;
+  if (draft.done !== baseline.done) patch.done = draft.done;
+  return Object.keys(patch).length > 0 ? patch : undefined;
 }
 
 interface Session {
@@ -124,7 +138,10 @@ export class TodoEditController {
     let saveSnapshot: SaveSnapshot | undefined;
     own(
       model.control.actions.save.onSubmitsUpdate(() => {
-        saveSnapshot = { id: model.view.details.getTodo().id, draft: model.view.form.getDraft() };
+        saveSnapshot = {
+          baseline: model.view.details.getTodo(),
+          draft: model.view.form.getDraft(),
+        };
         services.loop.kick();
       }),
     );
@@ -169,26 +186,29 @@ export class TodoEditController {
     // a snapshot, so this fallback should be unreachable — but a consumed
     // Save must never be silently dropped for want of one.
     const snapshot = session.getSaveSnapshot() ?? {
-      id: model.view.details.getTodo().id,
+      baseline: model.view.details.getTodo(),
       draft: model.view.form.getDraft(),
     };
+    const { id } = snapshot.baseline;
+    const patch = changedFields(snapshot);
+    if (patch === undefined) {
+      // Nothing differs from the baseline: saved already — nothing to write,
+      // so nothing to broadcast, log or toast.
+      await this._close();
+      return;
+    }
 
     const { save } = model.control.actions;
     model.control.reportError(undefined);
     save.update({ running: true });
-    const result = await attempt(services.log, "save", () =>
-      services.api.update(snapshot.id, {
-        title: snapshot.draft.title.trim(),
-        done: snapshot.draft.done,
-      }),
-    );
+    const result = await attempt(services.log, "save", () => services.api.update(id, patch));
 
     if (result.ok) {
       // The write already landed in the api: broadcast regardless of whether
       // this session is still current, so other listeners (the list) see it.
       // Log and toast only while the controller still owns them — once
       // disposed, broadcasting is this pass's only remaining job.
-      if (!this._disposed) services.log.info("action:save", { id: snapshot.id });
+      if (!this._disposed) services.log.info("action:save", { id });
       services.commands.call(todosChanged, { source: "todos.edit" });
       if (!this._disposed) {
         notifyUser(services.commands, services.log, { text: "Saved", level: "info" });

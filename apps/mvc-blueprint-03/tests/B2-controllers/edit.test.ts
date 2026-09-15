@@ -143,6 +143,39 @@ describe("B2 · edit controller", () => {
     await controller.dispose();
   });
 
+  it("Save sends only what the draft changed: a field changed elsewhere meanwhile is not reverted", async () => {
+    const { api, commands, controller } = await start();
+    await commands.call(todosEditOpen, { id: "t1" }).promise;
+    // The list ticks t1 while its editor is open.
+    await api.update("t1", { done: true });
+    const form = controller.current?.view.form;
+    form?.setTitle("Buy oat milk");
+    form?.actions.save.submit();
+    await settle();
+    expect((await api.list()).find((t) => t.id === "t1")).toEqual({
+      id: "t1",
+      title: "Buy oat milk",
+      done: true,
+    });
+    await controller.dispose();
+  });
+
+  it("a Save that changes nothing against the baseline calls no api, broadcasts nothing, and closes", async () => {
+    const { api, commands, slots, controller, toasts, changed } = await start();
+    await commands.call(todosEditOpen, { id: "t1" }).promise;
+    const form = controller.current?.view.form;
+    // Dirty as typed (so Save is enabled), identical once trimmed.
+    form?.setTitle("Buy milk  ");
+    form?.actions.save.submit();
+    await settle();
+    expect(api.calls).not.toContain("update");
+    expect(changed).toEqual([]);
+    expect(toasts).toEqual([]);
+    expect(slots.get(panelsSlot, "todos:edit")).toBeNull();
+    expect(controller.current).toBeUndefined();
+    await controller.dispose();
+  });
+
   it("a failing Save keeps the editor and the draft, shows the error and an error toast", async () => {
     const { api, commands, slots, controller, toasts, changed } = await start();
     await commands.call(todosEditOpen, { id: "t1" }).promise;

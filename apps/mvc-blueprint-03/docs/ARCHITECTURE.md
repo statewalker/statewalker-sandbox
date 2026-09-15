@@ -57,7 +57,7 @@ its own content is gone.
 ## 5. Domains and flows
 
 Every action's submit listener is read-only: it captures a snapshot of what the intent means right
-then — the list's selection, items and new-title draft; the edit form's todo id and draft — and the
+then — the list's selection, items and new-title draft; the edit form's baseline todo and draft — and the
 controller's pass acts on that snapshot, not on whatever the model holds once its microtask actually
 runs.
 
@@ -69,7 +69,9 @@ runs.
 - **Edit.** Answers `todos:edit:open` with a side panel holding the details and the form. Opens are
   serialised — each waits for the previous one — and an open also waits for any close still in flight
   (from Cancel or from a Save elsewhere) before it registers its own panel, so two opens never race for
-  the panel id. Save → `api.update`; once that write reaches the api, `todos:changed` is broadcast, the
+  the panel id. Save → `api.update` with only the fields the draft changed against the todo it was
+  opened from, so a change made elsewhere meanwhile is not reverted (nothing changed: no call, the
+  editor just closes); once that write reaches the api, `todos:changed` is broadcast, the
   save is logged and a "Saved" toast is shown, whether or not this editor is still the current one —
   only clearing `running` and marking the form saved are skipped once the session has moved on. A
   failure keeps the draft and shows the error.
