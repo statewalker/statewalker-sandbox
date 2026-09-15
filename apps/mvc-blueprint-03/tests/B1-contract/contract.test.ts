@@ -1,3 +1,5 @@
+import { createEditModel } from "../../src/lib/todos/edit/edit.model.impl.js";
+import type { TodoDraft } from "../../src/lib/todos/edit/edit.model.js";
 import { createTodoListModel } from "../../src/lib/todos/list/list.model.impl.js";
 import type { Todo } from "../../src/lib/todos/list/list.model.js";
 import { modelContract } from "./model-contract.js";
@@ -15,6 +17,21 @@ modelContract<readonly Todo[]>("todos.list · visible (signals)", {
       },
       changeEqual: () => m.control.replaceItems(m.view.getItems().map((t) => ({ ...t }))),
       changeOther: () => m.view.setNewTitle(`draft ${++n}`),
+      dispose: m.dispose,
+    };
+  },
+});
+
+modelContract<TodoDraft>("todos.edit · draft (signals)", {
+  make() {
+    const m = createEditModel({ id: "t1", title: "Buy milk", done: false });
+    let n = 0;
+    return {
+      read: m.view.form.getDraft,
+      subscribe: m.view.form.onDraftUpdate,
+      change: () => m.view.form.setTitle(`title ${++n}`),
+      changeEqual: () => m.view.form.setTitle(m.view.form.getDraft().title),
+      changeOther: () => m.control.reportError(`error ${++n}`),
       dispose: m.dispose,
     };
   },

@@ -1,0 +1,170 @@
+import type { Commands } from "@statewalker/shared-commands";
+import { getLogger, type Logger } from "@statewalker/shared-logger";
+import { newRegistry } from "@statewalker/shared-registry";
+import type { Slots } from "@statewalker/shared-slots";
+import { notifyUser } from "@notifications/commands";
+import { type SubmitWatch, watchSubmits } from "@sys/action";
+import { attempt } from "@sys/attempt";
+import { type AppContext, getCommands, getSlots } from "@sys/context";
+import { panelsSlot } from "@sys/extension-points";
+import { newUpdateLoop, type UpdateLoop } from "@sys/update-loop";
+import { getTodoApi, type TodoApi } from "@todos/core";
+import { todosChanged } from "@todos/events";
+import { todosEditOpen } from "./edit.commands.js";
+import { type EditModel, type TodoDraft, todoEditKind } from "./edit.model.js";
+import { createEditModel } from "./edit.model.impl.js";
+
+interface Services {
+  readonly commands: Commands;
+  readonly slots: Slots;
+  readonly api: TodoApi;
+  readonly log: Logger;
+  readonly loop: UpdateLoop;
+  readonly register: (release?: () => void | Promise<void>) => () => Promise<void>;
+}
+
+/**
+ * What Save acts on, captured in the submit listener — not read again when
+ * the pass reaches it. A draft the user changes after submitting, in the
+ * same tick, must not retarget an already-submitted Save.
+ */
+interface SaveSnapshot {
+  readonly id: string;
+  readonly draft: TodoDraft;
+}
+
+interface Session {
+  readonly model: EditModel;
+  readonly save: SubmitWatch;
+  readonly cancel: SubmitWatch;
+  readonly release: () => Promise<void>;
+  /** The most recently submitted Save's snapshot, if any. */
+  readonly getSaveSnapshot: () => SaveSnapshot | undefined;
+}
+
+/** The edit domain: answers `todos:edit:open` with an editor panel, and turns Save and Cancel into work. */
+export class TodoEditController {
+  private readonly _registry = newRegistry();
+  private _disposed = false;
+  private _services?: Services;
+  private _session?: Session;
+  private _opening: Promise<unknown> = Promise.resolve();
+
+  /** The open editor's model, if any. */
+  get current(): EditModel | undefined {
+    return this._session?.model;
+  }
+
+  activate(ctx: AppContext): void {
+    if (this._services) throw new Error("TodoEditController already activated");
+    const [register] = this._registry;
+    const log = getLogger(ctx).child({ module: "todos.edit" });
+    const loop = newUpdateLoop(() => this._pass(), {
+      isDisposed: () => this._disposed,
+      onError: (error) => log.error("update loop failed", { error: String(error) }),
+    });
+    const commands = getCommands(ctx);
+    this._services = { commands, slots: getSlots(ctx), api: getTodoApi(ctx), log, loop, register };
+    register(() => this._close());
+    // Opens are serialised: each waits for the previous one, so two opens never race for the panel id.
+    register(
+      commands.listen(todosEditOpen, (cmd) => {
+        const next = this._opening.then(() => this._open(cmd.payload.id));
+        this._opening = next.catch(() => {});
+        return next;
+      }),
+    );
+  }
+
+  async dispose(): Promise<void> {
+    this._disposed = true;
+    const [, cleanup] = this._registry;
+    await cleanup();
+  }
+
+  private async _open(id: string): Promise<{ opened: boolean }> {
+    const services = this._services;
+    if (!services || this._disposed) return { opened: false };
+    const todo = (await services.api.list()).find((t) => t.id === id);
+    if (!todo) throw new Error(`todo not found: ${id}`);
+    await this._close();
+    if (this._disposed) return { opened: false };
+
+    const model = createEditModel(todo);
+    const [own, releaseAll] = newRegistry();
+    own(() => model.dispose());
+    own(
+      services.slots.register(panelsSlot, "todos:edit", {
+        kind: todoEditKind,
+        title: `Edit "${todo.title}"`,
+        placement: "side",
+        model: model.view,
+      }),
+    );
+    // Read-only: this listener may read the model but must not write it. It
+    // records what the user meant at submit time, so the pass acts on that —
+    // not on whatever the draft holds once the microtask reaches it.
+    let saveSnapshot: SaveSnapshot | undefined;
+    own(
+      model.control.actions.save.onSubmitsUpdate(() => {
+        saveSnapshot = { id: model.view.details.getTodo().id, draft: model.view.form.getDraft() };
+        services.loop.kick();
+      }),
+    );
+    own(model.control.actions.cancel.onSubmitsUpdate(services.loop.kick));
+    this._session = {
+      model,
+      save: watchSubmits(model.control.actions.save),
+      cancel: watchSubmits(model.control.actions.cancel),
+      release: services.register(releaseAll),
+      getSaveSnapshot: () => saveSnapshot,
+    };
+    services.log.info("edit:opened", { id });
+    return { opened: true };
+  }
+
+  private async _close(): Promise<void> {
+    const session = this._session;
+    if (!session) return;
+    this._session = undefined;
+    await session.release();
+  }
+
+  private async _pass(): Promise<void> {
+    const services = this._services;
+    const session = this._session;
+    if (!services || !session) return;
+    const { model } = session;
+
+    if (session.cancel.take()) {
+      services.log.info("action:cancel", { id: model.view.details.getTodo().id });
+      await this._close();
+      return;
+    }
+    if (!session.save.take()) return;
+    const snapshot = session.getSaveSnapshot();
+    if (!snapshot) return;
+
+    const { save } = model.control.actions;
+    model.control.reportError(undefined);
+    save.update({ running: true });
+    const result = await attempt(services.log, "save", () =>
+      services.api.update(snapshot.id, {
+        title: snapshot.draft.title.trim(),
+        done: snapshot.draft.done,
+      }),
+    );
+    if (this._disposed || this._session !== session) return;
+    save.update({ running: false });
+    if (!result.ok) {
+      model.control.reportError(result.message);
+      notifyUser(services.commands, services.log, { text: result.message, level: "error" });
+      return;
+    }
+    model.control.markSaved(result.value);
+    services.log.info("action:save", { id: snapshot.id });
+    services.commands.call(todosChanged, { source: "todos.edit" });
+    notifyUser(services.commands, services.log, { text: "Saved", level: "info" });
+    await this._close();
+  }
+}
