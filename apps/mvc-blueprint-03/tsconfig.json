@@ -1,0 +1,46 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "paths": {
+      "@sys/signals": ["./src/lib/sys/signals/deps.ts"],
+      "@sys/context": ["./src/lib/sys/context.ts"],
+      "@sys/model-kit": ["./src/lib/sys/model-kit.ts"],
+      "@sys/update-loop": ["./src/lib/sys/update-loop.ts"],
+      "@sys/attempt": ["./src/lib/sys/attempt.ts"],
+      "@sys/extension-points": ["./src/lib/sys/extension-points.ts"],
+      "@sys/action/model": ["./src/lib/sys/action/action.model.ts"],
+      "@sys/action": ["./src/lib/sys/action/index.ts"],
+      "@todos/core": ["./src/lib/todos/core/index.ts"],
+      "@todos/events": ["./src/lib/todos/todos.commands.ts"],
+      "@todos/list/model": ["./src/lib/todos/list/list.model.ts"],
+      "@todos/list": ["./src/lib/todos/list/index.ts"],
+      "@todos/edit/model": ["./src/lib/todos/edit/edit.model.ts"],
+      "@todos/edit/commands": ["./src/lib/todos/edit/edit.commands.ts"],
+      "@todos/edit": ["./src/lib/todos/edit/index.ts"],
+      "@todos/clear-completed/model": ["./src/lib/todos/clear-completed/clear-completed.model.ts"],
+      "@todos/clear-completed/commands": [
+        "./src/lib/todos/clear-completed/clear-completed.commands.ts"
+      ],
+      "@todos/clear-completed": ["./src/lib/todos/clear-completed/index.ts"],
+      "@notifications/model": ["./src/lib/notifications/notifications.model.ts"],
+      "@notifications/commands": ["./src/lib/notifications/notifications.commands.ts"],
+      "@notifications": ["./src/lib/notifications/index.ts"],
+      "@ui/host": ["./src/ui/host/index.ts"],
+      "@ui/sys/action": ["./src/ui/sys/action/index.ts"],
+      "@ui/todos/list": ["./src/ui/todos/list/index.ts"],
+      "@ui/todos/edit": ["./src/ui/todos/edit/index.ts"],
+      "@ui/todos/clear-completed": ["./src/ui/todos/clear-completed/index.ts"],
+      "@ui/notifications": ["./src/ui/notifications/index.ts"]
+    }
+  },
+  "include": ["src/**/*", "tests/**/*", "*.ts"]
+}
