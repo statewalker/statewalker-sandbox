@@ -43,12 +43,12 @@ const specifiers = (code: string): string[] =>
 const FEATURES = ["todo", "stats", "progress", "logs"] as const;
 
 /** UI modules: every feature's `ui/` directory and both hosts. */
-const isUi = (file: string) => /^lib\/(?:[^/]+\/ui|ui-react|ui-dom)\//.test(file);
+const isUi = (file: string) => /^src\/lib\/(?:[^/]+\/ui|ui-react|ui-dom)\//.test(file);
 
 /** DOM UI: the DOM host, and every `.ts` under a feature's `ui/` except its React entries. */
 const isDomUi = (file: string) =>
-  file.startsWith("lib/ui-dom/") ||
-  (/^lib\/[^/]+\/ui\//.test(file) && file.endsWith(".ts") && !/\/(?:index|react)\.ts$/.test(file));
+  file.startsWith("src/lib/ui-dom/") ||
+  (/^src\/lib\/[^/]+\/ui\//.test(file) && file.endsWith(".ts") && !/\/(?:index|react)\.ts$/.test(file));
 
 /** What a UI module may never import. `@sys` exactly (it must take `@sys/ui`); relative paths into an `app/`, a `core/` or `sys/`. */
 const UI_FORBIDDEN =
@@ -64,28 +64,30 @@ const REACT_SPEC = /^(?:react|react-dom)(?:\/|$)|^@statewalker\/ui\.view\.shadcn
 const MODULE_SCOPE_LOGGER =
   /^(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*getLogger\(|^getLogger\(/m;
 
-const featureOf = (file: string) => /^lib\/([^/]+)\//.exec(file)?.[1];
+const featureOf = (file: string) => /^src\/lib\/([^/]+)\//.exec(file)?.[1];
 
-/** A relative specifier as a path from the app root (`lib/stats/app/x.js`); undefined for a bare one. */
+/** A relative specifier as a path from the app root (`src/lib/stats/app/x.js`); undefined for a bare one. */
 const resolveRelative = (file: string, spec: string) =>
   /^\.\.?\//.test(spec) ? normalize(join(dirname(file), spec)) : undefined;
 
 describe("B0 · boundaries", () => {
-  const all = () => [...sources("lib"), ...sources("src")];
+  // `lib/` now lives under `src/lib/`; walking `src` alone covers it, so this must not
+    // also walk `lib` — that would double-count every file under `src/lib`.
+  const all = () => sources("src");
 
   it("finds the tree it polices — nested files included", () => {
-    const files = sources("lib").map((s) => s.file);
+    const files = sources("src/lib").map((s) => s.file);
     expect(files).toEqual(
       expect.arrayContaining([
-        "lib/ui-dom/host.ts",
-        "lib/ui-react/host.tsx",
-        "lib/stats/ui/stats-view.ts",
-        "lib/todo/app/todo-controller.ts",
+        "src/lib/ui-dom/host.ts",
+        "src/lib/ui-react/host.tsx",
+        "src/lib/stats/ui/stats-view.ts",
+        "src/lib/todo/app/todo-controller.ts",
       ]),
     );
   });
 
-  it("every test lives under tests/ — none beside the code in lib/ or src/", () => {
+  it("every test lives under tests/ — none beside the code in src/lib/ or src/", () => {
     const misplaced = all()
       .map((s) => s.file)
       .filter(
@@ -101,7 +103,7 @@ describe("B0 · boundaries", () => {
 
   describe("the UI sees only view models and ui:* slots", () => {
     it("UI modules import no bus, no context, no logger, no reactive library, no feature implementation", () => {
-      const ui = sources("lib").filter((s) => isUi(s.file));
+      const ui = sources("src/lib").filter((s) => isUi(s.file));
       expect(ui.length).toBeGreaterThan(5);
       for (const { file, code } of ui) {
         for (const spec of specifiers(code)) {
@@ -111,7 +113,7 @@ describe("B0 · boundaries", () => {
     });
 
     it("UI modules never provide or register a contribution", () => {
-      const ui = sources("lib").filter((s) => isUi(s.file));
+      const ui = sources("src/lib").filter((s) => isUi(s.file));
       expect(ui.length).toBeGreaterThan(5);
       for (const { file, code } of ui) {
         expect(code, `${file} publishes to a slot`).not.toMatch(UI_PUBLISHES);
@@ -119,9 +121,9 @@ describe("B0 · boundaries", () => {
     });
 
     it("DOM UI modules load no React", () => {
-      const dom = sources("lib").filter((s) => isDomUi(s.file));
+      const dom = sources("src/lib").filter((s) => isDomUi(s.file));
       expect(dom.map((s) => s.file)).toEqual(
-        expect.arrayContaining(["lib/ui-dom/host.ts", "lib/stats/ui/stats-view.ts"]),
+        expect.arrayContaining(["src/lib/ui-dom/host.ts", "src/lib/stats/ui/stats-view.ts"]),
       );
       for (const { file, code } of dom) {
         for (const spec of specifiers(code))
@@ -130,7 +132,7 @@ describe("B0 · boundaries", () => {
     });
 
     it("a feature's models.ts carries interfaces and kinds only: its one value import is @sys/ui", () => {
-      const models = sources("lib").filter((s) => /^lib\/[^/]+\/app\/models\.ts$/.test(s.file));
+      const models = sources("src/lib").filter((s) => /^src\/lib\/[^/]+\/app\/models\.ts$/.test(s.file));
       expect(models.length).toBe(3);
       for (const { file, code } of models) {
         const valueImports = [
@@ -144,7 +146,7 @@ describe("B0 · boundaries", () => {
 
   describe("features meet only through services, slots, commands and models", () => {
     it("no feature's app layer imports another feature's app, models or ui — cores are shared declarations", () => {
-      const appFiles = sources("lib").filter((s) => /^lib\/[^/]+\/app\//.test(s.file));
+      const appFiles = sources("src/lib").filter((s) => /^src\/lib\/[^/]+\/app\//.test(s.file));
       expect(appFiles.length).toBeGreaterThan(10);
       for (const { file, code } of appFiles) {
         const own = featureOf(file);
@@ -157,7 +159,7 @@ describe("B0 · boundaries", () => {
             false,
           );
           const target = resolveRelative(file, spec);
-          if (target?.startsWith("lib/")) {
+          if (target?.startsWith("src/lib/")) {
             expect(featureOf(target), `${file} reaches into "${target}" by a relative path`).toBe(
               own,
             );
@@ -166,8 +168,8 @@ describe("B0 · boundaries", () => {
       }
     });
 
-    it("lib/sys imports no feature and no host", () => {
-      const sys = sources("lib/sys");
+    it("src/lib/sys imports no feature and no host", () => {
+      const sys = sources("src/lib/sys");
       expect(sys.length).toBeGreaterThan(3);
       for (const { file, code } of sys) {
         for (const spec of specifiers(code)) {
@@ -200,20 +202,20 @@ describe("B0 · boundaries", () => {
         .map((s) => s.file)
         .sort();
 
-    it("alien-signals is imported only by lib/signals/alien.ts", () => {
-      expect(importers(/^alien-signals$/)).toEqual(["lib/signals/alien.ts"]);
+    it("alien-signals is imported only by src/lib/signals/alien.ts", () => {
+      expect(importers(/^alien-signals$/)).toEqual(["src/lib/signals/alien.ts"]);
     });
 
     it("@signals is imported only inside the todo feature's app layer", () => {
       const files = importers(/^@signals$/);
       expect(files.length).toBeGreaterThan(0);
-      for (const file of files) expect(file.startsWith("lib/todo/app/"), file).toBe(true);
+      for (const file of files) expect(file.startsWith("src/lib/todo/app/"), file).toBe(true);
     });
 
     it("shared-baseclass is imported only inside the stats feature's app layer", () => {
       const files = importers(/^@statewalker\/shared-baseclass$/);
       expect(files.length).toBeGreaterThan(0);
-      for (const file of files) expect(file.startsWith("lib/stats/app/"), file).toBe(true);
+      for (const file of files) expect(file.startsWith("src/lib/stats/app/"), file).toBe(true);
     });
 
     it("no module resolves the logger at module scope", () => {
@@ -277,22 +279,22 @@ describe("B0 · boundaries", () => {
     it("resolveRelative places a relative specifier in its feature", () => {
       expect(
         featureOf(
-          resolveRelative("lib/todo/app/todo-controller.ts", "../../stats/app/stats-model.js") ??
+          resolveRelative("src/lib/todo/app/todo-controller.ts", "../../stats/app/stats-model.js") ??
             "",
         ),
       ).toBe("stats");
       expect(
-        featureOf(resolveRelative("lib/todo/app/todo-controller.ts", "./models.js") ?? ""),
+        featureOf(resolveRelative("src/lib/todo/app/todo-controller.ts", "./models.js") ?? ""),
       ).toBe("todo");
-      expect(resolveRelative("lib/todo/app/todo-controller.ts", "@stats/app")).toBeUndefined();
+      expect(resolveRelative("src/lib/todo/app/todo-controller.ts", "@stats/app")).toBeUndefined();
     });
 
     it("isUi and isDomUi classify by location", () => {
-      expect(isUi("lib/todo/ui/list-view.tsx")).toBe(true);
-      expect(isUi("lib/todo/app/models.ts")).toBe(false);
-      expect(isDomUi("lib/stats/ui/stats-view.ts")).toBe(true);
-      expect(isDomUi("lib/stats/ui/react.ts")).toBe(false);
-      expect(isDomUi("lib/todo/ui/index.ts")).toBe(false);
+      expect(isUi("src/lib/todo/ui/list-view.tsx")).toBe(true);
+      expect(isUi("src/lib/todo/app/models.ts")).toBe(false);
+      expect(isDomUi("src/lib/stats/ui/stats-view.ts")).toBe(true);
+      expect(isDomUi("src/lib/stats/ui/react.ts")).toBe(false);
+      expect(isDomUi("src/lib/todo/ui/index.ts")).toBe(false);
     });
   });
 });

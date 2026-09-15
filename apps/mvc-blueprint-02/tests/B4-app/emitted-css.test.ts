@@ -35,9 +35,9 @@ const KIT_ONLY_CLASS = ["shadow", "xs"].join("-");
 const KIT_ONLY_RULE = new RegExp(`\\.${KIT_ONLY_CLASS}\\s*\\{`);
 
 /**
- * A class spelled ONLY in a plain-DOM view (`lib/stats/ui/stats-view.ts`, a `.ts`
+ * A class spelled ONLY in a plain-DOM view (`src/lib/stats/ui/stats-view.ts`, a `.ts`
  * file): proves Tailwind reaches the non-React views, which the seed's
- * `@source "../lib/**\/*.tsx"` alone would not name. Spelled in pieces for the
+ * `@source "./lib/**\/*.tsx"` alone would not name. Spelled in pieces for the
  * same reason as the kit class.
  */
 const DOM_ONLY_CLASS = ["fill", "emerald", "500"].join("-");
@@ -45,7 +45,7 @@ const DOM_ONLY_RULE = new RegExp(`\\.${DOM_ONLY_CLASS}\\s*\\{`);
 
 /** Builds the app into a scratch directory and returns its one emitted stylesheet. */
 async function emittedCss(plugins: Plugin[] = []): Promise<string> {
-  const outDir = mkdtempSync(join(tmpdir(), "mvc-blueprint-v2-b4-"));
+  const outDir = mkdtempSync(join(tmpdir(), "mvc-blueprint-02-b4-"));
   try {
     await build({
       root: APP,
@@ -78,7 +78,7 @@ function withoutKitStyles(): Plugin {
 }
 
 const TAILWIND_IMPORT = /^@import\s+["']tailwindcss["'];/m;
-const DOM_VIEWS_SOURCE = /^@source\s+["']\.\.\/lib\/\*\*\/\*\.ts["'];[^\n]*\n/m;
+const DOM_VIEWS_SOURCE = /^@source\s+["']\.\/lib\/\*\*\/\*\.ts["'];[^\n]*\n/m;
 
 /**
  * `src/index.css` with automatic content detection off and the plain-DOM glob

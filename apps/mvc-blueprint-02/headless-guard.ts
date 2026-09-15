@@ -9,7 +9,7 @@ export const REACT_STACK = /^(react|react-dom|@statewalker\/ui\.view\.shadcn)(\/
  * DOM views load no React at all.
  */
 export const headless = (project: string): Plugin => ({
-  name: `mvc-blueprint-v2:headless:${project}`,
+  name: `mvc-blueprint-02:headless:${project}`,
   enforce: "pre",
   resolveId(source, importer) {
     if (!REACT_STACK.test(source)) return null;

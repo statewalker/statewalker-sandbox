@@ -14,8 +14,8 @@ describe("B3 · the headless guard", () => {
       "@statewalker/ui.view.shadcn",
       "@statewalker/ui.view.shadcn/styles",
     ]) {
-      expect(() => resolve(spec, "lib/stats/ui/stats-view.ts"), spec).toThrow(
-        /was loaded by lib\/stats\/ui\/stats-view\.ts in the browser:dom project/,
+      expect(() => resolve(spec, "src/lib/stats/ui/stats-view.ts"), spec).toThrow(
+        /was loaded by src\/lib\/stats\/ui\/stats-view\.ts in the browser:dom project/,
       );
     }
   });

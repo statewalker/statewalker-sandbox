@@ -11,24 +11,24 @@
     "jsx": "react-jsx",
     "types": ["node"],
     "paths": {
-      "@sys/ui": ["./lib/sys/ui.ts"],
-      "@sys": ["./lib/sys/index.ts"],
-      "@signals": ["./lib/signals/deps.ts"],
-      "@todo/core": ["./lib/todo/core/index.ts"],
-      "@todo/models": ["./lib/todo/app/models.ts"],
-      "@todo/app": ["./lib/todo/app/index.ts"],
-      "@todo/ui": ["./lib/todo/ui/index.ts"],
-      "@logs/app": ["./lib/logs/app/index.ts"],
-      "@stats/models": ["./lib/stats/app/models.ts"],
-      "@stats/app": ["./lib/stats/app/index.ts"],
-      "@stats/ui/dom": ["./lib/stats/ui/dom.ts"],
-      "@stats/ui/react": ["./lib/stats/ui/react.ts"],
-      "@progress/models": ["./lib/progress/app/models.ts"],
-      "@progress/app": ["./lib/progress/app/index.ts"],
-      "@progress/ui/dom": ["./lib/progress/ui/dom.ts"],
-      "@ui/react": ["./lib/ui-react/index.ts"],
-      "@ui/dom": ["./lib/ui-dom/index.ts"]
+      "@sys/ui": ["./src/lib/sys/ui.ts"],
+      "@sys": ["./src/lib/sys/index.ts"],
+      "@signals": ["./src/lib/signals/deps.ts"],
+      "@todo/core": ["./src/lib/todo/core/index.ts"],
+      "@todo/models": ["./src/lib/todo/app/models.ts"],
+      "@todo/app": ["./src/lib/todo/app/index.ts"],
+      "@todo/ui": ["./src/lib/todo/ui/index.ts"],
+      "@logs/app": ["./src/lib/logs/app/index.ts"],
+      "@stats/models": ["./src/lib/stats/app/models.ts"],
+      "@stats/app": ["./src/lib/stats/app/index.ts"],
+      "@stats/ui/dom": ["./src/lib/stats/ui/dom.ts"],
+      "@stats/ui/react": ["./src/lib/stats/ui/react.ts"],
+      "@progress/models": ["./src/lib/progress/app/models.ts"],
+      "@progress/app": ["./src/lib/progress/app/index.ts"],
+      "@progress/ui/dom": ["./src/lib/progress/ui/dom.ts"],
+      "@ui/react": ["./src/lib/ui-react/index.ts"],
+      "@ui/dom": ["./src/lib/ui-dom/index.ts"]
     }
   },
-  "include": ["lib/**/*", "src/**/*", "tests/**/*", "*.ts"]
+  "include": ["src/**/*", "tests/**/*", "*.ts"]
 }

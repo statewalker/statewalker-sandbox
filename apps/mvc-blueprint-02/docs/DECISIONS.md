@@ -1,6 +1,6 @@
 # Decisions
 
-What v2 decided, what it changed from v1 (`apps/mvc-blueprint`), and what is still open.
+What v2 decided, what it changed from v1 (`apps/mvc-blueprint-00`), and what is still open.
 
 ### V1 — Four mechanisms, each with one job · adopted
 

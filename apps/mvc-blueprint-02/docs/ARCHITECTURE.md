@@ -64,7 +64,7 @@ list's `visible` group on signals, the stats totals on BaseClass, the progress b
 listener set; point 9 (patch semantics — what a coarse write and an explicitly-`undefined` field
 mean) is pinned separately, in `B2-controllers`, on the inspector's filter. BaseClass needed
 lifting — it notifies every listener on every change, calls nobody on subscribe and lets a
-throwing listener stop the rest — which `lib/stats/app/model-base.ts` does.
+throwing listener stop the rest — which `src/lib/stats/app/model-base.ts` does.
 
 ## 6. Tracing
 

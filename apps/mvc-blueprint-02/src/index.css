@@ -12,8 +12,8 @@
  * the bundle, and proves it can fail by building once without this import.
  */
 @import "@statewalker/ui.view.shadcn/styles";
-@source "../lib/**/*.tsx"; /* this app's React views */
-@source "../lib/**/*.ts"; /* this app's plain-DOM views */
+@source "./lib/**/*.tsx"; /* this app's React views */
+@source "./lib/**/*.ts"; /* this app's plain-DOM views */
 
 @custom-variant dark (&:is(.dark *));
 

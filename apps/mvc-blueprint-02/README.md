@@ -1,4 +1,4 @@
-# @statewalker/mvc-blueprint-v2
+# @statewalker/mvc-blueprint-02
 
 The MVC blueprint, second generation: a todo app joined by three small controllers, built to show
 **four interaction mechanisms working together** — and a UI that renders only what controllers
@@ -41,14 +41,14 @@ pnpm build
 ## Layout
 
 ```
-lib/sys             the context's adapters, the extension points, the contribution types
-lib/signals          the signals contract over alien-signals (the todo models' substrate)
-lib/todo             core (declarations, api, command defaults) · app (signals models, controller) · ui (React)
-lib/logs             the fan-out logger and the controller that installs it
-lib/stats            app (BaseClass models, controller) · ui (DOM stats view, React inspector)
-lib/progress         app (plain model, projection controller) · ui (DOM progress bar)
-lib/ui-react         the React host and useModel
-lib/ui-dom           the DOM host
+src/lib/sys          the context's adapters, the extension points, the contribution types
+src/lib/signals      the signals contract over alien-signals (the todo models' substrate)
+src/lib/todo         core (declarations, api, command defaults) · app (signals models, controller) · ui (React)
+src/lib/logs         the fan-out logger and the controller that installs it
+src/lib/stats        app (BaseClass models, controller) · ui (DOM stats view, React inspector)
+src/lib/progress     app (plain model, projection controller) · ui (DOM progress bar)
+src/lib/ui-react     the React host and useModel
+src/lib/ui-dom       the DOM host
 src/app.ts           the composition root — the only module that wires features to hosts
 src/tracing.ts       tracing commands, slots and model notifications into the logger
 src/coverage.ts      reports any contribution no host can render

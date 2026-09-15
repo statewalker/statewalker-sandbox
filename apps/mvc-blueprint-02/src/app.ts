@@ -91,7 +91,7 @@ export function startApp(root: HTMLElement, options: StartOptions = {}): Running
 
   register(
     observeCoverage(slots, [react, dom], (unrendered) => {
-      console.warn("[mvc-blueprint-v2] no host renders", unrendered);
+      console.warn("[mvc-blueprint-02] no host renders", unrendered);
       getLogger(ctx).child({ module: "ui" }).warn("ui:unrendered", unrendered);
       options.onUnrendered?.(unrendered);
     }),
