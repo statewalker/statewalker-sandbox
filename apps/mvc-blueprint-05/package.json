@@ -1,0 +1,34 @@
+{
+  "name": "@statewalker/mvc-blueprint-05",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Prototype R1 — Elm/MVI single store: no controllers, no action models; bundles contribute update functions, effects, subscriptions and derived views to one store.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "typecheck": "tsc --noEmit",
+    "loc": "node scripts/loc.mjs",
+    "deps": "node scripts/deps.mjs"
+  },
+  "dependencies": {
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "@vitest/browser-playwright": "^5.0.0",
+    "playwright": "1.58.0",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "^5.0.0"
+  }
+}
