@@ -1,0 +1,102 @@
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  color: #111;
+  background: #fafafa;
+}
+.shell-header {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #ddd;
+  background: #fff;
+}
+.main-menu {
+  display: flex;
+  gap: 0.5rem;
+}
+.main-menu details {
+  position: relative;
+}
+.main-menu [role="menu"] {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #ccc;
+  padding: 0.25rem;
+  min-width: 12rem;
+}
+.shell-body {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1rem;
+  padding: 1rem;
+}
+.shell-side .panel {
+  border: 1px solid #ddd;
+  background: #fff;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+[role="tablist"] {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+[role="tab"][aria-selected="true"] {
+  font-weight: bold;
+}
+li[data-todo] {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.15rem 0.25rem;
+}
+li[aria-current="true"],
+button[aria-current="true"] {
+  background: #e6f0ff;
+}
+.done {
+  text-decoration: line-through;
+  color: #888;
+}
+.action-bar {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0.25rem 0;
+}
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 0.3);
+  display: grid;
+  place-items: center;
+}
+.dialog {
+  background: #fff;
+  padding: 1rem;
+  min-width: 18rem;
+}
+.toasts {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.toast {
+  background: #fff;
+  border: 1px solid #ccc;
+  padding: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+}
+.tone-error {
+  border-color: #c00;
+}
+[data-error] {
+  color: #c00;
+}
