@@ -8,8 +8,8 @@ import {
 } from "@b/contacts/api";
 import { panelsSlot } from "@b/shell/api";
 import {
-  type Controller,
   answer,
+  type Controller,
   call,
   getLogger,
   getSlots,

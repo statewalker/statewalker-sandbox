@@ -8,8 +8,8 @@ import {
   todosToolbarActionsSlot,
 } from "@b/todos/api";
 import {
-  type Controller,
   answer,
+  type Controller,
   call,
   getLogger,
   getSlots,

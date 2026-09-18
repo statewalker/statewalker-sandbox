@@ -6,8 +6,8 @@ import {
   contactsUpdate,
 } from "@b/contacts/api";
 import {
-  type Controller,
   answer,
+  type Controller,
   getConfig,
   getLogger,
   getSlots,

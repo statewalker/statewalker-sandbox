@@ -2,6 +2,7 @@ import type { ContactEditorView } from "@b/contacts/api";
 import { MemContactsApi } from "@b/contacts.core";
 import { dialogsSlot } from "@b/shell/api";
 import type { ConfirmView, TodoListView } from "@b/todos/api";
+import { callsSlot } from "@kernel";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorLogs, panel, start, toasts, until, workbenchHeadless } from "../support/harness.js";
 import { contactList, titles, todoList, toolbarAction } from "../support/scenarios.js";
@@ -77,7 +78,11 @@ describe("dispose: after the application's cleanup", () => {
     editor.editField("name", "Ada K. Lovelace");
     editor.save.submit();
     await until(() => editor.save.getState().running);
-    await r.stop(); // while the save is in flight
+    // P1: the in-flight write is visible as state — a pending call in `sys:calls`.
+    expect([...r.slots.getSnapshot(callsSlot).values()].map((c) => c.key)).toEqual([
+      "contacts:update",
+    ]);
+    await r.stop(); // while the save is in flight: its owner's handler leaves ⇒ the call is abandoned
     const before = r.slots.usage().filter((u) => u.contributions > 0);
     await new Promise((resolve) => setTimeout(resolve, 80)); // the save lands now
     expect(r.slots.usage().filter((u) => u.contributions > 0)).toEqual(before);
