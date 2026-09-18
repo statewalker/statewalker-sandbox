@@ -35,7 +35,7 @@ export function todosClearCompletedBundle(
     const action = () => ({
       id: "clear-completed",
       label: "Clear completed",
-      enabled: doneIds.length > 0 && !asked,
+      enabled: doneIds.length > 0, // a second ask while the dialog is up is a no-op
       to: todosClearCompleted,
       msg: { type: "todos:clear-completed:ask" },
     });

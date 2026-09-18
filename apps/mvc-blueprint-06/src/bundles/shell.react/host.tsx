@@ -2,7 +2,7 @@
  * The React shell host: renders the `shell` actor's point streams, pairs each published view with
  * the renderer for its kind, and forwards view messages. It is the only code that holds a port.
  */
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import type { ActionDesc, Contribution, ViewPort, ViewRef } from "../../kernel/index.js";
 import { useStream } from "../../kit/react/use-stream.js";
 import {
@@ -192,11 +192,12 @@ function ViewHost({
 
 function DialogFrame({ dialog, children }: { dialog: Contribution<Dialog>; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const before = document.activeElement as HTMLElement | null;
+  // Captured while rendering, before the dialog exists: what had focus when it was published.
+  const [before] = useState(() => document.activeElement as HTMLElement | null);
+  useLayoutEffect(() => {
     ref.current?.focus();
     return () => before?.focus?.();
-  }, []);
+  }, [before]);
   return (
     <div className="dialog-backdrop">
       <div
