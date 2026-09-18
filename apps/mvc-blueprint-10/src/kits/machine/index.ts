@@ -13,7 +13,7 @@ export type { FsmStateConfig as Chart } from "@statewalker/fsm";
 export interface StateScope {
   readonly event: string;
   readonly data: unknown;
-  /** Sends an event to the machine — dropped if this state has exited meanwhile. */
+  /** Sends an event to the machine — dropped if this state has exited before it is processed. */
   send(event: string, data?: unknown): void;
   /**
    * Runs async work owned by this state. `then` runs only if the state is still active when the
@@ -54,7 +54,8 @@ export function startMachine(
 ): Machine {
   const process = new FsmProcess(chart);
   const children = new WeakMap<FsmState, Handlers>();
-  const queue: [string, unknown][] = [["", undefined]];
+  /** [event, data, the sender's liveness — a state's sends die with it]. */
+  const queue: [string, unknown, (() => boolean)?][] = [["", undefined]];
   let data: unknown;
   let stopped = false;
   let pumping: Promise<void> | undefined;
@@ -74,9 +75,7 @@ export function startMachine(
       const scope: StateScope = {
         event: process.event ?? "",
         data,
-        send: (event, d) => {
-          if (!exited) send(event, d);
-        },
+        send: (event, d) => send(event, d, () => !exited),
         task: (work, then) => {
           const abort = new AbortController();
           state.onExit(() => abort.abort());
@@ -85,7 +84,7 @@ export function startMachine(
               if (exited || stopped) return;
               try {
                 const event = then(result);
-                if (event) send(event);
+                if (event) send(event, undefined, () => !exited);
               } catch (error) {
                 fail(error);
               }
@@ -108,22 +107,23 @@ export function startMachine(
 
   async function pump(): Promise<void> {
     while (queue.length > 0 && !stopped) {
-      const [event, d] = queue.shift() as [string, unknown];
+      const [event, d, alive] = queue.shift() as (typeof queue)[number];
+      if (alive && !alive()) continue;
       if (event !== "" && !isStateTransitionEnabled(process, event)) continue;
       data = d;
       await process.dispatch(event);
     }
     pumping = undefined;
   }
-  function send(event: string, d?: unknown): void {
+  function send(event: string, d?: unknown, alive?: () => boolean): void {
     if (stopped) return;
-    queue.push([event, d]);
+    queue.push([event, d, alive]);
     pumping ??= Promise.resolve().then(pump);
   }
   pumping = Promise.resolve().then(pump);
 
   return {
-    send,
+    send: (event, d) => send(event, d),
     states() {
       const keys: string[] = [];
       for (let s = process.state; s; s = s.parent) keys.unshift(s.key);

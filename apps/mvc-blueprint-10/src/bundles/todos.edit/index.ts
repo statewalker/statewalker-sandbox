@@ -99,8 +99,9 @@ export const activate: Controller = async (context) => {
                   return "failed";
                 },
               );
-              return () => model.control.save.update({ running: false });
             },
+            // `running` follows the state; not reset on exit, so a stop leaves the model as it was.
+            editing: () => model.control.save.update({ running: false }),
           },
         };
       },

@@ -8,11 +8,12 @@ import {
   todosToolbarActionsSlot,
 } from "@b/todos/api";
 import { type Controller, getCommands, getLogger, getSlots, newRegistry, useFields } from "@kernel";
-import { attempt, newUpdateLoop } from "@kit/loop";
+import { startMachine } from "@kit/machine";
 import { createAction, onSubmits } from "@kit/model";
 import { getNotificationTimeout, newNotifier } from "@kit/notify";
 import { followFirst } from "@kit/slots";
-import { type ConfirmModel, createConfirmModel } from "./confirm.model.js";
+import { createConfirmModel } from "./confirm.model.js";
+import { clearCompletedChart } from "./machine.js";
 
 const fields = useFields({
   slots: getSlots,
@@ -23,18 +24,11 @@ const fields = useFields({
 
 const plural = (n: number) => `${n} completed todo${n === 1 ? "" : "s"}`;
 
-interface Session {
-  readonly ids: readonly string[];
-  readonly model: ConfirmModel;
-  readonly withdraw: () => void;
-  answer?: "confirm" | "cancel";
-}
-
 /**
  * `todos.clear-completed`: the "Clear completed" action (toolbar + main menu) and the
  * `todos:clear-completed:ask` command. Asking publishes a confirmation over the todos that are
- * done WHEN ASKED; Clear removes exactly those and notifies how many. The action is REFUSED
- * (`running: true`) from the ask until the answer is handled.
+ * done WHEN ASKED; Clear removes exactly those and notifies how many. The lifecycle is the chart
+ * in `machine.ts`.
  */
 export const activate: Controller = async (context) => {
   const { slots, commands, log: rootLog, timeoutMs } = fields(context);
@@ -42,8 +36,6 @@ export const activate: Controller = async (context) => {
   const [register, cleanup] = newRegistry();
   const notifier = newNotifier(slots, timeoutMs);
   register(() => notifier.dispose());
-  let active = true;
-  let session: Session | undefined;
   let collection: TodosCollectionView | undefined;
 
   const action = createAction({ label: "Clear completed", enabled: false });
@@ -63,84 +55,69 @@ export const activate: Controller = async (context) => {
     ),
   );
 
-  const loop = newUpdateLoop(pass, {
-    isActive: () => active,
-    onError: (error) => log.error("todos.clear-completed: pass failed", { error: String(error) }),
-  });
+  const machine = startMachine(
+    clearCompletedChart,
+    {
+      idle: () => action.control.update({ running: false }),
+      busy: (scope) => {
+        const ids = scope.data as readonly string[];
+        action.control.update({ running: true });
+        const model = createConfirmModel(`Delete ${plural(ids.length)}?`, "Clear");
+        const [own, release] = newRegistry();
+        own(() => model.dispose());
+        own(
+          slots.register(dialogsSlot, "todos:clear-completed", {
+            kind: clearCompletedKind,
+            title: "Clear completed",
+            model: model.view,
+          }),
+        );
+        return {
+          exit: () => void release(),
+          states: {
+            // The answer is listened to only while asking: the first answer is the answer.
+            asking: ({ send }) => {
+              const offConfirm = onSubmits(model.control.confirm, () => send("confirm"));
+              const offCancel = onSubmits(model.control.cancel, () => send("cancel"));
+              return () => {
+                offConfirm();
+                offCancel();
+              };
+            },
+            clearing: ({ task }) => {
+              model.control.confirm.update({ running: true });
+              task(
+                () => commands.call(todosRemove, { ids }).promise,
+                (result) => {
+                  if (result.ok)
+                    notifier.notify({
+                      message: `Cleared ${plural(result.value)}`,
+                      tone: "success",
+                    });
+                  else
+                    notifier.notify({
+                      message: `Clear completed failed: ${result.message}`,
+                      tone: "error",
+                    });
+                  return "done";
+                },
+              );
+            },
+          },
+        };
+      },
+    },
+    { log, name: "todos.clear-completed" },
+  );
+  register(() => machine.stop());
 
-  function close(s: Session | undefined): void {
-    if (!s) return;
-    if (session === s) session = undefined;
-    s.withdraw();
-    if (active) action.control.update({ running: false });
-  }
-
+  // The question is fixed here, at commit time: the todos done when asked.
   function ask(): void {
-    if (session || !active) return;
     const ids = (collection?.getTodos() ?? []).filter((t) => t.done).map((t) => t.id);
-    if (ids.length === 0) return;
-    const model = createConfirmModel(`Delete ${plural(ids.length)}?`, "Clear");
-    const [own, release] = newRegistry();
-    own(() => model.dispose());
-    const s: Session = { ids, model, withdraw: () => void release() };
-    own(
-      onSubmits(model.control.confirm, () => {
-        s.answer ??= "confirm";
-        loop.kick();
-      }),
-    );
-    own(
-      onSubmits(model.control.cancel, () => {
-        s.answer ??= "cancel";
-        loop.kick();
-      }),
-    );
-    own(
-      slots.register(dialogsSlot, "todos:clear-completed", {
-        kind: clearCompletedKind,
-        title: "Clear completed",
-        model: model.view,
-      }),
-    );
-    session = s;
-    action.control.update({ running: true });
+    if (ids.length > 0) machine.send("ask", ids);
   }
-
-  let askOwed = false;
-  async function pass(): Promise<void> {
-    if (askOwed) {
-      askOwed = false;
-      ask();
-    }
-    const s = session;
-    if (!s?.answer) return;
-    if (s.answer === "cancel") return close(s);
-    s.model.control.confirm.update({ running: true });
-    const result = await attempt(
-      log,
-      "clear completed",
-      () => commands.call(todosRemove, { ids: s.ids }).promise,
-    );
-    if (!active) return;
-    close(s);
-    if (result.ok) notifier.notify({ message: `Cleared ${plural(result.value)}`, tone: "success" });
-    else notifier.notify({ message: `Clear completed failed: ${result.message}`, tone: "error" });
-  }
-
-  // The listener only records the intent: writing `running` here would write the action inside
-  // its own notification (MODELS.md §4 point 5).
-  register(
-    onSubmits(action.control, () => {
-      askOwed = true;
-      loop.kick();
-    }),
-  );
-  register(
-    commands.listen(todosClearCompletedAsk, async () => {
-      ask();
-    }),
-  );
-  register(() => close(session));
+  register(onSubmits(action.control, ask));
+  register(commands.listen(todosClearCompletedAsk, async () => ask()));
   register(
     slots.provide(todosToolbarActionsSlot, {
       id: "todos.clear-completed",
@@ -158,8 +135,5 @@ export const activate: Controller = async (context) => {
     }),
   );
 
-  return async () => {
-    active = false;
-    await cleanup();
-  };
+  return cleanup;
 };
