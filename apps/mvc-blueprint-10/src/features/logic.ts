@@ -16,9 +16,7 @@ import type { FeatureManifest } from "@kernel";
  * with `VITE_CONTACTS_EDIT=xstate` to run the XState one; the whole suite passes on either.
  */
 const contactsEdit =
-  (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_CONTACTS_EDIT === "xstate"
-    ? contactsEditXState
-    : contactsEditFsm;
+  import.meta.env.VITE_CONTACTS_EDIT === "xstate" ? contactsEditXState : contactsEditFsm;
 
 /** Logic features — technology-free. UI features live in `features/<tech>.ts`. */
 

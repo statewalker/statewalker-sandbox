@@ -27,6 +27,7 @@ export interface StateScope {
 }
 
 /** A state's exit, or its exit plus handlers for its children (they close over the parent's locals). */
+// biome-ignore lint/suspicious/noConfusingVoidType: a handler that returns nothing is the common case
 export type Entered = void | (() => void) | { exit?: () => void; states?: Handlers };
 export type Handlers = Readonly<Record<string, (scope: StateScope) => Entered>>;
 
