@@ -362,7 +362,13 @@ export function createIntentLog(options: { logger?: Logger; retain?: number } = 
         projections = projections.filter((p) => p.scope !== scope);
         for (const entry of [...pending.values()]) {
           if (entry.scope === scope)
-            settle(entry, false, new Error(`${origin} stopped`), LOG.origin);
+            // "abandoned", not "failed": the effect may already have reached a service
+            settle(
+              entry,
+              false,
+              new Error(`abandoned: ${origin} stopped before answering`),
+              LOG.origin,
+            );
         }
       },
     };
