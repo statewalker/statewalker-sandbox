@@ -28,6 +28,9 @@ const cur = (): App => {
   return app;
 };
 afterEach(async () => {
+  // the log-size measurement of the brief: records appended during each e2e test
+  if (app)
+    console.log(`[e2e log] ${expect.getState().currentTestName} → ${app.log.stats().appended}`);
   await app?.unmount();
   app = undefined;
 });
