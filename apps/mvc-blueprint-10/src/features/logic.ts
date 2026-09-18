@@ -1,5 +1,6 @@
 import { activate as contactsCore } from "@b/contacts.core";
-import { activate as contactsEdit } from "@b/contacts.edit";
+import { activate as contactsEditFsm } from "@b/contacts.edit";
+import { activate as contactsEditXState } from "@b/contacts.edit.xstate";
 import { activate as contactsList } from "@b/contacts.list";
 import { activate as todosClearCompleted } from "@b/todos.clear-completed";
 import { activate as todosContactsLink } from "@b/todos.contacts-link";
@@ -9,6 +10,15 @@ import { activate as todosList } from "@b/todos.list";
 import { activate as todosRename } from "@b/todos.rename";
 import { activate as todosStatus } from "@b/todos.status";
 import type { FeatureManifest } from "@kernel";
+
+/**
+ * P2: two editions of `contacts.edit` — `@statewalker/fsm` (default) and XState. Build or test
+ * with `VITE_CONTACTS_EDIT=xstate` to run the XState one; the whole suite passes on either.
+ */
+const contactsEdit =
+  (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_CONTACTS_EDIT === "xstate"
+    ? contactsEditXState
+    : contactsEditFsm;
 
 /** Logic features — technology-free. UI features live in `features/<tech>.ts`. */
 
