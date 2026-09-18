@@ -101,6 +101,13 @@ export interface ClearCompletedProps {
   readonly confirm: ActionItem;
   readonly cancel: ActionItem;
 }
+export interface RenameTodoProps {
+  readonly title: string;
+  readonly error?: string;
+  readonly rename: ActionItem;
+  readonly cancel: ActionItem;
+}
+export const renameTodoKind = defineViewKind<RenameTodoProps>("todos:rename");
 export const todosListKind = defineViewKind<TodosListProps>("todos:list");
 export const todoEditorKind = defineViewKind<TodoEditorProps>("todos:editor");
 export const clearCompletedKind = defineViewKind<ClearCompletedProps>("todos:clear-completed");
@@ -113,4 +120,7 @@ export const todosListIntents = {
 };
 export const todoEditorIntents = {
   title: defineMsg<{ title: string }>("todos.edit/title"),
+};
+export const renameTodoIntents = {
+  title: defineMsg<{ title: string }>("todos.rename/title"),
 };

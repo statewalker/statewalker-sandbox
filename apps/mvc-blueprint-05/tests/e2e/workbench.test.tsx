@@ -117,6 +117,24 @@ describe("todos in workbench.react", () => {
   });
 });
 
+describe("rename a todo", () => {
+  it("Rename… opens a dialog; Rename updates and withdraws; empty title is refused", async () => {
+    const h = await start();
+    clickTodo(h, "Buy milk");
+    await waitFor(() => !button(h, "Rename…").disabled, "Rename… enabled");
+    button(h, "Rename…").click();
+    await waitFor(() => !!h.querySelector("[role=dialog]"), "dialog");
+    const dialog = h.querySelector("[role=dialog]") as HTMLElement;
+    typeInto(input(dialog, "New title"), "");
+    button(dialog, "Rename").click();
+    await waitFor(() => !!dialog.querySelector("[role=alert]"), "error");
+    typeInto(input(dialog, "New title"), "Buy oat milk");
+    button(dialog, "Rename").click();
+    await waitFor(() => !h.querySelector("[role=dialog]"), "withdrawn");
+    await waitFor(() => rows(h)[0] === "  Buy oat milk", "renamed");
+  });
+});
+
 describe("contacts in workbench.react", () => {
   it("select shows details; Edit opens the seeded editor; Save closes and notifies Saved", async () => {
     const h = await start();

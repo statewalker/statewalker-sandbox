@@ -30,6 +30,7 @@ describe("single writer", () => {
       "todos.list",
       "todos.edit",
       "todos.clear-completed",
+      "todos.rename",
       "contacts.core",
       "contacts.list",
       "contacts.edit",

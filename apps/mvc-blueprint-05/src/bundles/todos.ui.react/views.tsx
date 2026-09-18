@@ -3,6 +3,8 @@ import type { ActionItem, Dispatch } from "../../kernel/index.ts";
 import type { RendererProps } from "../shell/api/react.ts";
 import {
   type ClearCompletedProps,
+  type RenameTodoProps,
+  renameTodoIntents,
   type TodoEditorProps,
   type TodosListProps,
   todoEditorIntents,
@@ -115,5 +117,33 @@ export function ClearCompleted({ props, dispatch }: RendererProps<ClearCompleted
         <Action item={props.cancel} dispatch={dispatch} />
       </div>
     </div>
+  );
+}
+
+export function RenameTodo({ props, dispatch }: RendererProps<RenameTodoProps>) {
+  return (
+    <form
+      className="flex flex-col gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (props.rename.enabled) dispatch(props.rename.msg);
+      }}
+    >
+      <input
+        aria-label="New title"
+        className="rounded border px-2 py-1"
+        value={props.title}
+        onChange={(e) => dispatch(renameTodoIntents.title({ title: e.target.value }))}
+      />
+      {props.error && (
+        <p role="alert" className="text-destructive">
+          {props.error}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Action item={props.rename} dispatch={dispatch} />
+        <Action item={props.cancel} dispatch={dispatch} />
+      </div>
+    </form>
   );
 }

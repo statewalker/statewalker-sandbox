@@ -10,6 +10,7 @@ import { activate as todosContactsLink } from "./bundles/todos.contacts-link/ind
 import { activate as todosCore } from "./bundles/todos.core/index.ts";
 import { activate as todosEdit } from "./bundles/todos.edit/index.ts";
 import { activate as todosList } from "./bundles/todos.list/index.ts";
+import { activate as todosRename } from "./bundles/todos.rename/index.ts";
 import { activate as todosStatus } from "./bundles/todos.status/index.ts";
 import type { FeatureManifest } from "./kernel/index.ts";
 
@@ -26,6 +27,7 @@ export const todosFeature: FeatureManifest = {
     { id: "todos.edit", activator: todosEdit },
     { id: "todos.clear-completed", activator: todosClearCompleted },
     { id: "todos.status", activator: todosStatus },
+    { id: "todos.rename", activator: todosRename },
   ],
 };
 export const contactsFeature: FeatureManifest = {
