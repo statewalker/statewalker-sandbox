@@ -119,7 +119,7 @@ export interface IntentLogCore {
   open(origin: string): IntentLog;
   records(): readonly LogRecord[];
   stats(): LogStats;
-  /** drop settled records beyond the newest `keep`; pending intents are never dropped */
+  /** drop settled records beyond the newest `keep`, never at or after the oldest pending intent */
   compact(keep: number): number;
   /** resolves when no answered intent is pending */
   idle(): Promise<void>;
@@ -272,8 +272,11 @@ export function createIntentLog(options: { logger?: Logger; retain?: number } = 
     if (excess <= 0) return 0;
     let dropped = 0;
     const kept: LogRecord[] = [];
+    // Watermark: nothing at or after the oldest pending intent may go — its handler may still read
+    // `since(seq)` for conflicts. A stuck intent therefore pins the log.
+    const floor = Math.min(...pending.keys(), ...queue.map((r) => r.seq));
     for (const record of records) {
-      const droppable = !pending.has(record.seq) && !queue.includes(record);
+      const droppable = record.seq < floor;
       if (droppable && dropped < excess) {
         dropped++;
         if (record.kind === "outcome") outcomes.delete(record.cause);

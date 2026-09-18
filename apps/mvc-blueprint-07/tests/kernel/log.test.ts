@@ -196,18 +196,28 @@ describe("late subscribers (replay)", () => {
 });
 
 describe("growth and compaction", () => {
-  it("retain bounds the log; pending intents are never dropped", async () => {
+  it("retain bounds the log", () => {
+    const { core, a } = setup(10);
+    for (let i = 0; i < 100; i++) a.append(bump, { by: i });
+    expect(core.stats().appended).toBe(100);
+    expect(core.stats().retained).toBeLessThanOrEqual(20);
+  });
+
+  it("a pending intent is a watermark: nothing after it is dropped, so a stuck intent pins the log", async () => {
     const { core, a } = setup(10);
     let release = () => {};
     a.handle(pong, () => new Promise<void>((r) => (release = r)));
+    a.append(bump, { by: -1 });
     const held = a.append(pong, { n: 0 });
     for (let i = 0; i < 100; i++) a.append(bump, { by: i });
-    expect(core.stats().appended).toBe(101);
-    expect(core.stats().retained).toBeLessThanOrEqual(20);
-    expect(core.records()).toContain(held);
+    expect(core.stats().retained).toBe(101); // only the record before the watermark went
+    expect(core.records()[0]).toBe(held);
+    // a handler's optimistic-concurrency read still sees everything since its cause
+    expect(a.since(held.seq)).toHaveLength(100);
     release();
     await core.idle();
-    expect(core.records().some((r) => r.kind === "outcome" && r.cause === held.seq)).toBe(true);
+    a.append(bump, { by: 100 });
+    expect(core.stats().retained).toBeLessThanOrEqual(20);
   });
 
   it("compact(keep) drops settled records only", () => {
