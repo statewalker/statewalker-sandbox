@@ -4,6 +4,7 @@ import type {
   TodoEditorView,
   TodosListView,
 } from "../../src/bundles/todos/api/index.js";
+import type { IntentRecord } from "../../src/kernel/log.js";
 import type { ActionView } from "../../src/kernel/models.js";
 import type { Probe } from "./headless.js";
 
@@ -41,7 +42,7 @@ export const contactAction = (app: Probe, label: string): ActionView => {
 export const contactEditor = (app: Probe, id: string) =>
   app.panel<ContactEditorView>(`contacts:editor:${id}`);
 export const recordsOf = (app: Probe, type: string) =>
-  app.log.records().filter((r) => r.kind === "intent" && r.type === type);
+  app.log.records().filter((r): r is IntentRecord => r.kind === "intent" && r.type === type);
 
 /** Opens the editor for a todo the way a user does: select it, then the Edit selection action. */
 export function openTodoEditor(app: Probe, id: string): TodoEditorView {
