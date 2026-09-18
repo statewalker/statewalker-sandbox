@@ -1,0 +1,151 @@
+import { shellCoverage } from "@b/shell/api";
+import { without } from "@kernel";
+import { afterEach, describe, expect, it } from "vitest";
+import { mixedWorkbench, workbench } from "../../src/apps/workbenches.js";
+import { button, click, open, type Page, waitFor } from "./dom.js";
+import {
+  contactsEdit,
+  headerCount,
+  menus,
+  newTodoForContact,
+  q,
+  renameTodo,
+  todosBasics,
+} from "./scenarios.js";
+
+/**
+ * P0's e2e cases, verbatim, per UI technology. `dom.ts` and `scenarios.ts` are byte-identical
+ * copies of P0's (tests/identity proves it); only the technology rows differ from P0's file.
+ */
+const technologies = [
+  ["svelte", workbench("svelte")],
+  ["solid", workbench("solid")],
+  ["vue", workbench("vue")],
+] as const;
+
+describe.each(technologies)("workbench.%s (Chromium)", (tech, manifest) => {
+  let page: Page | undefined;
+  afterEach(async () => {
+    await page?.stop();
+    page = undefined;
+  });
+
+  it("Todos: add, toggle, edit and save, clear completed", async () => {
+    page = await open(manifest);
+    await todosBasics(page);
+  });
+
+  it("Contacts: edit, failing save, save", async () => {
+    page = await open(manifest);
+    await contactsEdit(page);
+  });
+
+  it("(1) New todo for this contact", async () => {
+    page = await open(manifest);
+    await newTodoForContact(page);
+  });
+
+  it("(2) the header count follows the collection", async () => {
+    page = await open(manifest);
+    await headerCount(page);
+  });
+
+  it("(3) one main menu with both apps' groups", async () => {
+    page = await open(manifest);
+    await menus(page, ["Contacts", "Hello", "Todos"]);
+  });
+
+  it("(3) removing Contacts removes its group and nothing else", async () => {
+    page = await open(without(manifest, "contacts").manifest);
+    await menus(page, ["Hello", "Todos"]);
+    await todosBasics(page);
+  });
+
+  it("(3) removing Todos removes its group, panels and header item", async () => {
+    page = await open(without(manifest, "todos").manifest);
+    await menus(page, ["Contacts", "Hello"]);
+    expect(q(page).header()).toEqual([]);
+    await contactsEdit(page);
+  });
+
+  it("Rename a todo", async () => {
+    page = await open(manifest);
+    await renameTodo(page);
+  });
+
+  it("hello: the minimal bundle's menu item and panel", async () => {
+    page = await open(manifest);
+    const $ = q(page);
+    await waitFor(() => $.tab("Hello") !== undefined);
+    click($.menuItem("Say hello"));
+    await waitFor(() => page?.root.querySelector("[data-hello-count]")?.textContent === "Count: 1");
+  });
+
+  it("dialog: focus returns to the opener on withdrawal", async () => {
+    page = await open(manifest);
+    const $ = q(page);
+    await waitFor(() => $.todoTitles().length === 3);
+    const clear = button(
+      $.panel("todos:list") as HTMLElement,
+      "Clear completed",
+    ) as HTMLButtonElement;
+    clear.focus();
+    click(clear);
+    await waitFor(() => $.dialog("todos:clear-completed") !== null);
+    click(button($.dialog("todos:clear-completed") as HTMLElement, "Cancel"));
+    await waitFor(() => $.dialog("todos:clear-completed") === null);
+    await waitFor(() => document.activeElement === clear);
+  });
+
+  it("coverage: every published view has a renderer in this technology", async () => {
+    page = await open(manifest);
+    await waitFor(() => q(page as Page).todoTitles().length === 3);
+    expect(page.root.querySelector(`[data-shell="${tech}"]`)).not.toBeNull();
+    expect(shellCoverage.get(page.context).getReport().unrendered).toEqual([]);
+    expect(page.errors()).toEqual([]);
+  });
+});
+
+describe("two technologies in one shell: Svelte renderers in the Solid shell (Chromium)", () => {
+  let page: Page | undefined;
+  afterEach(async () => {
+    await page?.stop();
+    page = undefined;
+  });
+
+  it("Contacts (Svelte) and Todos (Solid): (1), the Contacts scenario, hello", async () => {
+    page = await open(mixedWorkbench);
+    await newTodoForContact(page);
+    await contactsEdit(page);
+    const $ = q(page);
+    click($.menuItem("Say hello"));
+    await waitFor(() => page?.root.querySelector("[data-hello-count]")?.textContent === "Count: 1");
+    expect(shellCoverage.get(page.context).getReport().unrendered).toEqual([]);
+  });
+
+  it("Todos basics in the mixed shell", async () => {
+    page = await open(mixedWorkbench);
+    await todosBasics(page);
+  });
+
+  it("(2) the header count in the mixed shell", async () => {
+    page = await open(mixedWorkbench);
+    await headerCount(page);
+  });
+
+  it("removing the Svelte feature leaves its kinds unrendered, not broken", async () => {
+    page = await open(without(mixedWorkbench, "contacts.svelte").manifest);
+    const $ = q(page);
+    await waitFor(() => $.todoTitles().length === 3);
+    await waitFor(
+      () => shellCoverage.get((page as Page).context).getReport().unrendered.length === 1,
+    );
+    expect(
+      shellCoverage
+        .get(page.context)
+        .getReport()
+        .unrendered.map((u) => u.kind),
+    ).toEqual(["contacts:list"]);
+    expect(page.errors()).toEqual([]);
+  });
+});
