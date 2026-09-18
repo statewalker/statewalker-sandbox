@@ -11,10 +11,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-type Cmd<M> = { run: "api"; payload: string; then: (result: string) => M }[];
+type Cmd<M> = { run: "api"; payload: string; onResult: (result: string) => M }[];
 const none: Cmd<never> = [];
 const mapCmd = <A, B>(cmd: Cmd<A>, f: (a: A) => B): Cmd<B> =>
-  cmd.map((c) => ({ ...c, then: (r: string) => f(c.then(r)) }));
+  cmd.map((c) => ({ ...c, onResult: (r: string) => f(c.onResult(r)) }));
 
 // ---- child 1: todos -------------------------------------------------------------------------
 type TodosModel = { titles: string[]; composing?: string };
@@ -28,7 +28,10 @@ const todos = {
       case "save":
         return m.composing === undefined
           ? [m, none]
-          : [m, [{ run: "api", payload: m.composing, then: (title) => ({ t: "saved", title }) }]];
+          : [
+              m,
+              [{ run: "api", payload: m.composing, onResult: (title) => ({ t: "saved", title }) }],
+            ];
       case "saved":
         return [{ titles: [...m.titles, msg.title] }, none];
     }
@@ -70,7 +73,7 @@ function runtime() {
   const dispatch = (msg: Msg) => {
     const [next, cmd] = parent.update(model, msg);
     model = next;
-    for (const c of cmd) dispatch(c.then(c.payload)); // a synchronous "api"
+    for (const c of cmd) dispatch(c.onResult(c.payload)); // a synchronous "api"
   };
   return { dispatch, get: () => model };
 }

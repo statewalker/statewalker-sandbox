@@ -3,7 +3,7 @@
  * Usage: node scripts/loc.mjs [path…]   (default: per bundle, kernel, app files, tests)
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { APP } from "./graph.mjs";
 
 function files(p) {
