@@ -45,15 +45,15 @@ export const activate: Controller = async (context) => {
   // Details: a view exists exactly as long as its publication — published while selected.
   let withdrawDetails: (() => void) | undefined;
   register(
-    model.selection.onSelectedUpdate(() => {
-      const contact = model.selection.getSelected();
+    model.selection.selected.subscribe(() => {
+      const contact = model.selection.selected();
       if (contact && !withdrawDetails) {
         withdrawDetails = slots.register(panelsSlot, "contacts:details", {
           kind: contactDetailsKind,
           title: "Details",
           placement: "side",
           order: 20,
-          model: model.selection,
+          model: model.details,
         });
       } else if (!contact && withdrawDetails) {
         withdrawDetails();
@@ -83,7 +83,7 @@ export const activate: Controller = async (context) => {
   for (const action of [model.edit, model.editFromMenu]) {
     register(
       onSubmits(action.control, () => {
-        editOwed = model.selection.getSelected()?.id;
+        editOwed = model.selection.selected()?.id;
         loop.kick();
       }),
     );

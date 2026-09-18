@@ -2,41 +2,31 @@ import { contactsSelectionActionsSlot, contactsSelectionSlot } from "@b/contacts
 import { todosCompose } from "@b/todos/api";
 import { type Controller, getCommands, getLogger, getSlots, newRegistry, useFields } from "@kernel";
 import { createAction, onSubmits } from "@kit/model";
-import { followFirst } from "@kit/slots";
+import { firstOf } from "@kit/slots";
 
 const fields = useFields({ slots: getSlots, commands: getCommands, log: getLogger });
 
 /**
  * `todos.contacts-link` (feature `todos-contacts`): "New todo for this contact" in
- * `contacts:selection-actions`. Enabled while `contacts:selection` has a contact; on submit it
- * reads the selected contact AT COMMIT TIME and calls `todos:compose`. Edits no Contacts file.
+ * `contacts:selection-actions`. P4: `enabled` is DERIVED in the action model from
+ * `contacts:selection` on the shared substrate (no listener sets it). On submit it reads the
+ * selected contact AT COMMIT TIME and calls `todos:compose`. Edits no Contacts file.
  */
 export const activate: Controller = async (context) => {
   const { slots, commands, log } = fields(context);
   const [register, cleanup] = newRegistry();
   let active = true;
-  const action = createAction({ label: "New todo for this contact", enabled: false });
+  const [selection, stop] = firstOf(slots, contactsSelectionSlot);
+  register(stop);
+  const selected = () => selection()?.selected();
+  const action = createAction({
+    label: "New todo for this contact",
+    when: () => selected() !== undefined,
+  });
   register(() => action.dispose());
-  let selected: (() => { name: string } | undefined) | undefined;
-  register(
-    followFirst(
-      slots,
-      contactsSelectionSlot,
-      (selection) => {
-        selected = selection.getSelected;
-        return selection.onSelectedUpdate(() =>
-          action.control.update({ enabled: selection.getSelected() !== undefined }),
-        );
-      },
-      () => {
-        selected = undefined;
-        action.control.update({ enabled: false });
-      },
-    ),
-  );
   register(
     onSubmits(action.control, () => {
-      const contact = selected?.(); // at commit time
+      const contact = selected(); // at commit time (the listener runs untracked)
       if (!contact || !active) return;
       const title = contact.name;
       queueMicrotask(() => {

@@ -8,6 +8,7 @@ import {
   shallowEqual,
   stableGroup,
 } from "@kit/model";
+import { readable } from "@kernel";
 import { signal, untracked } from "@kit/signals";
 
 export interface ListActions<A> {
@@ -18,8 +19,7 @@ export interface ListActions<A> {
 }
 
 export interface ListControl {
-  /** Presentation writers. */
-  publishItems(todos: readonly Todo[]): void;
+  /** Presentation writers. (P4: no `publishItems` — items are derived from the collection.) */
   publishToolbar(items: readonly ActionContribution[]): void;
   publishSelectionActions(items: readonly ActionContribution[]): void;
   reportOutcome(outcome: string | undefined): void;
@@ -38,11 +38,15 @@ export interface ListModel {
 
 const EMPTY: readonly never[] = Object.freeze([]);
 
-export function createListModel(): ListModel {
+/**
+ * `source` — P4: the collection's todos as a tracked read on the shared substrate (another
+ * bundle's state); the list's items are DERIVED from it, not copied into it by a listener.
+ */
+export function createListModel(source: () => readonly Todo[] = () => EMPTY): ListModel {
   let disposed = false;
   const channels = newChannels(() => disposed);
   const alive = signal(true);
-  const items = signal<readonly Todo[]>(EMPTY);
+  const items = stableGroup((): readonly Todo[] => source());
   const rawSelection = signal<readonly string[]>(EMPTY);
   const newTitle = signal("");
   const toolbar = signal<readonly ActionContribution[]>(EMPTY);
@@ -115,17 +119,13 @@ export function createListModel(): ListModel {
   });
 
   const selectionView: TodosSelectionView = Object.freeze({
-    getSelected: () => selection(),
-    onSelectedUpdate: channels.channel(selection),
+    selected: readable(selection, () => !disposed),
   });
 
   const same = <T>(read: () => readonly T[], next: readonly T[]) =>
     disposed || sameRecords(untracked(read), next);
 
   const control: ListControl = Object.freeze({
-    publishItems: (next: readonly Todo[]) => {
-      if (!same(items, next)) items(Object.freeze([...next]));
-    },
     publishToolbar: (next: readonly ActionContribution[]) => {
       if (!same(toolbar, next)) toolbar(Object.freeze([...next]));
     },

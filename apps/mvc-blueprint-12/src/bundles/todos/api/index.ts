@@ -7,6 +7,7 @@ import {
   type Listener,
   newAdapter,
   passthrough,
+  type Readable,
   type Unsubscribe,
 } from "@kernel";
 
@@ -39,20 +40,21 @@ export interface TodoCounts {
   readonly open: number;
   readonly done: number;
 }
-/** Presentation, owner `todos.core`. */
+/**
+ * Presentation, owner `todos.core`. P4: shared state is published on the KERNEL substrate — each
+ * group is a `Readable` (a tracked read for a consumer's `computed`; `.subscribe` for a consumer on
+ * plain listeners).
+ */
 export interface TodosCollectionView {
-  getTodos(): readonly Todo[];
-  onTodosUpdate(listener: Listener): Unsubscribe;
-  getCounts(): TodoCounts;
-  onCountsUpdate(listener: Listener): Unsubscribe;
+  readonly todos: Readable<readonly Todo[]>;
+  readonly counts: Readable<TodoCounts>;
 }
 /** One contribution: the collection, published by its owner `todos.core`. */
 export const todosCollectionSlot = defineSlot<TodosCollectionView>("todos:collection");
 
-/** Presentation, owner `todos.list`: the ids selected in the list. */
+/** Presentation, owner `todos.list`: the ids selected in the list (P4: on the kernel substrate). */
 export interface TodosSelectionView {
-  getSelected(): readonly string[];
-  onSelectedUpdate(listener: Listener): Unsubscribe;
+  readonly selected: Readable<readonly string[]>;
 }
 /** One contribution: the list's selection, published by `todos.list`. */
 export const todosSelectionSlot = defineSlot<TodosSelectionView>("todos:selection");

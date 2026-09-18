@@ -13,7 +13,8 @@
     "paths": {
       "@kernel": ["./src/kernel/index.ts"],
       "@kit/*": ["./src/kits/*/index.ts"],
-      "@b/*": ["./src/bundles/*/index.ts"]
+      "@b/*": ["./src/bundles/*/index.ts"],
+      "@features/*": ["./src/features/*.ts"]
     }
   },
   "include": ["src/**/*", "tests/**/*", "*.ts"]

@@ -42,7 +42,11 @@ const DOM_GLOBAL = /\b(?:document|window|HTMLElement|localStorage)\b/;
 
 /** R6: the kernel imports no bundle and no kit. */
 const KERNEL_FORBIDDEN = /^@(?:b|kit)\//;
-/** R7: the substrate stays private. */
+/**
+ * R7 (P4): the substrate LIBRARY stays in one file — the kernel's `reactive.ts`. The substrate
+ * itself is no longer private (ADR-008 broken on purpose): `Readable` appears in API modules and
+ * every bundle reaches alien-signals through `@kernel` (see substrate.test.ts for the reach).
+ */
 const ALIEN = /^alien-signals(?:\/|$)/;
 const KIT_SIGNALS = /^@kit\/signals$/;
 const mayImportSignals = (file: string) =>
@@ -90,9 +94,9 @@ describe("boundary suite", () => {
     }
   });
 
-  it("R7 alien-signals only in kits/signals; @kit/signals only in the model kit and *.model.ts", () => {
+  it("R7 alien-signals only in kernel/reactive.ts; @kit/signals only in the model kit and *.model.ts", () => {
     const alien = all.filter((s) => s.imports.some((i) => ALIEN.test(i.spec))).map((s) => s.file);
-    expect(alien).toEqual(["src/kits/signals/index.ts"]);
+    expect(alien).toEqual(["src/kernel/reactive.ts"]);
     for (const s of all.filter((x) => x.imports.some((i) => KIT_SIGNALS.test(i.spec)))) {
       expect(mayImportSignals(s.file), s.file).toBe(true);
     }

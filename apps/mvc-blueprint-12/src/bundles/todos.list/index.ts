@@ -22,9 +22,10 @@ import {
 } from "@kernel";
 import { attempt, newUpdateLoop } from "@kit/loop";
 import { onSubmits } from "@kit/model";
-import { byOrder, followFirst } from "@kit/slots";
+import { byOrder, firstOf } from "@kit/slots";
 import { createListModel } from "./list.model.js";
 
+const EMPTY: readonly Todo[] = Object.freeze([]);
 const fields = useFields({ slots: getSlots, commands: getCommands, log: getLogger });
 
 /** What a commit acts on, captured synchronously in the submit listener. */
@@ -44,19 +45,14 @@ export const activate: Controller = async (context) => {
   const [register, cleanup] = newRegistry();
   let active = true;
 
-  const model = createListModel();
+  // P4: the list's items are derived from the collection on the shared substrate.
+  const [collection, stopCollection] = firstOf(slots, todosCollectionSlot);
+  register(stopCollection);
+  const model = createListModel(() => collection()?.todos() ?? EMPTY);
   register(() => model.dispose());
   const { view, control } = model;
 
-  // ── derived presentation: collection and action extension points ───────────────────────────
-  register(
-    followFirst(
-      slots,
-      todosCollectionSlot,
-      (collection) => collection.onTodosUpdate(() => control.publishItems(collection.getTodos())),
-      () => control.publishItems([]),
-    ),
-  );
+  // ── derived presentation: the action extension points ────────────────────────────────────
   register(slots.observe(todosToolbarActionsSlot, (a) => control.publishToolbar(byOrder(a))));
   register(
     slots.observe(todosSelectionActionsSlot, (a) => control.publishSelectionActions(byOrder(a))),

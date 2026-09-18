@@ -1,6 +1,5 @@
 import { menuSlot, panelsSlot } from "@b/shell/api";
 import {
-  type TodosCollectionView,
   todoEditorKind,
   todosAdd,
   todosCollectionSlot,
@@ -8,11 +7,19 @@ import {
   todosEditOpen,
   todosUpdate,
 } from "@b/todos/api";
-import { type Controller, getCommands, getLogger, getSlots, newRegistry, useFields } from "@kernel";
+import {
+  type Controller,
+  getCommands,
+  getLogger,
+  getSlots,
+  newRegistry,
+  untracked,
+  useFields,
+} from "@kernel";
 import { attempt, newUpdateLoop } from "@kit/loop";
 import { createAction, onSubmits } from "@kit/model";
 import { getNotificationTimeout, newNotifier } from "@kit/notify";
-import { followFirst } from "@kit/slots";
+import { firstOf } from "@kit/slots";
 import { createEditorModel, type EditorModel } from "./editor.model.js";
 
 const fields = useFields({
@@ -48,20 +55,8 @@ export const activate: Controller = async (context) => {
   register(() => notifier.dispose());
   let active = true;
   let session: Session | undefined;
-  let collection: TodosCollectionView | undefined;
-  register(
-    followFirst(
-      slots,
-      todosCollectionSlot,
-      (c) => {
-        collection = c;
-        return () => {};
-      },
-      () => {
-        collection = undefined;
-      },
-    ),
-  );
+  const [collection, stopCollection] = firstOf(slots, todosCollectionSlot);
+  register(stopCollection);
 
   const loop = newUpdateLoop(pass, {
     isActive: () => active,
@@ -135,7 +130,11 @@ export const activate: Controller = async (context) => {
 
   register(
     commands.listen(todosEditOpen, async ({ payload }) => {
-      const todo = collection?.getTodos().find((t) => t.id === payload.id);
+      const todo = untracked(() =>
+        collection()
+          ?.todos()
+          .find((t) => t.id === payload.id),
+      );
       if (!todo) throw new Error(`todo not found: ${payload.id}`);
       if (active) open("edit", todo.title, todo.id);
     }),

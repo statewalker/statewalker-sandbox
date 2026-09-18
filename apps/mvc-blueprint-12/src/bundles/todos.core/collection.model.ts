@@ -1,5 +1,6 @@
 import type { Todo, TodoCounts, TodosCollectionView } from "@b/todos/api";
-import { newChannels, sameRecords, stableGroup } from "@kit/model";
+import { readable } from "@kernel";
+import { sameRecords, stableGroup } from "@kit/model";
 import { signal, untracked } from "@kit/signals";
 
 export interface CollectionControl {
@@ -17,18 +18,17 @@ const EMPTY: readonly Todo[] = Object.freeze([]);
 
 export function createCollectionModel(): CollectionModel {
   let disposed = false;
-  const channels = newChannels(() => disposed);
+  const alive = () => !disposed;
   const todos = signal<readonly Todo[]>(EMPTY);
   const counts = stableGroup((): TodoCounts => {
     const all = todos();
     const done = all.filter((t) => t.done).length;
     return Object.freeze({ open: all.length - done, done });
   });
+  // P4: the groups are published on the kernel substrate — consumers derive from them directly.
   const view: TodosCollectionView = Object.freeze({
-    getTodos: () => todos(),
-    onTodosUpdate: channels.channel(todos),
-    getCounts: () => counts(),
-    onCountsUpdate: channels.channel(counts),
+    todos: readable(todos, alive),
+    counts: readable(counts, alive),
   });
   const control: CollectionControl = Object.freeze({
     publishTodos: (next: readonly Todo[]) => {
@@ -51,7 +51,6 @@ export function createCollectionModel(): CollectionModel {
     dispose: () => {
       if (disposed) return;
       disposed = true;
-      channels.dispose();
     },
   });
 }

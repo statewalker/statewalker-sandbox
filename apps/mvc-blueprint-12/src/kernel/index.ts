@@ -5,3 +5,4 @@ export * from "./loader.js";
 export * from "./models.js";
 export * from "./services.js";
 export * from "./slots.js";
+export * from "./reactive.js";

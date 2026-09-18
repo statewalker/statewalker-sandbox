@@ -12,7 +12,8 @@
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "typecheck": "tsc --noEmit",
     "loc": "node scripts/loc.mjs",
-    "graph": "vitest run tests/boundaries --reporter=verbose"
+    "graph": "vitest run tests/boundaries --reporter=verbose",
+    "test:glitch-p0": "vitest run --config vitest.glitch-p0.config.ts"
   },
   "dependencies": {
     "@statewalker/shared-adapters": "catalog:",

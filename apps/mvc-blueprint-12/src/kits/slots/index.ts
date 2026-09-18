@@ -1,4 +1,4 @@
-import type { KernelSlots, SlotDeclaration } from "@kernel";
+import { type KernelSlots, type SlotDeclaration, signal, untracked } from "@kernel";
 
 /**
  * Follows the first contribution of a one-contribution slot (shared state such as
@@ -34,4 +34,20 @@ export function byOrder<T extends { readonly order: number; readonly id: string 
   items: readonly T[],
 ): T[] {
   return [...items].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+}
+
+/**
+ * P4: the first contribution of a one-contribution slot as a tracked read on the kernel graph, so
+ * a `computed` (or an action's `when`) can follow shared state through its arrival, replacement
+ * and withdrawal: `computed(() => collection()?.counts().open ?? 0)`. Returns the read and its stop.
+ */
+export function firstOf<T>(
+  slots: Pick<KernelSlots, "observe">,
+  decl: SlotDeclaration<T>,
+): readonly [read: () => T | undefined, stop: () => void] {
+  const current = signal<T | undefined>(undefined);
+  const off = slots.observe(decl, (items) => {
+    if (items[0] !== untracked(current)) current(items[0]);
+  });
+  return [current, off];
 }

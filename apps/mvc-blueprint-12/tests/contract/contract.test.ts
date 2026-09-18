@@ -17,10 +17,11 @@ modelContract("presentation · todos:collection todos (kit, signals)", {
     const m = createCollectionModel();
     let n = 0;
     return {
-      read: m.view.getTodos,
-      subscribe: m.view.onTodosUpdate,
+      // P4: the facet is a `Readable`; its `subscribe` is the contract's channel.
+      read: m.view.todos,
+      subscribe: m.view.todos.subscribe,
       change: () => m.control.publishTodos([{ id: `t${++n}`, title: `todo ${n}`, done: false }]),
-      changeEqual: () => m.control.publishTodos(m.view.getTodos().map((t) => ({ ...t }))),
+      changeEqual: () => m.control.publishTodos(m.view.todos().map((t) => ({ ...t }))),
       dispose: m.dispose,
     };
   },
@@ -31,14 +32,14 @@ modelContract("presentation · todos:collection counts, a derived group (kit)", 
     const m = createCollectionModel();
     let n = 0;
     return {
-      read: m.view.getCounts,
-      subscribe: m.view.onCountsUpdate,
+      read: m.view.counts,
+      subscribe: m.view.counts.subscribe,
       change: () =>
         m.control.publishTodos(
           Array.from({ length: ++n }, (_, i) => ({ id: `t${i}`, title: "x", done: false })),
         ),
       changeEqual: () =>
-        m.control.publishTodos(m.view.getTodos().map((t) => ({ ...t, title: `${t.title}!` }))),
+        m.control.publishTodos(m.view.todos().map((t) => ({ ...t, title: `${t.title}!` }))),
       dispose: m.dispose,
     };
   },
@@ -104,11 +105,12 @@ modelContract("form · todo editor draft (kit)", {
 
 modelContract("input · todo list selection, derived from items (kit)", {
   make() {
-    const m = createListModel();
-    m.control.publishItems([
+    // P4: items are derived from a source (the collection); a fixed one here.
+    const items = [
       { id: "a", title: "a", done: false },
       { id: "b", title: "b", done: false },
-    ]);
+    ];
+    const m = createListModel(() => items);
     let flip = false;
     return {
       read: m.view.getSelection,

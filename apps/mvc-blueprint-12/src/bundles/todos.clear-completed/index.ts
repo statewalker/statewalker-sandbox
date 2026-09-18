@@ -1,17 +1,24 @@
 import { dialogsSlot, menuSlot } from "@b/shell/api";
 import {
   clearCompletedKind,
-  type TodosCollectionView,
   todosClearCompletedAsk,
   todosCollectionSlot,
   todosRemove,
   todosToolbarActionsSlot,
 } from "@b/todos/api";
-import { type Controller, getCommands, getLogger, getSlots, newRegistry, useFields } from "@kernel";
+import {
+  type Controller,
+  getCommands,
+  getLogger,
+  getSlots,
+  newRegistry,
+  untracked,
+  useFields,
+} from "@kernel";
 import { attempt, newUpdateLoop } from "@kit/loop";
 import { createAction, onSubmits } from "@kit/model";
 import { getNotificationTimeout, newNotifier } from "@kit/notify";
-import { followFirst } from "@kit/slots";
+import { firstOf } from "@kit/slots";
 import { type ConfirmModel, createConfirmModel } from "./confirm.model.js";
 
 const fields = useFields({
@@ -44,24 +51,15 @@ export const activate: Controller = async (context) => {
   register(() => notifier.dispose());
   let active = true;
   let session: Session | undefined;
-  let collection: TodosCollectionView | undefined;
+  // P4: the collection is a tracked read on the shared substrate; `enabled` is derived from it.
+  const [collection, stopCollection] = firstOf(slots, todosCollectionSlot);
+  register(stopCollection);
 
-  const action = createAction({ label: "Clear completed", enabled: false });
+  const action = createAction({
+    label: "Clear completed",
+    when: () => (collection()?.counts().done ?? 0) > 0,
+  });
   register(() => action.dispose());
-  register(
-    followFirst(
-      slots,
-      todosCollectionSlot,
-      (c) => {
-        collection = c;
-        return c.onCountsUpdate(() => action.control.update({ enabled: c.getCounts().done > 0 }));
-      },
-      () => {
-        collection = undefined;
-        action.control.update({ enabled: false });
-      },
-    ),
-  );
 
   const loop = newUpdateLoop(pass, {
     isActive: () => active,
@@ -77,7 +75,8 @@ export const activate: Controller = async (context) => {
 
   function ask(): void {
     if (session || !active) return;
-    const ids = (collection?.getTodos() ?? []).filter((t) => t.done).map((t) => t.id);
+    const todos = untracked(() => collection()?.todos() ?? []);
+    const ids = todos.filter((t) => t.done).map((t) => t.id);
     if (ids.length === 0) return;
     const model = createConfirmModel(`Delete ${plural(ids.length)}?`, "Clear");
     const [own, release] = newRegistry();

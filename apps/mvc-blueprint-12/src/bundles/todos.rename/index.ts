@@ -1,16 +1,23 @@
 import { dialogsSlot } from "@b/shell/api";
 import {
-  type TodosCollectionView,
   todoRenameKind,
   todosCollectionSlot,
   todosSelectionActionsSlot,
   todosSelectionSlot,
   todosUpdate,
 } from "@b/todos/api";
-import { type Controller, getCommands, getLogger, getSlots, newRegistry, useFields } from "@kernel";
+import {
+  type Controller,
+  getCommands,
+  getLogger,
+  getSlots,
+  newRegistry,
+  untracked,
+  useFields,
+} from "@kernel";
 import { attempt, newUpdateLoop } from "@kit/loop";
 import { createAction, onSubmits } from "@kit/model";
-import { followFirst } from "@kit/slots";
+import { firstOf } from "@kit/slots";
 import { createRenameModel, type RenameModel } from "./rename.model.js";
 
 const fields = useFields({ slots: getSlots, commands: getCommands, log: getLogger });
@@ -34,32 +41,17 @@ export const activate: Controller = async (context) => {
   const [register, cleanup] = newRegistry();
   let active = true;
   let session: Session | undefined;
-  let collection: TodosCollectionView | undefined;
-  let selected: readonly string[] = [];
   let openOwed: string | undefined;
+  // P4: both are tracked reads of other bundles' state on the shared substrate.
+  const [selection, stopSelection] = firstOf(slots, todosSelectionSlot);
+  const [collection, stopCollection] = firstOf(slots, todosCollectionSlot);
+  register(stopSelection);
+  register(stopCollection);
+  const selected = () => selection()?.selected() ?? [];
 
-  const action = createAction({ label: "Rename…", enabled: false });
+  // `enabled` is derived in the action model from `todos:selection` — no listener sets it.
+  const action = createAction({ label: "Rename…", when: () => selected().length === 1 });
   register(() => action.dispose());
-  register(
-    followFirst(
-      slots,
-      todosSelectionSlot,
-      (selection) =>
-        selection.onSelectedUpdate(() => {
-          selected = selection.getSelected();
-          action.control.update({ enabled: selected.length === 1 });
-        }),
-      () => action.control.update({ enabled: false }),
-    ),
-  );
-  register(
-    followFirst(slots, todosCollectionSlot, (c) => {
-      collection = c;
-      return () => {
-        collection = undefined;
-      };
-    }),
-  );
 
   const loop = newUpdateLoop(pass, {
     isActive: () => active,
@@ -73,7 +65,11 @@ export const activate: Controller = async (context) => {
   }
 
   function open(id: string): void {
-    const todo = collection?.getTodos().find((t) => t.id === id);
+    const todo = untracked(() =>
+      collection()
+        ?.todos()
+        .find((t) => t.id === id),
+    );
     if (!todo || !active) return;
     close(session);
     const model = createRenameModel(todo.title);
@@ -129,7 +125,8 @@ export const activate: Controller = async (context) => {
 
   register(
     onSubmits(action.control, () => {
-      openOwed = selected.length === 1 ? selected[0] : undefined; // at commit time
+      const ids = selected(); // at commit time (the listener runs untracked)
+      openOwed = ids.length === 1 ? ids[0] : undefined;
       loop.kick();
     }),
   );

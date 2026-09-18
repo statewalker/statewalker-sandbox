@@ -7,6 +7,7 @@ import {
   type Listener,
   newAdapter,
   passthrough,
+  type Readable,
   type Unsubscribe,
 } from "@kernel";
 
@@ -39,10 +40,9 @@ export interface ContactsCollectionView {
 }
 export const contactsCollectionSlot = defineSlot<ContactsCollectionView>("contacts:collection");
 
-/** Presentation, owner `contacts.list`. */
+/** Presentation, owner `contacts.list` (P4: on the kernel substrate). */
 export interface ContactSelectionView {
-  getSelected(): Contact | undefined;
-  onSelectedUpdate(listener: Listener): Unsubscribe;
+  readonly selected: Readable<Contact | undefined>;
 }
 /** One contribution: the selected contact, published by `contacts.list`. */
 export const contactsSelectionSlot = defineSlot<ContactSelectionView>("contacts:selection");

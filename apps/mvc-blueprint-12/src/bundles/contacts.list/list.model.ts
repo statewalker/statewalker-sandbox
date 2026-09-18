@@ -4,14 +4,16 @@ import type {
   ContactListView,
   ContactSelectionView,
 } from "@b/contacts/api";
-import type { ActionContribution, ActionControl, ActionView } from "@kernel";
+import { type ActionContribution, type ActionControl, type ActionView, readable } from "@kernel";
 import { createAction, newChannels, sameRecords, stableGroup } from "@kit/model";
 import { signal, untracked } from "@kit/signals";
 
 export interface ContactListModel {
   readonly view: ContactListView;
-  /** Published to `contacts:selection`; also the details panel's model. */
-  readonly selection: ContactSelectionView & ContactDetailsView;
+  /** Published to `contacts:selection` (P4: a `Readable` on the shared substrate). */
+  readonly selection: ContactSelectionView;
+  /** The details panel's model (the model contract, for renderers). */
+  readonly details: ContactDetailsView;
   readonly edit: { readonly view: ActionView; readonly control: ActionControl };
   readonly editFromMenu: { readonly view: ActionView; readonly control: ActionControl };
   readonly control: {
@@ -57,16 +59,17 @@ export function createContactListModel(): ContactListModel {
     getSelectionActions: () => selectionActions(),
     onSelectionActionsUpdate: channels.channel(selectionActions),
   });
-  const onSelected = channels.channel(selected);
-  const selection = Object.freeze({
-    getSelected: () => selected(),
-    onSelectedUpdate: onSelected,
+  const selection: ContactSelectionView = Object.freeze({
+    selected: readable(selected, () => !disposed),
+  });
+  const details: ContactDetailsView = Object.freeze({
     getContact: () => selected(),
-    onContactUpdate: onSelected,
+    onContactUpdate: channels.channel(selected),
   });
   return Object.freeze({
     view,
     selection,
+    details,
     edit,
     editFromMenu,
     control: Object.freeze({

@@ -12,6 +12,7 @@ import {
   getLogger,
   getSlots,
   isProvided,
+  untracked,
   newRegistry,
   useFields,
 } from "@kernel";
@@ -44,7 +45,7 @@ export const activate: Controller = async (context) => {
 
   const collection = createCollectionModel();
   register(() => collection.dispose());
-  const current = () => collection.view.getTodos();
+  const current = () => untracked(collection.view.todos);
   const loaded = api.list().then(
     (todos) => {
       if (active) collection.control.publishTodos(todos);
