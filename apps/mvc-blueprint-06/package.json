@@ -1,0 +1,32 @@
+{
+  "name": "@statewalker/mvc-blueprint-06",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "R2 — actors: every bundle an actor with a mailbox; no shared context, only messages and state streams.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "typecheck": "tsc --noEmit",
+    "loc": "tsx scripts/loc.ts",
+    "deps": "tsx scripts/deps.ts"
+  },
+  "dependencies": {
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "@vitest/browser-playwright": "^5.0.0",
+    "playwright": "1.58.0",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "^5.0.0"
+  }
+}
