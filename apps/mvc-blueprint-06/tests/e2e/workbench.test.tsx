@@ -165,6 +165,28 @@ describe("workbench.react · e2e", () => {
     expect(perKeystroke).toBeLessThan(2);
   });
 
+  it("Rename a todo: dialog, empty title refused, Rename updates and withdraws", async () => {
+    app = await run((root) => workbenchReact(root, opts));
+    const u = ui(app.root);
+    await waitFor(() => u.titles().length === 3);
+    u.row("Buy milk")?.click();
+    await waitFor(() => button(app?.root as HTMLElement, "Rename…")?.disabled === false);
+    button(app.root, "Rename…")?.click();
+    await waitFor(() => u.dialog() !== null);
+    const input = () =>
+      u.dialog()?.querySelector<HTMLInputElement>('input[aria-label="New title"]');
+    expect(input()?.value).toBe("Buy milk");
+    typeInto(input(), "");
+    button(u.dialog() as HTMLElement, "Rename")?.click();
+    await waitFor(
+      () => u.dialog()?.querySelector("[data-error]")?.textContent === "Title is required",
+    );
+    typeInto(input(), "Buy oat milk");
+    button(u.dialog() as HTMLElement, "Rename")?.click();
+    await waitFor(() => u.dialog() === null);
+    await waitFor(() => u.titles().includes("Buy oat milk"));
+  });
+
   it("a dialog returns focus on withdrawal", async () => {
     app = await run((root) => workbenchReact(root, opts));
     const u = ui(app.root);

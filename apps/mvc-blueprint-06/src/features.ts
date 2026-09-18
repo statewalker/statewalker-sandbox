@@ -11,6 +11,7 @@ import { todosContactsLinkBundle } from "./bundles/todos.contacts-link/index.js"
 import { todosCoreBundle } from "./bundles/todos.core/index.js";
 import { todosEditBundle } from "./bundles/todos.edit/index.js";
 import { todosListBundle } from "./bundles/todos.list/index.js";
+import { todosRenameBundle } from "./bundles/todos.rename/index.js";
 import { todosStatusBundle } from "./bundles/todos.status/index.js";
 import type { FeatureManifest } from "./kernel/index.js";
 
@@ -30,6 +31,7 @@ export const todosFeature = (o: LogicOptions = {}): FeatureManifest => ({
     todosListBundle,
     todosEditBundle({ notifyTimeoutMs: o.notifyTimeoutMs }),
     todosClearCompletedBundle({ notifyTimeoutMs: o.notifyTimeoutMs }),
+    todosRenameBundle,
   ],
 });
 

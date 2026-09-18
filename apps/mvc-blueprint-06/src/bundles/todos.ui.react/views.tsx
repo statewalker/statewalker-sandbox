@@ -8,6 +8,8 @@ import type {
   EditorState,
   ListMsg,
   ListState,
+  RenameMsg,
+  RenameState,
 } from "../todos/api/index.js";
 
 export function ListView({ state, send, dispatch }: ViewProps<ListState, ListMsg>) {
@@ -88,5 +90,25 @@ export function ClearCompletedView({
       <ActionButton action={state.confirm} dispatch={dispatch} />
       <ActionButton action={state.cancel} dispatch={dispatch} />
     </div>
+  );
+}
+
+export function RenameView({ state, send, dispatch }: ViewProps<RenameState, RenameMsg>) {
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        dispatch(state.rename);
+      }}
+    >
+      <input
+        aria-label="New title"
+        value={state.title}
+        onChange={(e) => send({ type: "edit", title: e.target.value })}
+      />
+      {state.error && <p data-error>{state.error}</p>}
+      <ActionButton action={state.rename} dispatch={dispatch} />
+      <ActionButton action={state.cancel} dispatch={dispatch} />
+    </form>
   );
 }

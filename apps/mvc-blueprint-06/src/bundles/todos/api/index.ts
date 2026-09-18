@@ -92,3 +92,18 @@ export interface ClearCompletedState {
 export const clearCompletedKind = defineViewKind<ClearCompletedState, ClearCompletedMsg>(
   "todos:clear-completed",
 );
+
+// --- todos.rename: the Rename… selection action and its dialog ---------------------------------
+export type RenameMsg =
+  | { type: "open" }
+  | { type: "edit"; title: string }
+  | { type: "rename" }
+  | { type: "cancel" };
+export const todosRename = defineAddress<RenameMsg>("todos.rename");
+export interface RenameState {
+  readonly title: string;
+  readonly error?: string;
+  readonly rename: ActionDesc;
+  readonly cancel: ActionDesc;
+}
+export const renameKind = defineViewKind<RenameState, RenameMsg>("todos:rename");
