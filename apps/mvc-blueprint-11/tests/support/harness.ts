@@ -22,6 +22,7 @@ import {
   type KernelSlots,
   loggerAdapter,
 } from "@kernel";
+import { MECHANISM_KEY, type Mechanism } from "@kit/mechanism";
 import { byOrder } from "@kit/slots";
 import {
   contacts,
@@ -79,6 +80,9 @@ export interface Running {
   stop(): Promise<void>;
 }
 
+/** P3: the commit mechanism this test project runs (vitest.config.ts sets it per project). */
+export const mechanism = (process.env.COMMIT_MECHANISM ?? "A") as Mechanism;
+
 export interface StartOptions {
   /** Services set on the context before activation (e.g. `todos:api`). */
   readonly services?: Record<string, unknown>;
@@ -95,7 +99,11 @@ export async function start(
   loggerAdapter.set(context, logger);
   configAdapter.set(
     context,
-    Object.freeze({ "shell:notification-timeout-ms": 60_000, ...options.config }),
+    Object.freeze({
+      "shell:notification-timeout-ms": 60_000,
+      [MECHANISM_KEY]: mechanism,
+      ...options.config,
+    }),
   );
   const stop = (await application(manifest)(context)) ?? (async () => {});
   await settle();

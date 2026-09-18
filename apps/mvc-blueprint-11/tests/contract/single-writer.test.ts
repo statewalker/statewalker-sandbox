@@ -17,11 +17,11 @@ import type {
 import type { ActionControl, ActionView } from "@kernel";
 import { createAction } from "@kit/model";
 import { describe, expect, it } from "vitest";
-import { createContactEditorModel } from "../../src/bundles/contacts.edit/editor.model.js";
+import { createContactEditorModel } from "../../src/bundles/contacts.edit/a/editor.model.js";
 import { createContactListModel } from "../../src/bundles/contacts.list/list.model.js";
 import { createCollectionModel } from "../../src/bundles/todos.core/collection.model.js";
 import { createEditorModel } from "../../src/bundles/todos.edit/editor.model.js";
-import { createListModel } from "../../src/bundles/todos.list/list.model.js";
+import { createListModel } from "../../src/bundles/todos.list/a/list.model.js";
 
 /**
  * Single writer (ARCHITECTURE §7.2), checked two ways.

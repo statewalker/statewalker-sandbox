@@ -46,7 +46,9 @@ const KERNEL_FORBIDDEN = /^@(?:b|kit)\//;
 const ALIEN = /^alien-signals(?:\/|$)/;
 const KIT_SIGNALS = /^@kit\/signals$/;
 const mayImportSignals = (file: string) =>
-  file.startsWith("src/kits/model/") || /\.model\.ts$/.test(file);
+  file.startsWith("src/kits/model/") ||
+  file.startsWith("src/kits/commit/") || // P3: the commit-record action is a model kit
+  /\.model\.ts$/.test(file);
 /** R8: an API module declares; it implements nothing. */
 const IMPLEMENTATION = /\bfunction\b|\bclass\b|\bnew\s+[A-Z]/;
 const API_VALUE_OK = /^@kernel$/;
