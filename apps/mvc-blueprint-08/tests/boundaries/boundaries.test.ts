@@ -136,6 +136,16 @@ describe("boundary suite", () => {
         expect(foreignTech(s.file, i.spec), `${s.file} imports ${i.spec}`).toBe(false);
   });
 
+  it("R10 a bridge touches renderer extension points only: no logic API, no command, no panel", () => {
+    const bridges = all.filter((s) => /^src\/bundles\/bridge\./.test(s.file));
+    expect(bridges.length).toBe(1);
+    for (const s of bridges) {
+      for (const i of s.imports.filter((x) => x.spec.startsWith("@b/")))
+        expect(i.spec, s.file).toMatch(/^@b\/shell\/api\/(?:svelte|solid|vue)$/);
+      expect(s.code, s.file).not.toMatch(/\.\s*(?:provide|call|listen)\s*\(/);
+    }
+  });
+
   describe("negative controls: every rule can fail", () => {
     it("R1", () => {
       const bad = {

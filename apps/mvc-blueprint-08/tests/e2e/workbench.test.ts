@@ -1,7 +1,7 @@
 import { shellCoverage } from "@b/shell/api";
 import { without } from "@kernel";
 import { afterEach, describe, expect, it } from "vitest";
-import { workbench } from "../../src/apps/workbenches.js";
+import { mixedWorkbench, workbench } from "../../src/apps/workbenches.js";
 import { button, click, open, type Page, waitFor } from "./dom.js";
 import {
   contactsEdit,
@@ -102,6 +102,50 @@ describe.each(technologies)("workbench.%s (Chromium)", (tech, manifest) => {
     await waitFor(() => q(page as Page).todoTitles().length === 3);
     expect(page.root.querySelector(`[data-shell="${tech}"]`)).not.toBeNull();
     expect(shellCoverage.get(page.context).getReport().unrendered).toEqual([]);
+    expect(page.errors()).toEqual([]);
+  });
+});
+
+describe("two technologies in one shell: Svelte renderers in the Solid shell (Chromium)", () => {
+  let page: Page | undefined;
+  afterEach(async () => {
+    await page?.stop();
+    page = undefined;
+  });
+
+  it("Contacts (Svelte) and Todos (Solid): (1), the Contacts scenario, hello", async () => {
+    page = await open(mixedWorkbench);
+    await newTodoForContact(page);
+    await contactsEdit(page);
+    const $ = q(page);
+    click($.menuItem("Say hello"));
+    await waitFor(() => page?.root.querySelector("[data-hello-count]")?.textContent === "Count: 1");
+    expect(shellCoverage.get(page.context).getReport().unrendered).toEqual([]);
+  });
+
+  it("Todos basics in the mixed shell", async () => {
+    page = await open(mixedWorkbench);
+    await todosBasics(page);
+  });
+
+  it("(2) the header count in the mixed shell", async () => {
+    page = await open(mixedWorkbench);
+    await headerCount(page);
+  });
+
+  it("removing the Svelte feature leaves its kinds unrendered, not broken", async () => {
+    page = await open(without(mixedWorkbench, "contacts.svelte").manifest);
+    const $ = q(page);
+    await waitFor(() => $.todoTitles().length === 3);
+    await waitFor(
+      () => shellCoverage.get((page as Page).context).getReport().unrendered.length === 1,
+    );
+    expect(
+      shellCoverage
+        .get(page.context)
+        .getReport()
+        .unrendered.map((u) => u.kind),
+    ).toEqual(["contacts:list"]);
     expect(page.errors()).toEqual([]);
   });
 });

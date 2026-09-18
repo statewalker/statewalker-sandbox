@@ -90,7 +90,9 @@ export function moduleOf(path: string): string {
 export const ownerOf = (module: string) =>
   module.startsWith("api:") ? `bundle:${module.slice(4).split("/")[0]}` : module;
 
-export const isUiBundle = (name: string) => /\.ui\.|^shell\.(svelte|solid|vue)$/.test(name);
+/** UI: renderers, shell hosts, and bridges (a renderer-slot adapter between two technologies). */
+export const isUiBundle = (name: string) =>
+  /\.ui\.|^shell\.(svelte|solid|vue)$|^bridge\./.test(name);
 export const isRendererBundle = (name: string) => /\.ui\./.test(name);
 
 export interface Edge {

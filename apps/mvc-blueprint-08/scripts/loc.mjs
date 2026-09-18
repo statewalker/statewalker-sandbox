@@ -16,10 +16,12 @@ function walk(dir) {
 
 /** Non-blank, non-comment lines; string literals are kept (a "//" inside one is not a comment). */
 export function loc(text) {
-  const code = text.replace(/<!--[\s\S]*?-->/g, "").replace(
-    /("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
-    (_m, literal) => literal ?? "",
-  );
+  const code = text
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(
+      /("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
+      (_m, literal) => literal ?? "",
+    );
   return code.split("\n").filter((line) => line.trim() !== "").length;
 }
 
@@ -55,7 +57,7 @@ const kind = (m) =>
         ? "kit"
         : /\/api/.test(m)
           ? "api"
-          : /\.ui\.|^shell\.(svelte|solid|vue)/.test(m)
+          : /\.ui\.|^shell\.(svelte|solid|vue)|^bridge\./.test(m)
             ? "ui"
             : m.startsWith("app")
               ? "app"

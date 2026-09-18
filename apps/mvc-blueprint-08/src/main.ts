@@ -6,6 +6,7 @@ import {
   contactsStandalone,
   type Technology,
   technologies,
+  mixedWorkbench,
   todosStandalone,
   workbench,
 } from "./apps/workbenches.js";
@@ -16,6 +17,8 @@ for (const tech of Object.keys(technologies) as Technology[]) {
   apps[`todos.standalone.${tech}`] = () => todosStandalone(tech);
   apps[`contacts.standalone.${tech}`] = () => contactsStandalone(tech);
 }
+
+apps["workbench.solid+svelte"] = () => mixedWorkbench;
 
 const root = document.getElementById("root");
 if (!root) throw new Error('index.html has no <div id="root">');

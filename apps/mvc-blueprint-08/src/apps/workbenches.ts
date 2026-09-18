@@ -1,3 +1,4 @@
+import { activate as bridgeSvelteInSolid } from "@b/bridge.svelte-in-solid";
 import type { ApplicationManifest, FeatureManifest } from "@kernel";
 import { contacts, hello, todos, todosContacts, todosStatusFeature } from "../features/logic.js";
 import * as solid from "../features/solid.js";
@@ -67,3 +68,27 @@ export function contactsStandalone(tech: Technology): ApplicationManifest {
   const ui: UiFeatures = technologies[tech];
   return { id: `contacts.standalone.${tech}`, features: [ui.shell, contacts, ui.contacts] };
 }
+
+/**
+ * Two technologies in one shell: the Solid shell and Todos renderers, the Svelte Contacts and hello
+ * renderers, and a bridge that turns each Svelte renderer into a Solid one.
+ */
+export const svelteInSolid: FeatureManifest = {
+  id: "bridge.svelte-in-solid",
+  bundles: [{ id: "bridge.svelte-in-solid", activator: bridgeSvelteInSolid }],
+};
+export const mixedWorkbench: ApplicationManifest = {
+  id: "workbench.solid+svelte",
+  features: [
+    technologies.solid.shell,
+    svelteInSolid,
+    todos,
+    todosStatusFeature,
+    technologies.solid.todos,
+    contacts,
+    technologies.svelte.contacts,
+    todosContacts,
+    hello,
+    technologies.svelte.hello,
+  ],
+};
