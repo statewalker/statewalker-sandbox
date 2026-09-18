@@ -5,6 +5,10 @@ import { type ApplicationManifest, application, type Context } from "@kernel";
 
 const apps: Record<string, () => Promise<ApplicationManifest>> = {
   "workbench.react": () => import("./apps/workbench.react.js").then((m) => m.workbenchReact),
+  "workbench.dom": () => import("./apps/workbench.dom.js").then((m) => m.workbenchDom),
+  "todos.standalone": () => import("./apps/todos.standalone.js").then((m) => m.todosStandalone),
+  "contacts.standalone": () =>
+    import("./apps/contacts.standalone.js").then((m) => m.contactsStandalone),
 };
 
 const root = document.getElementById("root");

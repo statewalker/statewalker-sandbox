@@ -1,5 +1,6 @@
 import { without } from "@kernel";
 import { afterEach, describe, expect, it } from "vitest";
+import { workbenchDom } from "../../src/apps/workbench.dom.js";
 import { workbenchReact } from "../../src/apps/workbench.react.js";
 import { button, click, open, type Page, waitFor } from "./dom.js";
 import {
@@ -12,7 +13,10 @@ import {
 } from "./scenarios.js";
 
 /** The same scenarios, per UI technology. Adding a technology adds a row here, nothing else. */
-const technologies = [["react", workbenchReact]] as const;
+const technologies = [
+  ["react", workbenchReact],
+  ["dom", workbenchDom],
+] as const;
 
 describe.each(technologies)("workbench.%s (Chromium)", (_tech, manifest) => {
   let page: Page | undefined;
