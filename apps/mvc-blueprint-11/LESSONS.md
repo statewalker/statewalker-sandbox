@@ -1,159 +1,175 @@
-# P0 — lessons
+# P3 — commit mechanisms: lessons
 
-Prototype **P0** (`apps/mvc-blueprint-04`): ARCHITECTURE.md implemented as written, React **and** plain
-DOM. Status: **DONE** — every acceptance criterion met; the definition held, with the gaps and
-reinterpretations listed below.
+Prototype **P3** (`apps/mvc-blueprint-11`): P0 with the commit mechanism varied three ways on the
+same flows: **A** controller snapshot (P0), **B** form `commit()`, **C** action-bound commit records.
+Status: **DONE**. All three pass the same extended race suite, the P0 suites and the e2e scenarios.
+**Recommendation: C.**
 
-## History (the commits are part of the evidence)
+## History
 
-| Commit | What | Logic-bundle files touched |
-| --- | --- | --- |
-| `88783ab` | kernel, loader, all logic bundles, React host + renderers, node suites, React e2e | (created) |
-| `3452ea1` | **plain DOM**: `kits/dom`, `shell.dom`, `*.ui.dom`, trivial DOM test shell, `workbench.dom`, standalone apps; the same e2e scenarios now run for both | **0** (17 files, all UI / features / apps / tests) |
-| `6767f87` | boundary suite, dependency-graph report, LOC script | 0 |
-| `cac3951` | **Rename a todo** (§14.6) in one commit | new bundle `todos.rename` + 2 API lines |
+| Commit | What |
+| --- | --- |
+| `ae3c34a` | copy of P0 as the base (150 node tests green) |
+| `85b5ffe` | `@kit/mechanism`, `@kit/commit`; `a/ b/ c/` for contacts.edit, todos.rename, todos.list, todos.clear-completed; multi-step Save; the race suite per mechanism |
+| `a26ed11` | contract + single writer on B and C, kit tests, wrong-usage mutants, e2e per mechanism, `?commit=` |
+
+Tests: node **304** (node-A 222: the P0 suite + P3's; node-B 41 and node-C 41: commits, races,
+dispose, late, standalone, removal). Chromium **44** (10 scenarios × React A/B/C + DOM A, 2
+standalone, 2 flush). Stable over 3 consecutive runs.
 
 ## What worked
 
-- **The kernel is small and sufficient**: 344 LOC (context + guard, `useFields`, two bookkeeping
-  subclasses, services, loader, model types). Every bundle runs on `{}`.
-- **Slots' retention makes order irrelevant.** `todos.status` before `todos.core`, renderer before
-  model, model before renderer, a feature activated after the shell — all tested, all work with no
-  code for the case. `followFirst` (a kit helper, 20 lines) was the only pattern needed.
-- **Views as publications** removed every "open/close view" API. Editors, dialogs and details panels
-  are `register` / disposer; the dispose test (every slot empty, unobserved, no command listener,
-  no timer) needed no production-code fix: each controller owns one registry, released in reverse.
-- **The second technology touched zero logic files** (commit `3452ea1`). The DOM binding is 12 lines
-  (`bind` = the contract's subscribe loop); the rest of `kits/dom` is element helpers.
-- **The same e2e scenarios** (DOM-level, technology-neutral markup contract) pass under React, plain
-  DOM and the trivial test shell: 10 scenarios × 2 technologies + 2 standalone runs.
-- **Shared state owned by the service bundle** (`todos.core`) with writes as commands removed 03's
-  `todos:changed` broadcast and every reload; five consumers (list, edit, clear-completed, status,
-  rename) follow one published model.
-- **Extension without edits**: interaction (1) is one 54-LOC bundle; no Contacts file mentions
-  Todos. Rename was a new bundle plus a view kind; existing renderers were reused for the new kind.
-- **Commit-time snapshots** in the submit listener (MODELS.md §12) were enough for every race test:
-  typing after submit, typing while running, two submits in one tick, a selection changed after the
-  link's submit, Clear completed acting on what was done *when asked*.
+1. **All three satisfy ADR-012 on every flow.** The same race suite (15 races + P0's 9 commit tests)
+   passes on A, B and C: typing in the same tick and while running (Save, Rename, Add), a selection
+   changed after Delete, two submits in one tick (one commit for Save/Rename/Delete, two queued for
+   Add), a submit while running (refused visibly / queued), a **multi-step** Save (async validation,
+   then update; typing during step 1 and during step 2 is not committed), cancel during a running
+   save and during a failing one, dispose during step 1 of a save, dispose with three Adds queued.
+   The rule is mechanism-independent, as ADR-012 says.
+2. **C removes the commit plumbing from controllers.** C controllers have 0 `running` writes, 0
+   `??=` folds, 0 `onSubmits`, 0 update loops, 0 `settle` calls and 0 `session !== s` checks
+   (A: 10 / 5 / 10 / 4 / – / 3). Commit-handling code per bundle becomes one `drainCommits(…, on(action,
+   handler), …)` whose handler receives the snapshot as its argument. Controller LOC −23 % vs A.
+3. **C closes P0's same-tick hole by construction.** `running` is derived from "a record is
+   unsettled" and flips inside `submit()`; a second submit in the same tick is refused by the
+   action. Test: `running` is visible in the submit's own tick on B and C, a microtask later on A.
+4. **C makes the wrong things unwritable, not just testable.** Writing `running` is a type error
+   (`CommitControl.update` omits it); forgetting to settle is impossible (the drain settles in
+   `finally`); mutating a snapshot throws (deep-frozen); forgetting the `??=` fold cannot be written.
+5. **C reaches data that is not in a form.** `capture` is any synchronous read: the form's draft
+   (Save, Rename), the list's selection (Delete, Toggle, Edit), another bundle's collection (Clear
+   completed: the ids done *at submit*), another bundle's selection (Rename…). One mechanism for all
+   commits.
+6. **C expresses "running until the dialog is answered" with no writes.** Clear completed's handler
+   awaits the dialog's answer; the record stays unsettled, so the action is `running` (and refuses)
+   exactly as long as the dialog is open. In A this needs a `running: true` in `ask()` and a
+   `running: false` in `close()`.
+7. **Commit order across actions** (R2's "commit time is mailbox order"): `drainCommits` handles the
+   records of all its actions one at a time in `seq` order. Cancel submitted during a running Save
+   is handled after the Save, in every mechanism, without a special case in C.
+8. **Neither B nor C breaks the model contract or the single-writer rule.** The new groups — B's
+   commit group and derived Save state, C's records group and action state — pass MODELS.md §4
+   points 1–8. Single writer holds by splitting the queue into two fields: the records/commit (writer:
+   the view, via `submit`) and the settled cursor (writer: the controller, via `settle(seq)`);
+   `running` is derived from both. Type-level checks over 8 B/C control facets: 0 violations.
 
-## What failed or needed a patch to the definition
+## What failed, or did not deliver
 
-1. **The read-then-set guard vs "set it unless the host already has".** Checking "already set" with
-   the adapter's optional get *is* a read, so the provider's own `set` throws. Needed a non-reading
-   `isProvided(ctx, key)`. The rule is right; the definition must name the non-reading probe.
-2. **`Activator | (() => Promise<Activator>)` is ambiguous at runtime** — both are `() => Promise<…>`.
-   The loader needs a discriminator (`lazy: true`).
-3. **Coverage needs introspection the libraries do not have.** "Contributions nobody renders" is only
-   answerable if the slots bus knows its observers: `KernelSlots` (40 LOC) counts them; the same
-   bookkeeping (`KernelCommands.listened()`) was needed for the dispose test's "no command has a
-   listener". Side effect: shared state no one reads shows as `unobserved` (informational) — the
-   standalone reports flipped from `todos:selection unobserved` to complete when `todos.rename`
-   began to read it, so coverage expectations are part of a feature's cost.
-4. **"Effective `enabled` is derived in the model implementation"** holds only for guards over the
-   same model. Every cross-bundle guard (contacts link ← `contacts:selection`; Rename ←
-   `todos:selection`; Clear completed ← collection counts) is set by the **controller** from a
-   synchronous listener. Still same-tick in process; would not be across a realm.
-5. **Refuse mode has a same-tick hole**: the controller sets `running` a microtask after the submit,
-   so a second submit in the same tick passes the model's guard. Controllers must fold it (`pending
-   ??= snapshot`). Better: the action model flips a pending flag synchronously in `submit()`.
-6. **The definition's Todos API lacked `todos:selection`** (Contacts had its equivalent). Any bundle
-   that contributes a selection action from outside needs it.
-7. **Renderers vs an app's own extension points**: renderers may not read slots, so the list
-   *controller* folds `todos:toolbar-actions` / `*:selection-actions` into its presentation model.
-   Works well, but the definition did not say it.
-8. **Focus return** needs the last focused element, not `activeElement` at dialog time: the opener
-   (Clear completed) is disabled by `running: true` and the browser blurs it. Both hosts track
-   `focusin`.
-9. **Heterogeneous keyed renderer slots** need an existential cast
-   (`as unknown as ReactRenderer<never>`); `ViewKind<M>` types the pair only at the call site.
+1. **B does not stay B.** For one-field forms (Contacts, Rename) B is ≈ 30 lines per form: a commit
+   group, a settled cursor, and a re-implemented Save view whose `running` is derived. The list (four
+   actions, one queued) needed a local generic helper `committing(action, capture, queue)` — which is
+   C's primitive, written privately inside one model. Every B form re-implements an action.
+2. **B has no place for commits whose data is not in a form.** Clear completed acts on another
+   bundle's collection, "Rename…" on another bundle's selection, the contacts link on
+   `contacts:selection`: no form of the committing bundle owns that data. They stay controller
+   snapshots (A). `todos.clear-completed/b` simply re-exports `a`. **An app on B runs two mechanisms.**
+3. **B leaves a dead writer.** The form ORs its pending commit into Save's `running`, but Save's inner
+   `ActionControl.update({ running })` still compiles and is silently masked. C removes the field
+   from the control type.
+4. **No mechanism catches "re-read the draft in the handler" by type.** The controller creates the
+   form, so it can always reach `view.getDraft()`. In all three, only a race test catches it
+   (`tests/mechanisms/wrong-usage.test.ts`). C makes the right value the *argument* of the handler,
+   so the wrong read is a visible detour rather than the default — but it compiles. A lint could not
+   tell it from the legitimate read in Add ("clear the input only if it still holds what was
+   added"), which compares with current state on purpose.
+5. **C does not solve disposal.** Handlers still check `if (!active) return` after each await (5 in
+   C, 6 in A). R3's kernel-enforced "no append after stop" is out of C's reach; C's drain only
+   stops *starting* handlers.
+6. **Clear completed has two entry points in C.** The `todos:clear-completed:ask` command opens the
+   dialog without a record, so the toolbar action is not `running` while that dialog is open; a
+   toolbar submit then records and waits on the open dialog (visible as running). A never-lost
+   outcome, but not identical to A.
 
-## Pros
+## Pros and cons per mechanism
 
-- Everything is mechanically checkable: 8 boundary rules with negative controls, type-level single
-  writer, contract suite on two implementations per kind, a graph with 0 violations.
-- Independence is real: standalone runs load no code of the other app; removal runs log no error.
-- A kernel-only bundle is 80 LOC; the kit is optional and visibly so.
-- The UI layer really is replaceable: 0 logic files changed; the DOM renderers are ~1.35× the React ones (303 vs 224 LOC).
+| | Pros | Cons |
+| --- | --- | --- |
+| A | no new concept; the model contract untouched; controllers see everything | per-controller plumbing (fold, `running` writes, loop); same-tick hole needs `??=`; every wrong usage compiles |
+| B | the draft is captured where it lives; `running` derived; same-tick refusal in the form | per-form re-implementation of an action; no reach beyond the form → two mechanisms per app; a dead `running` writer |
+| C | one kit primitive for every commit; handler gets the snapshot as argument; `running`, refusal, queueing and settlement by construction; least controller code | a new kit (161 LOC); records are one more group on the control facet; the action's control type differs from `ActionControl` (menus and toolbars still take the unchanged `ActionView`) |
 
-## Cons
+## Numbers
 
-- **26 concepts** before a newcomer can write a bundle — more than 03, mostly from structure
-  (feature/application/loader/manifests) and the three model kinds.
-- **Ceremony per interaction**: a feature touches an API module (keys, commands, kinds), a controller,
-  a model, and two renderers. Rename: 11 files / +291 lines for one dialog (212 of them the new
-  bundle, 64 of those a form model that duplicates `todos.edit`'s — private models cannot be shared
-  across bundles without a kit).
-- Controllers are long (todos.list 283 LOC incl. model): snapshots, update loop, running flags, and
-  `active` checks are hand-written in every bundle.
-- Cross-bundle writes as commands mean the owner re-implements a store's write path (patch the
-  collection before resolving).
-- The shell hosts are the largest UI units (≈300 LOC each), and the DOM host re-implements
-  reconciliation (mount/unmount per renderer arrival).
+LOC (non-blank, non-comment; `scripts/loc.mjs` rules) of the four varied bundles.
 
-## Fitness table
-
-| Axis | Measurement | Value | Notes |
+| Bundle | A controller / model | B controller / model | C controller / model |
 | --- | --- | --- | --- |
-| Simplicity | concepts and rules a newcomer must learn | **26** | README lists them (kernel 8, structure 6, models 7, views & commits 5); kit concepts excluded |
-| Simplicity | LOC / files of the minimal no-kit bundle (`hello`) | **80 LOC / 2 files** (logic: activator 73 + API 7) | renderers: React 20 LOC / 2 files, DOM 20 LOC / 1 file; kernel only |
-| Simplicity | Rename a todo: files touched, lines +/− (logic / UI / tests) | **11 files, +291/−11** — logic 4 files +216/−0 · UI 2 files +4/−2 · tests 5 files +71/−9 | logic = new bundle (2 files, +212), API +2 (view kind), features +2; UI = register the existing editor renderer for the new kind; tests include 2 coverage expectations that changed |
-| Separation | boundary suite: rules / violations | **8 rules / 0 violations**, negative control per rule | R1 renderer value imports, R2 no provide/register/call/listen/await in renderers, R3 no UI lib in logic/neutral API, R4 no DOM globals in logic, R5 cross-bundle → API only, R6 kernel imports no bundle/kit, R7 substrate private, R8 API = declarations only |
-| Separation | single-writer violations | **0** | type-level over 14 view facets and 6 control facets (+2 negative controls, `@ts-expect-error`); runtime: 8 view + 6 control facets frozen and writer-free |
-| Separation | domain-logic hits in views | **2** (0 await / .call / .provide / .register / service imports) | the Ctrl-click selection arithmetic in `todos.ui.react` and `todos.ui.dom` — fix: a `toggleSelected(id)` intent on the list model. Other conditionals are rendering choices (line-through, aria-current, error shown) |
-| Independence | cross-bundle edges / to API modules / violations | **53 import sites (35 distinct) / 53 / 0** | fan-out 3–8 modules per bundle (logic bundles 3–8, renderers 4, hosts 4–6); report printed by `pnpm graph` |
-| Independence | standalone runs (Todos, Contacts) | **pass / pass** | headless test shell (node) and trivial DOM test shell (Chromium) |
-| Independence | removal runs: errors / coverage report | **4 runs, 0 error logs** | without `todos-contacts`: `unobserved contacts:selection`; without `todos.status`: complete; without `contacts` (+`todos-contacts`): complete; without `todos` (+`todos.status`, `todos-contacts`): `unobserved contacts:selection` |
-| Composability | interactions (1)–(3) pass | **3/3** under React, DOM and headless | (3) also with Contacts removed and Todos removed |
-| Composability | files changed in Contacts for interaction (1) | **0** | no `contacts.*` file mentions Todos; the link is one bundle in its own feature |
-| Composability | second UI technology: logic files changed / new UI LOC | **0 / 791** | binding kit 78 (the binding itself 12) · renderers 303 (todos 156, contacts 127, hello 20) · host `shell.dom` 304 · trivial DOM test shell 106 |
-| Correctness gate | contract · commit races · dispose · late subscriber · read-then-set | **green** | contract 83 tests (3 kinds × kit + hand-rolled implementations, hello through its bundle, point 9, 7 suite negative controls) + single writer 4; commits 9; dispose 4; late 3; read-then-set 7 + loader 7 |
+| contacts.edit (Save multi-step, Cancel) | 130 / 87 | 128 / 121 | 101 / 92 |
+| todos.rename (Rename…, Rename, Cancel) | 134 / 60 | 132 / 90 | 103 / 60 |
+| todos.list (Add queued, Toggle, Edit, Delete) | 138 / 145 | 108 / 219 | 90 / 171 |
+| todos.clear-completed (ask, Clear, Cancel) | 146 / 25 | 146 / 25 (= A) | 126 / 27 |
+| **total** | **548 / 317 = 865** | **514 / 455 = 969** | **420 / 350 = 770** |
+| kit | loop 77 + action 78 (P0) | same as A | + `@kit/commit` 161 |
 
-Totals: node 150 tests, Chromium 24 tests. LOC (non-test): kernel 344, kits 573, API modules 288,
-logic bundles 1758, UI bundles 1232, features/apps/main 191; tests 2348 (`pnpm loc`).
+Controller: B −6 %, C −23 %. Model: B +44 %, C +10 %. Logic total: B +12 %, C −11 % (+161 kit LOC,
+shared by every bundle). Tests: races 260 LOC (shared by all three), commit-mechanisms 244 (B and C),
+wrong-usage 174 (shared 22 · A 60 · B 41 · C 51).
+
+Constructs in the four controllers:
+
+| | `running` writes | `??=` folds | `onSubmits` | update loops | `settle` | `session !== s` | `if (!active` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A | 10 | 5 | 10 | 4 | – | 3 | 6 |
+| B | 3 (the A-bundle) | 2 | 6 | 4 | 3 (+3 `finally`) | 3 | 5 |
+| C | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
+
+Concepts (P0 counts 26): **A 26**. **B 27** — "form commit + settle" is added, and concepts 24 and
+25 stay for every non-form commit. **C 26** — concept 24 becomes "a commit is a record the action
+captures at submit; a controller drains and settles it" and concept 25 becomes a declaration
+(`queue: true` or refuse); concept 19 ("no payload") becomes "no payload on the view facet". The
+update loop (a kit-only concept) is no longer needed for commits.
+
+Wrong usage (acceptance 3):
+
+| Mutant | A | B | C |
+| --- | --- | --- | --- |
+| read the draft in the pass/handler | compiles; race test catches | compiles; race test catches | compiles; race test catches |
+| `=` for `??=` (second submit overwrites) | compiles; two-submits test catches | cannot be written | cannot be written |
+| forget `running: true` | compiles; refuse test catches (2 saves) | cannot be written | cannot be written (type error) |
+| forget `settle` / `running: false` | compiles; stuck (not mutated here; any "save again" test catches) | compiles; stuck (mutant; a "save again" check catches) | cannot be written (drain settles) |
+| mutate the snapshot | throws for drafts (models freeze them), silent for controller-built snapshots (the list's `{ selection, items }`) | throws (shallow-frozen by the form) | throws (deep-frozen by the kit) |
 
 ## Answers to the points to clarify
 
-- **Queue or disable?** Save (both editors), Clear completed, Toggle/Edit/Delete and Rename
-  **refuse** (`running: true`, button disabled + `aria-busy`); Add **queues**. User-visible
-  difference, pinned by tests: a refused second Save produces one api call and the button is
-  disabled meanwhile; three Adds while the first runs keep the button enabled and land in order with
-  their own titles. Queue costs a snapshot *list* instead of one snapshot; refuse needs the
-  same-tick fold (lesson 5). Recommendation: refuse by default, queue for event-edge actions.
-- **Owner of `todos:collection`?** `todos.core` (the service owner). Simpler: one writer, no
-  change broadcast, no reloads, consumers in any order. Cost: every write is a command in the API
-  (3 commands), handlers must publish before resolving, and `todos.core` does optimistic patching.
-  A domain-controller owner would have put the write path in `todos.list`, making Rename and the
-  contacts link depend on the list bundle's presence — worse for removal.
-- **Was one flat context a problem?** No clash. One reach we could not prevent: `todos:api` is
-  declared in the Todos API (the host must be able to set it), so any bundle *could* read it and
-  write around the owner's commands. That is the only case for scoping seen; a boundary rule ("only
-  the owner resolves `todos:api`") would cover it without scopes. `sys:config` became a second flat
-  namespace inside one service.
-- **Did activation order matter beyond "required first"?** Only for services: a provider before any
-  bundle that reads its key (checked statically from `provides`/`requires`/`optional`, and at
-  runtime by the guard — both tested), and host keys (`shell:root`, `sys:logger`, `sys:config`) set
-  before `application()` (the loader itself reads `sys:logger`). Slots and commands: no.
-- **Was the shell API sufficient?** Yes, plus two services: `shell:root` (where a DOM host renders)
-  and `shell:coverage` (the report). No new extension points. Tab selection is host-local state.
-- **How much of 03's kit was kept?** The signals wrapper, `stableGroup`/channels, the action model
-  (+ a `queue` option), the update loop and `attempt`; `watchSubmits` became `onSubmits`
-  (synchronous, per batch). New small kits: `slots` (`followFirst`), `notify`, `host` (coverage),
-  `react`, `dom`. A newcomer does not need the kit for a first bundle (`hello`), but every real
-  bundle here uses it; without it the list/editor models would roughly double.
-- **What had to be reinterpreted?** See "What failed" 1–9 and the README's choices table: the
-  non-reading probe, the lazy discriminator, coverage via observer counts, cross-bundle guards set
-  by controllers, the missing `todos:selection`, controllers folding action extension points into
-  models, write commands on the owner, `sys:config` for the timeout, `shell:root`.
+- **Which mechanism is simplest to use correctly, and which makes the wrong thing hardest?** C on
+  both counts: the handler receives the commit as its argument, and four of the five wrong usages
+  cannot be written. A makes every wrong usage compile. B sits between, and only inside forms.
+- **Where does queue vs disable fit?** A: in controller code (a list vs `??=`, `running` writes).
+  B: in each form (a list of commits vs one). C: one option on the action (`queue: true`), with
+  `running` derived — the declaration R3 proposed (`whileRunning`), without the log.
+- **Does B or C break the model contract or the single-writer invariant?** No, measured. Both need
+  the queue split into a view-written list and a controller-written settled cursor; a
+  controller-side `take()` that removes the record would have made the list two-writer. B leaves a
+  masked `running` writer on Save's inner control.
+- **Which mechanism does R3's log make unnecessary, if R3 succeeded?** Both A and B. R3's append
+  (clone + freeze at append, outcome records, `running` = "no outcome yet") *is* C, at kernel scope.
+  R3 kept its commit benefits and lost on state; C is exactly the part of R3 worth keeping, per
+  action, in a 161-LOC kit instead of a 340-LOC kernel log. If R3's log were adopted, `@kit/commit`
+  would be a thin view over it.
+- **Is a queued commit ever what a user wants in these forms?** For Add, yes: rapid entry, each
+  title its own todo, input free while earlier ones land. For Save and Rename, no: a second Save of
+  the same record while the first is in flight is either a duplicate or a race on the same record,
+  and a successful Save closes the form the queued commit belonged to. For Delete, no: a queued
+  delete of a later selection would surprise. Refuse for record edits; queue for event-edge inputs —
+  P0's recommendation stands.
+- **Does B require a form facet the view should not have?** No: the commit group and `settle` are
+  on the control facet, and the view keeps `save: ActionView`. But the form must re-implement its
+  Save *action* (to derive `running` and refuse), so B moves an action concern into every form.
 
 ## Recommendation for consolidation
 
-Keep the definition's core — flat context with the guard, slots/commands/registry, bundles/features
-with a loader, views as publications, per-technology renderers, the model contract with facets.
-Amend: (1) name `isProvided` and a manifest `lazy` flag; add `provides/requires/optional` to bundle
-manifests and let the loader check them; (2) make shared state's write path explicit (owner-answered
-commands) and add `todos:selection`; (3) specify that controllers fold an app's own extension points
-into presentation models; (4) define coverage as "unrendered kinds + unobserved slots" and require
-the bus bookkeeping in the kernel; (5) let the action model refuse same-tick resubmits itself; (6)
-allow cross-bundle guards to be controller-set base flags. To cut the concept count and per-feature
-ceremony, look at P3 (commit mechanism in the model) and P2 (controller shape) — the hand-written
-snapshot/loop/`active` pattern is the largest repeated cost here.
+Adopt **C** as the commit mechanism of the definition, and amend ADR-012 from "mechanism open" to:
+
+1. An action's view facet stays payload-free (`submit()`); an accepted submit appends a
+   **commit record** `{ seq, snapshot }` whose snapshot is captured synchronously by the action and
+   deep-frozen. The capture is declared where the action is created (model or controller).
+2. `running` is **derived** (a record is unsettled) and not writable; refuse is the default,
+   `queue: true` declares an event-edge action. The P0 same-tick fold disappears.
+3. A controller consumes records with a serial drain in commit order and never settles by hand.
+   Records (view-written) and the settled cursor (controller-written) are separate fields.
+4. Keep the race suite (15 races + the P0 commit tests) as the correctness gate; it is the only
+   thing that catches a handler that re-reads the draft.
+
+Drop B. Keep A only as the explanation of what C automates. Pair C with a disposal guarantee from
+elsewhere (R3's "no write after stop", or P2's controller shape): C removes the commit plumbing but
+not the `if (!active)` checks.
