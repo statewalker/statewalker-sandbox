@@ -109,7 +109,7 @@ reinterpretations listed below.
 | Correctness gate | contract · commit races · dispose · late subscriber · read-then-set | **green** | contract 83 tests (3 kinds × kit + hand-rolled implementations, hello through its bundle, point 9, 7 suite negative controls) + single writer 4; commits 9; dispose 4; late 3; read-then-set 7 + loader 7 |
 
 Totals: node 150 tests, Chromium 24 tests. LOC (non-test): kernel 344, kits 573, API modules 288,
-logic bundles 1758, UI bundles 1232, features/apps/main 191; tests 2340 (`pnpm loc`).
+logic bundles 1758, UI bundles 1232, features/apps/main 191; tests 2348 (`pnpm loc`).
 
 ## Answers to the points to clarify
 
