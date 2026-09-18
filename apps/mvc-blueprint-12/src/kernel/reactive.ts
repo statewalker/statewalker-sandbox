@@ -76,8 +76,16 @@ export function effect(fn: () => void): () => void {
  * Publishes a read on the graph as a `Readable`. `alive` (the owner's) silences every
  * subscription after the owner's dispose (contract point 8); reads keep returning the last value.
  */
+const onGraph = new WeakSet<object>();
+
+/** Whether `fn` is a `Readable` made by this kernel (so a tracked read of it is glitch-free). */
+export function isReadable(fn: unknown): fn is Readable<unknown> {
+  return typeof fn === "function" && onGraph.has(fn);
+}
+
 export function readable<T>(read: () => T, alive: () => boolean = () => true): Readable<T> {
   const r = (() => read()) as Readable<T>;
+  onGraph.add(r);
   (r as { subscribe: Readable<T>["subscribe"] }).subscribe = (listener) => {
     if (!alive()) return () => {};
     let active = true;
@@ -122,4 +130,17 @@ export function fromChannel<T>(
       off();
     },
   };
+}
+
+/**
+ * OPT-IN WITHOUT A SECOND CONTRACT (P4, point to clarify 2): follow any P0-shaped group
+ * (`getX`, `onXUpdate`) as a tracked read. If `get` is a kernel `Readable` (its owner opted in),
+ * it is used as is — glitch-free; otherwise it is bridged with `fromChannel`.
+ */
+export function track<T>(
+  get: () => T,
+  on: (listener: Listener) => Unsubscribe,
+): { readonly read: () => T; stop(): void } {
+  if (isReadable(get)) return { read: get as Readable<T>, stop: () => {} };
+  return fromChannel(get, on);
 }

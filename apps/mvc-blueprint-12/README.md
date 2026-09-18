@@ -1,32 +1,65 @@
-# @statewalker/mvc-blueprint-04 — prototype **P0**
+# @statewalker/mvc-blueprint-12 — prototype **P4**
 
-**P0 — the defined architecture**, implemented as written: kernel, bundles, features, loader, the
-three model kinds, controllers as activators, views as publications, and per-technology renderers
-for **React and plain DOM**, with the full benchmark scenario. It is the yardstick the other
-prototypes are measured against.
+**P4 — one shared reactive substrate across bundles.** A variation of P0 (`apps/mvc-blueprint-04`,
+copied as the base in the first commit): the kernel owns one reactive graph, and shared state
+(`todos:collection`, `todos:selection`, `contacts:selection`) is published on it as a `Readable<T>`,
+so a consumer's `computed` — or an action's `when` guard — reads another bundle's state directly
+instead of copying it through `getX`/`onXUpdate` listeners. It breaks ADR-008 on purpose.
 
 - Brief (with the lessons section): umbrella repository,
-  [`docs/sandbox-apps/architecture/prototypes/P0.md`](../../../../../docs/sandbox-apps/architecture/prototypes/P0.md)
-  (`statewalker/umbrella`, path `docs/sandbox-apps/architecture/prototypes/P0.md`).
-- The definition it implements: `docs/sandbox-apps/architecture/ARCHITECTURE.md` and
-  `docs/sandbox-apps/MODELS.md` in the same repository.
+  [`docs/sandbox-apps/architecture/prototypes/P4.md`](../../../../../docs/sandbox-apps/architecture/prototypes/P4.md)
+  (`statewalker/umbrella`, path `docs/sandbox-apps/architecture/prototypes/P4.md`).
+- The base it varies: [`../mvc-blueprint-04/README.md`](../mvc-blueprint-04/README.md) (P0).
 - Full lessons and fitness numbers: [`LESSONS.md`](LESSONS.md).
 
 ```
 pnpm dev             # http://localhost:5173/?app=workbench.react | workbench.dom | todos.standalone | contacts.standalone
-pnpm test            # node: kernel, contract, single writer, commits, dispose, late, standalone, removal, boundaries (+ graph report)
-pnpm test:browser    # Chromium: the same e2e scenarios under React and plain DOM, standalone runs, flush per technology
-pnpm typecheck       # also compiles the type-level single-writer checks
+pnpm test            # node: P0's suites + glitch (P4), interop, substrate reach
+pnpm test:glitch-p0  # the SAME glitch test against P0's sources (../mvc-blueprint-04, read-only) — reports, does not gate
+pnpm test:browser    # Chromium: the e2e scenarios under React and plain DOM (renderers unchanged from P0)
+pnpm typecheck
 pnpm build
-pnpm loc [prefix…]   # LOC per module (non-blank, non-comment); e.g. pnpm loc src/bundles/hello
+pnpm loc [prefix…]
 ```
+
+## What P4 changes relative to P0
+
+| Where | Change |
+| --- | --- |
+| `src/kernel/reactive.ts` (new) | The substrate: `signal`, `computed`, `effect`, `batch`, `untracked` (moved from `kits/signals`), and **`Readable<T>`** — a branded tracked read `r()` plus the model contract's channel `r.subscribe(listener)`; `readable(read, alive)` publishes a read; `fromChannel(get, on)` bridges a producer that is not on the graph; `track(get, on)` follows a P0-shaped group (`getX`/`onXUpdate`) directly when its getter is a kernel `Readable`, through the bridge otherwise (the opt-in experiment, `tests/interop/optional.test.ts`). The only `alien-signals` import. |
+| `kits/signals` | Re-exports the kernel's functions (the kit and `*.model.ts` files read as in P0). |
+| `kits/slots` | `firstOf(slots, decl)` — the first contribution of a one-contribution slot as a tracked read (arrival, replacement, withdrawal). |
+| `todos/api`, `contacts/api` | `TodosCollectionView { todos, counts }`, `TodosSelectionView { selected }`, `ContactSelectionView { selected }` are `Readable`s (type import from `@kernel`; no library import). |
+| `todos.core`, `todos.list`, `contacts.list` | Publish those facets with `readable(...)`. `todos.list`'s items are **derived** from the collection (no `publishItems`); `contacts.list`'s details panel keeps a contract facet of its own. |
+| `todos.status` | Header text = derived group over `collection()?.counts()`; no listener. |
+| `todos.contacts-link`, `todos.rename`, `todos.clear-completed` | `enabled` is **derived in the action model** (`when:` over another bundle's `Readable`) — the three controller-set cross-bundle guards of P0 (lesson 4) are gone. Commit-time reads call the `Readable` in the submit listener (which runs untracked). |
+| `todos.edit` | Reads the collection through `firstOf`. |
+| renderers, hosts, `hello`, `contacts:collection` | **Unchanged.** `contacts:collection` stays on `getX`/`onXUpdate` — a shared-state facet not on the substrate, next to ones that are. |
+
+New tests: `tests/glitch/` (black-box, runs against P0 and P4), `tests/interop/` (plain-listener
+consumer, plain producer via `fromChannel`, the glitch at the bridge, a `MessageChannel` realm hop,
+the opt-in-without-a-second-contract experiment),
+`tests/boundaries/substrate.test.ts` (which bundles reach the library, P0 vs P4), and two contract
+runs on `Readable`s (`todos:selection`, a hand-rolled producer through `fromChannel`).
+
+## What a newcomer must learn — 28 concepts and rules
+
+P0's 26 (see [P0's README](../mvc-blueprint-04/README.md)), with rule 21 (**shared state**) changed
+to "published by its single owner **as `Readable`s on the kernel substrate**", plus:
+
+27. **`Readable` / tracked read** — calling a `Readable` inside a `computed`, an `effect` or an
+    action's `when` subscribes; outside (a submit listener, a command handler, an async pass) it is a
+    plain read. Derive cross-bundle values; never copy them with a listener.
+28. **The bridge** — a producer not on the graph (a listener set, a remote proxy, another realm)
+    publishes through `fromChannel`; derivations stay correct but are glitch-free only on the graph.
 
 ## Layout
 
 ```
 src/kernel/               context + adapters (read-then-set guard), useFields, KernelSlots/KernelCommands
-                          (bookkeeping for coverage and dispose tests), logger/config, model-kind types, loader
-src/kits/                 OPTIONAL helpers: signals (alien-signals, private), model (createAction, stableGroup,
+                          (bookkeeping for coverage and dispose tests), logger/config, model-kind types, loader,
+                          reactive.ts (P4: the shared substrate, Readable, fromChannel)
+src/kits/                 OPTIONAL helpers: signals (re-exports the kernel substrate), model (createAction, stableGroup,
                           channels, createValue, onSubmits), loop (update loop, attempt), slots (followFirst,
                           byOrder), notify (owner-published notifications), host (coverage), react (useModel),
                           dom (bind — the DOM binding)
@@ -44,6 +77,7 @@ src/bundles/
 src/features/             logic.ts, react.ts, dom.ts — feature manifests
 src/apps/                 workbench.react, workbench.dom, todos.standalone, contacts.standalone
 tests/                    kernel/ contract/ commits/ dispose/ late/ standalone/ removal/ boundaries/ e2e/ support/
+                          glitch/ interop/ (P4)
 scripts/loc.mjs           the LOC script (§13)
 ```
 
@@ -51,63 +85,7 @@ Every importable module is a folder with an `index.ts`: `@kernel`, `@kit/<name>`
 Only `src/features/*` imports bundle implementations (activators); bundles import the kernel, kits and
 API modules only (the boundary suite enforces it).
 
-## What a newcomer must learn — 26 concepts and rules
-
-Kernel (8)
-
-1. **Context** — one flat object per application; namespaced keys (`sys:*`, `<bundle>:*`); services, never data.
-2. **Adapter** — a typed key; only kernel `sys:*` adapters have factories; a bundle service is declared
-   (key + type) in its API module and set by its provider (`isProvided` → `set`).
-3. **Read-then-set throws** — set a key before anyone reads it (a `find` that returns nothing is a read too).
-4. **`useFields`** — resolve every dependency in one place, at the top of the activator.
-5. **Slot** — an extension point for what *exists*; `provide`/`register` returns a disposer; `observe`
-   calls back at once (retained, so any arrival order works). Plain or keyed.
-6. **Command** — a typed request with a response for what *happens*; declared by the bundle that
-   answers it; not retained (never fire another bundle's command while activating).
-7. **Logger** — a child logger per bundle; a failure is logged at `warn` (it is owner state), only a
-   broken invariant at `error`.
-8. **`sys:config`** — plain host settings (e.g. `shell:notification-timeout-ms`).
-
-Structure (6)
-
-9. **Bundle** — an activator plus at most one API module; imports the kernel, kits and API modules only.
-10. **API module** — declarations only: keys, slot and command declarations, model interfaces, view kinds.
-11. **Controller** — `(context) => Promise<cleanup | void>`; publishes, listens, returns the reverse;
-    after every `await` it checks it is still active.
-12. **Feature** — bundles + required features; **application** — features; an application is a controller.
-13. **Loader rules** — required features first, bundles in order, rollback on a throwing activator,
-    reverse cleanup; missing feature / cycle / mis-ordered provider is an error before activation.
-14. **Manifest service declarations** (P0 addition) — `provides` / `requires` / `optional` service keys,
-    checked statically by the loader; `lazy: true` for an activator obtained by `import()`.
-
-Models (7)
-
-15. **The model contract** — coarse groups, `getX()` + `onXUpdate(() => void)`, the nine timing points.
-16. **Two facets** — `view` (what a renderer gets) and `control` (what the controller keeps), both frozen.
-17. **Presentation** — written by the controller only.
-18. **Form / input** — written by the view field by field; the controller only seeds or resets it whole.
-19. **Action** — the view calls `submit()`; the controller describes it (`label`, `running`, base
-    `enabled`); no payload; effective `enabled` derived synchronously.
-20. **Single writer** — every field has exactly one writer, fixed by its kind.
-21. **Shared state** — published by its single owner as a model in a slot; changed only through a
-    command the owner answers (`todos:add/update/remove`, `contacts:update`).
-
-Views and commits (5)
-
-22. **View kind + publication** — a view exists exactly as long as its contribution to `shell:panels` /
-    `shell:dialogs` (+ menu, header, notifications).
-23. **Renderer** — per technology, keyed by kind; reads view facets, calls view-facet members; never
-    publishes, calls a command or reaches a service.
-24. **Commit time** — a commit acts on the state captured synchronously in the submit listener.
-25. **Refuse or queue** — a submit while running is visibly refused (`running: true`) or queued and
-    honoured; never dropped.
-26. **Errors are owner state** — form errors / outcome lines; user messages are notifications the owner
-    publishes and withdraws; the **coverage report** lists what no one renders or observes.
-
-Kit-only concepts (not counted; `hello` uses none): signals, `stableGroup`, the update loop,
-`onSubmits`, `followFirst`, the notifier.
-
-## Choices where the definition was ambiguous
+## Choices where the definition was ambiguous (inherited from P0)
 
 | # | Question | Choice |
 | --- | --- | --- |
@@ -122,6 +100,6 @@ Kit-only concepts (not counted; `hello` uses none): signals, `stableGroup`, the 
 | 9 | Notification timeout "injected by tests" | `sys:config["shell:notification-timeout-ms"]`, read at the top of the owner's activator; `kits/notify` clears the timer on withdrawal. |
 | 10 | Where the DOM element comes from | `shell:root` (declared in `shell/api`, set by the application entry / test before activation, `requires`d by the DOM-based hosts). |
 | 11 | Menu group order | Unspecified → alphabetical by group key; items by `order` then `id`. |
-| 12 | Cross-bundle action guards | "`enabled` derived in the model" is impossible when the data lives in another bundle's model (contacts link ← `contacts:selection`, Rename ← `todos:selection`, Clear completed ← collection counts): the controller sets the base flag from a synchronous listener — still same-tick. |
+| 12 | Cross-bundle action guards (P0) — **P4: derived in the action model via `when` over `Readable`s** | "`enabled` derived in the model" is impossible when the data lives in another bundle's model (contacts link ← `contacts:selection`, Rename ← `todos:selection`, Clear completed ← collection counts): the controller sets the base flag from a synchronous listener — still same-tick. |
 | 13 | MODELS.md §6 rebase / conflict, editor refcount | Not built: the benchmark has no concurrent writer of an open record; one editor per app at a time. |
 | 14 | `todos.status` removal | `todos.status` is its own feature (requires `todos`), so it can be removed alone. `hello` is in both workbenches. |
