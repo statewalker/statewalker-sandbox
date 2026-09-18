@@ -1,6 +1,6 @@
 import type { HelloView } from "@b/hello/api";
 import { panelsSlot } from "@b/shell/api";
-import { type ActionState, type Context, getSlots, loggerAdapter } from "@kernel";
+import { type ActionState, type Context, fromChannel, getSlots, loggerAdapter } from "@kernel";
 import { createAction, createValue } from "@kit/model";
 import { describe, expect, it } from "vitest";
 import { createContactEditorModel } from "../../src/bundles/contacts.edit/editor.model.js";
@@ -122,6 +122,46 @@ modelContract("input · todo list selection, derived from items (kit)", {
       changeEqual: () => m.view.select([...m.view.getSelection()]),
       changeOther: () => m.view.setNewTitle(`x${Math.random()}`),
       dispose: m.dispose,
+    };
+  },
+});
+
+// ── P4: shared state as a `Readable` — the contract holds at the bundle boundary ─────────────
+modelContract("shared · todos:selection Readable, derived (P4, kernel substrate)", {
+  make() {
+    const items = [
+      { id: "a", title: "a", done: false },
+      { id: "b", title: "b", done: false },
+    ];
+    const m = createListModel(() => items);
+    let flip = false;
+    return {
+      read: m.selection.selected,
+      subscribe: m.selection.selected.subscribe,
+      change: () => {
+        flip = !flip;
+        m.view.select([flip ? "a" : "b"]);
+      },
+      changeEqual: () => m.view.select([...m.selection.selected()]),
+      changeOther: () => m.view.setNewTitle(`x${Math.random()}`),
+      dispose: m.dispose,
+    };
+  },
+});
+
+modelContract("shared · hand-rolled producer bridged by fromChannel (P4)", {
+  make() {
+    const m = plainPresentation({ count: 0 });
+    const bridge = fromChannel(m.view.get, m.view.on);
+    return {
+      read: bridge.read,
+      subscribe: bridge.read.subscribe,
+      change: () => m.control.publish({ count: m.view.get().count + 1 }),
+      changeEqual: () => m.control.publish({ ...m.view.get() }),
+      dispose: () => {
+        bridge.stop();
+        m.dispose();
+      },
     };
   },
 });
