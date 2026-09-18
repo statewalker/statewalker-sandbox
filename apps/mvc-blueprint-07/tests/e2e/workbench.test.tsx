@@ -192,3 +192,21 @@ describe("standalone and removal in the browser", () => {
     a.host.remove();
   });
 });
+
+describe("Rename a todo (§14.6)", () => {
+  it("Rename… opens a dialog; Rename updates the title and withdraws it", async () => {
+    app = await mount(workbenchReact);
+    await waitFor(() => todoTitles(cur()).length === 3, "todos");
+    await click(row(app, "Buy milk"), "Buy milk");
+    await click(
+      app.host.querySelector('[aria-label="Selection actions"]') as HTMLElement,
+      "Rename…",
+    );
+    const d = () => cur().host.querySelector('[role="dialog"]') as HTMLElement | null;
+    await waitFor(() => d() !== null, "rename dialog");
+    typeInto(input(d() as HTMLElement, "New title"), "Buy oat milk");
+    await click(d() as HTMLElement, "Rename");
+    await waitFor(() => d() === null, "dialog withdrawn");
+    expect(todoTitles(app)).toContain("Buy oat milk");
+  });
+});

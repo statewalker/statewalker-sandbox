@@ -111,3 +111,14 @@ export interface ClearCompletedView {
   readonly cancel: ActionView;
 }
 export const clearCompletedKind = defineViewKind<ClearCompletedView>("todos:clear-completed");
+
+export interface RenameView {
+  getDraft(): TodoDraft;
+  onDraftUpdate(listener: () => void): () => void;
+  getStatus(): { readonly error?: string };
+  onStatusUpdate(listener: () => void): () => void;
+  editTitle(title: string): void;
+  readonly rename: ActionView;
+  readonly cancel: ActionView;
+}
+export const renameKind = defineViewKind<RenameView>("todos:rename");

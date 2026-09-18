@@ -9,6 +9,7 @@ import { activate as todosContactsLink } from "./bundles/todos.contacts-link/ind
 import { activate as todosCore } from "./bundles/todos.core/index.js";
 import { activate as todosEdit } from "./bundles/todos.edit/index.js";
 import { activate as todosList } from "./bundles/todos.list/index.js";
+import { activate as todosRename } from "./bundles/todos.rename/index.js";
 import { activate as todosStatus } from "./bundles/todos.status/index.js";
 import type { Controller } from "./kernel/context.js";
 import type { BundleManifest, FeatureManifest } from "./kernel/loader.js";
@@ -38,6 +39,7 @@ export const todos: FeatureManifest = {
     bundle("todos.edit", todosEdit),
     bundle("todos.clear-completed", todosClearCompleted),
     bundle("todos.status", todosStatus),
+    bundle("todos.rename", todosRename),
   ],
 };
 export const todosReact: FeatureManifest = {
