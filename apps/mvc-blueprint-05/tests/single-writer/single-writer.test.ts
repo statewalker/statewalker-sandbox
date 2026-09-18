@@ -6,13 +6,13 @@
 import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import { shellPanels } from "../../src/bundles/shell/api/index.ts";
 import { todosCollection } from "../../src/bundles/todos/api/index.ts";
-import type { Msg, SliceDef, Store, UpdateEnv } from "../../src/kernel/index.ts";
 import {
   contactsFeature,
   shellFeature,
   todosContactsFeature,
   todosFeature,
 } from "../../src/features.ts";
+import type { Msg, SliceDef, Store, UpdateEnv } from "../../src/kernel/index.ts";
 import { type Harness, start, until } from "../support/harness.ts";
 
 let h: Harness;
@@ -48,9 +48,9 @@ describe("single writer", () => {
   it("state and derived views are frozen: neither another update nor a view can write them", async () => {
     h = await start(all);
     await until(() => h.store.select(todosCollection).length === 1);
-    const collection = h.store.select(todosCollection)[0];
+    const [todo] = h.store.select(todosCollection)[0]?.todos ?? [];
     expect(() => {
-      (collection?.todos as unknown as { title: string }[])[0].title = "hacked";
+      (todo as { title: string }).title = "hacked";
     }).toThrow(TypeError);
     const panel = h.store.select(shellPanels)[0];
     expect(() => {
@@ -61,8 +61,8 @@ describe("single writer", () => {
       id: "intruder",
       init: () => 0,
       update: (s, msg, { select }) => {
-        if (msg.type === "attack")
-          (select(todosCollection)[0]?.todos as unknown as { done: boolean }[])[0].done = true;
+        const [first] = select(todosCollection)[0]?.todos ?? [];
+        if (msg.type === "attack") (first as { done: boolean }).done = true;
         return s;
       },
     });

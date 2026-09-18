@@ -7,6 +7,7 @@ import type { Context } from "./context.ts";
 import { getLogger } from "./logger.ts";
 
 export type Cleanup = () => void | Promise<void>;
+// biome-ignore lint/suspicious/noConfusingVoidType: the normative signature (ARCHITECTURE §8) allows returning nothing.
 export type Activator = (context: Context) => Promise<void | Cleanup>;
 
 export interface BundleManifest {

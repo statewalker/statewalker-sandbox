@@ -11,8 +11,8 @@ import {
   getStore,
   type LogRecord,
   type Msg,
-  setLogger,
   type Store,
+  setLogger,
 } from "../../src/kernel/index.ts";
 
 export interface Harness {

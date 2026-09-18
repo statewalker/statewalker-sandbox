@@ -1,5 +1,5 @@
 /** A headless "user": reads what a host would render (points) and does what a view would (dispatch). */
-import type { ActionItem, Store } from "../../src/kernel/index.ts";
+
 import {
   type Dialog,
   type MenuItem,
@@ -10,6 +10,7 @@ import {
   shellNotifications,
   shellPanels,
 } from "../../src/bundles/shell/api/index.ts";
+import type { ActionItem, Store } from "../../src/kernel/index.ts";
 
 export const user = (store: Store) => {
   const panel = <P>(id: string) =>

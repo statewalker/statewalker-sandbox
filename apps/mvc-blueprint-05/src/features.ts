@@ -1,5 +1,5 @@
 /** Logic feature manifests (technology-neutral). UI features are in `features.react.ts`. */
-import type { FeatureManifest } from "./kernel/index.ts";
+
 import { activate as contactsCore } from "./bundles/contacts.core/index.ts";
 import { activate as contactsEdit } from "./bundles/contacts.edit/index.ts";
 import { activate as contactsList } from "./bundles/contacts.list/index.ts";
@@ -11,6 +11,7 @@ import { activate as todosCore } from "./bundles/todos.core/index.ts";
 import { activate as todosEdit } from "./bundles/todos.edit/index.ts";
 import { activate as todosList } from "./bundles/todos.list/index.ts";
 import { activate as todosStatus } from "./bundles/todos.status/index.ts";
+import type { FeatureManifest } from "./kernel/index.ts";
 
 export const shellFeature: FeatureManifest = {
   id: "shell",

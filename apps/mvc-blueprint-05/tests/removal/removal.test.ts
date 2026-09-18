@@ -5,8 +5,8 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  contactsListIntents,
   type ContactsListProps,
+  contactsListIntents,
 } from "../../src/bundles/contacts/api/index.ts";
 import { type TodosListProps, todosListIntents } from "../../src/bundles/todos/api/index.ts";
 import {

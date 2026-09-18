@@ -9,8 +9,8 @@ import {
 } from "../../src/bundles/contacts/api/index.ts";
 import {
   type TodoEditorProps,
-  todoEditorIntents,
   type TodosListProps,
+  todoEditorIntents,
 } from "../../src/bundles/todos/api/index.ts";
 import {
   contactsFeature,

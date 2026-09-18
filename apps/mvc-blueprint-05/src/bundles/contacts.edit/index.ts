@@ -11,7 +11,6 @@ import {
   next,
   useFields,
 } from "../../kernel/index.ts";
-import { shellMenu, shellNotify, shellPanels } from "../shell/api/index.ts";
 import {
   type Contact,
   type ContactReply,
@@ -23,6 +22,7 @@ import {
   contactsSelection,
   contactsSelectionActions,
 } from "../contacts/api/index.ts";
+import { shellMenu, shellNotify, shellPanels } from "../shell/api/index.ts";
 
 interface Session {
   readonly id: number;

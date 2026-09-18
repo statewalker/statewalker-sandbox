@@ -9,8 +9,8 @@ export type Getter<T> = (context: Context) => T;
 const reads = new WeakMap<Context, Set<string>>();
 
 function markRead(context: Context, key: string): void {
-  let set = reads.get(context);
-  if (!set) reads.set(context, (set = new Set()));
+  const set = reads.get(context) ?? new Set<string>();
+  reads.set(context, set);
   set.add(key);
 }
 

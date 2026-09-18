@@ -6,7 +6,6 @@ import {
   getStore,
   useFields,
 } from "../../kernel/index.ts";
-import { shellPanels } from "../shell/api/index.ts";
 import {
   type Contact,
   contactDetailsKind,
@@ -16,6 +15,7 @@ import {
   contactsSelection,
   contactsSelectionActions,
 } from "../contacts/api/index.ts";
+import { shellPanels } from "../shell/api/index.ts";
 
 interface ListState {
   readonly selectedId?: string;

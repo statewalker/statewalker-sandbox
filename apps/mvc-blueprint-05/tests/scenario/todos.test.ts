@@ -1,14 +1,14 @@
 /** §14.3 Todos behaviour, headless. */
 import { afterEach, describe, expect, it } from "vitest";
 import type {
+  ClearCompletedProps,
   TodoEditorProps,
   TodosListProps,
-  ClearCompletedProps,
 } from "../../src/bundles/todos/api/index.ts";
-import { todosListIntents, todoEditorIntents } from "../../src/bundles/todos/api/index.ts";
+import { todoEditorIntents, todosListIntents } from "../../src/bundles/todos/api/index.ts";
 import { createMemTodoApi } from "../../src/bundles/todos.core/mem-api.ts";
 import { shellFeature, todosFeature } from "../../src/features.ts";
-import { type Harness, gate, start, until } from "../support/harness.ts";
+import { gate, type Harness, start, until } from "../support/harness.ts";
 import { user } from "../support/user.ts";
 
 let h: Harness;

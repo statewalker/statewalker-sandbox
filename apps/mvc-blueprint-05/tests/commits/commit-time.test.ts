@@ -17,9 +17,9 @@ import {
   todosListIntents,
 } from "../../src/bundles/todos/api/index.ts";
 import { createMemTodoApi } from "../../src/bundles/todos.core/mem-api.ts";
-import type { Effect, Msg } from "../../src/kernel/index.ts";
 import { contactsFeature, shellFeature, todosFeature } from "../../src/features.ts";
-import { type Harness, gate, start, until } from "../support/harness.ts";
+import type { Effect, Msg } from "../../src/kernel/index.ts";
+import { gate, type Harness, start, until } from "../support/harness.ts";
 import { user } from "../support/user.ts";
 
 let h: Harness;
