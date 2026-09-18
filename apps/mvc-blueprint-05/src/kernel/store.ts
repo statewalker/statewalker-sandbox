@@ -196,7 +196,7 @@ export function createStore(log: Logger): Store {
     } finally {
       evaluating.delete(point.id);
     }
-    const frozen = Object.freeze(out);
+    const frozen = deepFreeze(out);
     memo.set(point.id, frozen);
     return frozen as readonly T[];
   };
