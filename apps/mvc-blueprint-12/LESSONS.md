@@ -1,159 +1,178 @@
-# P0 — lessons
+# P4 — lessons
 
-Prototype **P0** (`apps/mvc-blueprint-04`): ARCHITECTURE.md implemented as written, React **and** plain
-DOM. Status: **DONE** — every acceptance criterion met; the definition held, with the gaps and
-reinterpretations listed below.
+Prototype **P4** (`apps/mvc-blueprint-12`): P0 with **one shared reactive substrate** across
+bundles. The kernel owns the graph (`kernel/reactive.ts`, alien-signals 3.2.1); `todos:collection`,
+`todos:selection` and `contacts:selection` are published as `Readable<T>` (a tracked read plus the
+model contract's channel `.subscribe`); consumers derive from them with `computed` or an action's
+`when` guard. Status: **DONE** — every acceptance criterion met. The verdict is negative on the
+headline idea and positive on a narrow opt-in variant (see Recommendation).
 
-## History (the commits are part of the evidence)
+## History
 
-| Commit | What | Logic-bundle files touched |
+| Commit | What |
+| --- | --- |
+| `d04e49d` | copy of P0 (`mvc-blueprint-04`) as the base |
+| `f5280fa` | the substrate in the kernel, `Readable` facets, six consumers converted, glitch test (runs on P0 and P4), substrate-reach report |
+| `b5f44ea` | interop tests (plain consumer, plain producer, glitch at the bridge, realm hop), contract suite on `Readable`s |
+| `2a6fa88` | `track(get, on)` — the substrate as an opt-in behind P0's contract; README |
+
+## The glitch test (acceptance 2)
+
+`tests/glitch/glitch.test.ts` is black-box: it reads only published view models (what a renderer
+reads), so the same file runs against P0's sources (`pnpm test:glitch-p0`, aliases pointed at
+`../mvc-blueprint-04`, read-only) and against P4. In every notification of every observed model it
+checks four cross-bundle invariants — I1 header "N open todos" = open rows; I2 contacts link enabled
+= a contact selected; I3 Rename enabled = exactly one row selected; I4 Clear completed enabled = some
+row done — plus an intra-model control (I0). Scenario: selections, toggle, add, delete of a selected
+row, clear completed, four contact selections.
+
+| Observers subscribed | P0 | P4 |
 | --- | --- | --- |
-| `88783ab` | kernel, loader, all logic bundles, React host + renderers, node suites, React e2e | (created) |
-| `3452ea1` | **plain DOM**: `kits/dom`, `shell.dom`, `*.ui.dom`, trivial DOM test shell, `workbench.dom`, standalone apps; the same e2e scenarios now run for both | **0** (17 files, all UI / features / apps / tests) |
-| `6767f87` | boundary suite, dependency-graph report, LOC script | 0 |
-| `cac3951` | **Rename a todo** (§14.6) in one commit | new bundle `todos.rename` + 2 API lines |
+| late (after activation — as a renderer mounts) | 0 violations / 41 checks | 0 / 41 |
+| early (each model the moment it is published — a bundle activated before the deriving ones) | **11 violations / 42 checks** (I3 ×8, I2 ×3) | **0 / 42** |
+
+So P0 **does** glitch, but only for an observer that subscribed to the owner before the bundle that
+derives from it (the controller-set guard is written from a listener that runs after the early
+observer's). Renderers mount late, so no rendered frame in P0's e2e ever showed it, and React batches
+anyway. I1 and I4 never glitched even early: the header item and the Clear-completed action only exist
+after their controllers subscribed.
 
 ## What worked
 
-- **The kernel is small and sufficient**: 344 LOC (context + guard, `useFields`, two bookkeeping
-  subclasses, services, loader, model types). Every bundle runs on `{}`.
-- **Slots' retention makes order irrelevant.** `todos.status` before `todos.core`, renderer before
-  model, model before renderer, a feature activated after the shell — all tested, all work with no
-  code for the case. `followFirst` (a kit helper, 20 lines) was the only pattern needed.
-- **Views as publications** removed every "open/close view" API. Editors, dialogs and details panels
-  are `register` / disposer; the dispose test (every slot empty, unobserved, no command listener,
-  no timer) needed no production-code fix: each controller owns one registry, released in reverse.
-- **The second technology touched zero logic files** (commit `3452ea1`). The DOM binding is 12 lines
-  (`bind` = the contract's subscribe loop); the rest of `kits/dom` is element helpers.
-- **The same e2e scenarios** (DOM-level, technology-neutral markup contract) pass under React, plain
-  DOM and the trivial test shell: 10 scenarios × 2 technologies + 2 standalone runs.
-- **Shared state owned by the service bundle** (`todos.core`) with writes as commands removed 03's
-  `todos:changed` broadcast and every reload; five consumers (list, edit, clear-completed, status,
-  rename) follow one published model.
-- **Extension without edits**: interaction (1) is one 54-LOC bundle; no Contacts file mentions
-  Todos. Rename was a new bundle plus a view kind; existing renderers were reused for the new kind.
-- **Commit-time snapshots** in the submit listener (MODELS.md §12) were enough for every race test:
-  typing after submit, typing while running, two submits in one tick, a selection changed after the
-  link's submit, Clear completed acting on what was done *when asked*.
+- **Cross-bundle derivation is real and small.** P0's three controller-set cross-bundle guards
+  (lesson 4 there: link ← `contacts:selection`, Rename ← `todos:selection`, Clear completed ←
+  counts) became `when:` guards in the action model — "effective `enabled` is derived in the model"
+  now holds across bundles, same-tick and glitch-free.
+- **No listener bridges left** for the converted state: P0 had 7 cross-bundle subscriptions in
+  controllers (status, link, rename ×2, clear, list, edit), 5 of them writing a derived value, and 5
+  mutable holders (`let collection`, `let selected`); P4 has 0 and 0 — seven `firstOf(slots, decl)`
+  calls (a slot's first contribution as a tracked read) replace them. `todos.list`'s items are derived from the
+  collection; its `publishItems` writer is gone.
+- **The model contract still holds at the boundary.** `Readable.subscribe` *is* the contract's
+  channel: the MODELS.md §4 suite passes on `todos:collection` (todos, counts), on `todos:selection`,
+  and on a hand-rolled producer through the bridge — adapting a contract test was a one-line change
+  (`read: m.view.todos, subscribe: m.view.todos.subscribe`).
+- **Nothing outside the logic moved**: 0 renderer, host or `hello` files changed; the DOM renderers
+  compile and pass; e2e 24/24 under React and DOM; standalone and removal runs unchanged.
+- **A plain-listener consumer interoperates with no library**: it only calls `.subscribe` on the
+  facet (`tests/interop`, "plain CONSUMER").
+- **Opt-in without a second contract works** (`track(get, on)`, `tests/interop/optional.test.ts`):
+  keep P0's `getX`/`onXUpdate`; an owner opts in by making `getX` a kernel `Readable`; a consumer's
+  `track` uses it directly (early observer: **0** glitches) or bridges a plain owner (**4 of 4**
+  transitions glitched for the early observer, correct afterwards).
 
-## What failed or needed a patch to the definition
+## What failed or cost more than expected
 
-1. **The read-then-set guard vs "set it unless the host already has".** Checking "already set" with
-   the adapter's optional get *is* a read, so the provider's own `set` throws. Needed a non-reading
-   `isProvided(ctx, key)`. The rule is right; the definition must name the non-reading probe.
-2. **`Activator | (() => Promise<Activator>)` is ambiguous at runtime** — both are `() => Promise<…>`.
-   The loader needs a discriminator (`lazy: true`).
-3. **Coverage needs introspection the libraries do not have.** "Contributions nobody renders" is only
-   answerable if the slots bus knows its observers: `KernelSlots` (40 LOC) counts them; the same
-   bookkeeping (`KernelCommands.listened()`) was needed for the dispose test's "no command has a
-   listener". Side effect: shared state no one reads shows as `unobserved` (informational) — the
-   standalone reports flipped from `todos:selection unobserved` to complete when `todos.rename`
-   began to read it, so coverage expectations are part of a feature's cost.
-4. **"Effective `enabled` is derived in the model implementation"** holds only for guards over the
-   same model. Every cross-bundle guard (contacts link ← `contacts:selection`; Rename ←
-   `todos:selection`; Clear completed ← collection counts) is set by the **controller** from a
-   synchronous listener. Still same-tick in process; would not be across a realm.
-5. **Refuse mode has a same-tick hole**: the controller sets `running` a microtask after the submit,
-   so a second submit in the same tick passes the model's guard. Controllers must fold it (`pending
-   ??= snapshot`). Better: the action model flips a pending flag synchronously in `submit()`.
-6. **The definition's Todos API lacked `todos:selection`** (Contacts had its equivalent). Any bundle
-   that contributes a selection action from outside needs it.
-7. **Renderers vs an app's own extension points**: renderers may not read slots, so the list
-   *controller* folds `todos:toolbar-actions` / `*:selection-actions` into its presentation model.
-   Works well, but the definition did not say it.
-8. **Focus return** needs the last focused element, not `activeElement` at dialog time: the opener
-   (Clear completed) is disabled by `running: true` and the browser blurs it. Both hosts track
-   `focusin`.
-9. **Heterogeneous keyed renderer slots** need an existential cast
-   (`as unknown as ReactRenderer<never>`); `ViewKind<M>` types the pair only at the call site.
+1. **The gain is small against the benchmark.** Logic LOC 1758 → 1734 (**−24**, −1.4%); per bundle:
+   `todos.contacts-link` 54→43, `todos.list` 283→274, `todos.rename` 134→129, `todos.clear-completed`
+   146→144, `todos.edit` 153→152, `todos.core` 195→194, `todos.status` 26→29, `contacts.list`
+   208→210. The kernel grew +95 (`reactive.ts`, 94 LOC incl. `track`) and the kit shrank −23 (the
+   signals wrapper moved): **+46 non-test LOC overall**. The controllers' real cost (snapshots, update
+   loops, running flags, `active` checks — P0's recommendation) is untouched by a substrate.
+2. **Coupling becomes total and invisible.** Runtime reach to alien-signals (value-import closure):
+   **P0 10/20 bundles** (those using the kit) → **P4 20/20** — `hello`, the renderers and the hosts
+   now load the library through the `@kernel` barrel. Contract reach: 0 → **8 bundles** whose
+   published or consumed contract is expressed in `Readable`. API modules gained **no library
+   import** (only `import type { Readable } from "@kernel"`, 2 modules) — the coupling is in the
+   *semantics* (a tracked read means "tracked on this graph"), which no import rule sees. A second
+   copy or version of the library would silently turn every cross-bundle derivation into a stale read.
+3. **A producer cannot opt out.** A `Readable` is branded; a bundle on plain listeners (or a remote
+   proxy) can only publish shared state through the kernel's `fromChannel` — and the glitch comes back
+   at that bridge (`tests/interop`: an early listener saw "3 open rows" with "2 open todos").
+4. **Realms**: a `Readable` cannot cross `postMessage`. A worker-side owner needs a proxy that
+   bridges a message stream (`fromChannel` again); derivations lag by one hop (pinned: the worker's
+   command resolved, the main side still said "2 open todos") and identity (contract point 7) is lost
+   at every clone. P4's guarantee is strictly in-realm — the same place P0 already had "same tick".
+5. **Tracked vs untracked reads become a rule authors must hold**: reading shared state inside a
+   `computed`/`effect` subscribes, elsewhere it does not. Commit-time reads were safe only because
+   the kit's submit listeners run untracked; a read in the wrong place makes an accidental dependency
+   (not hit here, but it is the classic signals bug and nothing in the boundary suite catches it).
+6. Small: `Signal<T>`'s overloads had to be reordered (read last) for a signal to infer as `() => T`
+   when passed to `readable`; `todos.status`'s header text needed a *stable* group, not a plain
+   `computed` (a new object per counts change would notify on equal text — contract point 3).
 
 ## Pros
 
-- Everything is mechanically checkable: 8 boundary rules with negative controls, type-level single
-  writer, contract suite on two implementations per kind, a graph with 0 violations.
-- Independence is real: standalone runs load no code of the other app; removal runs log no error.
-- A kernel-only bundle is 80 LOC; the kit is optional and visibly so.
-- The UI layer really is replaceable: 0 logic files changed; the DOM renderers are ~1.35× the React ones (303 vs 224 LOC).
+- Glitch-free cross-bundle derived state, measured: 11 → 0 intermediate states for early observers.
+- Guards and derived presentation from other bundles live in the model, as the definition wanted;
+  controllers lose their bridging listeners and holders.
+- The contract suite and the U1 bindings still apply: a `Readable` is `(read, subscribe)`.
+- Renderers are unaffected; the second UI technology needed nothing.
 
 ## Cons
 
-- **26 concepts** before a newcomer can write a bundle — more than 03, mostly from structure
-  (feature/application/loader/manifests) and the three model kinds.
-- **Ceremony per interaction**: a feature touches an API module (keys, commands, kinds), a controller,
-  a model, and two renderers. Rename: 11 files / +291 lines for one dialog (212 of them the new
-  bundle, 64 of those a form model that duplicates `todos.edit`'s — private models cannot be shared
-  across bundles without a kit).
-- Controllers are long (todos.list 283 LOC incl. model): snapshots, update loop, running flags, and
-  `active` checks are hand-written in every bundle.
-- Cross-bundle writes as commands mean the owner re-implements a store's write path (patch the
-  collection before resolving).
-- The shell hosts are the largest UI units (≈300 LOC each), and the DOM host re-implements
-  reconciliation (mount/unmount per renderer arrival).
+- Every bundle is bound to one library *and one instance/version* of it through the kernel; the
+  binding is semantic, so the boundary suite cannot police it (R7 now only says "one file imports
+  alien-signals").
+- ADR-008's "bundles with different substrates interoperate" survives only for consumers; producers
+  must bridge, and bridged state loses the one thing P4 adds.
+- +2 concepts (28), +95 kernel LOC; `hello` now carries the reactive library at runtime.
+- No help across realms, which is where independence matters most (workers, remote apps).
 
 ## Fitness table
 
 | Axis | Measurement | Value | Notes |
 | --- | --- | --- | --- |
-| Simplicity | concepts and rules a newcomer must learn | **26** | README lists them (kernel 8, structure 6, models 7, views & commits 5); kit concepts excluded |
-| Simplicity | LOC / files of the minimal no-kit bundle (`hello`) | **80 LOC / 2 files** (logic: activator 73 + API 7) | renderers: React 20 LOC / 2 files, DOM 20 LOC / 1 file; kernel only |
-| Simplicity | Rename a todo: files touched, lines +/− (logic / UI / tests) | **11 files, +291/−11** — logic 4 files +216/−0 · UI 2 files +4/−2 · tests 5 files +71/−9 | logic = new bundle (2 files, +212), API +2 (view kind), features +2; UI = register the existing editor renderer for the new kind; tests include 2 coverage expectations that changed |
-| Separation | boundary suite: rules / violations | **8 rules / 0 violations**, negative control per rule | R1 renderer value imports, R2 no provide/register/call/listen/await in renderers, R3 no UI lib in logic/neutral API, R4 no DOM globals in logic, R5 cross-bundle → API only, R6 kernel imports no bundle/kit, R7 substrate private, R8 API = declarations only |
-| Separation | single-writer violations | **0** | type-level over 14 view facets and 6 control facets (+2 negative controls, `@ts-expect-error`); runtime: 8 view + 6 control facets frozen and writer-free |
-| Separation | domain-logic hits in views | **2** (0 await / .call / .provide / .register / service imports) | the Ctrl-click selection arithmetic in `todos.ui.react` and `todos.ui.dom` — fix: a `toggleSelected(id)` intent on the list model. Other conditionals are rendering choices (line-through, aria-current, error shown) |
-| Independence | cross-bundle edges / to API modules / violations | **53 import sites (35 distinct) / 53 / 0** | fan-out 3–8 modules per bundle (logic bundles 3–8, renderers 4, hosts 4–6); report printed by `pnpm graph` |
-| Independence | standalone runs (Todos, Contacts) | **pass / pass** | headless test shell (node) and trivial DOM test shell (Chromium) |
-| Independence | removal runs: errors / coverage report | **4 runs, 0 error logs** | without `todos-contacts`: `unobserved contacts:selection`; without `todos.status`: complete; without `contacts` (+`todos-contacts`): complete; without `todos` (+`todos.status`, `todos-contacts`): `unobserved contacts:selection` |
-| Composability | interactions (1)–(3) pass | **3/3** under React, DOM and headless | (3) also with Contacts removed and Todos removed |
-| Composability | files changed in Contacts for interaction (1) | **0** | no `contacts.*` file mentions Todos; the link is one bundle in its own feature |
-| Composability | second UI technology: logic files changed / new UI LOC | **0 / 791** | binding kit 78 (the binding itself 12) · renderers 303 (todos 156, contacts 127, hello 20) · host `shell.dom` 304 · trivial DOM test shell 106 |
-| Correctness gate | contract · commit races · dispose · late subscriber · read-then-set | **green** | contract 83 tests (3 kinds × kit + hand-rolled implementations, hello through its bundle, point 9, 7 suite negative controls) + single writer 4; commits 9; dispose 4; late 3; read-then-set 7 + loader 7 |
+| Simplicity | concepts and rules a newcomer must learn | **28** | P0's 26, rule 21 changed, + `Readable`/tracked read, + the bridge (README) |
+| Simplicity | LOC / files of the minimal no-kit bundle (`hello`) | **80 LOC / 2 files** (unchanged) | but its runtime closure now includes alien-signals (via `@kernel`) |
+| Simplicity | Rename a todo: files touched, lines +/− (logic / UI / tests) | **n/a** — not re-run | P4 changes no feature flow; `todos.rename` is 129 LOC vs P0's 134 (its selection listener became a `when` guard) |
+| Separation | boundary suite: rules / violations | **8 rules / 0 violations** | R7 redefined: alien-signals only in `kernel/reactive.ts`; + substrate-reach report (P0 vs P4) |
+| Separation | single-writer violations | **0** | type-level suite unchanged and green; a `Readable` exposes no writer |
+| Separation | domain-logic hits in views | **2** (unchanged) | renderers untouched (P0's Ctrl-click arithmetic) |
+| Independence | cross-bundle edges / to API modules / violations | **56 import sites (37 distinct) / 56 / 0** | identical to P0's tree (edge lists diffed); **substrate reach: 20/20 bundles** reach alien-signals (P0: 10/20); **8** bundles' contracts expressed in `Readable` (P0: 0); API modules naming a substrate type 2 (P0: 0), importing a library 0 new |
+| Independence | standalone runs (Todos, Contacts) | **pass / pass** | coverage reports as P0 |
+| Independence | removal runs: errors / coverage report | **4 runs, 0 error logs** | coverage reports identical to P0 (tests unchanged) |
+| Composability | interactions (1)–(3) pass | **3/3** | headless, React, DOM |
+| Composability | files changed in Contacts for interaction (1) | **0** | P4 itself changed 2 Contacts files (`contacts/api`, `contacts.list`) to put `contacts:selection` on the substrate — a platform change, not the interaction's |
+| Composability | second UI technology: logic files changed / new UI LOC | **0 / 0** | DOM renderers unchanged, compile, e2e green; U1's bindings take `(r, r.subscribe)` unchanged |
+| Correctness gate | contract · commit races · dispose · late subscriber · read-then-set | **green** | contract 99 (incl. 4 runs on `Readable`s, one hand-rolled via the bridge) + controls 7 + single writer 4; commits 9; dispose 4; late 3; read-then-set 7 + loader 7; **glitch 2 (P4 0/0; P0 0/11)**; interop 6 |
 
-Totals: node 150 tests, Chromium 24 tests. LOC (non-test): kernel 344, kits 573, API modules 288,
-logic bundles 1758, UI bundles 1232, features/apps/main 191; tests 2348 (`pnpm loc`).
+Totals: node **175** tests (16 files), Chromium **24**. LOC (non-test): kernel 439 (P0 344), kits 550
+(573), API 286 (288), logic 1734 (1758), UI 1232 (1232), app 191; tests 3018.
 
 ## Answers to the points to clarify
 
-- **Queue or disable?** Save (both editors), Clear completed, Toggle/Edit/Delete and Rename
-  **refuse** (`running: true`, button disabled + `aria-busy`); Add **queues**. User-visible
-  difference, pinned by tests: a refused second Save produces one api call and the button is
-  disabled meanwhile; three Adds while the first runs keep the button enabled and land in order with
-  their own titles. Queue costs a snapshot *list* instead of one snapshot; refuse needs the
-  same-tick fold (lesson 5). Recommendation: refuse by default, queue for event-edge actions.
-- **Owner of `todos:collection`?** `todos.core` (the service owner). Simpler: one writer, no
-  change broadcast, no reloads, consumers in any order. Cost: every write is a command in the API
-  (3 commands), handlers must publish before resolving, and `todos.core` does optimistic patching.
-  A domain-controller owner would have put the write path in `todos.list`, making Rename and the
-  contacts link depend on the list bundle's presence — worse for removal.
-- **Was one flat context a problem?** No clash. One reach we could not prevent: `todos:api` is
-  declared in the Todos API (the host must be able to set it), so any bundle *could* read it and
-  write around the owner's commands. That is the only case for scoping seen; a boundary rule ("only
-  the owner resolves `todos:api`") would cover it without scopes. `sys:config` became a second flat
-  namespace inside one service.
-- **Did activation order matter beyond "required first"?** Only for services: a provider before any
-  bundle that reads its key (checked statically from `provides`/`requires`/`optional`, and at
-  runtime by the guard — both tested), and host keys (`shell:root`, `sys:logger`, `sys:config`) set
-  before `application()` (the loader itself reads `sys:logger`). Slots and commands: no.
-- **Was the shell API sufficient?** Yes, plus two services: `shell:root` (where a DOM host renders)
-  and `shell:coverage` (the report). No new extension points. Tab selection is host-local state.
-- **How much of 03's kit was kept?** The signals wrapper, `stableGroup`/channels, the action model
-  (+ a `queue` option), the update loop and `attempt`; `watchSubmits` became `onSubmits`
-  (synchronous, per batch). New small kits: `slots` (`followFirst`), `notify`, `host` (coverage),
-  `react`, `dom`. A newcomer does not need the kit for a first bundle (`hello`), but every real
-  bundle here uses it; without it the list/editor models would roughly double.
-- **What had to be reinterpreted?** See "What failed" 1–9 and the README's choices table: the
-  non-reading probe, the lazy discriminator, coverage via observer counts, cross-bundle guards set
-  by controllers, the missing `todos:selection`, controllers folding action extension points into
-  models, write commands on the owner, `sys:config` for the timeout, `shell:root`.
+- **Did P0 show a glitch or a cost that P4 removes?** Yes to both, both small. Glitch: 11
+  intermediate states in the scenario, **only** for observers subscribed before the deriving bundle
+  (0 for late observers such as renderers; never visible in P0's UI tests). Cost: 3 controller-set
+  guards, 7 bridging subscriptions (5 writing a derived value) and 5 holder variables — about 24 logic LOC. P4 removes both, and
+  adds 95 kernel LOC and total coupling.
+- **Could the shared substrate be optional without two contracts?** Yes, if the contract stays P0's
+  (`getX`/`onXUpdate`) and the substrate is a negotiated fast path: an owner opts in by making `getX`
+  a kernel `Readable`; consumers follow any group with `track(get, on)` — direct (glitch-free) for an
+  opted-in owner, bridged for a plain one. Measured: 0 vs 4/4 glitches for an early observer. The
+  headline P4 shape (`Readable` in the API types) is *not* optional: producers must be on the graph
+  or bridge through the kernel.
+- **What happens to a bundle in another realm?** Its `Readable`s cannot cross. A proxy bundle
+  bridges a message stream into a local `Readable` (`fromChannel`); derivations stay correct but lag
+  by one hop, glitch-freedom stops at the proxy, and snapshot identity must be restored by the proxy
+  (the consumers' stable groups hid it here). Exactly the P0 situation — P4 adds nothing across realms.
+- **Dependency graph (acceptance 3):** every bundle now reaches the library (20/20, via `@kernel`);
+  no API module gained a library import — two gained a type import of `Readable` from the kernel.
+- **UI replacement impact (acceptance 4):** none for the current renderers (they read unchanged
+  view facets). U1's bindings (`useModel(get, on)`, Svelte `modelStore(read, subscribe)`, Solid) take
+  a `Readable` as `(r, r.subscribe)`. The substrate does not make Solid/Svelte bind natively — they
+  have their own graphs, so they still bridge through `.subscribe`; native binding would require the
+  logic's substrate *to be* the UI library's (Solid signals), which breaks R3.
+- **Contract tests adapted (acceptance 1):** `contract.test.ts` — the two `todos:collection` runs
+  (`getTodos/onTodosUpdate` → `todos/todos.subscribe`, `getCounts/onCountsUpdate` →
+  `counts/counts.subscribe`) and the list-selection run (`publishItems` → a fixed items source);
+  `boundaries.test.ts` — R7's allowed file. Everything else in P0's suites is unchanged.
 
 ## Recommendation for consolidation
 
-Keep the definition's core — flat context with the guard, slots/commands/registry, bundles/features
-with a loader, views as publications, per-technology renderers, the model contract with facets.
-Amend: (1) name `isProvided` and a manifest `lazy` flag; add `provides/requires/optional` to bundle
-manifests and let the loader check them; (2) make shared state's write path explicit (owner-answered
-commands) and add `todos:selection`; (3) specify that controllers fold an app's own extension points
-into presentation models; (4) define coverage as "unrendered kinds + unobserved slots" and require
-the bus bookkeeping in the kernel; (5) let the action model refuse same-tick resubmits itself; (6)
-allow cross-bundle guards to be controller-set base flags. To cut the concept count and per-feature
-ceremony, look at P3 (commit mechanism in the model) and P2 (controller shape) — the hand-written
-snapshot/loop/`active` pattern is the largest repeated cost here.
+Keep ADR-008: the contract (`getX`/`onXUpdate`) stays substrate-free at bundle boundaries. Do **not**
+put a reactive type into API modules — the benchmark's gain (−24 logic LOC, a glitch only early
+observers see) does not pay for binding every bundle to one library instance, and it buys nothing
+across realms. Adopt two small things instead:
+
+1. **The opt-in fast path** as a *kit* feature (not kernel): the model kit marks the getters it makes
+   (its models already share one alien-signals instance in process), and a kit `track(get, on)` lets
+   a model's `when` guard or derived group follow another bundle's group — direct when the getter is
+   kit-made, bridged otherwise. That gives P0's lesson 4 ("cross-bundle guards derived in the model")
+   without changing any API module, and degrades to P0 behaviour for plain or remote producers.
+2. **`firstOf(slots, decl)`** (a slot's first contribution as a tracked read) next to `followFirst`
+   in the slots kit — it is what removed the holder variables.
+
+State in the definition that "same-tick" is guaranteed in process but **glitch-freedom is not**
+unless both sides use the kit, and that renderers are unaffected either way (they subscribe late).
