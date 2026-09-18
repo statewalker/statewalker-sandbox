@@ -1,16 +1,45 @@
-# @statewalker/mvc-blueprint-04 — prototype **P0**
+# @statewalker/mvc-blueprint-09 — prototype **P1**
 
-**P0 — the defined architecture**, implemented as written: kernel, bundles, features, loader, the
-three model kinds, controllers as activators, views as publications, and per-technology renderers
-for **React and plain DOM**, with the full benchmark scenario. It is the yardstick the other
-prototypes are measured against.
+**P1 — commands over slots**: P0 (`apps/mvc-blueprint-04`) with its command bus replaced by
+**dispatch over handlers published in slots**. A command declaration is a slot declaration plus a
+policy; answering a command is contributing a handler to that slot; calling it dispatches to the
+handlers in the slot *at call time*. The kernel has two primitives (context, slots) instead of
+three (context, slots, commands). Everything else is P0, unchanged.
 
 - Brief (with the lessons section): umbrella repository,
-  [`docs/sandbox-apps/architecture/prototypes/P0.md`](../../../../../docs/sandbox-apps/architecture/prototypes/P0.md)
-  (`statewalker/umbrella`, path `docs/sandbox-apps/architecture/prototypes/P0.md`).
-- The definition it implements: `docs/sandbox-apps/architecture/ARCHITECTURE.md` and
-  `docs/sandbox-apps/MODELS.md` in the same repository.
+  [`docs/sandbox-apps/architecture/prototypes/P1.md`](../../../../../docs/sandbox-apps/architecture/prototypes/P1.md)
+  (`statewalker/umbrella`, path `docs/sandbox-apps/architecture/prototypes/P1.md`).
+- The base: [`../mvc-blueprint-04`](../mvc-blueprint-04) (P0) — its README explains the rest of the
+  layout and the choices, which P1 keeps.
 - Full lessons and fitness numbers: [`LESSONS.md`](LESSONS.md).
+
+## The command mechanism (`src/kernel/commands.ts`, 124 LOC)
+
+```ts
+export const todosAdd = defineCommand<{ title: string }, Todo>("todos:add");   // API module
+register(answer(slots, todosAdd, async ({ payload }) => api.add(payload.title))); // owner
+const todo = await call(slots, todosAdd, { title }).promise;                       // caller
+```
+
+| Rule | P1 |
+| --- | --- |
+| Declaration | `defineCommand<P, R>(key, { policy?, label? })` — a frozen plain-slot declaration of `Handler<P, R>` plus `policy` |
+| Answer | `answer(slots, decl, fn, { priority? })` = `slots.provide(decl, { handle: fn, priority })`; returns the disposer |
+| Call | `call(slots, decl, payload)` → `Call<P, R>` (`promise`, first-wins `resolve` / `reject`) |
+| Transient | handlers are read from the slot at call time; no call is retained, so a late handler never sees an earlier call |
+| Order | higher `priority` first; equal priorities in arrival order |
+| Claim | a handler returning a promise (or `true`, settling the call itself) claims; **the first claim stops the dispatch**; a handler returning nothing only observes |
+| Mid-dispatch | a handler withdrawn before its turn is skipped; one added during a dispatch is not called |
+| `required` | no handler ⇒ `CommandError("no-handlers")`; handlers but no claim ⇒ `"not-claimed"` |
+| `silent` | no claim ⇒ resolves `undefined` (declare `R` as `X \| undefined`) |
+| Failures | a handler's throw / rejection reaches the caller unchanged (no wrapper) |
+| In flight | a claimed, unsettled call is a contribution to the keyed slot `sys:calls` until it settles |
+| Abandoned | the claiming handler withdrawn while its call is pending ⇒ the call rejects `CommandError("abandoned")` |
+
+Bookkeeping: P0 needed `KernelSlots` (observer counts) **and** `KernelCommands` (listener counts).
+P1 has only `KernelSlots`; `usage()` marks command slots (`command: true`) so coverage does not
+report handlers as unobserved, and the dispose test's "no leftovers" covers handlers and in-flight
+calls in one query.
 
 ```
 pnpm dev             # http://localhost:5173/?app=workbench.react | workbench.dom | todos.standalone | contacts.standalone
@@ -24,8 +53,8 @@ pnpm loc [prefix…]   # LOC per module (non-blank, non-comment); e.g. pnpm loc 
 ## Layout
 
 ```
-src/kernel/               context + adapters (read-then-set guard), useFields, KernelSlots/KernelCommands
-                          (bookkeeping for coverage and dispose tests), logger/config, model-kind types, loader
+src/kernel/               context + adapters (read-then-set guard), useFields, KernelSlots (bookkeeping for
+                          coverage and dispose), commands over slots, logger/config, model-kind types, loader
 src/kits/                 OPTIONAL helpers: signals (alien-signals, private), model (createAction, stableGroup,
                           channels, createValue, onSubmits), loop (update loop, attempt), slots (followFirst,
                           byOrder), notify (owner-published notifications), host (coverage), react (useModel),
@@ -43,7 +72,7 @@ src/bundles/
   hello/ (+api) hello.ui.react/ hello.ui.dom/   the minimal kernel-only bundle (§13.1)
 src/features/             logic.ts, react.ts, dom.ts — feature manifests
 src/apps/                 workbench.react, workbench.dom, todos.standalone, contacts.standalone
-tests/                    kernel/ contract/ commits/ dispose/ late/ standalone/ removal/ boundaries/ e2e/ support/
+tests/                    kernel/ (+ commands.test.ts: the dispatcher) contract/ commits/ dispose/ late/ standalone/ removal/ boundaries/ e2e/ support/
 scripts/loc.mjs           the LOC script (§13)
 ```
 
@@ -51,7 +80,7 @@ Every importable module is a folder with an `index.ts`: `@kernel`, `@kit/<name>`
 Only `src/features/*` imports bundle implementations (activators); bundles import the kernel, kits and
 API modules only (the boundary suite enforces it).
 
-## What a newcomer must learn — 26 concepts and rules
+## What a newcomer must learn — 26 concepts and rules (P0's list; only 5 and 6 are restated)
 
 Kernel (8)
 
@@ -62,8 +91,9 @@ Kernel (8)
 4. **`useFields`** — resolve every dependency in one place, at the top of the activator.
 5. **Slot** — an extension point for what *exists*; `provide`/`register` returns a disposer; `observe`
    calls back at once (retained, so any arrival order works). Plain or keyed.
-6. **Command** — a typed request with a response for what *happens*; declared by the bundle that
-   answers it; not retained (never fire another bundle's command while activating).
+6. **Command** — a slot whose contributions are handlers; `answer` contributes one, `call` dispatches
+   a typed request to the handlers present *now* and returns the typed response. Not retained (never
+   call another bundle's command while activating). `required` / `silent`; first claim wins.
 7. **Logger** — a child logger per bundle; a failure is logged at `warn` (it is owner state), only a
    broken invariant at `error`.
 8. **`sys:config`** — plain host settings (e.g. `shell:notification-timeout-ms`).
