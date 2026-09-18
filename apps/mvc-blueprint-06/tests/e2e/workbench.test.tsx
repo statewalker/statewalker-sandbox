@@ -114,8 +114,7 @@ describe("workbench.react · e2e", () => {
     button(app.root, "New todo for this contact")?.click();
     await waitFor(() => u.panel("todos:editor") !== null);
     expect(
-      (u.panel("todos:editor")?.querySelector('input[aria-label="Title"]') as HTMLInputElement)
-        .value,
+      u.panel("todos:editor")?.querySelector<HTMLInputElement>('input[aria-label="Title"]')?.value,
     ).toBe("Grace Hopper");
     button(u.panel("todos:editor") as HTMLElement, "Save")?.click();
     await waitFor(() => u.panel("todos:editor") === null);

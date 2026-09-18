@@ -13,7 +13,8 @@ if (arg) {
   const per: Record<string, { loc: number; files: number }> = {};
   for (const s of sources("src")) {
     const u = unitOf(s.file);
-    const e = (per[u] ??= { loc: 0, files: 0 });
+    const e = per[u] ?? { loc: 0, files: 0 };
+    per[u] = e;
     e.loc += count(s.code);
     e.files++;
   }

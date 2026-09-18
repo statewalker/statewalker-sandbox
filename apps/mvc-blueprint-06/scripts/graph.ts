@@ -100,7 +100,7 @@ export function graph(all: Source[]): Graph {
   const unique = new Map(edges.map((e) => [`${e.from}→${e.to}`, e]));
   const cross = [...unique.values()].filter((e) => e.to !== "kernel" && !e.to.startsWith("kit"));
   const fanOut: Record<string, string[]> = {};
-  for (const e of unique.values()) (fanOut[e.from] ??= []).push(e.to);
+  for (const e of unique.values()) fanOut[e.from] = [...(fanOut[e.from] ?? []), e.to];
   for (const k of Object.keys(fanOut)) fanOut[k]?.sort();
   return {
     bundles: [...new Set(all.map((s) => unitOf(s.file)).filter(isBundle))].sort(),
