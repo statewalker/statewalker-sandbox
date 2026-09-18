@@ -1,0 +1,41 @@
+{
+  "name": "@statewalker/mvc-blueprint-04",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "P0 — the client application architecture exactly as defined: kernel, bundles, features, loader; React and plain-DOM renderers.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "typecheck": "tsc --noEmit",
+    "loc": "node scripts/loc.mjs",
+    "graph": "vitest run tests/boundaries --reporter=verbose"
+  },
+  "dependencies": {
+    "@statewalker/shared-adapters": "catalog:",
+    "@statewalker/shared-commands": "0.2.1",
+    "@statewalker/shared-logger": "catalog:",
+    "@statewalker/shared-registry": "catalog:",
+    "@statewalker/shared-slots": "0.2.1",
+    "alien-signals": "3.2.1",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "@vitest/browser-playwright": "^5.0.0",
+    "playwright": "1.58.0",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "^5.0.0"
+  }
+}
