@@ -53,13 +53,14 @@ export interface Page {
 export async function open(
   manifest: ApplicationManifest,
   services: Record<string, unknown> = {},
+  config: Record<string, unknown> = {},
 ): Promise<Page> {
   const root = document.createElement("div");
   document.body.append(root);
   const context: Context = { ...services };
   const { logger, calls } = newRecordingLogger();
   loggerAdapter.set(context, logger);
-  configAdapter.set(context, Object.freeze({ "shell:notification-timeout-ms": 60_000 }));
+  configAdapter.set(context, Object.freeze({ "shell:notification-timeout-ms": 60_000, ...config }));
   shellRoot.set(context, root);
   const stop = await application(manifest)(context);
   return {

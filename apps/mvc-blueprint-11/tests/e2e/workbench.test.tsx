@@ -1,8 +1,9 @@
-import { without } from "@kernel";
+import { type ApplicationManifest, without } from "@kernel";
+import { MECHANISM_KEY } from "@kit/mechanism";
 import { afterEach, describe, expect, it } from "vitest";
 import { workbenchDom } from "../../src/apps/workbench.dom.js";
 import { workbenchReact } from "../../src/apps/workbench.react.js";
-import { button, click, open, type Page, waitFor } from "./dom.js";
+import { button, click, open as openPage, type Page, waitFor } from "./dom.js";
 import {
   contactsEdit,
   headerCount,
@@ -13,13 +14,19 @@ import {
   todosBasics,
 } from "./scenarios.js";
 
-/** The same scenarios, per UI technology. Adding a technology adds a row here, nothing else. */
+/**
+ * The same scenarios, per UI technology. Adding a technology adds a row here, nothing else.
+ * P3: React runs on each commit mechanism (A, B, C); plain DOM on A (the brief is React only).
+ */
 const technologies = [
-  ["react", workbenchReact],
-  ["dom", workbenchDom],
+  ["react·A", workbenchReact, "A"],
+  ["react·B", workbenchReact, "B"],
+  ["react·C", workbenchReact, "C"],
+  ["dom·A", workbenchDom, "A"],
 ] as const;
 
-describe.each(technologies)("workbench.%s (Chromium)", (_tech, manifest) => {
+describe.each(technologies)("workbench.%s (Chromium)", (_tech, manifest, mechanism) => {
+  const open = (m: ApplicationManifest) => openPage(m, {}, { [MECHANISM_KEY]: mechanism });
   let page: Page | undefined;
   afterEach(async () => {
     await page?.stop();
