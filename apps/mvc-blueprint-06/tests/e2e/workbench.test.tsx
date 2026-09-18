@@ -185,6 +185,27 @@ describe("workbench.react · e2e", () => {
   });
 });
 
+describe("hello (minimal bundle) in React", () => {
+  it("renders its panel and increments from the panel and the menu", async () => {
+    const { helloBundle } = await import("../../src/bundles/hello/index.js");
+    const { helloUiReactBundle } = await import("../../src/bundles/hello.ui.react/index.js");
+    const app = await run((root) => ({
+      id: "hello.react",
+      features: [
+        shellFeature,
+        shellReactFeature(root),
+        { id: "hello", bundles: [helloBundle, helloUiReactBundle] },
+      ],
+    }));
+    await waitFor(() => app.root.querySelector("output")?.textContent === "0");
+    button(app.root.querySelector('[role="tabpanel"]') as HTMLElement, "Increment")?.click();
+    ui(app.root).menuItem("Increment")?.click();
+    await waitFor(() => app.root.querySelector("output")?.textContent === "2");
+    expect(app.errors()).toEqual([]);
+    await app.stop();
+  });
+});
+
 describe("standalone React apps", () => {
   it("todos.standalone: Todos only", async () => {
     const app = await run((root) => todosStandalone(root, opts));
