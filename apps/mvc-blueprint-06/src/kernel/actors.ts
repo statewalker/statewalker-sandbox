@@ -31,6 +31,8 @@ export interface Asks<R> {
 }
 // biome-ignore lint/suspicious/noConfusingVoidType: a request with no answer resolves to void
 export type ReplyOf<K> = K extends Asks<infer R> ? R : void;
+/** The reply of the member of `N` whose `type` is `T`. */
+export type ReplyTo<N, T> = ReplyOf<Extract<N, { readonly type: T }>>;
 
 export class NoSuchActor extends Error {
   constructor(readonly address: string) {
@@ -62,7 +64,10 @@ export interface ActorContext<M> {
   readonly log: Logger;
   isAlive(): boolean;
   send<N>(to: Address<N>, msg: N): void;
-  ask<N, K extends N>(to: Address<N>, msg: K): Promise<ReplyOf<K>>;
+  ask<N extends { readonly type: string }, T extends N["type"]>(
+    to: Address<N>,
+    msg: N & { readonly type: T },
+  ): Promise<ReplyTo<N, T>>;
   /** Run `ok`/`err` as a turn of this actor when the promise settles — dropped after stop. */
   pipe<T>(promise: Promise<T>, ok: (value: T) => void, err?: (error: unknown) => void): void;
   /** Run `cb` as a turn of this actor after `ms` — cancelled on stop. Returns a canceller. */
@@ -132,6 +137,7 @@ export class ActorSystem {
   readonly #cloneCheck: boolean;
   #draining = false;
   #delivered = 0;
+  #turns = 0;
 
   constructor(options: SystemOptions = {}) {
     this.log = newLogger("sys", options.logSink);
@@ -150,10 +156,11 @@ export class ActorSystem {
     return this.#actors.get(address)?.alive === true;
   }
 
-  stats(): { delivered: number; perActor: Record<string, number> } {
+  /** Messages delivered (per live actor), and turns run (stream, presence, pipe and timer callbacks). */
+  stats(): { delivered: number; turns: number; perActor: Record<string, number> } {
     const perActor: Record<string, number> = {};
     for (const a of this.#actors.values()) perActor[a.address] = a.delivered;
-    return { delivered: this.#delivered, perActor };
+    return { delivered: this.#delivered, turns: this.#turns, perActor };
   }
 
   spawn<M>(address: Address<M> | string, behavior: Behavior<M>): void {
@@ -224,8 +231,9 @@ export class ActorSystem {
     this.#drain();
   }
 
-  ask<N, K extends N>(to: Address<N> | string, msg: K, from?: string): Promise<ReplyOf<K>> {
-    return new Promise<ReplyOf<K>>((resolve, reject) => {
+  /** Untyped on purpose: outside callers (tests, loaders) are not actors; `ctx.ask` is the typed one. */
+  ask<R = unknown>(to: string, msg: unknown, from?: string): Promise<R> {
+    return new Promise<R>((resolve, reject) => {
       this.#check("message", `${from ?? "outside"} → ${to}`, msg);
       const reply: Reply = {
         settled: false,
@@ -264,8 +272,13 @@ export class ActorSystem {
       send: (to, msg) => {
         if (alive()) this.send(to, msg, actor.address);
       },
-      ask: (to, msg) =>
-        alive() ? this.ask(to, msg, actor.address) : Promise.reject(new ActorStopped(self)),
+      ask: <N extends { readonly type: string }, T extends N["type"]>(
+        to: Address<N>,
+        msg: N & { readonly type: T },
+      ) =>
+        alive()
+          ? this.ask<ReplyTo<N, T>>(to, msg, actor.address)
+          : Promise.reject(new ActorStopped(self)),
       pipe: (promise, ok, err) => {
         promise.then(
           (v) => turn(() => ok(v)),
@@ -360,6 +373,7 @@ export class ActorSystem {
       return;
     }
     if (job.kind === "turn") {
+      this.#turns++;
       try {
         job.run();
       } catch (error) {

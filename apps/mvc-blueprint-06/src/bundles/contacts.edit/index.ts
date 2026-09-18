@@ -139,8 +139,16 @@ export function contactsEditBundle(options: { notifyTimeoutMs?: number } = {}): 
           ctx.pipe(
             ctx.ask(contactsCore, { type: "contacts:update", id: s.id, patch }),
             () => {
-              if (session === s) close();
               notifier.notify("Saved", "success");
+              if (session !== s) return;
+              // Edited while saving? That belongs to the next commit: stay open.
+              const d = s.draft;
+              if (d.name !== patch.name || d.email !== patch.email || d.phone !== patch.phone) {
+                s.saving = false;
+                s.error = undefined;
+                return render();
+              }
+              close();
             },
             (e) => {
               const message = e instanceof Error ? e.message : String(e);

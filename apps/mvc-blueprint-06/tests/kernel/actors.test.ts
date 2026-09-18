@@ -4,6 +4,7 @@ import {
   ActorStopped,
   ActorSystem,
   type Asks,
+  defineAddress,
   defineStream,
   type LogEntry,
   NoSuchActor,
@@ -85,7 +86,7 @@ describe("actors · stop", () => {
     system.spawn<string>("victim", () => () => {});
     system.spawn<string>("killer", (ctx) => () => {
       // Both land in victim's mailbox behind this handler; then victim stops before they run.
-      asked = ctx.ask("victim", "q");
+      asked = ctx.ask(defineAddress<{ type: "q" }>("victim"), { type: "q" });
       ctx.send("victim", "t");
       system.stop("victim");
     });

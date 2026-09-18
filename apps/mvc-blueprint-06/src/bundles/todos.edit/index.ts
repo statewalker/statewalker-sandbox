@@ -152,9 +152,15 @@ export function todosEditBundle(options: { notifyTimeoutMs?: number } = {}): Bun
               : ctx.ask(todosCore, { type: "todos:update", id: s.id ?? "", patch: { title } });
           ctx.pipe(
             request,
-            () => {
-              if (session === s) close();
+            (todo) => {
               notifier.notify("Saved", "success");
+              if (session !== s) return;
+              // Typed while saving? That belongs to the next commit: stay open on the saved todo.
+              if (s.title.trim() !== title) {
+                session = { mode: "edit", id: todo.id, title: s.title, saving: false };
+                return render();
+              }
+              close();
             },
             (e) => {
               if (session !== s) return;
