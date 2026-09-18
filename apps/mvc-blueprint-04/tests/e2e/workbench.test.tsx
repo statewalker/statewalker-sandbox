@@ -9,6 +9,7 @@ import {
   menus,
   newTodoForContact,
   q,
+  renameTodo,
   todosBasics,
 } from "./scenarios.js";
 
@@ -61,6 +62,11 @@ describe.each(technologies)("workbench.%s (Chromium)", (_tech, manifest) => {
     await menus(page, ["Contacts", "Hello"]);
     expect(q(page).header()).toEqual([]);
     await contactsEdit(page);
+  });
+
+  it("Rename a todo", async () => {
+    page = await open(manifest);
+    await renameTodo(page);
   });
 
   it("hello: the minimal bundle's menu item and panel", async () => {

@@ -6,6 +6,7 @@ import { activate as todosContactsLink } from "@b/todos.contacts-link";
 import { activate as todosCore } from "@b/todos.core";
 import { activate as todosEdit } from "@b/todos.edit";
 import { activate as todosList } from "@b/todos.list";
+import { activate as todosRename } from "@b/todos.rename";
 import { activate as todosStatus } from "@b/todos.status";
 import type { FeatureManifest } from "@kernel";
 
@@ -18,6 +19,7 @@ export const todos: FeatureManifest = {
     { id: "todos.list", activator: todosList },
     { id: "todos.edit", activator: todosEdit },
     { id: "todos.clear-completed", activator: todosClearCompleted },
+    { id: "todos.rename", activator: todosRename },
   ],
 };
 

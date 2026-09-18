@@ -151,3 +151,25 @@ export async function contactsEdit(page: Page): Promise<void> {
   await waitFor(() => $.toasts().includes("Saved"));
   expect(page.errors()).toEqual([]);
 }
+
+/** §14.6 Rename a todo: a selection action, a dialog, a form error on an empty title. */
+export async function renameTodo(page: Page): Promise<void> {
+  const $ = q(page);
+  await waitFor(() => $.todoTitles().length === 3);
+  const list = () => $.panel("todos:list") as HTMLElement;
+  click($.todoRow("Buy milk"));
+  await waitFor(() => button(list(), "Rename…")?.disabled === false);
+  click(button(list(), "Rename…"));
+  await waitFor(() => $.dialog("todos:rename") !== null);
+  const dialog = () => $.dialog("todos:rename") as HTMLElement;
+  typeInto(dialog().querySelector('input[aria-label="Title"]'), "");
+  click(button(dialog(), "Rename"));
+  await waitFor(
+    () => dialog().querySelector('[role="alert"]')?.textContent === "Title is required",
+  );
+  typeInto(dialog().querySelector('input[aria-label="Title"]'), "Buy oat milk");
+  click(button(dialog(), "Rename"));
+  await waitFor(() => $.dialog("todos:rename") === null);
+  await waitFor(() => $.todoTitles().includes("Buy oat milk"));
+  expect(page.errors()).toEqual([]);
+}

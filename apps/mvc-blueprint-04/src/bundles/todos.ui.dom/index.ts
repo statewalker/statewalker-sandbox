@@ -1,5 +1,5 @@
 import { type DomRenderer, domRenderersSlot } from "@b/shell/api/dom";
-import { clearCompletedKind, todoEditorKind, todoListKind } from "@b/todos/api";
+import { clearCompletedKind, todoEditorKind, todoListKind, todoRenameKind } from "@b/todos/api";
 import { type Controller, getSlots, newRegistry, type ViewKind } from "@kernel";
 import { mountClearCompleted, mountTodoEditor, mountTodoList } from "./views.js";
 
@@ -16,6 +16,7 @@ export const activate: Controller = async (context) => {
     );
   add(todoListKind, mountTodoList);
   add(todoEditorKind, mountTodoEditor);
+  add(todoRenameKind, mountTodoEditor);
   add(clearCompletedKind, mountClearCompleted);
   return cleanup;
 };
