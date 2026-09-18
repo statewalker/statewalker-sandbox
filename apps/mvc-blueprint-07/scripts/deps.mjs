@@ -8,7 +8,10 @@ const cross = edges.filter((e) => bundleOf(e.from) !== bundleOf(e.to));
 const toApi = cross.filter((e) => e.to.endsWith("/api"));
 const violations = cross.filter((e) => !e.to.endsWith("/api"));
 const fanOut = {};
-for (const e of cross) (fanOut[bundleOf(e.from)] ??= new Set()).add(e.to);
+for (const e of cross) {
+  const key = bundleOf(e.from);
+  fanOut[key] = (fanOut[key] ?? new Set()).add(e.to);
+}
 console.log(`cross-bundle edges (import statements): ${cross.length}`);
 console.log(`  to API modules: ${toApi.length}`);
 console.log(`  violations: ${violations.length}`);

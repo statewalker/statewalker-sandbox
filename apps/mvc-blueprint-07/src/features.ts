@@ -3,6 +3,7 @@ import { activate as contactsEdit } from "./bundles/contacts.edit/index.js";
 import { activate as contactsList } from "./bundles/contacts.list/index.js";
 import { activate as hello } from "./bundles/hello/index.js";
 import { activate as shellNotifications } from "./bundles/shell.notifications/index.js";
+import { activate as logViewer } from "./bundles/sys.log-viewer/index.js";
 import { activate as todosClearCompleted } from "./bundles/todos.clear-completed/index.js";
 import { activate as todosContactsLink } from "./bundles/todos.contacts-link/index.js";
 import { activate as todosCore } from "./bundles/todos.core/index.js";
@@ -72,4 +73,18 @@ export const helloReact: FeatureManifest = {
   id: "hello.react",
   requires: ["hello", "shell.react"],
   bundles: [lazy("hello.ui.react", () => import("./bundles/hello.ui.react/index.js"))],
+};
+
+/** Optional: the intent log viewer — a debugging tool the log makes almost free. */
+export const logViewerFeature: FeatureManifest = {
+  id: "sys.log-viewer",
+  requires: ["shell"],
+  bundles: [bundle("sys.log-viewer", logViewer)],
+};
+export const logViewerReact: FeatureManifest = {
+  id: "sys.log-viewer.react",
+  requires: ["sys.log-viewer", "shell.react"],
+  bundles: [
+    lazy("sys.log-viewer.ui.react", () => import("./bundles/sys.log-viewer.ui.react/index.js")),
+  ],
 };

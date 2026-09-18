@@ -3,6 +3,8 @@ import {
   contactsReact,
   helloFeature,
   helloReact,
+  logViewerFeature,
+  logViewerReact,
   shell,
   shellReact,
   todos,
@@ -25,6 +27,11 @@ export const workbenchReact: ApplicationManifest = {
     helloReact,
   ],
 };
+/** The workbench plus the intent log viewer (`?app=debug`). */
+export const workbenchDebug: ApplicationManifest = {
+  id: "workbench.react.debug",
+  features: [...workbenchReact.features, logViewerFeature, logViewerReact],
+};
 export const todosStandalone: ApplicationManifest = {
   id: "todos.standalone",
   features: [shell, shellReact, todos, todosReact],
@@ -34,7 +41,13 @@ export const contactsStandalone: ApplicationManifest = {
   features: [shell, shellReact, contacts, contactsReact],
 };
 
-const REACT = new Set(["shell.react", "todos.react", "contacts.react", "hello.react"]);
+const REACT = new Set([
+  "shell.react",
+  "todos.react",
+  "contacts.react",
+  "hello.react",
+  "sys.log-viewer.react",
+]);
 
 /** The same application with no UI technology — what node tests run. */
 export const headless = (app: ApplicationManifest): ApplicationManifest => ({

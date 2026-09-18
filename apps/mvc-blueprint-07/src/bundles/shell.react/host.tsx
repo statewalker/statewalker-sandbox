@@ -89,7 +89,7 @@ function Dialog({ title, children, depth }: { title: string; children: ReactNode
 /** The React shell host: renders the shell API's extension points; pairs models with renderers. */
 export function Host({ slots }: { slots: Slots }) {
   const header = [...useSlot(slots, headerSlot)].sort(byOrder);
-  const menu = [...useSlot(slots, menuSlot)].sort(byOrder);
+  const menu = useSlot(slots, menuSlot); // groups in arrival order; items by order, then id
   const panels = [...useSlot(slots, panelsSlot)];
   const dialogs = [...useSlot(slots, dialogsSlot)];
   const toasts = useSlot(slots, notificationsSlot);
@@ -102,8 +102,7 @@ export function Host({ slots }: { slots: Slots }) {
   const groups = new Map<string, { label: string; items: typeof menu }>();
   for (const item of menu) {
     const group = groups.get(item.group) ?? { label: item.groupLabel, items: [] };
-    group.items.push(item);
-    groups.set(item.group, group);
+    groups.set(item.group, { ...group, items: [...group.items, item].sort(byOrder) });
   }
   return (
     <div className="shell">
