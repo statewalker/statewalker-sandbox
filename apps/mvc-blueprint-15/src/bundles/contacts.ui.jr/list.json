@@ -1,0 +1,52 @@
+{
+  "root": "panel",
+  "elements": {
+    "panel": {
+      "type": "Stack",
+      "props": { "direction": "column" },
+      "children": ["list", "actions"]
+    },
+    "list": {
+      "type": "List",
+      "props": { "label": "Contacts" },
+      "repeat": { "statePath": "/contacts", "key": "id" },
+      "children": ["row"]
+    },
+    "row": {
+      "type": "Item",
+      "props": {
+        "data": { "contact": { "$item": "id" } },
+        "current": {
+          "$cond": { "$item": "id", "eq": { "$state": "/selectedId" } },
+          "$then": true,
+          "$else": false
+        }
+      },
+      "on": { "press": { "action": "select", "params": { "id": { "$template": "${id}" } } } },
+      "children": ["name"]
+    },
+    "name": { "type": "Text", "props": { "text": { "$item": "name" } }, "children": [] },
+    "actions": {
+      "type": "Toolbar",
+      "props": { "label": "Contact actions" },
+      "repeat": { "statePath": "/selectionActions", "key": "id" },
+      "children": ["action"]
+    },
+    "action": {
+      "type": "Button",
+      "props": {
+        "action": {
+          "$computed": "at",
+          "args": { "map": { "$state": "/selectionActionsState" }, "key": { "$item": "id" } }
+        }
+      },
+      "on": {
+        "press": {
+          "action": "submit",
+          "params": { "ref": { "$template": "selectionActions/${id}" } }
+        }
+      },
+      "children": []
+    }
+  }
+}

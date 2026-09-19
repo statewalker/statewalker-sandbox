@@ -1,0 +1,35 @@
+{
+  "root": "form",
+  "elements": {
+    "form": {
+      "type": "Form",
+      "props": {},
+      "on": { "submit": { "action": "submit", "params": { "ref": "save" } } },
+      "children": ["title", "error", "buttons"]
+    },
+    "title": {
+      "type": "TextInput",
+      "props": { "label": "Title", "value": { "$bindState": "/draft/title" } },
+      "children": []
+    },
+    "error": {
+      "type": "Alert",
+      "props": { "text": { "$state": "/status/errors/form" } },
+      "visible": { "$state": "/status/errors/form" },
+      "children": []
+    },
+    "buttons": { "type": "Stack", "props": { "direction": "row" }, "children": ["save", "cancel"] },
+    "save": {
+      "type": "Button",
+      "props": { "action": { "$state": "/save" } },
+      "on": { "press": { "action": "submit", "params": { "ref": "save" } } },
+      "children": []
+    },
+    "cancel": {
+      "type": "Button",
+      "props": { "action": { "$state": "/cancel" } },
+      "on": { "press": { "action": "submit", "params": { "ref": "cancel" } } },
+      "children": []
+    }
+  }
+}

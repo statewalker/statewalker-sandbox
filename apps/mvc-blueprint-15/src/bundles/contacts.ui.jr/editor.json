@@ -1,0 +1,45 @@
+{
+  "root": "form",
+  "elements": {
+    "form": {
+      "type": "Form",
+      "props": {},
+      "on": { "submit": { "action": "submit", "params": { "ref": "save" } } },
+      "children": ["name", "email", "phone", "error", "buttons"]
+    },
+    "name": {
+      "type": "TextInput",
+      "props": { "label": "Name", "value": { "$bindState": "/draft/name" } },
+      "children": []
+    },
+    "email": {
+      "type": "TextInput",
+      "props": { "label": "Email", "value": { "$bindState": "/draft/email" } },
+      "children": []
+    },
+    "phone": {
+      "type": "TextInput",
+      "props": { "label": "Phone", "value": { "$bindState": "/draft/phone" } },
+      "children": []
+    },
+    "error": {
+      "type": "Alert",
+      "props": { "text": { "$state": "/status/errors/form" } },
+      "visible": { "$state": "/status/errors/form" },
+      "children": []
+    },
+    "buttons": { "type": "Stack", "props": { "direction": "row" }, "children": ["save", "cancel"] },
+    "save": {
+      "type": "Button",
+      "props": { "action": { "$state": "/save" } },
+      "on": { "press": { "action": "submit", "params": { "ref": "save" } } },
+      "children": []
+    },
+    "cancel": {
+      "type": "Button",
+      "props": { "action": { "$state": "/cancel" } },
+      "on": { "press": { "action": "submit", "params": { "ref": "cancel" } } },
+      "children": []
+    }
+  }
+}
