@@ -1,0 +1,17 @@
+{
+  "name": "@p5/todos.clear-completed",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@p5/kernel": "link:../../kernel",
+    "@p5/kit-commit": "link:../../kits/commit",
+    "@p5/kit-notify": "link:../../kits/notify",
+    "@p5/kit-track": "link:../../kits/track",
+    "@p5/shell": "link:../shell",
+    "@p5/todos": "link:../todos"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@p5/shell.solid",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@p5/kernel": "link:../../kernel",
+    "@p5/kit-host": "link:../../kits/host",
+    "@p5/kit-shell": "link:../../kits/shell",
+    "@p5/kit-solid": "link:../../kits/solid",
+    "@p5/shell": "link:../shell",
+    "solid-js": "1.9.15"
+  }
+}

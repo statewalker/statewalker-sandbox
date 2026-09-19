@@ -1,0 +1,15 @@
+{
+  "name": "@p5/hello.ui.solid",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@p5/hello": "link:../hello",
+    "@p5/kernel": "link:../../kernel",
+    "@p5/kit-solid": "link:../../kits/solid",
+    "@p5/shell": "link:../shell"
+  }
+}

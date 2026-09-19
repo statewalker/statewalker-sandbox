@@ -1,0 +1,14 @@
+{
+  "name": "@p5/kit-solid",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.tsx"
+  },
+  "dependencies": {
+    "@p5/kernel": "link:../../kernel",
+    "@p5/shell": "link:../../bundles/shell",
+    "solid-js": "1.9.15"
+  }
+}

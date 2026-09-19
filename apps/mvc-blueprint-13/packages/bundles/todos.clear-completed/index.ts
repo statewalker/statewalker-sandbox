@@ -1,0 +1,100 @@
+import { answer, type Controller, call, getLogger, getSlots, useFields } from "@p5/kernel";
+import { attempt, createCommitAction, drainCommits, on } from "@p5/kit-commit";
+import { getNotificationTimeout, newNotifier } from "@p5/kit-notify";
+import { trackFirst } from "@p5/kit-track";
+import { dialogsSlot, menuSlot } from "@p5/shell/api";
+import {
+  clearCompletedKind,
+  todosClearCompletedAsk,
+  todosCollectionSlot,
+  todosRemove,
+  todosToolbarActionsSlot,
+} from "@p5/todos/api";
+import { createConfirmModel } from "./confirm.model.js";
+
+const fields = useFields({ slots: getSlots, log: getLogger, timeoutMs: getNotificationTimeout });
+
+const plural = (n: number) => `${n} completed todo${n === 1 ? "" : "s"}`;
+
+/**
+ * `todos.clear-completed`: the "Clear completed" action (toolbar + main menu) and the
+ * `todos:clear-completed:ask` command, which submits the same action. The record carries the ids
+ * that are done AT SUBMIT; its handler asks about exactly those in a dialog session and settles
+ * when the dialog closes — so the action is `running` (and refuses) exactly as long as the dialog
+ * is open, with no controller write. Clear removes those ids and notifies how many.
+ */
+export const activate: Controller = async (context, scope) => {
+  const { slots, log: rootLog, timeoutMs } = fields(context);
+  const log = rootLog.child({ bundle: "todos.clear-completed" });
+  const notifier = newNotifier(slots, timeoutMs);
+  scope.defer(() => notifier.dispose());
+  const [collection, stop] = trackFirst(slots, todosCollectionSlot, (c) => [
+    c.getTodos,
+    c.onTodosUpdate,
+  ]);
+  scope.defer(stop);
+  const doneIds = () => (collection() ?? []).filter((t) => t.done).map((t) => t.id);
+
+  const action = createCommitAction({
+    label: "Clear completed",
+    capture: doneIds,
+    when: () => doneIds().length > 0,
+  });
+  scope.defer(() => action.dispose());
+
+  /** Publishes the question over `ids` in a dialog session; resolves when the dialog closes. */
+  const ask = (ids: readonly string[]) =>
+    new Promise<void>((closed) => {
+      const dialog = scope.child();
+      dialog.defer(closed);
+      const model = createConfirmModel(`Delete ${plural(ids.length)}?`, "Clear");
+      dialog.defer(() => model.dispose());
+      drainCommits(
+        dialog,
+        log,
+        on(model.control.confirm, async (_, { task }) => {
+          const result = await task(
+            attempt(log, "clear completed", () => call(slots, todosRemove, { ids }).promise),
+          );
+          void dialog.close();
+          notifier.notify(
+            result.ok
+              ? { message: `Cleared ${plural(result.value)}`, tone: "success" }
+              : { message: `Clear completed failed: ${result.message}`, tone: "error" },
+          );
+        }),
+        on(model.control.cancel, () => void dialog.close()),
+      );
+      dialog.defer(
+        slots.register(dialogsSlot, "todos:clear-completed", {
+          kind: clearCompletedKind,
+          title: "Clear completed",
+          model: model.view,
+        }),
+      );
+    });
+
+  drainCommits(
+    scope,
+    log,
+    on(action.control, (ids, { task }) => task(ask(ids))),
+  );
+  // The command is one more source of the same intent: the action records it (or refuses it).
+  scope.defer(answer(slots, todosClearCompletedAsk, async () => action.view.submit()));
+  scope.defer(
+    slots.provide(todosToolbarActionsSlot, {
+      id: "todos.clear-completed",
+      order: 20,
+      action: action.view,
+    }),
+  );
+  scope.defer(
+    slots.provide(menuSlot, {
+      id: "todos.clear-completed",
+      group: "todos",
+      groupLabel: "Todos",
+      order: 20,
+      action: action.view,
+    }),
+  );
+};

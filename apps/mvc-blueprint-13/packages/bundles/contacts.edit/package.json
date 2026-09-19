@@ -1,0 +1,18 @@
+{
+  "name": "@p5/contacts.edit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@p5/contacts": "link:../contacts",
+    "@p5/kernel": "link:../../kernel",
+    "@p5/kit-commit": "link:../../kits/commit",
+    "@p5/kit-form": "link:../../kits/form",
+    "@p5/kit-notify": "link:../../kits/notify",
+    "@p5/kit-slots": "link:../../kits/slots",
+    "@p5/shell": "link:../shell"
+  }
+}

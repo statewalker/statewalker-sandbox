@@ -1,0 +1,15 @@
+{
+  "name": "@p5/kernel",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@statewalker/shared-adapters": "catalog:",
+    "@statewalker/shared-logger": "catalog:",
+    "@statewalker/shared-registry": "catalog:",
+    "@statewalker/shared-slots": "0.2.1"
+  }
+}

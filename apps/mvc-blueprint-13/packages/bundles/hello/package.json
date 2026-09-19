@@ -1,0 +1,14 @@
+{
+  "name": "@p5/hello",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./api": "./api/index.ts"
+  },
+  "dependencies": {
+    "@p5/kernel": "link:../../kernel",
+    "@p5/shell": "link:../shell"
+  }
+}
