@@ -1,16 +1,16 @@
 {
-  "name": "@p5/shell",
+  "name": "@p5/todos.ui.solid",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
-    "./api": "./api/index.ts",
-    "./api/react": "./api/react/index.ts",
-    "./api/solid": "./api/solid/index.ts"
+    ".": "./index.ts"
   },
   "dependencies": {
     "@p5/kernel": "link:../../kernel",
-    "react": "catalog:",
+    "@p5/kit-solid": "link:../../kits/solid",
+    "@p5/shell": "link:../shell",
+    "@p5/todos": "link:../todos",
     "solid-js": "1.9.15"
   }
 }

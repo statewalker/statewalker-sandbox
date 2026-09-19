@@ -1,22 +1,16 @@
 import { contactDetailsKind, contactEditorKind, contactListKind } from "@p5/contacts/api";
-import { type ReactRenderer, reactRenderersSlot } from "@p5/shell/api/react";
-import { type Controller, getSlots, newRegistry, type ViewKind } from "@p5/kernel";
-import type { ComponentType } from "react";
+import { type Controller, getSlots } from "@p5/kernel";
+import { reactRenderer } from "@p5/kit-react";
+import { reactRenderersSlot } from "@p5/shell/api/react";
 import { ContactDetails, ContactEditor, ContactList } from "./views.js";
 
 /** `contacts.ui.react`: contributes the Contacts renderers for React. Wiring only. */
-export const activate: Controller = async (context) => {
+export const activate: Controller = async (context, scope) => {
   const slots = getSlots(context);
-  const [register, cleanup] = newRegistry();
-  const add = <M>(kind: ViewKind<M>, component: ComponentType<{ model: M }>) =>
-    register(
-      slots.register(reactRenderersSlot, kind.id, {
-        kind,
-        component,
-      } satisfies ReactRenderer<M> as unknown as ReactRenderer<never>),
-    );
-  add(contactListKind, ContactList);
-  add(contactDetailsKind, ContactDetails);
-  add(contactEditorKind, ContactEditor);
-  return cleanup;
+  for (const r of [
+    reactRenderer(contactListKind, ContactList),
+    reactRenderer(contactDetailsKind, ContactDetails),
+    reactRenderer(contactEditorKind, ContactEditor),
+  ])
+    scope.defer(slots.register(reactRenderersSlot, r.kind.id, r));
 };

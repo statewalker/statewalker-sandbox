@@ -4,10 +4,14 @@ import { type ApplicationManifest, application, type Context } from "@p5/kernel"
 import { shellRoot } from "@p5/shell/api";
 
 const react = () => import("./apps/react.js");
+const solid = () => import("./apps/solid.js");
 const apps: Record<string, () => Promise<ApplicationManifest>> = {
   "workbench.react": () => react().then((m) => m.workbenchReact),
   "todos.react": () => react().then((m) => m.todosReactStandalone),
   "contacts.react": () => react().then((m) => m.contactsReactStandalone),
+  "workbench.solid": () => solid().then((m) => m.workbenchSolid),
+  "todos.solid": () => solid().then((m) => m.todosSolidStandalone),
+  "contacts.solid": () => solid().then((m) => m.contactsSolidStandalone),
 };
 
 const root = document.getElementById("root");

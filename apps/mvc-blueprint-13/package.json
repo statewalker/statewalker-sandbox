@@ -21,8 +21,10 @@
     "@p5/contacts.edit": "link:packages/bundles/contacts.edit",
     "@p5/contacts.list": "link:packages/bundles/contacts.list",
     "@p5/contacts.ui.react": "link:packages/bundles/contacts.ui.react",
+    "@p5/contacts.ui.solid": "link:packages/bundles/contacts.ui.solid",
     "@p5/hello": "link:packages/bundles/hello",
     "@p5/hello.ui.react": "link:packages/bundles/hello.ui.react",
+    "@p5/hello.ui.solid": "link:packages/bundles/hello.ui.solid",
     "@p5/kernel": "link:packages/kernel",
     "@p5/kit-commit": "link:packages/kits/commit",
     "@p5/kit-form": "link:packages/kits/form",
@@ -30,11 +32,14 @@
     "@p5/kit-model": "link:packages/kits/model",
     "@p5/kit-notify": "link:packages/kits/notify",
     "@p5/kit-react": "link:packages/kits/react",
+    "@p5/kit-shell": "link:packages/kits/shell",
     "@p5/kit-signals": "link:packages/kits/signals",
     "@p5/kit-slots": "link:packages/kits/slots",
+    "@p5/kit-solid": "link:packages/kits/solid",
     "@p5/kit-track": "link:packages/kits/track",
     "@p5/shell": "link:packages/bundles/shell",
     "@p5/shell.react": "link:packages/bundles/shell.react",
+    "@p5/shell.solid": "link:packages/bundles/shell.solid",
     "@p5/shell.test": "link:packages/bundles/shell.test",
     "@p5/todos": "link:packages/bundles/todos",
     "@p5/todos.clear-completed": "link:packages/bundles/todos.clear-completed",
@@ -44,6 +49,7 @@
     "@p5/todos.list": "link:packages/bundles/todos.list",
     "@p5/todos.status": "link:packages/bundles/todos.status",
     "@p5/todos.ui.react": "link:packages/bundles/todos.ui.react",
+    "@p5/todos.ui.solid": "link:packages/bundles/todos.ui.solid",
     "@statewalker/shared-adapters": "catalog:",
     "@statewalker/shared-logger": "catalog:",
     "@statewalker/shared-registry": "catalog:",
@@ -51,6 +57,7 @@
     "alien-signals": "3.2.1",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "solid-js": "1.9.15",
     "zod": "4.5.4"
   },
   "devDependencies": {
@@ -64,6 +71,7 @@
     "tailwindcss": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
+    "vite-plugin-solid": "2.11.14",
     "vitest": "^5.0.0"
   }
 }

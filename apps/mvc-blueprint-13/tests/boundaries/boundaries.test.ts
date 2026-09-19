@@ -51,7 +51,7 @@ const KERNEL_FORBIDDEN = /^@p5\//;
 const ALIEN = /^alien-signals(?:\/|$)/;
 const KIT_SIGNALS = /^@p5\/kit-signals$/;
 const mayImportSignals = (file: string) =>
-  /^packages\/kits\/(?:model|commit|form|track)\//.test(file) || /\.model\.ts$/.test(file);
+  /^packages\/kits\/(?:model|commit|form|track|shell)\//.test(file) || /\.model\.ts$/.test(file);
 /** R8: an API module declares; it implements nothing. */
 const IMPLEMENTATION = /\bfunction\b|\bclass\b|\bnew\s+[A-Z]/;
 const API_VALUE_OK = /^@p5\/kernel$/;

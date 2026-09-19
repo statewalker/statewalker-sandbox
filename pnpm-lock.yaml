@@ -1420,12 +1420,18 @@ importers:
       '@p5/contacts.ui.react':
         specifier: link:packages/bundles/contacts.ui.react
         version: link:packages/bundles/contacts.ui.react
+      '@p5/contacts.ui.solid':
+        specifier: link:packages/bundles/contacts.ui.solid
+        version: link:packages/bundles/contacts.ui.solid
       '@p5/hello':
         specifier: link:packages/bundles/hello
         version: link:packages/bundles/hello
       '@p5/hello.ui.react':
         specifier: link:packages/bundles/hello.ui.react
         version: link:packages/bundles/hello.ui.react
+      '@p5/hello.ui.solid':
+        specifier: link:packages/bundles/hello.ui.solid
+        version: link:packages/bundles/hello.ui.solid
       '@p5/kernel':
         specifier: link:packages/kernel
         version: link:packages/kernel
@@ -1447,12 +1453,18 @@ importers:
       '@p5/kit-react':
         specifier: link:packages/kits/react
         version: link:packages/kits/react
+      '@p5/kit-shell':
+        specifier: link:packages/kits/shell
+        version: link:packages/kits/shell
       '@p5/kit-signals':
         specifier: link:packages/kits/signals
         version: link:packages/kits/signals
       '@p5/kit-slots':
         specifier: link:packages/kits/slots
         version: link:packages/kits/slots
+      '@p5/kit-solid':
+        specifier: link:packages/kits/solid
+        version: link:packages/kits/solid
       '@p5/kit-track':
         specifier: link:packages/kits/track
         version: link:packages/kits/track
@@ -1462,6 +1474,9 @@ importers:
       '@p5/shell.react':
         specifier: link:packages/bundles/shell.react
         version: link:packages/bundles/shell.react
+      '@p5/shell.solid':
+        specifier: link:packages/bundles/shell.solid
+        version: link:packages/bundles/shell.solid
       '@p5/shell.test':
         specifier: link:packages/bundles/shell.test
         version: link:packages/bundles/shell.test
@@ -1489,6 +1504,9 @@ importers:
       '@p5/todos.ui.react':
         specifier: link:packages/bundles/todos.ui.react
         version: link:packages/bundles/todos.ui.react
+      '@p5/todos.ui.solid':
+        specifier: link:packages/bundles/todos.ui.solid
+        version: link:packages/bundles/todos.ui.solid
       '@statewalker/shared-adapters':
         specifier: 'catalog:'
         version: 0.1.1
@@ -1510,6 +1528,9 @@ importers:
       react-dom:
         specifier: 'catalog:'
         version: 19.2.8(react@19.2.8)
+      solid-js:
+        specifier: 1.9.15
+        version: 1.9.15
       zod:
         specifier: 4.5.4
         version: 4.5.4
@@ -1544,6 +1565,9 @@ importers:
       vite:
         specifier: 'catalog:'
         version: 8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0)
+      vite-plugin-solid:
+        specifier: 2.11.14
+        version: 2.11.14(solid-js@1.9.15)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0))
       vitest:
         specifier: ^5.0.0
         version: 5.0.0(@opentelemetry/api@1.9.1)(@types/node@25.9.5)(@vitest/browser-playwright@5.0.0)(@vitest/ui@5.0.0)(happy-dom@20.14.0)(vite@8.2.2(@types/node@25.9.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0))

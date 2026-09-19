@@ -1,4 +1,6 @@
-import type { ActionContribution, ActionView } from "@p5/kernel";
+import type { ActionContribution, ActionView, ViewKind } from "@p5/kernel";
+import type { ReactRenderer } from "@p5/shell/api/react";
+import type { ComponentType } from "react";
 import { useSyncExternalStore } from "react";
 
 /**
@@ -41,4 +43,15 @@ export function ActionBar({
       ))}
     </div>
   );
+}
+
+/**
+ * A React renderer for `kind`, typed against the kind's model, as the heterogeneous renderer slot
+ * stores it — the existential cast (P0 fail 9) lives here, once.
+ */
+export function reactRenderer<M>(
+  kind: ViewKind<M>,
+  component: ComponentType<{ model: M }>,
+): ReactRenderer<never> {
+  return { kind, component } as ReactRenderer<M> as unknown as ReactRenderer<never>;
 }

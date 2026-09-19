@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { contactsReactStandalone, todosReactStandalone } from "../../src/apps/react.js";
+import { contactsSolidStandalone, todosSolidStandalone } from "../../src/apps/solid.js";
 import { open, type Page } from "./dom.js";
 import { contactsEdit, q, todosBasics } from "./scenarios.js";
 
-describe("standalone runs in the per technology (Chromium)", () => {
+const technologies = [
+  ["react", todosReactStandalone, contactsReactStandalone],
+  ["solid", todosSolidStandalone, contactsSolidStandalone],
+] as const;
+
+describe.each(technologies)("standalone runs, %s (Chromium)", (_tech, todosApp, contactsApp) => {
   let page: Page | undefined;
   afterEach(async () => {
     await page?.stop();
@@ -11,14 +17,16 @@ describe("standalone runs in the per technology (Chromium)", () => {
   });
 
   it("todos.standalone: the Todos scenario; only the Todos menu group", async () => {
-    page = await open(todosReactStandalone);
+    page = await open(todosApp);
     await todosBasics(page);
     expect(q(page).menuGroups()).toEqual(["Todos"]);
+    expect(page.errors()).toEqual([]);
   });
 
   it("contacts.standalone: the Contacts scenario; only the Contacts menu group", async () => {
-    page = await open(contactsReactStandalone);
+    page = await open(contactsApp);
     await contactsEdit(page);
     expect(q(page).menuGroups()).toEqual(["Contacts"]);
+    expect(page.errors()).toEqual([]);
   });
 });

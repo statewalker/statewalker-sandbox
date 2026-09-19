@@ -1,6 +1,7 @@
 import { without } from "@p5/kernel";
 import { afterEach, describe, expect, it } from "vitest";
 import { workbenchReact } from "../../src/apps/react.js";
+import { workbenchSolid } from "../../src/apps/solid.js";
 import { button, click, open, type Page, waitFor } from "./dom.js";
 import {
   contactsEdit,
@@ -12,7 +13,10 @@ import {
 } from "./scenarios.js";
 
 /** The same scenarios, per UI technology. Adding a technology adds a row here, nothing else. */
-const technologies = [["react", workbenchReact]] as const;
+const technologies = [
+  ["react", workbenchReact],
+  ["solid", workbenchSolid],
+] as const;
 
 describe.each(technologies)("workbench.%s (Chromium)", (_tech, manifest) => {
   let page: Page | undefined;
@@ -57,6 +61,20 @@ describe.each(technologies)("workbench.%s (Chromium)", (_tech, manifest) => {
     await menus(page, ["Contacts", "Hello"]);
     expect(q(page).header()).toEqual([]);
     await contactsEdit(page);
+  });
+
+  it("Ctrl-click adds and removes a row (the model's toggleSelected, no arithmetic in the view)", async () => {
+    page = await open(manifest);
+    const $ = q(page);
+    await waitFor(() => $.todoTitles().length === 3);
+    const selected = () =>
+      $.todoTitles().filter((t) => $.todoRow(t)?.getAttribute("aria-current") === "true");
+    click($.todoRow("Buy milk"));
+    await waitFor(() => selected().join() === "Buy milk");
+    click($.todoRow("Call plumber"), { ctrlKey: true });
+    await waitFor(() => selected().join() === "Buy milk,Call plumber");
+    click($.todoRow("Buy milk"), { metaKey: true });
+    await waitFor(() => selected().join() === "Call plumber");
   });
 
   it("hello: the minimal bundle's menu item and panel", async () => {
