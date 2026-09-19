@@ -79,7 +79,7 @@ export function moduleOf(path: string): string {
   if (path.startsWith("src/kernel/")) return "kernel";
   const kit = /^src\/kits\/([^/]+)\//.exec(path);
   if (kit) return `kit:${kit[1]}`;
-  const api = /^src\/bundles\/(.+?\/api(?:\/(?:react|dom|svelte|solid|vue))?)\//.exec(path);
+  const api = /^src\/bundles\/(.+?\/api(?:\/(?:react|dom|svelte|solid|vue|jr))?)\//.exec(path);
   if (api) return `api:${api[1]}`;
   const bundle = /^src\/bundles\/([^/]+)\//.exec(path);
   if (bundle) return `bundle:${bundle[1]}`;
@@ -90,9 +90,11 @@ export function moduleOf(path: string): string {
 export const ownerOf = (module: string) =>
   module.startsWith("api:") ? `bundle:${module.slice(4).split("/")[0]}` : module;
 
-/** UI: renderers, shell hosts, and bridges (a renderer-slot adapter between two technologies). */
-export const isUiBundle = (name: string) =>
-  /\.ui\.|^shell\.(svelte|solid|vue)$|^bridge\./.test(name);
+/**
+ * UI: views (`*.ui.jr`: specs + model bindings), shell hosts, and the json-render technology
+ * bundles `jr.<tech>` (a catalog implementation + the views → renderers bridge).
+ */
+export const isUiBundle = (name: string) => /\.ui\.|^shell\.(react|solid)$|^jr\./.test(name);
 export const isRendererBundle = (name: string) => /\.ui\./.test(name);
 
 export interface Edge {

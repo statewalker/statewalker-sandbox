@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// LOC per module: non-blank, non-comment lines of .ts/.tsx/.svelte (ARCHITECTURE §13). Tests counted apart.
+// LOC per module: non-blank, non-comment lines of .ts/.tsx/.json (ARCHITECTURE §13). Tests counted apart.
+// J2: json-render specs (.json) count as UI code, formatted by Biome like the rest.
 // Usage: node scripts/loc.mjs [path-prefix …]   e.g. node scripts/loc.mjs src/bundles/hello
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -10,7 +11,7 @@ function walk(dir) {
   return readdirSync(dir).flatMap((name) => {
     const p = join(dir, name);
     if (statSync(p).isDirectory()) return walk(p);
-    return /\.(ts|tsx|svelte)$/.test(name) ? [p] : [];
+    return /\.(ts|tsx|svelte|json)$/.test(name) ? [p] : [];
   });
 }
 
@@ -27,7 +28,7 @@ export function loc(text) {
 
 function moduleOf(file) {
   const m =
-    /^src\/bundles\/([^/]+\/api(?:\/(?:react|dom|svelte|solid|vue))?)\//.exec(file) ??
+    /^src\/bundles\/([^/]+\/api(?:\/(?:react|dom|svelte|solid|vue|jr))?)\//.exec(file) ??
     /^src\/bundles\/([^/]+)\//.exec(file) ??
     /^src\/(kits\/[^/]+)\//.exec(file) ??
     /^src\/(kernel)\//.exec(file) ??
@@ -57,7 +58,7 @@ const kind = (m) =>
         ? "kit"
         : /\/api/.test(m)
           ? "api"
-          : /\.ui\.|^shell\.(svelte|solid|vue)|^bridge\./.test(m)
+          : /\.ui\.|^shell\.(react|solid)|^jr\./.test(m)
             ? "ui"
             : m.startsWith("app")
               ? "app"
@@ -79,5 +80,5 @@ for (const [m, r] of sorted) {
 console.log("—".repeat(50));
 for (const [k, t] of totals)
   console.log(
-    `${("total " + k).padEnd(37)} ${String(t.files).padStart(5)} ${String(t.loc).padStart(6)}`,
+    `${`total ${k}`.padEnd(37)} ${String(t.files).padStart(5)} ${String(t.loc).padStart(6)}`,
   );

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "J2 — json-render as a renderer technology: one set of specs rendered by React and Solid over P0's logic (byte-identical copies), through a single-writer store adapter.",
+  "description": "J2 \u2014 json-render as a renderer technology: one set of specs rendered by React and Solid over P0's logic (byte-identical copies), through a single-writer store adapter.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -12,7 +12,8 @@
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "typecheck": "tsc --noEmit",
     "loc": "node scripts/loc.mjs",
-    "graph": "vitest run tests/boundaries --reporter=verbose"
+    "graph": "vitest run tests/boundaries --reporter=verbose",
+    "size": "node scripts/size.mjs"
   },
   "dependencies": {
     "@json-render/core": "0.21.0",
