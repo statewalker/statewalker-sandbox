@@ -73,14 +73,16 @@ export const activate: Controller = async (context, scope) => {
   }
 
   scope.defer(
-    answer(slots, todosEditOpen, ({ payload }) => {
+    answer(slots, todosEditOpen, "todos.edit", ({ payload }) => {
       const collection = slots.getSnapshot(todosCollectionSlot)[0]; // a one-shot read
       const todo = collection?.getTodos().find((t) => t.id === payload.id);
       if (!todo) throw new Error(`todo not found: ${payload.id}`);
       open("edit", todo.title, todo.id);
     }),
   );
-  scope.defer(answer(slots, todosCompose, ({ payload }) => open("create", payload.title)));
+  scope.defer(
+    answer(slots, todosCompose, "todos.edit", ({ payload }) => open("create", payload.title)),
+  );
 
   // "New todo…" in the main menu: calls its own command, like any other caller would.
   const newTodo = createCommitAction({ label: "New todo…", capture: () => undefined });

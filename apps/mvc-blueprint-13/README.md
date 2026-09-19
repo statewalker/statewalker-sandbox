@@ -33,7 +33,7 @@ pnpm packages        # regenerates every package.json from its imports (--check 
 export const activate: Controller = async (context, scope) => {
   const { slots, log } = fields(context);                       // 1. resolve dependencies
   let session: Scope | undefined;
-  scope.defer(answer(slots, contactsEditOpen, ({ payload }) => { // `answer` claims; `observe` never does
+  scope.defer(answer(slots, contactsEditOpen, "contacts.edit", ({ payload }) => { // the one answer; `observe` never claims
     void session?.close();                                       //    withdraws synchronously
     const editor = (session = scope.child());                    //    a child scope = one editor
     const model = createForm<ContactDraft>(base);                // 2. create models
@@ -56,11 +56,15 @@ export const activate: Controller = async (context, scope) => {
 hosts, lanes and explicit drain owners, `submit(): boolean`, `answer`/`observe`, the turn's
 scope-aware `call`, changed-fields patches, singleton peer kernel. See `LESSONS.md` § P5.1.
 
+**P5.2** (after the re-check): a drain's claim ends with its session once its records are settled
+(N1); `each()` releases its disposer when the stream ends (N2); the React dev guard names the
+contribution (N3); a second `answer` to a command throws, naming both bundles. See `LESSONS.md` § P5.2.
+
 | Piece | Where | What it guarantees |
 | --- | --- | --- |
 | `Scope` | `packages/kernel/scope.ts` (80 LOC) | `defer` (reverse disposal; `release` early), `child()` (closed first), `task(p)` (continuation dropped once closed; `task(fn)` not started on a closed scope), `signal` (aborted on close). `close()` withdraws synchronously. The loader gives each activation a bundle scope and closes them in reverse. |
-| Commands | `packages/kernel/commands.ts` (P1, P5.1) | `answer` contributes the handler that claims (first present wins; sync or async); `observe` sees every call and never claims; errors unwrapped; a claimed call whose answer leaves rejects `abandoned`; a `silent` result is typed `R \| undefined`. |
-| Commit records | `@p5/kit-commit` | `createCommitAction({ capture, queue?, when? })`: `submit()` captures a deep-frozen record and returns whether it was accepted (a failing capture refuses and logs); `running` is derived and not writable; refuse by default. `drainCommits({ scope, session?, slots, log }, …on(action, handler))`: ONE LANE — one at a time in submit order; settles each record; an action is claimed by one drain (a second throws). The turn: `task`, scope-aware `call`, `signal`. Helpers: `session()`, `each()` (streams). |
+| Commands | `packages/kernel/commands.ts` (P1, P5.1) | `answer(slots, decl, by, fn)` contributes the one handler that claims (sync or async; a second answer throws, naming both `by`s); `observe` sees every call and never claims; errors unwrapped; a claimed call whose answer leaves rejects `abandoned`; a `silent` result is typed `R \| undefined`. |
+| Commit records | `@p5/kit-commit` | `createCommitAction({ capture, queue?, when? })`: `submit()` captures a deep-frozen record and returns whether it was accepted (a failing capture refuses and logs); `running` is derived and not writable; refuse by default. `drainCommits({ scope, session?, slots, log }, …on(action, handler))`: ONE LANE — one at a time in submit order; settles each record; an action is claimed by one drain at a time (a second throws; the claim ends when the drain's session closed and its records settled). The turn: `task`, scope-aware `call`, `signal`. Helpers: `session()`, `each()` (streams). |
 | Outcome rule (D4) | `drainCommits` | records accepted in a session are handled even after the session closes — the drain belongs to `scope` (the bundle); writes to the session's disposed models are ignored and the bundle's notification remains. When the bundle closes, the drain and its continuations are dropped. Cancel is its own lane, so it closes at once. |
 | Cross-bundle guards | `@p5/kit-track` | `trackFirst(slots, decl, pick)` as an action's `when`; glitch-free kit-to-kit (a producer marks its getters `readable`), bridged otherwise. |
 | Forms | `@p5/kit-form` | one form factory for both editors and the rename dialog (the ledger's "share model factories through a kit"). |
@@ -97,7 +101,7 @@ rules, 14 manifest declarations, 15 the model contract, 16 two facets, 17 presen
 Rewritten:
 
 - **6 Command** — a slot whose contributions are handlers: `answer` contributes the claiming
-  handler, `observe` a watcher that never claims; `call` dispatches to the handlers present now; a
+  handler (at most one, named by its bundle), `observe` a watcher that never claims; `call` dispatches to the handlers present now; a
   caller whose owner leaves gets `abandoned` (P1; split verbs since P5.1).
 - **9 Bundle** — a package: an activator and at most one API module (`./api`); it imports the
   kernel, kits and API modules only, each declared in its `package.json`.

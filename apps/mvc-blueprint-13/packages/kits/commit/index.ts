@@ -44,8 +44,11 @@ export interface CommitControl<T> {
   settle(seq: number): void;
   /** Describes the action. `running` is derived from the records and cannot be written. */
   update(patch: Partial<Omit<ActionState, "running">>): void;
-  /** Claims the records for ONE drain; a second claim throws (`drainCommits` calls it). */
-  claim(): void;
+  /**
+   * Claims the records for ONE drain; a second claim while it holds throws. Returns `release`
+   * (`drainCommits` calls both: it releases when its session closed and its records are settled).
+   */
+  claim(): () => void;
 }
 
 export interface CommitActionOptions<T> {
@@ -147,6 +150,10 @@ export function createCommitAction<T>(options: CommitActionOptions<T>): CommitAc
     claim: () => {
       if (claimed) throw new Error(`"${options.label}" is already drained: one drain per action`);
       claimed = true;
+      let held = true;
+      return () => {
+        if (held) held = claimed = false;
+      };
     },
   });
 
@@ -209,11 +216,16 @@ export interface DrainOwner {
  * the bundle's notifications remain. When `scope` (the bundle) closes, the drain and every
  * continuation awaited through the turn are dropped: nothing is written after deactivation.
  *
- * Each action is drained by one drain only (a second claim throws). A handler's throw is logged.
+ * Each action is drained by one drain at a time (a second claim throws). The claim ends when the
+ * session has closed and the records it accepted are settled, so each session of a bundle-level
+ * action can drain it in turn (N1); records accepted after the close are the next drain's. A
+ * handler's throw is logged.
  */
 export function drainCommits(owner: DrainOwner, ...handlers: CommitHandler[]): void {
   const { scope: home, session = home, slots, log } = owner;
-  for (const h of handlers) h.control.claim();
+  const claims = handlers.map((h) => h.control.claim());
+  /** Per handler, the last seq this drain accepted — set when its session closes. */
+  let accepted: Map<CommitHandler, number> | undefined;
   let scheduled = false;
   let running = false;
   let arrival = 0;
@@ -234,12 +246,18 @@ export function drainCommits(owner: DrainOwner, ...handlers: CommitHandler[]): v
     let best: [CommitHandler, CommitRecord<unknown>] | undefined;
     for (const h of handlers) {
       const after = cursor.get(h) ?? 0;
-      const r = h.control.getRecords().find((x) => x.seq > after);
+      const last = accepted?.get(h) ?? Number.POSITIVE_INFINITY;
+      const r = h.control.getRecords().find((x) => x.seq > after && x.seq <= last);
       if (r && (!best || (seen.get(r) ?? 0) < (seen.get(best[1]) ?? 0))) best = [h, r];
     }
     return best;
   };
 
+  const settledAll = (upTo: Map<CommitHandler, number>) =>
+    handlers.every((h) => !h.control.getRecords().some((r) => r.seq <= (upTo.get(h) ?? 0)));
+  const release = () => {
+    if (home.closed || (accepted && settledAll(accepted))) for (const r of claims.splice(0)) r();
+  };
   const run = async () => {
     scheduled = false;
     if (running) return;
@@ -254,6 +272,7 @@ export function drainCommits(owner: DrainOwner, ...handlers: CommitHandler[]): v
           log.error("commit handler failed", { error: String(error) });
         } finally {
           h.control.settle(record.seq);
+          release();
         }
       }
     } finally {
@@ -269,12 +288,19 @@ export function drainCommits(owner: DrainOwner, ...handlers: CommitHandler[]): v
   // Subscriptions end with the session (no new records can arrive from its disposed models);
   // records already accepted are still handled, in the bundle scope.
   for (const h of handlers) session.defer(h.control.onRecordsUpdate(kick));
+  session.defer(() => {
+    stamp();
+    accepted = new Map(handlers.map((h) => [h, h.control.getRecords().at(-1)?.seq ?? 0]));
+    release();
+  });
+  home.defer(release);
+  kick(); // records already pending (a previous session's leftovers) are this drain's
 }
 
 /**
  * The stream helper: consumes `stream` while `scope` is open, calling `fn` per item; when the
  * scope closes the pending read is dropped and the iterator is returned (a streaming controller's
- * `for await`, which R11 forbids).
+ * `for await`, which R11 forbids). A stream that ends or throws releases its disposer at once.
  */
 export async function each<T>(
   scope: Scope,
@@ -282,8 +308,12 @@ export async function each<T>(
   fn: (item: T) => void,
 ): Promise<void> {
   const it = stream[Symbol.asyncIterator]();
-  scope.defer(() => void it.return?.());
-  for (let r = await scope.task(it.next()); !r.done; r = await scope.task(it.next())) fn(r.value);
+  const release = scope.defer(() => void it.return?.());
+  try {
+    for (let r = await scope.task(it.next()); !r.done; r = await scope.task(it.next())) fn(r.value);
+  } finally {
+    release(); // a stream that ended (or threw) leaves no disposer behind (N2)
+  }
 }
 
 /**

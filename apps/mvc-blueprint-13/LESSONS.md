@@ -342,3 +342,48 @@ reasons). Tests: `pnpm test` **228** (212 + 16), `pnpm test:browser` **33** (31 
 | Correctness | Cancel during a hung Save | — | trapped (A1) | **closes at once**; Save reported when it lands |
 | Correctness | Toggle behind 3 queued Adds (100 ms backend) | — | ≥ 350 ms (B1; 402 measured) | **< 150 ms** |
 | Correctness | suites | green | 212 node / 31 Chromium | **228 / 33** — + containment × 2, drain seams 10, dispatcher rewritten (12), singleton, R13, A1, A7, B1, ask refusal |
+
+## P5.2 iteration
+
+A short follow-up to the [re-check after P5.1](../../../../../docs/sandbox-apps/architecture/prototypes/P5-analysis.md)
+(section "Re-check after P5.1"), on branch `spike/p5-iteration-2`, in place. It covers the three
+new Low hazards N1–N3 and the "two answers" residual. Each item's test was written first and
+failed for the stated reason, then the fix made it pass. The documented limits (timers and
+listeners, the stale base A7b, Cancel not cancelling the write) are out of scope and unchanged.
+Tests: `pnpm test` **231** (228 + 3), `pnpm test:browser` **33** (the containment test now
+asserts the new message), and `pnpm typecheck`. No new dependency.
+
+| # | Item | Built as | Test |
+| --- | --- | --- | --- |
+| N1 | A drain's claim was permanent | `claim()` returns `release`. The drain releases it once its session has closed and every record accepted before the close is settled, or when the bundle scope closes. A drain handles only the records it accepted, and records accepted after its session closed belong to the next drain. A new drain also starts on the records already pending, because otherwise a leftover record would keep a non-queue action `running` forever. | `drain.test.ts`: session A drains and closes, then session B drains without throwing; two open drains still throw; the claim holds while A's record runs, and the leftover record goes to B |
+| N2 | `each()` kept one disposer per finished stream | It keeps the `release` returned by `defer` and calls it in a `finally` when the stream ends or throws. When the scope closes, the dropped continuation never runs the `finally`, and the disposer runs as before. | 50 finished streams and 1 throwing stream leave **0** pending disposers (was 51) |
+| N3 | The dev guard said "r returns a new value…" | The React host puts `ContributionName` (`<slot> "<id>"`) around each contained contribution, and `useModel` prefixes its error with that name. `readable()` now keeps the wrapped getter's name instead of `r`. | `containment.test.tsx`: `shell:panels "bad:unstable": a getter returns a new value on every call (model contract point 7)`, with a `readable()`-wrapped getter |
+| — | Two answers: the first contributed won silently | `answer(slots, decl, by, fn)`. A second answer throws at contribution time: `<key> is already answered by "<a>"; "<b>" cannot answer it too`. The refused answer is not contributed, and once the first is withdrawn another bundle may answer. `observe` is unrestricted. | `commands.test.ts`: the "first answer claims, second never runs" test became the loud-conflict test |
+
+Findings:
+
+1. **No bundle relied on shadowing.** Every command in the app has exactly one answer, and the
+   whole suite passes with the conflict check. The only test that relied on it was the kernel's
+   "a second answer never runs", which now pins the throw instead.
+2. **Naming the contributor needed an argument.** Slots do not know who contributes, and
+   `answer` has no bundle scope, so `by` is explicit (the bundle id at 8 call sites). It goes
+   before the handler: as the last argument, biome expanded every multi-line `answer` call, which
+   cost +37 logic LOC for nothing. In the chosen position the cost is +2 LOC.
+3. **Releasing a claim changed who handles leftover records.** Before, a record was handled by
+   the one drain that ever existed. Now it is handled by the drain that holds the claim when the
+   record is accepted, or by the next drain to claim it. That is why a drain now starts on
+   records that are already pending.
+4. **N3 needs the host's cooperation.** A binding cannot know which contribution it renders. The
+   host already wraps each contribution in a boundary, so it passes the name through a context.
+   Solid has no equivalent guard, so nothing changed there.
+
+LOC, counted as in P5.1 (`node scripts/loc.mjs`):
+
+| | P5.1 | **P5.2** |
+| --- | --- | --- |
+| kernel | 470 | **476** (+6: the conflict check) |
+| kernel + `shared-slots` | 679 | **685** (≤ 700) |
+| kits | 1010 | **1036** (+26: `kit-commit` 234 → 257, `kit-react` 53 → 55, `kit-signals` 44 → 45) |
+| logic | 1219 | **1221** (+2: one `answer` line wrapped) |
+| UI (React host) | 334 | **338** (the name provider) |
+

@@ -42,7 +42,7 @@ export const activate: Controller = async (context, scope) => {
     .then(publishTodos, (error) => log.warn("todos:load failed", { error: String(error) }));
 
   scope.defer(
-    answer(slots, todosAdd, async ({ payload }) => {
+    answer(slots, todosAdd, "todos.core", async ({ payload }) => {
       await scope.task(loaded);
       const todo = await scope.task(api.add(payload.title));
       publishTodos([...current(), todo]);
@@ -50,7 +50,7 @@ export const activate: Controller = async (context, scope) => {
     }),
   );
   scope.defer(
-    answer(slots, todosUpdate, async ({ payload }) => {
+    answer(slots, todosUpdate, "todos.core", async ({ payload }) => {
       await scope.task(loaded);
       const todo = await scope.task(api.update(payload.id, payload.patch));
       publishTodos(current().map((t) => (t.id === todo.id ? todo : t)));
@@ -58,7 +58,7 @@ export const activate: Controller = async (context, scope) => {
     }),
   );
   scope.defer(
-    answer(slots, todosRemove, async ({ payload }) => {
+    answer(slots, todosRemove, "todos.core", async ({ payload }) => {
       await scope.task(loaded);
       const gone = new Set<string>();
       try {

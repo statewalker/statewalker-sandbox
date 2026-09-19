@@ -34,7 +34,7 @@ export const activate: Controller = async (context, scope) => {
 
   let session: Scope | undefined; // the open editor; a new open replaces it
   scope.defer(
-    answer(slots, contactsEditOpen, ({ payload }) => {
+    answer(slots, contactsEditOpen, "contacts.edit", ({ payload }) => {
       const collection = slots.getSnapshot(contactsCollectionSlot)[0]; // a one-shot read
       const contact = collection?.getContacts().find((c) => c.id === payload.id);
       if (!contact) throw new Error(`contact not found: ${payload.id}`);

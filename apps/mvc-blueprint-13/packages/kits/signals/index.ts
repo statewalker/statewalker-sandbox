@@ -54,6 +54,7 @@ const onGraph = new WeakSet<object>();
  */
 export function readable<T>(read: Read<T>): Read<T> {
   const r = () => read();
+  Object.defineProperty(r, "name", { value: read.name }); // not "r": the dev guard names getters
   onGraph.add(r);
   return r;
 }

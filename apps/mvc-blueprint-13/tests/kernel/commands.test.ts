@@ -13,7 +13,7 @@ const kind = async (p: Promise<unknown>) =>
 describe("commands over slots: a command is a slot of handlers, a call is a dispatch", () => {
   it("a typed request gets its typed response; the answer is a contribution in the slot", async () => {
     const slots = new KernelSlots();
-    const off = answer(slots, ping, async ({ payload }) => `pong ${payload.n}`);
+    const off = answer(slots, ping, "test", async ({ payload }) => `pong ${payload.n}`);
     expect(slots.getSnapshot(ping)).toHaveLength(1); // visible like any contribution
     const r: string = await call(slots, ping, { n: 1 }).promise;
     expect(r).toBe("pong 1");
@@ -42,7 +42,7 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
     const slots = new KernelSlots();
     const ran: string[] = [];
     observe(slots, ping, () => void ran.push("early observer"));
-    answer(slots, ping, async ({ payload }) => {
+    answer(slots, ping, "test", async ({ payload }) => {
       ran.push("owner");
       return `owner ${payload.n}`;
     });
@@ -51,13 +51,19 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
     expect(ran).toEqual(["early observer", "late observer", "owner"]);
   });
 
-  it("the first answer present claims; a second answer never runs", async () => {
+  it("a second answer is loud: it throws at contribution time and names both contributors", async () => {
     const slots = new KernelSlots();
-    const ran: string[] = [];
-    answer(slots, ping, () => (ran.push("first"), "first")); // a sync answer claims too
-    answer(slots, ping, () => (ran.push("second"), "second"));
+    const off = answer(slots, ping, "bundle.one", () => "first");
+    expect(() => answer(slots, ping, "bundle.two", () => "second")).toThrow(
+      /t:ping is already answered by "bundle\.one"; "bundle\.two" cannot answer it too/,
+    );
+    expect(slots.getSnapshot(ping)).toHaveLength(1); // the refused answer is not contributed
     expect(await call(slots, ping, { n: 1 }).promise).toBe("first");
-    expect(ran).toEqual(["first"]);
+    observe(slots, ping, () => undefined); // observers stay unrestricted
+    observe(slots, ping, () => undefined);
+    off();
+    answer(slots, ping, "bundle.two", () => "second"); // once withdrawn, another may answer
+    expect(await call(slots, ping, { n: 1 }).promise).toBe("second");
   });
 
   it("a throwing observer is reported and changes nothing for the caller", async () => {
@@ -66,7 +72,7 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
     observe(slots, ping, () => {
       throw new Error("observer bug");
     });
-    answer(slots, ping, () => "ok");
+    answer(slots, ping, "test", () => "ok");
     expect(await call(slots, ping, { n: 1 }).promise).toBe("ok");
     expect(logged).toHaveBeenCalledTimes(1);
     logged.mockRestore();
@@ -91,7 +97,7 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
     const early = call(slots, ping, { n: 1 });
     const earlySilent = call(slots, note, "early");
     const got: unknown[] = [];
-    answer(slots, ping, async ({ payload }) => {
+    answer(slots, ping, "test", async ({ payload }) => {
       got.push(payload);
       return "ok";
     });
@@ -105,12 +111,12 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
 
   it("an answer's own failure reaches the caller unchanged (thrown or rejected)", async () => {
     const slots = new KernelSlots();
-    const off = answer(slots, ping, () => {
+    const off = answer(slots, ping, "test", () => {
       throw new Error("sync boom");
     });
     expect(await kind(call(slots, ping, { n: 1 }).promise)).toBe("raw:sync boom");
     off();
-    answer(slots, ping, async () => {
+    answer(slots, ping, "test", async () => {
       throw new Error("Name is required");
     });
     expect(await kind(call(slots, ping, { n: 1 }).promise)).toBe("raw:Name is required");
@@ -119,7 +125,7 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
   it("the answer withdrawn while a call is pending ⇒ the call rejects (abandoned); nothing is left", async () => {
     const slots = new KernelSlots();
     let release: (v: string) => void = () => {};
-    const off = answer(slots, ping, () => new Promise<string>((r) => (release = r)));
+    const off = answer(slots, ping, "test", () => new Promise<string>((r) => (release = r)));
     const c = call(slots, ping, { n: 1 });
     off();
     expect(await kind(c.promise)).toBe("abandoned");
@@ -130,7 +136,7 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
 
   it("usage marks command slots so coverage does not report handlers as unobserved", () => {
     const slots = new KernelSlots();
-    answer(slots, ping, async () => "x");
+    answer(slots, ping, "test", async () => "x");
     expect(slots.usage()).toEqual([
       { key: "t:ping", contributions: 1, observers: 0, command: true },
     ]);
@@ -142,7 +148,7 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
     // @ts-expect-error — an observer cannot be async: it could look like a claim
     observe(slots, unit, async () => {});
     // @ts-expect-error — no priorities: order is not a mechanism
-    answer(slots, unit, () => {}, { priority: 10 });
+    answer(slots, unit, "test", () => {}, { priority: 10 });
     const later = async () => {
       // @ts-expect-error — a silent command's result may be undefined
       const n: string = await call(slots, note, "x").promise;

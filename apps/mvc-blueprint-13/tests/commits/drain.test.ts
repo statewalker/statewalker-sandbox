@@ -1,4 +1,4 @@
-import { answer, defineCommand, KernelSlots, newScope } from "@p5/kernel";
+import { answer, defineCommand, KernelSlots, newScope, type Scope } from "@p5/kernel";
 import { createCommitAction, drainCommits, each, on, session } from "@p5/kit-commit";
 import { newNotifier } from "@p5/kit-notify";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -101,7 +101,7 @@ describe("P5.1 drain seams", () => {
     const slots = new KernelSlots();
     const cmd = defineCommand<void, void>("t:write");
     const writes: string[] = [];
-    answer(slots, cmd, async () => void writes.push("written"));
+    answer(slots, cmd, "test", async () => void writes.push("written"));
     const bundle = newScope();
     const a = createCommitAction({ label: "A", capture: () => 1 });
     let settled = false;
@@ -174,5 +174,107 @@ describe("P5.1 drain seams", () => {
     await later(null, 20);
     expect(notifier.size).toBe(0);
     expect(warned).toHaveLength(1); // fail() logs, notify() does not
+  });
+});
+
+/**
+ * P5.2 — the two hazards the re-check found in P5.1's own additions (N1, N2).
+ */
+describe("P5.2 drain and stream releases", () => {
+  it("N1 → a drain's claim ends with its session: a later session drains the same action", async () => {
+    const bundle = newScope();
+    const a = createCommitAction({ label: "A", capture: () => 1 }); // bundle-level: outlives sessions
+    const seen: string[] = [];
+    const first = bundle.child();
+    drainCommits(
+      { ...drainIn(bundle), session: first },
+      on(a.control, () => void seen.push("A")),
+    );
+    a.view.submit();
+    await later(null);
+    await first.close();
+    const second = bundle.child();
+    expect(() =>
+      drainCommits(
+        { ...drainIn(bundle), session: second },
+        on(a.control, () => void seen.push("B")),
+      ),
+    ).not.toThrow();
+    a.view.submit();
+    await later(null);
+    expect(seen).toEqual(["A", "B"]);
+    // Two drains open at once are still refused.
+    expect(() =>
+      drainCommits(
+        { ...drainIn(bundle), session: bundle.child() },
+        on(a.control, () => {}),
+      ),
+    ).toThrow(/already drained/);
+  });
+
+  it("N1 → the claim is held until the closed session's accepted records are settled", async () => {
+    const bundle = newScope();
+    const a = createCommitAction({ label: "A", capture: () => 1, queue: true });
+    const seen: string[] = [];
+    let release = () => {};
+    const first = bundle.child();
+    drainCommits(
+      { ...drainIn(bundle), session: first },
+      on(a.control, (_, { task }) => {
+        seen.push("A");
+        return task(new Promise<void>((r) => (release = r)));
+      }),
+    );
+    a.view.submit();
+    await later(null);
+    await first.close(); // A's record is still running
+    const drainB = () =>
+      drainCommits(
+        { ...drainIn(bundle), session: bundle.child() },
+        on(a.control, () => void seen.push("B")),
+      );
+    expect(drainB).toThrow(/already drained/);
+    a.view.submit(); // accepted after A's session closed: not A's to handle
+    release();
+    await later(null);
+    expect(seen).toEqual(["A"]);
+    expect(drainB).not.toThrow();
+    await later(null); // the pending record is the new drain's: handled without another submit
+    expect(seen).toEqual(["A", "B"]);
+    expect(a.view.getState().running).toBe(false);
+  });
+
+  it("N2 → each() releases its disposer when the stream ends: 50 finished streams leave 0", async () => {
+    const inner = newScope();
+    let pending = 0;
+    const counted: Scope = {
+      signal: inner.signal,
+      get closed() {
+        return inner.closed;
+      },
+      defer(dispose) {
+        pending++;
+        let ran = false;
+        return inner.defer(() => {
+          if (!ran) (ran = true), pending--;
+          return dispose();
+        });
+      },
+      child: () => inner.child(),
+      task: (work) => inner.task(work),
+      close: () => inner.close(),
+    };
+    async function* finite(n: number) {
+      for (let i = 0; i < n; i++) yield i;
+    }
+    async function* failing() {
+      yield 1;
+      throw new Error("stream failed");
+    }
+    let items = 0;
+    for (let i = 0; i < 50; i++) await each(counted, finite(3), () => void items++);
+    await each(counted, failing(), () => {}).catch(() => {});
+    expect(items).toBe(150);
+    expect(pending).toBe(0);
   });
 });

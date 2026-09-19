@@ -27,7 +27,7 @@ export interface Call<R> {
  * OBSERVER (sees every call, before the answer; never claims, whatever it returns).
  */
 export type Handler<P, R> =
-  | { readonly answer: (call: CallView<P>) => R | Promise<R> }
+  | { readonly answer: (call: CallView<P>) => R | Promise<R>; readonly by: string }
   | { readonly observe: (call: CallView<P>) => undefined };
 
 export interface CommandDeclaration<P, R> extends SlotDeclaration<Handler<P, R>> {
@@ -71,16 +71,23 @@ export class CommandError extends Error {
 }
 
 /**
- * Answers `decl` with `fn`: contributes the handler that CLAIMS every call (sync or async, its
- * result or throw settles the call). The first answer present at call time claims. Returns the
- * disposer.
+ * Answers `decl` with `fn` on behalf of `by` (the contributing bundle): contributes the handler
+ * that CLAIMS every call (sync or async, its result or throw settles the call). A command has at
+ * most one answer: a second one throws here, naming both contributors, as a duplicate keyed id
+ * does. Returns the disposer; once it ran, another contributor may answer.
  */
 export function answer<P, R>(
   slots: KernelSlots,
   decl: CommandDeclaration<P, R>,
+  by: string,
   fn: (call: CallView<P>) => R | Promise<R>,
 ): () => void {
-  return slots.provide(decl, Object.freeze({ answer: fn }));
+  const other = slots.getSnapshot(decl).find((h) => "answer" in h);
+  if (other && "answer" in other)
+    throw new Error(
+      `${decl.key} is already answered by "${other.by}"; "${by}" cannot answer it too`,
+    );
+  return slots.provide(decl, Object.freeze({ answer: fn, by }));
 }
 
 /** Observes `decl`: `fn` sees every call, before the answer, and can never claim one. */
@@ -94,7 +101,7 @@ export function observe<P, R>(
 
 /**
  * Dispatches `payload` to the handlers of `decl` present now: every observer (a throwing observer
- * is reported and skipped), then the first answer. The answer's withdrawal while the call is
+ * is reported and skipped), then the answer. The answer's withdrawal while the call is
  * pending rejects the call (`abandoned`) — an owner that stops never leaves a caller waiting.
  */
 export function call<P, R>(

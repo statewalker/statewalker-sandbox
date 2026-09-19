@@ -14,7 +14,7 @@ import {
 import { type ReactRenderer, reactRenderersSlot } from "@p5/shell/api/react";
 import type { KernelSlots, KeyedSlotDeclaration, SlotDeclaration } from "@p5/kernel";
 import type { FocusReturn } from "@p5/kit-host";
-import { useModel } from "@p5/kit-react";
+import { ContributionName, useModel } from "@p5/kit-react";
 import { byOrder } from "@p5/kit-slots";
 import {
   Component,
@@ -58,7 +58,11 @@ class Contained extends Component<
   render() {
     const { failed } = this.state;
     if (failed === undefined || (failed !== true && failed !== this.props.of))
-      return this.props.children;
+      return (
+        <ContributionName.Provider value={`${this.props.slot} "${this.props.id}"`}>
+          {this.props.children}
+        </ContributionName.Provider>
+      );
     return (
       <span role="alert" data-failed={this.props.id}>
         ⚠ {this.props.title} failed

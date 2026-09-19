@@ -9,6 +9,7 @@ import {
   type Listener,
 } from "@p5/kernel";
 import { reactRenderer, useModel as useReactModel } from "@p5/kit-react";
+import { readable } from "@p5/kit-signals";
 import { solidRenderer } from "@p5/kit-solid";
 import { createElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -31,9 +32,8 @@ interface Probe {
 const throwingKind = defineViewKind<Probe>("bad:throws");
 const unstableKind = defineViewKind<Probe>("bad:unstable");
 const unstable: Probe = {
-  getState: function getState() {
-    return { text: "fresh every call" }; // breaks contract point 7
-  },
+  // Wrapped by `readable()` like every kit-made getter: the guard cannot rely on its name (N3).
+  getState: readable(() => ({ text: "fresh every call" })), // breaks contract point 7
   onStateUpdate: (l) => (l(), () => {}),
 };
 const badHeader = {
@@ -130,9 +130,12 @@ describe.each(["react", "solid"] as const)("fault containment: %s (W1)", (tech) 
     expect(logged.some((l) => l.includes("renderer bug"))).toBe(true);
     expect(logged.some((l) => l.includes("header model bug"))).toBe(true);
     if (tech === "react") {
-      // R1: the dev guard names the getter before React's update-depth loop starts.
+      // R1/N3: the dev guard names the offending contribution before React's update-depth loop
+      // starts — not the getter's name, which `readable()` wrappers do not carry.
       const r1 = report.failed.find((f) => f.id === "bad:unstable");
-      expect(r1?.error).toMatch(/getState returns a new value on every call/);
+      expect(r1?.error).toBe(
+        'shell:panels "bad:unstable": a getter returns a new value on every call (model contract point 7)',
+      );
     }
   });
 });

@@ -41,7 +41,7 @@ export const activate: Controller = async (context, scope) => {
   });
 
   scope.defer(
-    answer(slots, contactsUpdate, async ({ payload }) => {
+    answer(slots, contactsUpdate, "contacts.core", async ({ payload }) => {
       await scope.task(loaded);
       const contact = await scope.task(api.update(payload.id, payload.patch));
       publish(contacts.get().map((c) => (c.id === contact.id ? contact : c)));

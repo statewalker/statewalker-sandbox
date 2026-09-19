@@ -117,7 +117,7 @@ describe("kernel scope (K §4.1.4)", () => {
     const slots = getSlots(context);
     const cmd = defineCommand<void, number>("x:slow");
     const owner = newScope();
-    owner.defer(answer(slots, cmd, () => owner.task(later(1, 50))));
+    owner.defer(answer(slots, cmd, "test", () => owner.task(later(1, 50))));
     const c = call(slots, cmd, undefined);
     await owner.close();
     const error = await c.promise.catch((e: unknown) => e);

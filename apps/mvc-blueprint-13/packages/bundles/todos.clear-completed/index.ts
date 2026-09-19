@@ -79,7 +79,7 @@ export const activate: Controller = async (context, scope) => {
   // The command is one more source of the same intent: the action records it, or refuses — and a
   // refusal is the caller's answer.
   scope.defer(
-    answer(slots, todosClearCompletedAsk, () => {
+    answer(slots, todosClearCompletedAsk, "todos.clear-completed", () => {
       if (action.view.submit()) return;
       throw new Error(action.view.getState().running ? "busy" : "nothing to clear");
     }),
