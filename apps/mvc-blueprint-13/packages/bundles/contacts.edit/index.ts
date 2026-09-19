@@ -72,8 +72,13 @@ export const activate: Controller = async (context, scope) => {
         editor,
         log,
         on(model.control.save, async (draft, { task }) => {
+          // A failure goes to the form (ignored once the session closed) AND to a notification.
+          const fail = (errors: { form: string; email?: string }) => {
+            model.control.reportErrors(errors);
+            notifier.notify({ message: `Could not save ${name}: ${errors.form}`, tone: "error" });
+          };
           const invalid = await task(validateContact(draft, validateMs)); // step 1
-          if (invalid) return model.control.reportErrors(invalid);
+          if (invalid) return fail(invalid);
           const result = await task(
             attempt(
               log,
@@ -81,14 +86,7 @@ export const activate: Controller = async (context, scope) => {
               () => call(slots, contactsUpdate, { id, patch: draft }).promise,
             ), // step 2
           );
-          if (!result.ok) {
-            model.control.reportErrors({ form: result.message });
-            notifier.notify({
-              message: `Could not save ${name}: ${result.message}`,
-              tone: "error",
-            });
-            return;
-          }
+          if (!result.ok) return fail({ form: result.message });
           notifier.notify({ message: `Saved ${draft.name}`, tone: "success" });
           void editor.close();
         }),

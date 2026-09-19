@@ -107,6 +107,22 @@ describe("outcome of an in-flight Save after its session closed (D4)", () => {
     expect(errorLogs(r.logs)).toEqual([]);
   });
 
+  it("replace during step 1 (validation), failing: notified, not lost with the closed form", async () => {
+    const api = new MemContactsApi(undefined, DELAY);
+    r = await start(workbenchHeadless, {
+      services: { "contacts:api": api },
+      config: { "contacts:validate-ms": DELAY },
+    });
+    const first = await openContact(r, "c1");
+    first.editField("email", "not-an-email");
+    first.save.submit(); // step 1 runs for DELAY ms
+    const second = await openContact(r, "c2");
+    await until(() => messages(r as Running).length > 0);
+    expect(messages(r)).toEqual(["Could not save Ada Lovelace: Invalid email"]);
+    expect(second.getStatus().errors).toEqual({});
+    expect(updates(api)).toHaveLength(0);
+  });
+
   it("a record captured in s1 and drained after s1 closed is still committed and reported", async () => {
     const api = new MemContactsApi(undefined, DELAY);
     r = await start(workbenchHeadless, { services: { "contacts:api": api } });
