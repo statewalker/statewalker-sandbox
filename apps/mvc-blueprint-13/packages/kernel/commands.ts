@@ -86,8 +86,6 @@ export function answer<P, R>(
   return slots.provide(decl, Object.freeze({ handle: fn, priority: options.priority ?? 0 }));
 }
 
-let nextId = 1;
-
 /**
  * Dispatches `payload` to the handlers of `decl` currently in the slot, highest priority first.
  * A handler withdrawn before its turn is skipped. The claiming handler's withdrawal while the call
@@ -98,7 +96,7 @@ export function call<P, R>(
   decl: CommandDeclaration<P, R>,
   payload: P,
 ): Call<P, R> {
-  const id = nextId++;
+  const id = slots.nextCallId();
   let settle!: (ok: boolean, v: unknown) => void;
   const promise = new Promise<R>((res, rej) => {
     settle = (ok, v) => (ok ? res(v as R) : rej(v));

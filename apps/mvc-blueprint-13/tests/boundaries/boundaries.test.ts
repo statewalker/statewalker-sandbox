@@ -1,5 +1,8 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  ROOT,
   crossBundle,
   edges,
   importsOf,
@@ -52,6 +55,83 @@ const mayImportSignals = (file: string) =>
 /** R8: an API module declares; it implements nothing. */
 const IMPLEMENTATION = /\bfunction\b|\bclass\b|\bnew\s+[A-Z]/;
 const API_VALUE_OK = /^@p5\/kernel$/;
+
+/** R9: the `<app>:api` service adapters declared in API modules, owned by `<app>.core` (D10). Host services (`shell:*`) are set by hosts. */
+const SERVICES = new Map(
+  apiFiles.flatMap((s) =>
+    [...s.code.matchAll(/export const (\w+)\s*=\s*newAdapter<[^>]*>\("[\w.-]+:api"\)/g)].map(
+      (m) => [m[1], `${bundleName(s.file)}.core`] as const,
+    ),
+  ),
+);
+const serviceViolations = (s: Source) => {
+  const bundle = bundleName(s.file);
+  if (!bundle || isApi(s)) return [];
+  return [...SERVICES]
+    .filter(([name, owner]) => bundle !== owner && new RegExp(`\\b${name}\\b`).test(s.code))
+    .map(([name]) => `${s.file} uses ${name}`);
+};
+
+/** R10 (R2's rule, extended to the kernel): top-level let/var, new Map/Set/Array, mutable array. WeakMap/WeakSet are allowed: keyed by per-application objects. */
+const moduleState = (s: Source) =>
+  [
+    ...s.code.matchAll(/^(?:export\s+)?(?:let|var)\s+\w+/gm),
+    ...s.code.matchAll(/^(?:export\s+)?const\s+\w+[^=\n]*=\s*new\s+(?:Map|Set|Array)\b/gm),
+    ...s.code.matchAll(
+      /^(?:export\s+)?const\s+\w+(?:\s*:\s*(?![^=\n]*readonly)[^=\n]+)?\s*=\s*\[(?![^;]*\]\s*as\s+const)/gm,
+    ),
+  ].map((m) => `${s.file}: ${m[0]}`);
+
+/** R11: controller files — a logic bundle's activator module. */
+const controllerFiles = logicFiles.filter((s) => s.file.endsWith("/index.ts"));
+const bareAwaits = (code: string) =>
+  [...code.matchAll(/\bawait\s+(?!(?:\w+\.)?task\()[^;\n]*/g)].map((m) => m[0]);
+
+/** R12: the package graph (D13), from each package.json. */
+function packageJsons(): { dir: string; name: string; deps: string[] }[] {
+  const out: { dir: string; name: string; deps: string[] }[] = [];
+  const add = (dir: string) => {
+    const pkg = JSON.parse(readFileSync(join(ROOT, dir, "package.json"), "utf8"));
+    out.push({ dir, name: pkg.name, deps: Object.keys(pkg.dependencies ?? {}) });
+  };
+  add("packages/kernel");
+  for (const group of ["kits", "bundles"])
+    for (const n of readdirSync(join(ROOT, "packages", group))) add(`packages/${group}/${n}`);
+  return out;
+}
+const pkgName = (spec: string) => spec.split("/").slice(0, 2).join("/");
+function undeclared(): string[] {
+  const pkgs = packageJsons();
+  return all.flatMap((s) => {
+    const pkg = pkgs.find((p) => s.file.startsWith(`${p.dir}/`));
+    if (!pkg) return [];
+    return s.imports
+      .map((i) => pkgName(i.spec))
+      .filter((n) => n.startsWith("@p5/") && n !== pkg.name && !pkg.deps.includes(n))
+      .map((n) => `${s.file} imports ${n}, not in ${pkg.dir}/package.json`);
+  });
+}
+export function cycleIn(graph: ReadonlyMap<string, readonly string[]>): string[] | undefined {
+  const state = new Map<string, "on" | "done">();
+  const visit = (n: string, path: string[]): string[] | undefined => {
+    if (state.get(n) === "on") return [...path.slice(path.indexOf(n)), n];
+    if (state.get(n) === "done") return undefined;
+    state.set(n, "on");
+    for (const d of graph.get(n) ?? []) {
+      const found = visit(d, [...path, n]);
+      if (found) return found;
+    }
+    state.set(n, "done");
+    return undefined;
+  };
+  for (const n of graph.keys()) {
+    const found = visit(n, []);
+    if (found) return found;
+  }
+  return undefined;
+}
+const packageCycle = () =>
+  cycleIn(new Map(packageJsons().map((p) => [p.name, p.deps.filter((d) => d.startsWith("@p5/"))])));
 
 describe("boundary suite", () => {
   it("finds the tree it polices", () => {
@@ -107,6 +187,26 @@ describe("boundary suite", () => {
         expect(API_VALUE_OK.test(i.spec), `${s.file} value-imports ${i.spec}`).toBe(true);
       }
     }
+  });
+
+  it("R9 a service an API declares is used only by its owner bundle (`<app>.core`)", () => {
+    const bad = all.flatMap((s) => serviceViolations(s));
+    expect(bad).toEqual([]);
+    expect(SERVICES.size).toBeGreaterThanOrEqual(2); // todos:api, contacts:api
+  });
+
+  it("R10 no module-level mutable state anywhere (kernel, kits, bundles, APIs)", () => {
+    const hits = all.filter((s) => s.file.startsWith("packages/")).flatMap(moduleState);
+    expect(hits).toEqual([]);
+  });
+
+  it("R11 a controller awaits only through a scope (`task(…)`): no 'still active?' check needed", () => {
+    for (const s of controllerFiles) expect(bareAwaits(s.code), s.file).toEqual([]);
+  });
+
+  it("R12 every @p5 import is a declared dependency of its package; the package graph is acyclic", () => {
+    expect(undeclared()).toEqual([]);
+    expect(packageCycle()).toBeUndefined();
   });
 
   describe("negative controls: every rule can fail", () => {
@@ -182,6 +282,41 @@ describe("boundary suite", () => {
         "packages/bundles/hello/api/index.js",
       );
     });
+    it("R9, R10, R11, R12", () => {
+      const fake = (file: string, code: string): Source => ({
+        file,
+        code,
+        imports: importsOf(code),
+      });
+      expect(
+        serviceViolations(fake("packages/bundles/todos.list/index.ts", "todoApiAdapter.get(ctx)")),
+      ).toHaveLength(1);
+      expect(
+        serviceViolations(fake("packages/bundles/todos.core/index.ts", "todoApiAdapter.get(ctx)")),
+      ).toEqual([]);
+      expect(moduleState(fake("packages/kits/x/index.ts", "let seq = 0;"))).toHaveLength(1);
+      expect(moduleState(fake("packages/kits/x/index.ts", "const m = new Map();"))).toHaveLength(1);
+      expect(moduleState(fake("packages/kits/x/index.ts", "const w = new WeakMap();"))).toEqual([]);
+      expect(moduleState(fake("packages/kits/x/index.ts", "  let inside = 0;"))).toEqual([]);
+      expect(bareAwaits("await call(slots, x, p).promise;")).toHaveLength(1);
+      expect(bareAwaits("await task(p); await scope.task(q); await turn.task(r);")).toEqual([]);
+      expect(
+        cycleIn(
+          new Map([
+            ["a", ["b"]],
+            ["b", ["a"]],
+          ]),
+        ),
+      ).toEqual(["a", "b", "a"]);
+      expect(
+        cycleIn(
+          new Map([
+            ["a", ["b"]],
+            ["b", []],
+          ]),
+        ),
+      ).toBeUndefined();
+    });
     it("R6, R7, R8", () => {
       expect(KERNEL_FORBIDDEN.test("@p5/shell/api")).toBe(true);
       expect(KERNEL_FORBIDDEN.test("@statewalker/shared-slots")).toBe(false);
@@ -219,6 +354,11 @@ describe("dependency graph report (§13.3)", () => {
             `  ${b.padEnd(32)} ${String(t.size).padStart(2)}  ${[...t].sort().join(", ")}`,
         ),
     ];
+    const pkgs = packageJsons();
+    const internal = pkgs.flatMap((p) => p.deps.filter((d) => d.startsWith("@p5/")));
+    lines.push(
+      `package graph (D13): ${pkgs.length} packages, ${internal.length} declared @p5 dependencies, acyclic: ${packageCycle() === undefined}`,
+    );
     console.info(`[graph]\n${lines.join("\n")}`);
     expect(cross.filter((c) => !c.ok)).toEqual([]);
   });

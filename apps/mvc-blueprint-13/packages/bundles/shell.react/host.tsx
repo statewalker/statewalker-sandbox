@@ -12,6 +12,7 @@ import {
 } from "@p5/shell/api";
 import { type ReactRenderer, reactRenderersSlot } from "@p5/shell/api/react";
 import type { KernelSlots, KeyedSlotDeclaration, SlotDeclaration } from "@p5/kernel";
+import type { FocusReturn } from "@p5/kit-host";
 import { useModel } from "@p5/kit-react";
 import { byOrder } from "@p5/kit-slots";
 import {
@@ -22,13 +23,13 @@ import {
   useContext,
   useLayoutEffect,
   useMemo,
-  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
 
 type Slots = Pick<KernelSlots, "observe" | "getSnapshot">;
 const SlotsContext = createContext<Slots | null>(null);
+const FocusContext = createContext<FocusReturn | null>(null);
 
 function useSlots(): Slots {
   const slots = useContext(SlotsContext);
@@ -61,18 +62,20 @@ function Rendered({ contribution }: { contribution: PanelContribution | DialogCo
   return Component ? <Component model={contribution.model} /> : null;
 }
 
-export function Shell({ slots }: { slots: Slots }) {
+export function Shell({ slots, focus }: { slots: Slots; focus: FocusReturn }) {
   return (
     <SlotsContext.Provider value={slots}>
-      <div className="flex min-h-screen flex-col">
-        <div className="flex items-center gap-4 border-b px-4 py-2">
-          <Menu />
-          <Header />
+      <FocusContext.Provider value={focus}>
+        <div className="flex min-h-screen flex-col">
+          <div className="flex items-center gap-4 border-b px-4 py-2">
+            <Menu />
+            <Header />
+          </div>
+          <Panels />
+          <Dialogs />
+          <Notifications />
         </div>
-        <Panels />
-        <Dialogs />
-        <Notifications />
-      </div>
+      </FocusContext.Provider>
     </SlotsContext.Provider>
   );
 }
@@ -222,32 +225,10 @@ function Dialogs() {
   );
 }
 
-/**
- * The last element that received focus. The browser blurs an opener that gets disabled while its
- * dialog is open (Clear completed shows `running`), so `activeElement` at open time can be <body>.
- */
-let lastFocused: Element | null = null;
-if (typeof document !== "undefined") {
-  document.addEventListener("focusin", (event) => {
-    if (!(event.target as Element).closest?.('[role="dialog"]'))
-      lastFocused = event.target as Element;
-  });
-}
-
 /** Remembers the opener when a dialog appears; puts focus back when it is withdrawn. */
 function FocusReturn({ children }: { children: ReactNode }) {
-  const opener = useRef<Element | null>(null);
-  useLayoutEffect(() => {
-    opener.current =
-      document.activeElement !== document.body ? document.activeElement : lastFocused;
-    return () => {
-      const back = opener.current;
-      // After the withdrawal has rendered: the opener may have been disabled while the dialog ran.
-      setTimeout(() => {
-        if (back instanceof HTMLElement && back.isConnected) back.focus();
-      }, 0);
-    };
-  }, []);
+  const focus = useContext(FocusContext);
+  useLayoutEffect(() => focus?.opened(), [focus]);
   return <>{children}</>;
 }
 

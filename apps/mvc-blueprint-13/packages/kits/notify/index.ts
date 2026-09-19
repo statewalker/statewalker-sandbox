@@ -7,8 +7,6 @@ import {
 import type { Context, KernelSlots } from "@p5/kernel";
 import { getConfig } from "@p5/kernel";
 
-let seq = 0;
-
 /** Reads the notification timeout from `sys:config` (a read: resolve it at the top of an activator). */
 export function getNotificationTimeout(context: Context): number {
   const value = getConfig(context)[NOTIFICATION_TIMEOUT_KEY];
@@ -46,7 +44,7 @@ export function notify(
     },
     dismiss: () => withdraw(),
   });
-  release = slots.provide(notificationsSlot, { id: `n${++seq}`, model });
+  release = slots.provide(notificationsSlot, { id: `n-${crypto.randomUUID()}`, model });
   if (timeoutMs > 0 && Number.isFinite(timeoutMs)) timer = setTimeout(withdraw, timeoutMs);
   return withdraw;
 }

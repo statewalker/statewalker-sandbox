@@ -44,24 +44,25 @@ export const activate: Controller = async (context, scope) => {
   );
 
   // ── commits ──────────────────────────────────────────────────────────────────────────────
-  const run = async (what: string, { task }: Turn, work: () => Promise<unknown>) => {
-    const result = await task(attempt(log, what, work));
+  /** One commit: the work, then the outcome line (and `then` on success) — in the bundle scope. */
+  const run = async (what: string, turn: Turn, work: () => Promise<unknown>, then = () => {}) => {
+    const result = await turn.task(attempt(log, what, work));
     control.reportOutcome(result.ok ? undefined : `${what} failed: ${result.message}`);
-    return result.ok;
+    if (result.ok) then();
   };
   const { actions } = control;
   drainCommits(
     scope,
     log,
-    on(actions.add, async (raw, turn) => {
-      const added = await run(
+    on(actions.add, (raw, turn) =>
+      run(
         "add",
         turn,
         () => call(slots, todosAdd, { title: raw.trim() }).promise,
-      );
-      // Clear the input only if it still holds what was added (typing went on meanwhile).
-      if (added && view.getNewTitle() === raw) control.resetNewTitle();
-    }),
+        // Clear the input only if it still holds what was added (typing went on meanwhile).
+        () => view.getNewTitle() === raw && control.resetNewTitle(),
+      ),
+    ),
     on(actions.toggle, (targets, turn) =>
       run("toggle", turn, async () => {
         for (const t of targets)

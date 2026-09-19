@@ -9,7 +9,7 @@ import {
 import type { KernelSlots, KeyedSlotDeclaration, ViewKind } from "@p5/kernel";
 
 /** Slot keys a shell host renders itself — never "unobserved" while a host is up. */
-const HOST_SLOTS = new Set(["shell:header", "shell:menu", "shell:notifications"]);
+const HOST_SLOTS: readonly string[] = ["shell:header", "shell:menu", "shell:notifications"];
 
 /**
  * A host's coverage report: panels and dialogs whose kind has no renderer in `renderers`, and slots
@@ -34,7 +34,8 @@ export function createCoverage(
     const unobserved: UnobservedEntry[] = slots
       .usage()
       .filter(
-        (u) => u.contributions > 0 && u.observers === 0 && !u.command && !HOST_SLOTS.has(u.key),
+        (u) =>
+          u.contributions > 0 && u.observers === 0 && !u.command && !HOST_SLOTS.includes(u.key),
       )
       .map((u) => ({ slot: u.key, contributions: u.contributions }));
     const key = JSON.stringify([unrendered, unobserved]);
@@ -83,3 +84,4 @@ export function formatCoverage(report: CoverageReport): string {
   ];
   return lines.length === 0 ? "coverage: complete" : `coverage:\n  ${lines.join("\n  ")}`;
 }
+export * from "./focus.js";

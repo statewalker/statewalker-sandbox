@@ -21,6 +21,12 @@ type AnyDecl = SlotDeclaration<unknown> | KeyedSlotDeclaration<unknown>;
 export class KernelSlots extends Slots {
   private readonly _decls = new Map<string, AnyDecl>();
   private readonly _observers = new Map<string, number>();
+  private _lastCallId = 0;
+
+  /** Ids for in-flight calls (`sys:calls`), per bus — no module-level counter. */
+  nextCallId(): number {
+    return ++this._lastCallId;
+  }
 
   private _count(key: string, delta: number): void {
     this._observers.set(key, (this._observers.get(key) ?? 0) + delta);
