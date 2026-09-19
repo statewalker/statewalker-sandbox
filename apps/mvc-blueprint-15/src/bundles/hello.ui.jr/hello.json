@@ -1,0 +1,21 @@
+{
+  "root": "hello",
+  "elements": {
+    "hello": {
+      "type": "Stack",
+      "props": { "direction": "row" },
+      "children": ["count", "increment"]
+    },
+    "count": {
+      "type": "Paragraph",
+      "props": { "text": { "$template": "Count: ${/count}" }, "data": { "hello-count": "" } },
+      "children": []
+    },
+    "increment": {
+      "type": "Button",
+      "props": { "action": { "$state": "/increment" } },
+      "on": { "press": { "action": "submit", "params": { "ref": "increment" } } },
+      "children": []
+    }
+  }
+}

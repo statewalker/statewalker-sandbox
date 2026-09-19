@@ -1,0 +1,47 @@
+{
+  "name": "@statewalker/mvc-blueprint-15",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "J2 \u2014 json-render as a renderer technology: one set of specs rendered by React and Solid over P0's logic (byte-identical copies), through a single-writer store adapter.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "typecheck": "tsc --noEmit",
+    "loc": "node scripts/loc.mjs",
+    "graph": "vitest run tests/boundaries --reporter=verbose",
+    "size": "node scripts/size.mjs"
+  },
+  "dependencies": {
+    "@json-render/core": "0.21.0",
+    "@json-render/react": "0.21.0",
+    "@json-render/solid": "0.21.0",
+    "@statewalker/shared-adapters": "catalog:",
+    "@statewalker/shared-commands": "0.2.1",
+    "@statewalker/shared-logger": "catalog:",
+    "@statewalker/shared-registry": "catalog:",
+    "@statewalker/shared-slots": "0.2.1",
+    "alien-signals": "3.2.1",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "solid-js": "1.9.15",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "@vitest/browser-playwright": "^5.0.0",
+    "playwright": "1.58.0",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plugin-solid": "2.11.14",
+    "vitest": "^5.0.0"
+  }
+}

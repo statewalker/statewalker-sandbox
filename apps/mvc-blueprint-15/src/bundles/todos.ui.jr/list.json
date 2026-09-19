@@ -1,0 +1,104 @@
+{
+  "root": "panel",
+  "elements": {
+    "panel": {
+      "type": "Stack",
+      "props": { "direction": "column" },
+      "children": ["entry", "list", "selectionBar", "outcome"]
+    },
+    "entry": {
+      "type": "Stack",
+      "props": { "direction": "row" },
+      "children": ["newTitle", "toolbar"]
+    },
+    "newTitle": {
+      "type": "TextInput",
+      "props": { "label": "New todo", "value": { "$bindState": "/newTitle" }, "grow": true },
+      "children": []
+    },
+    "toolbar": {
+      "type": "Toolbar",
+      "props": { "label": "Todo actions" },
+      "repeat": { "statePath": "/toolbar/ids", "key": "id" },
+      "children": ["toolbarButton"]
+    },
+    "toolbarButton": {
+      "type": "Button",
+      "props": {
+        "action": {
+          "$computed": "at",
+          "args": { "map": { "$state": "/toolbar/states" }, "key": { "$item": "id" } }
+        }
+      },
+      "on": {
+        "press": { "action": "submit", "params": { "ref": { "$template": "toolbar/${id}" } } }
+      },
+      "children": []
+    },
+    "list": {
+      "type": "List",
+      "props": { "label": "Todos" },
+      "repeat": { "statePath": "/items", "key": "id" },
+      "children": ["row"]
+    },
+    "row": {
+      "type": "Item",
+      "props": {
+        "data": { "todo": { "$item": "id" } },
+        "current": {
+          "$computed": "includes",
+          "args": { "list": { "$state": "/selection" }, "value": { "$item": "id" } }
+        }
+      },
+      "on": {
+        "press": { "action": "select", "params": { "id": { "$template": "${id}" } } },
+        "togglePress": { "action": "toggleSelect", "params": { "id": { "$template": "${id}" } } }
+      },
+      "children": ["done", "title"]
+    },
+    "done": {
+      "type": "Checkbox",
+      "props": { "label": { "$template": "Done: ${title}" }, "checked": { "$item": "done" } },
+      "on": {
+        "change": [
+          { "action": "select", "params": { "id": { "$template": "${id}" } } },
+          { "action": "submit", "params": { "ref": "toggle" } }
+        ]
+      },
+      "children": []
+    },
+    "title": {
+      "type": "Text",
+      "props": { "text": { "$item": "title" }, "strike": { "$item": "done" } },
+      "children": []
+    },
+    "selectionBar": {
+      "type": "Toolbar",
+      "props": { "label": "Selection actions" },
+      "repeat": { "statePath": "/selectionActions/ids", "key": "id" },
+      "children": ["selectionButton"]
+    },
+    "selectionButton": {
+      "type": "Button",
+      "props": {
+        "action": {
+          "$computed": "at",
+          "args": { "map": { "$state": "/selectionActions/states" }, "key": { "$item": "id" } }
+        }
+      },
+      "on": {
+        "press": {
+          "action": "submit",
+          "params": { "ref": { "$template": "selectionActions/${id}" } }
+        }
+      },
+      "children": []
+    },
+    "outcome": {
+      "type": "Alert",
+      "props": { "text": { "$state": "/outcome" } },
+      "visible": { "$state": "/outcome" },
+      "children": []
+    }
+  }
+}

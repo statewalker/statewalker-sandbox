@@ -1,0 +1,28 @@
+{
+  "root": "confirm",
+  "elements": {
+    "confirm": {
+      "type": "Stack",
+      "props": { "direction": "column" },
+      "children": ["question", "buttons"]
+    },
+    "question": {
+      "type": "Paragraph",
+      "props": { "text": { "$state": "/question/text" } },
+      "children": []
+    },
+    "buttons": { "type": "Stack", "props": { "direction": "row" }, "children": ["yes", "no"] },
+    "yes": {
+      "type": "Button",
+      "props": { "action": { "$state": "/confirm" } },
+      "on": { "press": { "action": "submit", "params": { "ref": "confirm" } } },
+      "children": []
+    },
+    "no": {
+      "type": "Button",
+      "props": { "action": { "$state": "/cancel" } },
+      "on": { "press": { "action": "submit", "params": { "ref": "cancel" } } },
+      "children": []
+    }
+  }
+}

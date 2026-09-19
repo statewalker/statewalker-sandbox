@@ -1,0 +1,18 @@
+{
+  "root": "details",
+  "elements": {
+    "details": {
+      "type": "Details",
+      "visible": { "$state": "/contact" },
+      "props": {
+        "data": { "contact-details": { "$state": "/contact/id" } },
+        "entries": [
+          { "term": "Name", "value": { "$state": "/contact/name" } },
+          { "term": "Email", "value": { "$state": "/contact/email" } },
+          { "term": "Phone", "value": { "$state": "/contact/phone" } }
+        ]
+      },
+      "children": []
+    }
+  }
+}
