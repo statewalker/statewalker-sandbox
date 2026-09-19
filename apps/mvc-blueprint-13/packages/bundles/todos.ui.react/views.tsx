@@ -28,13 +28,7 @@ export function TodoList({ model }: { model: TodoListView }) {
             aria-current={selection.includes(todo.id) || undefined}
             className="flex items-center gap-2 px-2 py-1 aria-[current=true]:bg-slate-100"
             onClick={(e) =>
-              model.select(
-                e.ctrlKey || e.metaKey
-                  ? selection.includes(todo.id)
-                    ? selection.filter((id) => id !== todo.id)
-                    : [...selection, todo.id]
-                  : [todo.id],
-              )
+              e.ctrlKey || e.metaKey ? model.toggleSelected(todo.id) : model.select([todo.id])
             }
           >
             <input

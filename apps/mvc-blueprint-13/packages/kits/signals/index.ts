@@ -44,3 +44,20 @@ export function effect(fn: () => void): () => void {
     }),
   );
 }
+
+/** Reads made on this substrate (kit-made getters). A WeakSet: it holds no state of its own. */
+const onGraph = new WeakSet<object>();
+
+/**
+ * Marks a model getter as a read on the kit's graph, so a kit `track` elsewhere reads it directly
+ * (tracked, glitch-free) instead of bridging it through its change channel (K §4.3, D11).
+ */
+export function readable<T>(read: Read<T>): Read<T> {
+  const r = () => read();
+  onGraph.add(r);
+  return r;
+}
+
+export function isReadable(fn: unknown): boolean {
+  return typeof fn === "function" && onGraph.has(fn);
+}

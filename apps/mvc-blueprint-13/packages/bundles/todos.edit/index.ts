@@ -1,5 +1,19 @@
+import {
+  answer,
+  type Controller,
+  call,
+  getLogger,
+  getSlots,
+  type Scope,
+  useFields,
+} from "@p5/kernel";
+import { attempt, createCommitAction, drainCommits, on } from "@p5/kit-commit";
+import { createForm } from "@p5/kit-form";
+import { getNotificationTimeout, newNotifier } from "@p5/kit-notify";
+import { followFirst } from "@p5/kit-slots";
 import { menuSlot, panelsSlot } from "@p5/shell/api";
 import {
+  type TitleDraft,
   type TodosCollectionView,
   todoEditorKind,
   todosAdd,
@@ -8,55 +22,22 @@ import {
   todosEditOpen,
   todosUpdate,
 } from "@p5/todos/api";
-import {
-  answer,
-  type Controller,
-  call,
-  getLogger,
-  getSlots,
-  newRegistry,
-  useFields,
-} from "@p5/kernel";
-import { attempt, newUpdateLoop } from "@p5/kit-loop";
-import { createAction, onSubmits } from "@p5/kit-model";
-import { getNotificationTimeout, newNotifier } from "@p5/kit-notify";
-import { followFirst } from "@p5/kit-slots";
-import { createEditorModel, type EditorModel } from "./editor.model.js";
 
-const fields = useFields({
-  slots: getSlots,
-  log: getLogger,
-  timeoutMs: getNotificationTimeout,
-});
-
-interface Session {
-  readonly mode: "edit" | "create";
-  readonly id?: string;
-  readonly model: EditorModel;
-  readonly withdraw: () => void;
-  /** Save's commit, captured at submit time. */
-  commit?: { readonly title: string };
-  cancelled: boolean;
-}
-
-const PANEL_ID = "todos:editor";
+const fields = useFields({ slots: getSlots, log: getLogger, timeoutMs: getNotificationTimeout });
 
 /**
  * `todos.edit`: answers `todos:edit:open` (edit mode) and `todos:compose` (create mode) with ONE
- * editor panel; Save updates or adds and closes; a failing save keeps the form with the error.
+ * editor session; Save updates or adds and closes; a failing save keeps the form with the error.
  * Contributes the main-menu item "New todo…", which calls its own `todos:compose`.
- * Save is REFUSED while running (`running: true`).
+ * Save is REFUSED while running. Outcomes follow the narrowest open scope (see `contacts.edit`).
  */
-export const activate: Controller = async (context) => {
+export const activate: Controller = async (context, scope) => {
   const { slots, log: rootLog, timeoutMs } = fields(context);
   const log = rootLog.child({ bundle: "todos.edit" });
-  const [register, cleanup] = newRegistry();
   const notifier = newNotifier(slots, timeoutMs);
-  register(() => notifier.dispose());
-  let active = true;
-  let session: Session | undefined;
+  scope.defer(() => notifier.dispose());
   let collection: TodosCollectionView | undefined;
-  register(
+  scope.defer(
     followFirst(
       slots,
       todosCollectionSlot,
@@ -70,41 +51,43 @@ export const activate: Controller = async (context) => {
     ),
   );
 
-  const loop = newUpdateLoop(pass, {
-    isActive: () => active,
-    onError: (error) => log.error("todos.edit: pass failed", { error: String(error) }),
-  });
-
-  function close(s: Session | undefined): void {
-    if (!s) return;
-    if (session === s) session = undefined;
-    s.withdraw();
-  }
-
+  let session: Scope | undefined; // the open editor; a new open replaces it
   function open(mode: "edit" | "create", title: string, id?: string): void {
-    close(session);
+    void session?.close();
+    const editor = (session = scope.child());
     // Create mode seeds the draft with the prefilled title over an empty base (a whole-form seed).
-    const model = createEditorModel(
+    const model = createForm<TitleDraft>(
       { title: mode === "create" ? "" : title },
-      { allowClean: mode === "create", saveLabel: "Save", draft: { title } },
+      { allowClean: mode === "create", draft: { title }, valid: (d) => d.title.trim() !== "" },
     );
-    const [own, release] = newRegistry();
-    own(() => model.dispose());
-    const s: Session = { mode, id, model, withdraw: () => void release(), cancelled: false };
-    own(
-      onSubmits(model.control.save, () => {
-        s.commit ??= { title: model.view.getDraft().title };
-        loop.kick();
+    editor.defer(() => model.dispose());
+    drainCommits(
+      editor,
+      log,
+      on(model.control.save, async (draft, { task }) => {
+        const next = draft.title.trim();
+        const result = await task(
+          attempt(log, "save", () =>
+            mode === "create"
+              ? call(slots, todosAdd, { title: next }).promise
+              : call(slots, todosUpdate, { id: id as string, patch: { title: next } }).promise,
+          ),
+        );
+        if (!result.ok) {
+          model.control.reportErrors({ form: `Save failed: ${result.message}` });
+          notifier.notify({
+            message: `Could not save "${next}": ${result.message}`,
+            tone: "error",
+          });
+          return;
+        }
+        notifier.notify({ message: `Saved "${next}"`, tone: "success" });
+        void editor.close();
       }),
+      on(model.control.cancel, () => void editor.close()),
     );
-    own(
-      onSubmits(model.control.cancel, () => {
-        s.cancelled = true;
-        loop.kick();
-      }),
-    );
-    own(
-      slots.register(panelsSlot, PANEL_ID, {
+    editor.defer(
+      slots.register(panelsSlot, "todos:editor", {
         kind: todoEditorKind,
         title: mode === "create" ? "New todo" : `Edit "${title}"`,
         placement: "side",
@@ -112,59 +95,28 @@ export const activate: Controller = async (context) => {
         model: model.view,
       }),
     );
-    session = s;
   }
 
-  async function pass(): Promise<void> {
-    const s = session;
-    if (!s) return;
-    if (s.cancelled) return close(s);
-    const commit = s.commit;
-    if (!commit) return;
-    s.commit = undefined;
-    const title = commit.title.trim();
-    const { save } = s.model.control;
-    save.update({ running: true });
-    const result = await attempt(log, "save", () =>
-      s.mode === "create"
-        ? call(slots, todosAdd, { title }).promise
-        : call(slots, todosUpdate, { id: s.id as string, patch: { title } }).promise,
-    );
-    if (!active) return;
-    // The write landed: say so even if this session was replaced meanwhile.
-    if (result.ok) notifier.notify({ message: "Saved", tone: "success" });
-    if (session !== s) return;
-    save.update({ running: false });
-    if (result.ok) return close(s);
-    s.model.control.reportErrors({ form: `Save failed: ${result.message}` });
-    notifier.notify({ message: `Save failed: ${result.message}`, tone: "error" });
-  }
-
-  register(
+  scope.defer(
     answer(slots, todosEditOpen, async ({ payload }) => {
       const todo = collection?.getTodos().find((t) => t.id === payload.id);
       if (!todo) throw new Error(`todo not found: ${payload.id}`);
-      if (active) open("edit", todo.title, todo.id);
+      open("edit", todo.title, todo.id);
     }),
   );
-  register(
-    answer(slots, todosCompose, async ({ payload }) => {
-      if (active) open("create", payload.title);
-    }),
-  );
-  register(() => close(session));
+  scope.defer(answer(slots, todosCompose, async ({ payload }) => open("create", payload.title)));
 
   // "New todo…" in the main menu: calls its own command, like any other caller would.
-  const newTodo = createAction({ label: "New todo…" });
-  register(() => newTodo.dispose());
-  register(
-    onSubmits(newTodo.control, () => {
-      void call(slots, todosCompose, { title: "" }).promise.catch((error) =>
-        log.warn("compose failed", { error: String(error) }),
-      );
-    }),
+  const newTodo = createCommitAction({ label: "New todo…", capture: () => undefined });
+  scope.defer(() => newTodo.dispose());
+  drainCommits(
+    scope,
+    log,
+    on(newTodo.control, (_, { task }) =>
+      task(attempt(log, "compose", () => call(slots, todosCompose, { title: "" }).promise)),
+    ),
   );
-  register(
+  scope.defer(
     slots.provide(menuSlot, {
       id: "todos.new",
       group: "todos",
@@ -173,9 +125,4 @@ export const activate: Controller = async (context) => {
       action: newTodo.view,
     }),
   );
-
-  return async () => {
-    active = false;
-    await cleanup();
-  };
 };

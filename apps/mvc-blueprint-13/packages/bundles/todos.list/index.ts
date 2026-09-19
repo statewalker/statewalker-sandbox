@@ -1,6 +1,8 @@
+import { type Controller, call, getLogger, getSlots, useFields } from "@p5/kernel";
+import { attempt, drainCommits, on, type Turn } from "@p5/kit-commit";
+import { byOrder, followFirst } from "@p5/kit-slots";
 import { panelsSlot } from "@p5/shell/api";
 import {
-  type Todo,
   todoListKind,
   todosAdd,
   todosCollectionSlot,
@@ -11,45 +13,24 @@ import {
   todosToolbarActionsSlot,
   todosUpdate,
 } from "@p5/todos/api";
-import {
-  type ActionControl,
-  type Controller,
-  call,
-  getLogger,
-  getSlots,
-  newRegistry,
-  useFields,
-} from "@p5/kernel";
-import { attempt, newUpdateLoop } from "@p5/kit-loop";
-import { onSubmits } from "@p5/kit-model";
-import { byOrder, followFirst } from "@p5/kit-slots";
 import { createListModel } from "./list.model.js";
 
 const fields = useFields({ slots: getSlots, log: getLogger });
 
-/** What a commit acts on, captured synchronously in the submit listener. */
-interface Snapshot {
-  readonly selection: readonly string[];
-  readonly items: readonly Todo[];
-}
-
 /**
  * `todos.list`: the list panel, the selection (published to `todos:selection`), Add (toolbar,
  * QUEUED: every submit is honoured with the title it was submitted with) and Toggle/Edit/Delete
- * (selection actions, REFUSED while running).
+ * (selection actions, REFUSED while running). Each record carries what its commit means.
  */
-export const activate: Controller = async (context) => {
+export const activate: Controller = async (context, scope) => {
   const { slots, log: rootLog } = fields(context);
   const log = rootLog.child({ bundle: "todos.list" });
-  const [register, cleanup] = newRegistry();
-  let active = true;
-
   const model = createListModel();
-  register(() => model.dispose());
+  scope.defer(() => model.dispose());
   const { view, control } = model;
 
   // ── derived presentation: collection and action extension points ───────────────────────────
-  register(
+  scope.defer(
     followFirst(
       slots,
       todosCollectionSlot,
@@ -57,81 +38,46 @@ export const activate: Controller = async (context) => {
       () => control.publishItems([]),
     ),
   );
-  register(slots.observe(todosToolbarActionsSlot, (a) => control.publishToolbar(byOrder(a))));
-  register(
+  scope.defer(slots.observe(todosToolbarActionsSlot, (a) => control.publishToolbar(byOrder(a))));
+  scope.defer(
     slots.observe(todosSelectionActionsSlot, (a) => control.publishSelectionActions(byOrder(a))),
   );
 
   // ── commits ──────────────────────────────────────────────────────────────────────────────
-  const adds: string[] = [];
-  const pending: { toggle?: Snapshot; edit?: Snapshot; remove?: Snapshot } = {};
-  const snapshot = (): Snapshot => ({ selection: view.getSelection(), items: view.getItems() });
-  const loop = newUpdateLoop(pass, {
-    isActive: () => active,
-    onError: (error) => log.error("todos.list: pass failed", { error: String(error) }),
-  });
-  const { actions } = control;
-  register(
-    onSubmits(actions.add, (n) => {
-      for (let i = 0; i < n; i++) adds.push(view.getNewTitle());
-      loop.kick();
-    }),
-  );
-  for (const key of ["toggle", "edit", "remove"] as const) {
-    register(
-      onSubmits(actions[key], () => {
-        // Two submits in one tick are one commit, on the state of the first.
-        pending[key] ??= snapshot();
-        loop.kick();
-      }),
-    );
-  }
-
-  async function run(action: ActionControl, what: string, work: () => Promise<unknown>) {
-    action.update({ running: true });
-    const result = await attempt(log, what, work);
-    if (!active) return;
-    action.update({ running: false });
+  const run = async (what: string, { task }: Turn, work: () => Promise<unknown>) => {
+    const result = await task(attempt(log, what, work));
     control.reportOutcome(result.ok ? undefined : `${what} failed: ${result.message}`);
-  }
-
-  async function pass(): Promise<void> {
-    while (adds.length > 0 && active) {
-      const raw = adds.shift() as string;
-      const title = raw.trim();
-      if (title === "") continue;
-      await run(actions.add, "add", async () => {
-        await call(slots, todosAdd, { title }).promise;
-        if (active && view.getNewTitle() === raw) control.resetNewTitle();
-      });
-    }
-    const toggle = pending.toggle;
-    pending.toggle = undefined;
-    if (toggle && active) {
-      const selected = new Set(toggle.selection);
-      const targets = toggle.items.filter((t) => selected.has(t.id));
-      await run(actions.toggle, "toggle", async () => {
-        for (const t of targets) {
-          await call(slots, todosUpdate, { id: t.id, patch: { done: !t.done } }).promise;
-        }
-      });
-    }
-    const edit = pending.edit;
-    pending.edit = undefined;
-    if (edit && active && edit.selection.length === 1) {
-      const id = edit.selection[0];
-      await run(actions.edit, "edit", () => call(slots, todosEditOpen, { id }).promise);
-    }
-    const remove = pending.remove;
-    pending.remove = undefined;
-    if (remove && active && remove.selection.length > 0) {
-      const ids = remove.selection;
-      await run(actions.remove, "delete", () => call(slots, todosRemove, { ids }).promise);
-    }
-  }
+    return result.ok;
+  };
+  const { actions } = control;
+  drainCommits(
+    scope,
+    log,
+    on(actions.add, async (raw, turn) => {
+      const added = await run(
+        "add",
+        turn,
+        () => call(slots, todosAdd, { title: raw.trim() }).promise,
+      );
+      // Clear the input only if it still holds what was added (typing went on meanwhile).
+      if (added && view.getNewTitle() === raw) control.resetNewTitle();
+    }),
+    on(actions.toggle, (targets, turn) =>
+      run("toggle", turn, async () => {
+        for (const t of targets)
+          await turn.task(call(slots, todosUpdate, { id: t.id, patch: { done: !t.done } }).promise);
+      }),
+    ),
+    on(actions.edit, ([id], turn) =>
+      run("edit", turn, () => call(slots, todosEditOpen, { id }).promise),
+    ),
+    on(actions.remove, (ids, turn) =>
+      run("delete", turn, () => call(slots, todosRemove, { ids }).promise),
+    ),
+  );
 
   // ── publications ─────────────────────────────────────────────────────────────────────────
-  register(
+  scope.defer(
     slots.register(panelsSlot, "todos:list", {
       kind: todoListKind,
       title: "Todos",
@@ -140,19 +86,16 @@ export const activate: Controller = async (context) => {
       model: view,
     }),
   );
-  register(slots.provide(todosSelectionSlot, model.selection));
+  scope.defer(slots.provide(todosSelectionSlot, model.selection));
   const { add, toggle, edit, remove } = view.actions;
-  register(slots.provide(todosToolbarActionsSlot, { id: "todos.add", order: 10, action: add }));
-  register(
+  scope.defer(slots.provide(todosToolbarActionsSlot, { id: "todos.add", order: 10, action: add }));
+  scope.defer(
     slots.provide(todosSelectionActionsSlot, { id: "todos.toggle", order: 10, action: toggle }),
   );
-  register(slots.provide(todosSelectionActionsSlot, { id: "todos.edit", order: 20, action: edit }));
-  register(
+  scope.defer(
+    slots.provide(todosSelectionActionsSlot, { id: "todos.edit", order: 20, action: edit }),
+  );
+  scope.defer(
     slots.provide(todosSelectionActionsSlot, { id: "todos.delete", order: 30, action: remove }),
   );
-
-  return async () => {
-    active = false;
-    await cleanup();
-  };
 };

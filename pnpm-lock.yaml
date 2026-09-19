@@ -1429,12 +1429,15 @@ importers:
       '@p5/kernel':
         specifier: link:packages/kernel
         version: link:packages/kernel
+      '@p5/kit-commit':
+        specifier: link:packages/kits/commit
+        version: link:packages/kits/commit
+      '@p5/kit-form':
+        specifier: link:packages/kits/form
+        version: link:packages/kits/form
       '@p5/kit-host':
         specifier: link:packages/kits/host
         version: link:packages/kits/host
-      '@p5/kit-loop':
-        specifier: link:packages/kits/loop
-        version: link:packages/kits/loop
       '@p5/kit-model':
         specifier: link:packages/kits/model
         version: link:packages/kits/model
@@ -1450,6 +1453,9 @@ importers:
       '@p5/kit-slots':
         specifier: link:packages/kits/slots
         version: link:packages/kits/slots
+      '@p5/kit-track':
+        specifier: link:packages/kits/track
+        version: link:packages/kits/track
       '@p5/shell':
         specifier: link:packages/bundles/shell
         version: link:packages/bundles/shell
@@ -1477,9 +1483,6 @@ importers:
       '@p5/todos.list':
         specifier: link:packages/bundles/todos.list
         version: link:packages/bundles/todos.list
-      '@p5/todos.rename':
-        specifier: link:packages/bundles/todos.rename
-        version: link:packages/bundles/todos.rename
       '@p5/todos.status':
         specifier: link:packages/bundles/todos.status
         version: link:packages/bundles/todos.status

@@ -85,6 +85,8 @@ export interface TodoListView {
   getSelection(): readonly string[];
   onSelectionUpdate(listener: Listener): Unsubscribe;
   select(ids: readonly string[]): void;
+  /** Input: adds `id` to the selection, or removes it (Ctrl/⌘-click). */
+  toggleSelected(id: string): void;
   /** Input: the new-title field. */
   getNewTitle(): string;
   onNewTitleUpdate(listener: Listener): Unsubscribe;
@@ -101,13 +103,11 @@ export interface TodoListView {
   readonly toggle: ActionView;
 }
 
-export interface TitleDraft {
-  readonly title: string;
-}
+export type TitleDraft = { readonly title: string };
 export interface FormStatus {
   readonly touched: boolean;
   readonly dirty: boolean;
-  readonly errors: Readonly<Record<string, string>>;
+  readonly errors: Readonly<Partial<Record<string, string>>>;
 }
 /** The editor panel (side): one title field, Save and Cancel. */
 export interface TitleFormView {
@@ -130,5 +130,3 @@ export interface ConfirmView {
 export const todoListKind = defineViewKind<TodoListView>("todos:list");
 export const todoEditorKind = defineViewKind<TitleFormView>("todos:editor");
 export const clearCompletedKind = defineViewKind<ConfirmView>("todos:clear-completed");
-/** The rename dialog: one title field, Rename and Cancel. */
-export const todoRenameKind = defineViewKind<TitleFormView>("todos:rename");

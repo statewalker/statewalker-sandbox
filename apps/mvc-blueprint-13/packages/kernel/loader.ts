@@ -1,10 +1,15 @@
 import type { Context } from "./context.js";
+import { type Cleanup, newScope, type Scope } from "./scope.js";
 import { getLogger } from "./services.js";
 
-export type Cleanup = () => void | Promise<void>;
-/** Normative: a controller is a function of the context that returns how to tear it down. */
+/**
+ * Normative: a controller is a function of the context that returns how to tear it down. K: it
+ * also receives its bundle scope — what it `defer`s there is disposed when it deactivates, and
+ * continuations awaited through `scope.task` are dropped then. Returning a cleanup still works
+ * (it is deferred on the scope).
+ */
 // biome-ignore lint/suspicious/noConfusingVoidType: normative (ARCHITECTURE §8) — an activator may return nothing
-export type Controller = (context: Context) => Promise<void | Cleanup>;
+export type Controller = (context: Context, scope: Scope) => Promise<void | Cleanup>;
 export type Activator = Controller;
 
 export interface BundleManifest {
@@ -109,44 +114,48 @@ export function plan(manifest: ApplicationManifest, context: Context = {}): Bund
 
 /**
  * Turns an application manifest into an activator (itself a controller). Features activate
- * required-first, bundles in listed order, each awaited; a throwing activator rolls back what
- * already activated (reverse order) and rethrows; the cleanup deactivates in reverse, logging a
- * throwing cleanup without stopping the others.
+ * required-first, bundles in listed order, each awaited, each in its own bundle scope; a throwing
+ * activator rolls back what already activated (reverse order) and rethrows; the cleanup closes the
+ * bundle scopes in reverse, logging a throwing cleanup without stopping the others.
  */
-export function application(manifest: ApplicationManifest): Controller {
-  return async (context) => {
+export function application(
+  manifest: ApplicationManifest,
+): (context: Context, parent?: Scope) => ReturnType<Controller> {
+  return async (context, parent) => {
     const bundles = plan(manifest, context);
     const log = getLogger(context).child({ app: manifest.id });
-    const cleanups: { id: string; cleanup: Cleanup }[] = [];
+    const app = parent ? parent.child() : newScope();
+    const active: { id: string; scope: Scope }[] = [];
     const deactivate = async () => {
-      while (cleanups.length > 0) {
-        const { id, cleanup } = cleanups.pop() as { id: string; cleanup: Cleanup };
+      // Bundle scopes close in reverse activation order, one at a time; a throwing cleanup is
+      // logged and does not stop the others.
+      while (active.length > 0) {
+        const { id, scope } = active.pop() as { id: string; scope: Scope };
         try {
-          await cleanup();
+          await scope.close();
         } catch (error) {
           log.error("loader:cleanup-failed", { bundle: id, error: String(error) });
         }
       }
+      await app.close();
     };
     for (const bundle of bundles) {
+      const scope = newScope(app, true);
+      app.defer(() => scope.close().catch(() => {})); // failures are logged by `deactivate`
+      active.push({ id: bundle.id, scope });
       try {
         const activator = bundle.lazy
           ? await (bundle.activator as () => Promise<Activator>)()
           : (bundle.activator as Activator);
-        const cleanup = await activator(context);
-        if (cleanup) cleanups.push({ id: bundle.id, cleanup });
+        const cleanup = await activator(context, scope);
+        if (cleanup) scope.defer(cleanup);
         log.debug("loader:activated", { bundle: bundle.id });
       } catch (error) {
         await deactivate();
         throw error;
       }
     }
-    let stopped = false;
-    return async () => {
-      if (stopped) return;
-      stopped = true;
-      await deactivate();
-    };
+    return deactivate;
   };
 }
 

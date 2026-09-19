@@ -1,14 +1,8 @@
 import type { Todo, TodoListView, TodosSelectionView } from "@p5/todos/api";
-import type { ActionContribution, ActionControl } from "@p5/kernel";
-import {
-  type ActionModel,
-  createAction,
-  newChannels,
-  sameRecords,
-  shallowEqual,
-  stableGroup,
-} from "@p5/kit-model";
-import { signal, untracked } from "@p5/kit-signals";
+import type { ActionContribution, ActionView } from "@p5/kernel";
+import { type CommitActionModel, type CommitControl, createCommitAction } from "@p5/kit-commit";
+import { newChannels, sameRecords, shallowEqual, stableGroup } from "@p5/kit-model";
+import { readable, signal, untracked } from "@p5/kit-signals";
 
 export interface ListActions<A> {
   readonly add: A;
@@ -16,6 +10,15 @@ export interface ListActions<A> {
   readonly edit: A;
   readonly remove: A;
 }
+
+/** What each action's record carries (mechanism C), captured at submit. */
+export interface ListCommits {
+  readonly add: string;
+  readonly toggle: readonly Pick<Todo, "id" | "done">[];
+  readonly edit: readonly string[];
+  readonly remove: readonly string[];
+}
+type Controls = { readonly [K in keyof ListCommits]: CommitControl<ListCommits[K]> };
 
 export interface ListControl {
   /** Presentation writers. */
@@ -25,11 +28,11 @@ export interface ListControl {
   reportOutcome(outcome: string | undefined): void;
   /** Resets the new-title form as a whole (after its Add landed). */
   resetNewTitle(): void;
-  readonly actions: ListActions<ActionControl>;
+  readonly actions: Controls;
 }
 
 export interface ListModel {
-  readonly view: TodoListView & { readonly actions: ListActions<ActionModel["view"]> };
+  readonly view: TodoListView & { readonly actions: ListActions<ActionView> };
   /** The selection facet published to `todos:selection`. */
   readonly selection: TodosSelectionView;
   readonly control: ListControl;
@@ -57,42 +60,66 @@ export function createListModel(): ListModel {
     return Object.freeze(raw.filter((id) => ids.has(id)));
   });
 
-  const owned: ActionModel[] = [];
-  const action = (label: string, guard: () => boolean, queue = false): ActionModel => {
-    const model = createAction({
+  const owned: CommitActionModel<unknown>[] = [];
+  const action = <T>(
+    label: string,
+    guard: () => boolean,
+    capture: () => T,
+    queue = false,
+  ): CommitActionModel<T> => {
+    const model = createCommitAction({
       label,
       queue,
+      capture,
       when: () => {
         const live = alive();
         const ok = guard();
         return live && ok;
       },
     });
-    owned.push(model);
+    owned.push(model as CommitActionModel<unknown>);
     return model;
   };
-  const actions: ListActions<ActionModel> = {
-    add: action("Add", () => newTitle().trim() !== "", true),
-    toggle: action("Toggle", () => selection().length > 0),
-    edit: action("Edit", () => selection().length === 1),
-    remove: action("Delete", () => selection().length > 0),
+  const selectedItems = () => {
+    const ids = new Set(selection());
+    return items()
+      .filter((t) => ids.has(t.id))
+      .map(({ id, done }) => ({ id, done }));
+  };
+  const actions = {
+    add: action(
+      "Add",
+      () => newTitle().trim() !== "",
+      () => newTitle(),
+      true,
+    ),
+    toggle: action("Toggle", () => selection().length > 0, selectedItems),
+    edit: action(
+      "Edit",
+      () => selection().length === 1,
+      () => selection(),
+    ),
+    remove: action(
+      "Delete",
+      () => selection().length > 0,
+      () => selection(),
+    ),
   };
 
+  const select = (ids: readonly string[]) => {
+    if (disposed) return;
+    const next = Object.freeze([...new Set(ids)]);
+    if (!shallowEqual(untracked(rawSelection), next)) rawSelection(next);
+  };
   const view = Object.freeze({
     getItems: () => items(),
     onItemsUpdate: channels.channel(items),
     getSelection: () => selection(),
     onSelectionUpdate: channels.channel(selection),
-    select: (ids: readonly string[]) => {
-      if (disposed) return;
-      const next = Object.freeze([...new Set(ids)]);
-      if (
-        !shallowEqual(
-          untracked(() => rawSelection()),
-          next,
-        )
-      )
-        rawSelection(next);
+    select,
+    toggleSelected: (id: string) => {
+      const current = untracked(() => selection());
+      select(current.includes(id) ? current.filter((x) => x !== id) : [...current, id]);
     },
     getNewTitle: () => newTitle(),
     onNewTitleUpdate: channels.channel(newTitle),
@@ -115,7 +142,7 @@ export function createListModel(): ListModel {
   });
 
   const selectionView: TodosSelectionView = Object.freeze({
-    getSelected: () => selection(),
+    getSelected: readable(selection),
     onSelectedUpdate: channels.channel(selection),
   });
 

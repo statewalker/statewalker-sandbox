@@ -1,5 +1,5 @@
 import { type ReactRenderer, reactRenderersSlot } from "@p5/shell/api/react";
-import { clearCompletedKind, todoEditorKind, todoListKind, todoRenameKind } from "@p5/todos/api";
+import { clearCompletedKind, todoEditorKind, todoListKind } from "@p5/todos/api";
 import { type Controller, getSlots, newRegistry, type ViewKind } from "@p5/kernel";
 import type { ComponentType } from "react";
 import { ClearCompletedDialog, TodoEditor, TodoList } from "./views.js";
@@ -17,7 +17,6 @@ export const activate: Controller = async (context) => {
     );
   add(todoListKind, TodoList);
   add(todoEditorKind, TodoEditor);
-  add(todoRenameKind, TodoEditor);
   add(clearCompletedKind, ClearCompletedDialog);
   return cleanup;
 };

@@ -4,16 +4,18 @@ import type {
   ContactListView,
   ContactSelectionView,
 } from "@p5/contacts/api";
-import type { ActionContribution, ActionControl, ActionView } from "@p5/kernel";
-import { createAction, newChannels, sameRecords, stableGroup } from "@p5/kit-model";
-import { signal, untracked } from "@p5/kit-signals";
+import type { ActionContribution } from "@p5/kernel";
+import { type CommitActionModel, createCommitAction } from "@p5/kit-commit";
+import { newChannels, sameRecords, stableGroup } from "@p5/kit-model";
+import { readable, signal, untracked } from "@p5/kit-signals";
 
 export interface ContactListModel {
   readonly view: ContactListView;
   /** Published to `contacts:selection`; also the details panel's model. */
   readonly selection: ContactSelectionView & ContactDetailsView;
-  readonly edit: { readonly view: ActionView; readonly control: ActionControl };
-  readonly editFromMenu: { readonly view: ActionView; readonly control: ActionControl };
+  /** Records carry the id selected at submit. */
+  readonly edit: Omit<CommitActionModel<string>, "dispose">;
+  readonly editFromMenu: Omit<CommitActionModel<string>, "dispose">;
   readonly control: {
     publishContacts(contacts: readonly Contact[]): void;
     publishSelectionActions(items: readonly ActionContribution[]): void;
@@ -43,8 +45,9 @@ export function createContactListModel(): ContactListModel {
     const has = selected() !== undefined;
     return live && has;
   };
-  const edit = createAction({ label: "Edit", when: guard });
-  const editFromMenu = createAction({ label: "Edit contact", when: guard });
+  const capture = () => selected()?.id as string;
+  const edit = createCommitAction({ label: "Edit", when: guard, capture });
+  const editFromMenu = createCommitAction({ label: "Edit contact", when: guard, capture });
 
   const view: ContactListView = Object.freeze({
     getContacts: () => contacts(),
@@ -59,7 +62,7 @@ export function createContactListModel(): ContactListModel {
   });
   const onSelected = channels.channel(selected);
   const selection = Object.freeze({
-    getSelected: () => selected(),
+    getSelected: readable(selected),
     onSelectedUpdate: onSelected,
     getContact: () => selected(),
     onContactUpdate: onSelected,

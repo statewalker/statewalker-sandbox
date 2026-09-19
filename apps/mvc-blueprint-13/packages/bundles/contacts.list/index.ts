@@ -6,11 +6,10 @@ import {
   contactsSelectionActionsSlot,
   contactsSelectionSlot,
 } from "@p5/contacts/api";
-import { menuSlot, panelsSlot } from "@p5/shell/api";
-import { type Controller, call, getLogger, getSlots, newRegistry, useFields } from "@p5/kernel";
-import { attempt, newUpdateLoop } from "@p5/kit-loop";
-import { onSubmits } from "@p5/kit-model";
+import { type Controller, call, getLogger, getSlots, useFields } from "@p5/kernel";
+import { attempt, drainCommits, on } from "@p5/kit-commit";
 import { byOrder, followFirst } from "@p5/kit-slots";
+import { menuSlot, panelsSlot } from "@p5/shell/api";
 import { createContactListModel } from "./list.model.js";
 
 const fields = useFields({ slots: getSlots, log: getLogger });
@@ -20,15 +19,13 @@ const fields = useFields({ slots: getSlots, log: getLogger });
  * panel (published while a contact is selected), and Edit (a selection action + the main-menu item
  * "Edit contact"), which opens the editor on the contact selected AT COMMIT TIME.
  */
-export const activate: Controller = async (context) => {
+export const activate: Controller = async (context, scope) => {
   const { slots, log: rootLog } = fields(context);
   const log = rootLog.child({ bundle: "contacts.list" });
-  const [register, cleanup] = newRegistry();
-  let active = true;
   const model = createContactListModel();
-  register(() => model.dispose());
+  scope.defer(() => model.dispose());
 
-  register(
+  scope.defer(
     followFirst(
       slots,
       contactsCollectionSlot,
@@ -36,60 +33,41 @@ export const activate: Controller = async (context) => {
       () => model.control.publishContacts([]),
     ),
   );
-  register(
+  scope.defer(
     slots.observe(contactsSelectionActionsSlot, (items) =>
       model.control.publishSelectionActions(byOrder(items)),
     ),
   );
 
   // Details: a view exists exactly as long as its publication — published while selected.
-  let withdrawDetails: (() => void) | undefined;
-  register(
+  let details: (() => void) | undefined;
+  scope.defer(
     model.selection.onSelectedUpdate(() => {
       const contact = model.selection.getSelected();
-      if (contact && !withdrawDetails) {
-        withdrawDetails = slots.register(panelsSlot, "contacts:details", {
-          kind: contactDetailsKind,
-          title: "Details",
-          placement: "side",
-          order: 20,
-          model: model.selection,
-        });
-      } else if (!contact && withdrawDetails) {
-        withdrawDetails();
-        withdrawDetails = undefined;
+      if (contact && !details) {
+        details = scope.defer(
+          slots.register(panelsSlot, "contacts:details", {
+            kind: contactDetailsKind,
+            title: "Details",
+            placement: "side",
+            order: 20,
+            model: model.selection,
+          }),
+        );
+      } else if (!contact && details) {
+        details();
+        details = undefined;
       }
     }),
   );
-  register(() => withdrawDetails?.());
 
-  let editOwed: string | undefined;
-  const loop = newUpdateLoop(
-    async () => {
-      const id = editOwed;
-      editOwed = undefined;
-      if (id === undefined) return;
-      await attempt(
-        log,
-        "open the contact editor",
-        () => call(slots, contactsEditOpen, { id }).promise,
-      );
-    },
-    {
-      isActive: () => active,
-      onError: (error) => log.error("contacts.list: pass failed", { error: String(error) }),
-    },
-  );
-  for (const action of [model.edit, model.editFromMenu]) {
-    register(
-      onSubmits(action.control, () => {
-        editOwed = model.selection.getSelected()?.id;
-        loop.kick();
-      }),
+  const edit = (id: string, { task }: { task: <R>(p: Promise<R>) => Promise<R> }) =>
+    task(
+      attempt(log, "open the contact editor", () => call(slots, contactsEditOpen, { id }).promise),
     );
-  }
+  drainCommits(scope, log, on(model.edit.control, edit), on(model.editFromMenu.control, edit));
 
-  register(
+  scope.defer(
     slots.register(panelsSlot, "contacts:list", {
       kind: contactListKind,
       title: "Contacts",
@@ -98,15 +76,15 @@ export const activate: Controller = async (context) => {
       model: model.view,
     }),
   );
-  register(slots.provide(contactsSelectionSlot, model.selection));
-  register(
+  scope.defer(slots.provide(contactsSelectionSlot, model.selection));
+  scope.defer(
     slots.provide(contactsSelectionActionsSlot, {
       id: "contacts.edit",
       order: 10,
       action: model.edit.view,
     }),
   );
-  register(
+  scope.defer(
     slots.provide(menuSlot, {
       id: "contacts.edit",
       group: "contacts",
@@ -115,8 +93,4 @@ export const activate: Controller = async (context) => {
       action: model.editFromMenu.view,
     }),
   );
-  return async () => {
-    active = false;
-    await cleanup();
-  };
 };

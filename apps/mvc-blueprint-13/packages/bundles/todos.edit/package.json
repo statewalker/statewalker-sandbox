@@ -8,10 +8,9 @@
   },
   "dependencies": {
     "@p5/kernel": "link:../../kernel",
-    "@p5/kit-loop": "link:../../kits/loop",
-    "@p5/kit-model": "link:../../kits/model",
+    "@p5/kit-commit": "link:../../kits/commit",
+    "@p5/kit-form": "link:../../kits/form",
     "@p5/kit-notify": "link:../../kits/notify",
-    "@p5/kit-signals": "link:../../kits/signals",
     "@p5/kit-slots": "link:../../kits/slots",
     "@p5/shell": "link:../shell",
     "@p5/todos": "link:../todos"

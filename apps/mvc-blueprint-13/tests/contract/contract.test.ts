@@ -1,12 +1,13 @@
 import type { HelloView } from "@p5/hello/api";
 import { panelsSlot } from "@p5/shell/api";
 import { type ActionState, type Context, getSlots, loggerAdapter } from "@p5/kernel";
-import { createAction, createValue } from "@p5/kit-model";
+import { createCommitAction } from "@p5/kit-commit";
+import { createForm } from "@p5/kit-form";
+import { createValue } from "@p5/kit-model";
 import { describe, expect, it } from "vitest";
-import { createContactEditorModel } from "../../packages/bundles/contacts.edit/editor.model.js";
 import { createCollectionModel } from "../../packages/bundles/todos.core/collection.model.js";
-import { createEditorModel } from "../../packages/bundles/todos.edit/editor.model.js";
 import { createListModel } from "../../packages/bundles/todos.list/list.model.js";
+import { activateAlone } from "../support/activate.js";
 import { newRecordingLogger } from "../support/logging.js";
 import { modelContract } from "./model-contract.js";
 import { plainAction, plainForm, plainPresentation } from "./plain-models.js";
@@ -74,7 +75,7 @@ modelContract("presentation · hand-rolled", {
 // ── form / input ─────────────────────────────────────────────────────────────────────────────
 modelContract("form · contact editor draft (kit)", {
   make() {
-    const m = createContactEditorModel({ name: "Ada", email: "a@x", phone: "1" });
+    const m = createForm({ name: "Ada", email: "a@x", phone: "1" });
     let n = 0;
     return {
       read: m.view.getDraft,
@@ -89,7 +90,7 @@ modelContract("form · contact editor draft (kit)", {
 
 modelContract("form · todo editor draft (kit)", {
   make() {
-    const m = createEditorModel({ title: "Buy milk" });
+    const m = createForm({ title: "Buy milk" });
     let n = 0;
     return {
       read: m.view.getDraft,
@@ -140,16 +141,33 @@ modelContract("form · hand-rolled", {
 });
 
 // ── action ───────────────────────────────────────────────────────────────────────────────────
-modelContract<ActionState>("action · createAction (kit)", {
+modelContract<ActionState>("action · createCommitAction state, running derived (kit)", {
   make() {
-    const m = createAction({ label: "Save" });
+    const m = createCommitAction({ label: "Save", capture: () => undefined });
     let n = 0;
     return {
       read: m.view.getState,
       subscribe: m.view.onStateUpdate,
       change: () => m.control.update({ label: `Save ${++n}` }),
       changeEqual: () => m.control.update({ label: m.view.getState().label }),
-      changeOther: () => m.view.submit(),
+      dispose: m.dispose,
+    };
+  },
+});
+
+modelContract("action · commit records group: view submits, controller settles (kit)", {
+  make() {
+    let n = 0;
+    const m = createCommitAction({ label: "Add", queue: true, capture: () => n });
+    return {
+      read: m.control.getRecords,
+      subscribe: m.control.onRecordsUpdate,
+      change: () => {
+        n++;
+        m.view.submit(); // one intention: one record appended
+      },
+      changeEqual: () => m.control.settle(0),
+      changeOther: () => m.control.update({ label: `L${++n}` }),
       dispose: m.dispose,
     };
   },
@@ -176,7 +194,7 @@ describe("presentation · hello (hand-rolled, kernel only)", () => {
     const { activate } = await import("@p5/hello");
     const ctx: Context = {};
     loggerAdapter.set(ctx, newRecordingLogger().logger);
-    const stop = await activate(ctx);
+    const stop = await activateAlone(activate, ctx);
     const view = getSlots(ctx).getSnapshot(panelsSlot).get("hello")?.model as HelloView;
     const seen: number[] = [];
     const off = view.onCountUpdate(() => seen.push(view.getCount()));
@@ -195,13 +213,13 @@ describe("presentation · hello (hand-rolled, kernel only)", () => {
 // ── point 9: a coarse write is a patch; undefined means "leave it" ────────────────────────────
 describe("point 9 · action update is a patch", () => {
   for (const [name, make] of [
-    ["kit", () => createAction({ label: "Go", hint: "h" })],
+    ["kit", () => createCommitAction({ label: "Go", hint: "h", capture: () => undefined })],
     ["hand-rolled", () => plainAction("Go")],
   ] as const) {
     it(`${name}: an undefined field leaves the value`, () => {
       const m = make();
-      m.control.update({ running: true, label: undefined });
-      expect(m.view.getState()).toMatchObject({ label: "Go", running: true });
+      m.control.update({ hint: "h2", label: undefined });
+      expect(m.view.getState()).toMatchObject({ label: "Go", hint: "h2" });
     });
   }
 });

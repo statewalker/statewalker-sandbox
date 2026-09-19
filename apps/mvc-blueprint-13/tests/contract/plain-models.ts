@@ -1,4 +1,4 @@
-import type { ActionControl, ActionState, ActionView, Listener } from "@p5/kernel";
+import type { ActionState, ActionView, Listener } from "@p5/kernel";
 
 /**
  * Hand-rolled second implementations of the three model kinds: a listener set, no library.
@@ -77,7 +77,11 @@ export function plainForm<T extends Record<string, unknown>>(base: T) {
 /** Action: the view submits; the controller describes. `update` is a patch (undefined = leave). */
 export function plainAction(label: string): {
   view: ActionView;
-  control: ActionControl;
+  control: {
+    getSubmits(): number;
+    onSubmitsUpdate(listener: Listener): () => void;
+    update(patch: Partial<Omit<ActionState, "running">>): void;
+  };
   dispose(): void;
 } {
   const state = group<ActionState>(
@@ -98,7 +102,7 @@ export function plainAction(label: string): {
     control: Object.freeze({
       getSubmits: submits.get,
       onSubmitsUpdate: submits.on,
-      update: (patch: Partial<ActionState>) => {
+      update: (patch: Partial<Omit<ActionState, "running">>) => {
         const defined = Object.fromEntries(
           Object.entries(patch).filter(([, v]) => v !== undefined),
         );

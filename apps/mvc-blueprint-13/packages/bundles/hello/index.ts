@@ -38,13 +38,14 @@ function group<T>(initial: T) {
 const fields = useFields({ slots: getSlots });
 
 /** The minimal bundle: one menu item and one panel; the action increments a counter. */
-export const activate: Controller = async (context) => {
+export const activate: Controller = async (context, scope) => {
   const { slots } = fields(context);
   const count = group(0);
   const submits = group(0);
   const state = group<ActionState>(
     Object.freeze({ label: "Say hello", enabled: true, running: false }),
   );
+  for (const g of [count, submits, state]) scope.defer(g.dispose);
   const view: HelloView = Object.freeze({
     getCount: count.get,
     onCountUpdate: count.on,
@@ -55,25 +56,23 @@ export const activate: Controller = async (context) => {
     }),
   });
   // The controller: the only writer of `count`.
-  const off = submits.on(() => count.set(submits.get()));
-  const withdrawPanel = slots.register(panelsSlot, "hello", {
-    kind: helloKind,
-    title: "Hello",
-    placement: "main",
-    order: 90,
-    model: view,
-  });
-  const withdrawMenu = slots.provide(menuSlot, {
-    id: "hello.say",
-    group: "hello",
-    groupLabel: "Hello",
-    order: 10,
-    action: view.increment,
-  });
-  return () => {
-    withdrawMenu();
-    withdrawPanel();
-    off();
-    for (const g of [count, submits, state]) g.dispose();
-  };
+  scope.defer(submits.on(() => count.set(submits.get())));
+  scope.defer(
+    slots.register(panelsSlot, "hello", {
+      kind: helloKind,
+      title: "Hello",
+      placement: "main",
+      order: 90,
+      model: view,
+    }),
+  );
+  scope.defer(
+    slots.provide(menuSlot, {
+      id: "hello.say",
+      group: "hello",
+      groupLabel: "Hello",
+      order: 10,
+      action: view.increment,
+    }),
+  );
 };

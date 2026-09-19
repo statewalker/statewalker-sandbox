@@ -9,8 +9,8 @@
   "dependencies": {
     "@p5/contacts": "link:../contacts",
     "@p5/kernel": "link:../../kernel",
-    "@p5/kit-model": "link:../../kits/model",
-    "@p5/kit-slots": "link:../../kits/slots",
+    "@p5/kit-commit": "link:../../kits/commit",
+    "@p5/kit-track": "link:../../kits/track",
     "@p5/todos": "link:../todos"
   }
 }

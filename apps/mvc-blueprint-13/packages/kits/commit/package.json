@@ -1,5 +1,5 @@
 {
-  "name": "@p5/kit-model",
+  "name": "@p5/kit-commit",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,6 +7,8 @@
     ".": "./index.ts"
   },
   "dependencies": {
+    "@p5/kernel": "link:../../kernel",
+    "@p5/kit-model": "link:../model",
     "@p5/kit-signals": "link:../signals"
   }
 }

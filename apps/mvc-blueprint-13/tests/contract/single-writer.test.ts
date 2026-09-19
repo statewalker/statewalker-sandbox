@@ -14,13 +14,12 @@ import type {
   TodosCollectionView,
   TodosSelectionView,
 } from "@p5/todos/api";
-import type { ActionControl, ActionView } from "@p5/kernel";
-import { createAction } from "@p5/kit-model";
+import type { ActionView } from "@p5/kernel";
+import { type CommitControl, createCommitAction } from "@p5/kit-commit";
+import { createForm } from "@p5/kit-form";
 import { describe, expect, it } from "vitest";
-import { createContactEditorModel } from "../../packages/bundles/contacts.edit/editor.model.js";
 import { createContactListModel } from "../../packages/bundles/contacts.list/list.model.js";
 import { createCollectionModel } from "../../packages/bundles/todos.core/collection.model.js";
-import { createEditorModel } from "../../packages/bundles/todos.edit/editor.model.js";
 import { createListModel } from "../../packages/bundles/todos.list/list.model.js";
 
 /**
@@ -52,13 +51,16 @@ const views: [
 ] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true];
 
 const controls: [
-  NoFieldWriter<ActionControl>,
+  NoFieldWriter<CommitControl<unknown>>,
   NoFieldWriter<ReturnType<typeof createListModel>["control"]>,
-  NoFieldWriter<ReturnType<typeof createEditorModel>["control"]>,
-  NoFieldWriter<ReturnType<typeof createContactEditorModel>["control"]>,
+  NoFieldWriter<ReturnType<typeof createForm>["control"]>,
   NoFieldWriter<ReturnType<typeof createCollectionModel>["control"]>,
   NoFieldWriter<ReturnType<typeof createContactListModel>["control"]>,
-] = [true, true, true, true, true, true];
+] = [true, true, true, true, true];
+
+// K: `running` is derived from the records - no control facet can write it.
+// @ts-expect-error - `running` is not a writable field of a commit action
+createCommitAction({ label: "Go", capture: () => 0 }).control.update({ running: true });
 
 // Negative control: the checks can fail.
 // @ts-expect-error — a view with a presentation writer is rejected
@@ -83,11 +85,11 @@ describe("single writer", () => {
 
   it("runtime: every view facet is frozen and exposes no presentation writer", () => {
     const list = createListModel();
-    const editor = createEditorModel({ title: "x" });
-    const contact = createContactEditorModel({ name: "a", email: "b", phone: "c" });
+    const editor = createForm({ title: "x" });
+    const contact = createForm({ name: "a", email: "b", phone: "c" });
     const collection = createCollectionModel();
     const contacts = createContactListModel();
-    const action = createAction({ label: "Go" });
+    const action = createCommitAction({ label: "Go", capture: () => 0 });
     for (const facet of [
       list.view,
       list.selection,
@@ -105,11 +107,10 @@ describe("single writer", () => {
   it("runtime: every control facet is frozen and exposes no field-level form writer", () => {
     for (const facet of [
       createListModel().control,
-      createEditorModel({ title: "x" }).control,
-      createContactEditorModel({ name: "a", email: "b", phone: "c" }).control,
+      createForm({ title: "x" }).control,
       createCollectionModel().control,
       createContactListModel().control,
-      createAction({ label: "Go" }).control,
+      createCommitAction({ label: "Go", capture: () => 0 }).control,
     ]) {
       for (const name of facetNames(facet)) expect(name).not.toMatch(FIELD_WRITER);
     }

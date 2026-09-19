@@ -1,6 +1,6 @@
 import type { Todo, TodoCounts, TodosCollectionView } from "@p5/todos/api";
 import { newChannels, sameRecords, stableGroup } from "@p5/kit-model";
-import { signal, untracked } from "@p5/kit-signals";
+import { readable, signal, untracked } from "@p5/kit-signals";
 
 export interface CollectionControl {
   /** Replaces the whole collection; silent when every todo is field-equal. */
@@ -25,9 +25,9 @@ export function createCollectionModel(): CollectionModel {
     return Object.freeze({ open: all.length - done, done });
   });
   const view: TodosCollectionView = Object.freeze({
-    getTodos: () => todos(),
+    getTodos: readable(() => todos()),
     onTodosUpdate: channels.channel(todos),
-    getCounts: () => counts(),
+    getCounts: readable(counts),
     onCountsUpdate: channels.channel(counts),
   });
   const control: CollectionControl = Object.freeze({

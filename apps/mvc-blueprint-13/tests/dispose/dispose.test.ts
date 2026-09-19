@@ -77,7 +77,8 @@ describe("dispose: after the application's cleanup", () => {
     const editor = panel<ContactEditorView>(r.slots, "contacts:editor")?.model as ContactEditorView;
     editor.editField("name", "Ada K. Lovelace");
     editor.save.submit();
-    await until(() => editor.save.getState().running);
+    expect(editor.save.getState().running).toBe(true); // K: in the submit's own tick
+    await until(() => r.slots.getSnapshot(callsSlot).size > 0);
     // P1: the in-flight write is visible as state — a pending call in `sys:calls`.
     expect([...r.slots.getSnapshot(callsSlot).values()].map((c) => c.key)).toEqual([
       "contacts:update",

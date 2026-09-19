@@ -1,92 +1,74 @@
 import {
-  todoApiAdapter,
-  todosAdd,
-  todosCollectionSlot,
-  todosRemove,
-  todosUpdate,
-} from "@p5/todos/api";
-import {
   answer,
   type Controller,
   getConfig,
   getLogger,
   getSlots,
   isProvided,
-  newRegistry,
   useFields,
 } from "@p5/kernel";
+import {
+  todoApiAdapter,
+  todosAdd,
+  todosCollectionSlot,
+  todosRemove,
+  todosUpdate,
+} from "@p5/todos/api";
 import { createCollectionModel } from "./collection.model.js";
 import { MemTodoApi, seedTodos } from "./mem-todo-api.js";
 
 export { MemTodoApi, seedTodos };
 
-const fields = useFields({
-  slots: getSlots,
-  log: getLogger,
-  config: getConfig,
-  api: todoApiAdapter.get,
-});
+const fields = useFields({ slots: getSlots, log: getLogger, api: todoApiAdapter.get });
 
 /**
  * `todos.core`: provides `todos:api` (unless the host did), OWNS the todos collection — publishes
- * it to `todos:collection` and is its only writer — and answers the write commands.
+ * it to `todos:collection` and is its only writer — and answers the write commands. Every await
+ * goes through the bundle scope: after deactivation no continuation writes, and a caller whose
+ * call was claimed here gets `abandoned` (its handler is withdrawn with the scope).
  */
-export const activate: Controller = async (context) => {
+export const activate: Controller = async (context, scope) => {
   if (!isProvided(context, todoApiAdapter.key)) {
     const delay = Number(getConfig(context)["todos:delay-ms"] ?? 0);
     todoApiAdapter.set(context, new MemTodoApi(seedTodos, delay));
   }
-  const { slots, log: rootLog, api } = fields(context);
-  const log = rootLog.child({ bundle: "todos.core" });
-  const [register, cleanup] = newRegistry();
-  let active = true;
-
+  const { slots, log, api } = fields(context);
   const collection = createCollectionModel();
-  register(() => collection.dispose());
+  scope.defer(() => collection.dispose());
+  const { publishTodos } = collection.control;
   const current = () => collection.view.getTodos();
-  const loaded = api.list().then(
-    (todos) => {
-      if (active) collection.control.publishTodos(todos);
-    },
-    (error) => log.warn("todos:load failed", { error: String(error) }),
-  );
+  const loaded = scope
+    .task(api.list())
+    .then(publishTodos, (error) => log.warn("todos:load failed", { error: String(error) }));
 
-  register(
+  scope.defer(
     answer(slots, todosAdd, async ({ payload }) => {
-      await loaded;
-      const todo = await api.add(payload.title);
-      if (active) collection.control.publishTodos([...current(), todo]);
+      await scope.task(loaded);
+      const todo = await scope.task(api.add(payload.title));
+      publishTodos([...current(), todo]);
       return todo;
     }),
   );
-  register(
+  scope.defer(
     answer(slots, todosUpdate, async ({ payload }) => {
-      await loaded;
-      const todo = await api.update(payload.id, payload.patch);
-      if (active)
-        collection.control.publishTodos(current().map((t) => (t.id === todo.id ? todo : t)));
+      await scope.task(loaded);
+      const todo = await scope.task(api.update(payload.id, payload.patch));
+      publishTodos(current().map((t) => (t.id === todo.id ? todo : t)));
       return todo;
     }),
   );
-  register(
+  scope.defer(
     answer(slots, todosRemove, async ({ payload }) => {
-      await loaded;
+      await scope.task(loaded);
       const gone = new Set<string>();
       try {
-        for (const id of payload.ids) if (await api.remove(id)) gone.add(id);
+        for (const id of payload.ids) if (await scope.task(api.remove(id))) gone.add(id);
       } finally {
         // What landed is published even when a later removal failed.
-        if (active && gone.size > 0) {
-          collection.control.publishTodos(current().filter((t) => !gone.has(t.id)));
-        }
+        if (gone.size > 0) publishTodos(current().filter((t) => !gone.has(t.id)));
       }
       return gone.size;
     }),
   );
-  register(slots.provide(todosCollectionSlot, collection.view));
-
-  return async () => {
-    active = false;
-    await cleanup();
-  };
+  scope.defer(slots.provide(todosCollectionSlot, collection.view));
 };

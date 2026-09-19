@@ -1,18 +1,20 @@
+import { type CommitControl, createCommitAction } from "@p5/kit-commit";
 import type { ConfirmView } from "@p5/todos/api";
-import type { ActionControl } from "@p5/kernel";
-import { createAction } from "@p5/kit-model";
 
 export interface ConfirmModel {
   readonly view: ConfirmView;
-  readonly control: { readonly confirm: ActionControl; readonly cancel: ActionControl };
+  readonly control: {
+    readonly confirm: CommitControl<undefined>;
+    readonly cancel: CommitControl<undefined>;
+  };
   dispose(): void;
 }
 
 /** A question with two answers. The question is fixed when asked. */
 export function createConfirmModel(text: string, confirmLabel: string): ConfirmModel {
   const question = Object.freeze({ text });
-  const confirm = createAction({ label: confirmLabel });
-  const cancel = createAction({ label: "Cancel" });
+  const confirm = createCommitAction({ label: confirmLabel, capture: () => undefined });
+  const cancel = createCommitAction({ label: "Cancel", capture: () => undefined });
   return Object.freeze({
     view: Object.freeze({
       getQuestion: () => question,

@@ -33,15 +33,6 @@ export interface ActionView {
   submit(): void;
 }
 
-/** The controller's side: observe intents, describe the action. */
-export interface ActionControl {
-  /** Monotonic count of accepted submits (a state-latest edge). */
-  getSubmits(): number;
-  onSubmitsUpdate(listener: Listener): Unsubscribe;
-  /** Patch; an undefined field is left unchanged. `enabled` sets the base flag only. */
-  update(patch: Partial<ActionState>): void;
-}
-
 /** An action offered at an extension point: a toolbar, a selection menu. */
 export interface ActionContribution {
   readonly id: string;

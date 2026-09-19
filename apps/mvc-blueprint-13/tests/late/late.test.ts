@@ -12,6 +12,7 @@ import {
 } from "@p5/kernel";
 import { createCoverage } from "@p5/kit-host";
 import { describe, expect, it } from "vitest";
+import { activateAlone } from "../support/activate.js";
 import { contacts, todos } from "../../src/features/logic.js";
 import { contactsReact } from "../../src/features/react.js";
 import { header, headlessShellFeature, settle, until } from "../support/harness.js";
@@ -51,7 +52,7 @@ describe("late subscribers: any arrival order works", () => {
     const stopTodos = await application({ id: "logic", features: [todos] })(ctx);
     expect(coverage.getReport().unrendered.map((u) => u.id)).toEqual(["todos:list"]);
     // The renderer arrives later: the gap closes without touching the model.
-    const stopUi = await todosUiReact(ctx);
+    const stopUi = await activateAlone(todosUiReact, ctx);
     expect(coverage.getReport().unrendered).toEqual([]);
     expect(slots.getSnapshot(reactRenderersSlot).has("todos:list")).toBe(true);
     await stopUi?.();
@@ -61,7 +62,7 @@ describe("late subscribers: any arrival order works", () => {
     const ctx2 = quiet();
     const slots2 = getSlots(ctx2);
     const coverage2 = createCoverage(slots2, reactRenderersSlot);
-    const stopUi2 = await todosUiReact(ctx2);
+    const stopUi2 = await activateAlone(todosUiReact, ctx2);
     expect(slots2.getSnapshot(panelsSlot).size).toBe(0);
     const stopTodos2 = await application({ id: "logic", features: [todos] })(ctx2);
     expect(slots2.getSnapshot(panelsSlot).has("todos:list")).toBe(true);

@@ -57,7 +57,7 @@ export async function todosScenario(r: Running): Promise<void> {
   editor.save.submit();
   await until(() => panel(r.slots, "todos:editor") === undefined);
   expect(titles(r)).toContain("Write the report");
-  expect(toasts(r.slots).some((t) => t.message === "Saved")).toBe(true);
+  expect(toasts(r.slots).some((t) => t.message.startsWith("Saved"))).toBe(true);
 
   // "New todo…" from the main menu → create mode → Save adds.
   menuItem(r.slots, "New todo…").submit();
@@ -124,7 +124,7 @@ export async function contactsScenario(r: Running): Promise<void> {
   editor.editField("name", "Alan M. Turing");
   editor.save.submit();
   await until(() => panel(r.slots, "contacts:editor") === undefined);
-  expect(toasts(r.slots).some((t) => t.message === "Saved")).toBe(true);
+  expect(toasts(r.slots).some((t) => t.message.startsWith("Saved"))).toBe(true);
   expect(list.getContacts().find((c) => c.id === "c2")?.name).toBe("Alan M. Turing");
 
   // Cancel withdraws the editor.
