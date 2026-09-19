@@ -1,4 +1,4 @@
-import type { TitleFormView } from "@b/todos/api";
+import type { TitleFormView } from "@p5/todos/api";
 import { afterEach, describe, expect, it } from "vitest";
 import { dialog, type Running, start, until, workbenchHeadless } from "../support/harness.js";
 import { selectionAction, titles, todoList } from "../support/scenarios.js";

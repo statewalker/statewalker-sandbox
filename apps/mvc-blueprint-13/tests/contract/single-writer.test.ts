@@ -4,24 +4,24 @@ import type {
   ContactListView,
   ContactSelectionView,
   ContactsCollectionView,
-} from "@b/contacts/api";
-import type { HelloView } from "@b/hello/api";
-import type { HeaderItemView, NotificationView } from "@b/shell/api";
+} from "@p5/contacts/api";
+import type { HelloView } from "@p5/hello/api";
+import type { HeaderItemView, NotificationView } from "@p5/shell/api";
 import type {
   ConfirmView,
   TitleFormView,
   TodoListView,
   TodosCollectionView,
   TodosSelectionView,
-} from "@b/todos/api";
-import type { ActionControl, ActionView } from "@kernel";
-import { createAction } from "@kit/model";
+} from "@p5/todos/api";
+import type { ActionControl, ActionView } from "@p5/kernel";
+import { createAction } from "@p5/kit-model";
 import { describe, expect, it } from "vitest";
-import { createContactEditorModel } from "../../src/bundles/contacts.edit/editor.model.js";
-import { createContactListModel } from "../../src/bundles/contacts.list/list.model.js";
-import { createCollectionModel } from "../../src/bundles/todos.core/collection.model.js";
-import { createEditorModel } from "../../src/bundles/todos.edit/editor.model.js";
-import { createListModel } from "../../src/bundles/todos.list/list.model.js";
+import { createContactEditorModel } from "../../packages/bundles/contacts.edit/editor.model.js";
+import { createContactListModel } from "../../packages/bundles/contacts.list/list.model.js";
+import { createCollectionModel } from "../../packages/bundles/todos.core/collection.model.js";
+import { createEditorModel } from "../../packages/bundles/todos.edit/editor.model.js";
+import { createListModel } from "../../packages/bundles/todos.list/list.model.js";
 
 /**
  * Single writer (ARCHITECTURE §7.2), checked two ways.

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // LOC per module: non-blank, non-comment lines of .ts/.tsx (ARCHITECTURE §13). Tests counted apart.
-// Usage: node scripts/loc.mjs [path-prefix …]   e.g. node scripts/loc.mjs src/bundles/hello
+// Usage: node scripts/loc.mjs [path-prefix …]   e.g. node scripts/loc.mjs packages/bundles/hello
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -9,6 +9,7 @@ const ROOT = new URL("../", import.meta.url).pathname;
 function walk(dir) {
   return readdirSync(dir).flatMap((name) => {
     const p = join(dir, name);
+    if (name === "node_modules") return [];
     if (statSync(p).isDirectory()) return walk(p);
     return /\.(ts|tsx)$/.test(name) ? [p] : [];
   });
@@ -25,16 +26,20 @@ export function loc(text) {
 
 function moduleOf(file) {
   const m =
-    /^src\/bundles\/([^/]+\/api(?:\/(?:react|dom))?)\//.exec(file) ??
-    /^src\/bundles\/([^/]+)\//.exec(file) ??
-    /^src\/(kits\/[^/]+)\//.exec(file) ??
-    /^src\/(kernel)\//.exec(file) ??
+    /^packages\/bundles\/([^/]+\/api(?:\/(?:react|solid))?)\//.exec(file) ??
+    /^packages\/bundles\/([^/]+)\//.exec(file) ??
+    /^packages\/(kits\/[^/]+)\//.exec(file) ??
+    /^packages\/(kernel)\//.exec(file) ??
     /^(tests)\//.exec(file);
   return m ? m[1] : file.startsWith("src/") ? "app (features, apps, main)" : "other";
 }
 
 const filters = process.argv.slice(2);
-const files = [...walk(join(ROOT, "src")), ...walk(join(ROOT, "tests"))]
+const files = [
+  ...walk(join(ROOT, "packages")),
+  ...walk(join(ROOT, "src")),
+  ...walk(join(ROOT, "tests")),
+]
   .map((p) => relative(ROOT, p))
   .filter((f) => filters.length === 0 || filters.some((prefix) => f.startsWith(prefix)));
 
@@ -55,7 +60,7 @@ const kind = (m) =>
         ? "kit"
         : /\/api/.test(m)
           ? "api"
-          : /\.ui\.|^shell\.(react|dom|test)/.test(m)
+          : /\.ui\.|^shell\.(react|solid|test)/.test(m)
             ? "ui"
             : m.startsWith("app")
               ? "app"

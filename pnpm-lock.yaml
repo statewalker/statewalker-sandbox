@@ -1405,6 +1405,87 @@ importers:
 
   apps/mvc-blueprint-13:
     dependencies:
+      '@p5/contacts':
+        specifier: link:packages/bundles/contacts
+        version: link:packages/bundles/contacts
+      '@p5/contacts.core':
+        specifier: link:packages/bundles/contacts.core
+        version: link:packages/bundles/contacts.core
+      '@p5/contacts.edit':
+        specifier: link:packages/bundles/contacts.edit
+        version: link:packages/bundles/contacts.edit
+      '@p5/contacts.list':
+        specifier: link:packages/bundles/contacts.list
+        version: link:packages/bundles/contacts.list
+      '@p5/contacts.ui.react':
+        specifier: link:packages/bundles/contacts.ui.react
+        version: link:packages/bundles/contacts.ui.react
+      '@p5/hello':
+        specifier: link:packages/bundles/hello
+        version: link:packages/bundles/hello
+      '@p5/hello.ui.react':
+        specifier: link:packages/bundles/hello.ui.react
+        version: link:packages/bundles/hello.ui.react
+      '@p5/kernel':
+        specifier: link:packages/kernel
+        version: link:packages/kernel
+      '@p5/kit-host':
+        specifier: link:packages/kits/host
+        version: link:packages/kits/host
+      '@p5/kit-loop':
+        specifier: link:packages/kits/loop
+        version: link:packages/kits/loop
+      '@p5/kit-model':
+        specifier: link:packages/kits/model
+        version: link:packages/kits/model
+      '@p5/kit-notify':
+        specifier: link:packages/kits/notify
+        version: link:packages/kits/notify
+      '@p5/kit-react':
+        specifier: link:packages/kits/react
+        version: link:packages/kits/react
+      '@p5/kit-signals':
+        specifier: link:packages/kits/signals
+        version: link:packages/kits/signals
+      '@p5/kit-slots':
+        specifier: link:packages/kits/slots
+        version: link:packages/kits/slots
+      '@p5/shell':
+        specifier: link:packages/bundles/shell
+        version: link:packages/bundles/shell
+      '@p5/shell.react':
+        specifier: link:packages/bundles/shell.react
+        version: link:packages/bundles/shell.react
+      '@p5/shell.test':
+        specifier: link:packages/bundles/shell.test
+        version: link:packages/bundles/shell.test
+      '@p5/todos':
+        specifier: link:packages/bundles/todos
+        version: link:packages/bundles/todos
+      '@p5/todos.clear-completed':
+        specifier: link:packages/bundles/todos.clear-completed
+        version: link:packages/bundles/todos.clear-completed
+      '@p5/todos.contacts-link':
+        specifier: link:packages/bundles/todos.contacts-link
+        version: link:packages/bundles/todos.contacts-link
+      '@p5/todos.core':
+        specifier: link:packages/bundles/todos.core
+        version: link:packages/bundles/todos.core
+      '@p5/todos.edit':
+        specifier: link:packages/bundles/todos.edit
+        version: link:packages/bundles/todos.edit
+      '@p5/todos.list':
+        specifier: link:packages/bundles/todos.list
+        version: link:packages/bundles/todos.list
+      '@p5/todos.rename':
+        specifier: link:packages/bundles/todos.rename
+        version: link:packages/bundles/todos.rename
+      '@p5/todos.status':
+        specifier: link:packages/bundles/todos.status
+        version: link:packages/bundles/todos.status
+      '@p5/todos.ui.react':
+        specifier: link:packages/bundles/todos.ui.react
+        version: link:packages/bundles/todos.ui.react
       '@statewalker/shared-adapters':
         specifier: 'catalog:'
         version: 0.1.1

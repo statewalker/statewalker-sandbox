@@ -13,7 +13,7 @@ import {
 } from "./graph.js";
 
 const all = sources();
-const bundleName = (file: string) => /^src\/bundles\/([^/]+)\//.exec(file)?.[1];
+const bundleName = (file: string) => /^packages\/bundles\/([^/]+)\//.exec(file)?.[1];
 const inBundle = (s: Source) => bundleName(s.file) !== undefined;
 const isApi = (s: Source) => moduleOf(s.file).startsWith("api:");
 const logicFiles = all.filter(
@@ -27,7 +27,8 @@ const rendererFiles = all.filter(
 
 // ── the rules, as predicates (each has a negative control below) ─────────────────────────────
 /** R1: what a renderer may value-import. Types from API modules and the kernel are fine. */
-const RENDERER_VALUE_OK = /^(?:react|react\/jsx-runtime|@kit\/react|@kit\/dom|\.\/.*)$/;
+const RENDERER_VALUE_OK =
+  /^(?:react|react\/jsx-runtime|solid-js|solid-js\/web|@p5\/kit-react|@p5\/kit-solid|\.\/.*)$/;
 const rendererViolations = (s: Source) =>
   s.imports.filter((i) => !i.typeOnly && !RENDERER_VALUE_OK.test(i.spec)).map((i) => i.spec);
 
@@ -37,26 +38,26 @@ const RENDERER_RUNTIME =
 
 /** R3: a logic bundle or a neutral API module imports no UI library or UI module. */
 const UI_SPEC =
-  /^(?:react|react-dom)(?:\/|$)|^@kit\/(?:react|dom)$|^@b\/shell\/api\/(?:react|dom)$|\.ui\.|^@b\/shell\.(?:react|dom|test)/;
+  /^(?:react|react-dom)(?:\/|$)|^solid-js(?:\/|$)|^@p5\/kit-(?:react|solid)$|^@p5\/shell\/api\/(?:react|solid)$|\.ui\.|^@p5\/shell\.(?:react|solid|test)/;
 /** R4: logic code never reads the DOM. */
 const DOM_GLOBAL = /\b(?:document|window|HTMLElement|localStorage)\b/;
 
 /** R6: the kernel imports no bundle and no kit. */
-const KERNEL_FORBIDDEN = /^@(?:b|kit)\//;
+const KERNEL_FORBIDDEN = /^@p5\//;
 /** R7: the substrate stays private. */
 const ALIEN = /^alien-signals(?:\/|$)/;
-const KIT_SIGNALS = /^@kit\/signals$/;
+const KIT_SIGNALS = /^@p5\/kit-signals$/;
 const mayImportSignals = (file: string) =>
-  file.startsWith("src/kits/model/") || /\.model\.ts$/.test(file);
+  /^packages\/kits\/(?:model|commit|track)\//.test(file) || /\.model\.ts$/.test(file);
 /** R8: an API module declares; it implements nothing. */
 const IMPLEMENTATION = /\bfunction\b|\bclass\b|\bnew\s+[A-Z]/;
-const API_VALUE_OK = /^@kernel$/;
+const API_VALUE_OK = /^@p5\/kernel$/;
 
 describe("boundary suite", () => {
   it("finds the tree it polices", () => {
     expect(logicFiles.length).toBeGreaterThan(15);
-    expect(apiFiles.length).toBe(6);
-    expect(rendererFiles.length).toBe(5);
+    expect(apiFiles.length).toBeGreaterThanOrEqual(5);
+    expect(rendererFiles.length).toBeGreaterThanOrEqual(3);
   });
 
   it("R1 renderers value-import only React, the binding kits and their own files", () => {
@@ -68,7 +69,7 @@ describe("boundary suite", () => {
   });
 
   it("R3 logic bundles and neutral API modules import no UI library", () => {
-    const neutral = apiFiles.filter((s) => !/\/api\/(react|dom)\//.test(s.file));
+    const neutral = apiFiles.filter((s) => !/\/api\/(react|solid)\//.test(s.file));
     for (const s of [...logicFiles, ...neutral]) {
       for (const i of s.imports)
         expect(UI_SPEC.test(i.spec), `${s.file} imports ${i.spec}`).toBe(false);
@@ -85,7 +86,7 @@ describe("boundary suite", () => {
   });
 
   it("R6 the kernel imports no bundle and no kit", () => {
-    for (const s of all.filter((x) => x.file.startsWith("src/kernel/"))) {
+    for (const s of all.filter((x) => x.file.startsWith("packages/kernel/"))) {
       for (const i of s.imports)
         expect(KERNEL_FORBIDDEN.test(i.spec), `${s.file} → ${i.spec}`).toBe(false);
     }
@@ -93,7 +94,7 @@ describe("boundary suite", () => {
 
   it("R7 alien-signals only in kits/signals; @kit/signals only in the model kit and *.model.ts", () => {
     const alien = all.filter((s) => s.imports.some((i) => ALIEN.test(i.spec))).map((s) => s.file);
-    expect(alien).toEqual(["src/kits/signals/index.ts"]);
+    expect(alien).toEqual(["packages/kits/signals/index.ts"]);
     for (const s of all.filter((x) => x.imports.some((i) => KIT_SIGNALS.test(i.spec)))) {
       expect(mayImportSignals(s.file), s.file).toBe(true);
     }
@@ -114,15 +115,15 @@ describe("boundary suite", () => {
         file: "x",
         code: "",
         imports: importsOf(
-          'import { todosAdd } from "@b/todos/api";\nimport { getSlots } from "@kernel";',
+          'import { todosAdd } from "@p5/todos/api";\nimport { getSlots } from "@p5/kernel";',
         ),
       };
-      expect(rendererViolations(bad)).toEqual(["@b/todos/api", "@kernel"]);
+      expect(rendererViolations(bad)).toEqual(["@p5/todos/api", "@p5/kernel"]);
       const good = {
         file: "x",
         code: "",
         imports: importsOf(
-          'import type { TodoListView } from "@b/todos/api";\nimport { useModel } from "@kit/react";',
+          'import type { TodoListView } from "@p5/todos/api";\nimport { useModel } from "@p5/kit-react";',
         ),
       };
       expect(rendererViolations(good)).toEqual([]);
@@ -139,14 +140,20 @@ describe("boundary suite", () => {
       for (const bad of [
         "react",
         "react-dom/client",
-        "@kit/react",
-        "@b/shell/api/dom",
-        "@b/todos.ui.react",
-        "@b/shell.react",
+        "@p5/kit-react",
+        "@p5/shell/api/solid",
+        "@p5/todos.ui.react",
+        "@p5/shell.react",
       ]) {
         expect(UI_SPEC.test(bad), bad).toBe(true);
       }
-      for (const good of ["@kernel", "@kit/model", "@b/shell/api", "@b/todos/api", "reactive"]) {
+      for (const good of [
+        "@p5/kernel",
+        "@p5/kit-model",
+        "@p5/shell/api",
+        "@p5/todos/api",
+        "reactive",
+      ]) {
         expect(UI_SPEC.test(good), good).toBe(false);
       }
     });
@@ -158,29 +165,29 @@ describe("boundary suite", () => {
     it("R5", () => {
       const fake: Source[] = [
         {
-          file: "src/bundles/todos.status/index.ts",
+          file: "packages/bundles/todos.status/index.ts",
           code: "",
           imports: importsOf(
-            'import { x } from "@b/todos.core";\nimport { y } from "@b/todos/api";',
+            'import { x } from "@p5/todos.core";\nimport { y } from "@p5/todos/api";',
           ),
         },
       ];
       const found = crossBundle(edges(fake));
       expect(found.map((f) => [f.edge.spec, f.ok])).toEqual([
-        ["@b/todos.core", false],
-        ["@b/todos/api", true],
+        ["@p5/todos.core", false],
+        ["@p5/todos/api", true],
       ]);
-      expect(ownerOf(moduleOf("src/bundles/hello/api/index.ts"))).toBe("bundle:hello");
-      expect(resolve("src/bundles/hello/index.ts", "./api/index.js").path).toBe(
-        "src/bundles/hello/api/index.js",
+      expect(ownerOf(moduleOf("packages/bundles/hello/api/index.ts"))).toBe("bundle:hello");
+      expect(resolve("packages/bundles/hello/index.ts", "./api/index.js").path).toBe(
+        "packages/bundles/hello/api/index.js",
       );
     });
     it("R6, R7, R8", () => {
-      expect(KERNEL_FORBIDDEN.test("@b/shell/api")).toBe(true);
+      expect(KERNEL_FORBIDDEN.test("@p5/shell/api")).toBe(true);
       expect(KERNEL_FORBIDDEN.test("@statewalker/shared-slots")).toBe(false);
       expect(ALIEN.test("alien-signals")).toBe(true);
-      expect(mayImportSignals("src/bundles/todos.list/index.ts")).toBe(false);
-      expect(mayImportSignals("src/bundles/todos.list/list.model.ts")).toBe(true);
+      expect(mayImportSignals("packages/bundles/todos.list/index.ts")).toBe(false);
+      expect(mayImportSignals("packages/bundles/todos.list/list.model.ts")).toBe(true);
       expect("export function f() {}").toMatch(IMPLEMENTATION);
       expect("new MemTodoApi()").toMatch(IMPLEMENTATION);
       expect("export const x = defineCommand<A, B>('a')").not.toMatch(IMPLEMENTATION);

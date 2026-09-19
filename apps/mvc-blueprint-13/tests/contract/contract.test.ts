@@ -1,12 +1,12 @@
-import type { HelloView } from "@b/hello/api";
-import { panelsSlot } from "@b/shell/api";
-import { type ActionState, type Context, getSlots, loggerAdapter } from "@kernel";
-import { createAction, createValue } from "@kit/model";
+import type { HelloView } from "@p5/hello/api";
+import { panelsSlot } from "@p5/shell/api";
+import { type ActionState, type Context, getSlots, loggerAdapter } from "@p5/kernel";
+import { createAction, createValue } from "@p5/kit-model";
 import { describe, expect, it } from "vitest";
-import { createContactEditorModel } from "../../src/bundles/contacts.edit/editor.model.js";
-import { createCollectionModel } from "../../src/bundles/todos.core/collection.model.js";
-import { createEditorModel } from "../../src/bundles/todos.edit/editor.model.js";
-import { createListModel } from "../../src/bundles/todos.list/list.model.js";
+import { createContactEditorModel } from "../../packages/bundles/contacts.edit/editor.model.js";
+import { createCollectionModel } from "../../packages/bundles/todos.core/collection.model.js";
+import { createEditorModel } from "../../packages/bundles/todos.edit/editor.model.js";
+import { createListModel } from "../../packages/bundles/todos.list/list.model.js";
 import { newRecordingLogger } from "../support/logging.js";
 import { modelContract } from "./model-contract.js";
 import { plainAction, plainForm, plainPresentation } from "./plain-models.js";
@@ -173,7 +173,7 @@ modelContract<ActionState>("action · hand-rolled", {
 // ── the hello bundle's hand-rolled presentation, through its controller ─────────────────────
 describe("presentation · hello (hand-rolled, kernel only)", () => {
   it("passes the contract points it can express through the bundle", async () => {
-    const { activate } = await import("@b/hello");
+    const { activate } = await import("@p5/hello");
     const ctx: Context = {};
     loggerAdapter.set(ctx, newRecordingLogger().logger);
     const stop = await activate(ctx);

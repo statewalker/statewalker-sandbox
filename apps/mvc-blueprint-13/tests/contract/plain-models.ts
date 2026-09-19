@@ -1,4 +1,4 @@
-import type { ActionControl, ActionState, ActionView, Listener } from "@kernel";
+import type { ActionControl, ActionState, ActionView, Listener } from "@p5/kernel";
 
 /**
  * Hand-rolled second implementations of the three model kinds: a listener set, no library.

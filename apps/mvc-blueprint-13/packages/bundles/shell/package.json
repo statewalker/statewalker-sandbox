@@ -1,0 +1,14 @@
+{
+  "name": "@p5/shell",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./api": "./api/index.ts",
+    "./api/react": "./api/react/index.ts"
+  },
+  "dependencies": {
+    "@p5/kernel": "link:../../kernel",
+    "react": "catalog:"
+  }
+}

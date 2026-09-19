@@ -6,7 +6,7 @@ import {
   callsSlot,
   defineCommand,
   KernelSlots,
-} from "@kernel";
+} from "@p5/kernel";
 import { describe, expect, it } from "vitest";
 
 const ping = defineCommand<{ n: number }, string>("t:ping");

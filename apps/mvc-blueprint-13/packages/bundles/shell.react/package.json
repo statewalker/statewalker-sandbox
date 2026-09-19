@@ -1,0 +1,18 @@
+{
+  "name": "@p5/shell.react",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@p5/kernel": "link:../../kernel",
+    "@p5/kit-host": "link:../../kits/host",
+    "@p5/kit-react": "link:../../kits/react",
+    "@p5/kit-slots": "link:../../kits/slots",
+    "@p5/shell": "link:../shell",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  }
+}

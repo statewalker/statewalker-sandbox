@@ -1,4 +1,4 @@
-import type { Logger, LoggerLevel } from "@kernel";
+import type { Logger, LoggerLevel } from "@p5/kernel";
 
 export interface LoggedCall {
   readonly level: LoggerLevel;

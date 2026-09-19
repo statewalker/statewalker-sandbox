@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, normalize, relative } from "node:path";
 
 /**
- * The import graph of `src/`, by regex (as 03's B0). A module is a folder (a bundle, an API
+ * The import graph of `packages/` and `src/`, by regex (as 03's B0). A module is a folder (a bundle, an API
  * module, a kit, the kernel); edges are imports between modules.
  */
 export const ROOT = new URL("../../", import.meta.url).pathname;
@@ -48,32 +48,34 @@ export function importsOf(code: string): Import[] {
   return out;
 }
 
-export function sources(dir = "src"): Source[] {
-  return walk(join(ROOT, dir)).map((path) => {
-    const code = stripComments(readFileSync(path, "utf8"));
-    return { file: relative(ROOT, path), code, imports: importsOf(code) };
-  });
+export function sources(dirs: readonly string[] = ["packages", "src"]): Source[] {
+  return dirs
+    .flatMap((dir) => walk(join(ROOT, dir)))
+    .map((path) => {
+      const code = stripComments(readFileSync(path, "utf8"));
+      return { file: relative(ROOT, path), code, imports: importsOf(code) };
+    });
 }
 
 /** Where an import lands: a path under src/ (for aliases and relatives) or an external package. */
 export function resolve(file: string, spec: string): { path?: string; external?: string } {
-  if (spec === "@kernel") return { path: "src/kernel/index.ts" };
-  const kit = /^@kit\/(.+)$/.exec(spec);
-  if (kit) return { path: `src/kits/${kit[1]}/index.ts` };
-  const b = /^@b\/(.+)$/.exec(spec);
-  if (b) return { path: `src/bundles/${b[1]}/index.ts` };
+  if (spec === "@p5/kernel") return { path: "packages/kernel/index.ts" };
+  const kit = /^@p5\/kit-(.+)$/.exec(spec);
+  if (kit) return { path: `packages/kits/${kit[1]}/index.ts` };
+  const b = /^@p5\/(.+)$/.exec(spec);
+  if (b) return { path: `packages/bundles/${b[1]}/index.ts` };
   if (/^\.\.?\//.test(spec)) return { path: normalize(join(dirname(file), spec)) };
   return { external: spec };
 }
 
 /** The module a file belongs to: "kernel", "kit:<name>", "api:<path>", "bundle:<name>", "app". */
 export function moduleOf(path: string): string {
-  if (path.startsWith("src/kernel/")) return "kernel";
-  const kit = /^src\/kits\/([^/]+)\//.exec(path);
+  if (path.startsWith("packages/kernel/")) return "kernel";
+  const kit = /^packages\/kits\/([^/]+)\//.exec(path);
   if (kit) return `kit:${kit[1]}`;
-  const api = /^src\/bundles\/(.+?\/api(?:\/(?:react|dom))?)\//.exec(path);
+  const api = /^packages\/bundles\/(.+?\/api(?:\/(?:react|solid))?)\//.exec(path);
   if (api) return `api:${api[1]}`;
-  const bundle = /^src\/bundles\/([^/]+)\//.exec(path);
+  const bundle = /^packages\/bundles\/([^/]+)\//.exec(path);
   if (bundle) return `bundle:${bundle[1]}`;
   return "app";
 }
@@ -82,7 +84,7 @@ export function moduleOf(path: string): string {
 export const ownerOf = (module: string) =>
   module.startsWith("api:") ? `bundle:${module.slice(4).split("/")[0]}` : module;
 
-export const isUiBundle = (name: string) => /\.ui\.|^shell\.(react|dom|test)$/.test(name);
+export const isUiBundle = (name: string) => /\.ui\.|^shell\.(react|solid|test)$/.test(name);
 export const isRendererBundle = (name: string) => /\.ui\./.test(name);
 
 export interface Edge {

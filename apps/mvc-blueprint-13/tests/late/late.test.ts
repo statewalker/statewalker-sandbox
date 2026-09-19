@@ -1,16 +1,16 @@
-import { panelsSlot } from "@b/shell/api";
-import { reactRenderersSlot } from "@b/shell/api/react";
-import { activate as todosCore } from "@b/todos.core";
-import { activate as todosStatus } from "@b/todos.status";
-import { activate as todosUiReact } from "@b/todos.ui.react";
+import { panelsSlot } from "@p5/shell/api";
+import { reactRenderersSlot } from "@p5/shell/api/react";
+import { activate as todosCore } from "@p5/todos.core";
+import { activate as todosStatus } from "@p5/todos.status";
+import { activate as todosUiReact } from "@p5/todos.ui.react";
 import {
   type ApplicationManifest,
   application,
   type Context,
   getSlots,
   loggerAdapter,
-} from "@kernel";
-import { createCoverage } from "@kit/host";
+} from "@p5/kernel";
+import { createCoverage } from "@p5/kit-host";
 import { describe, expect, it } from "vitest";
 import { contacts, todos } from "../../src/features/logic.js";
 import { contactsReact } from "../../src/features/react.js";

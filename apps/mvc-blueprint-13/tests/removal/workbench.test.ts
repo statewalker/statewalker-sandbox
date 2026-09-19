@@ -1,5 +1,5 @@
-import { without } from "@kernel";
-import { formatCoverage } from "@kit/host";
+import { without } from "@p5/kernel";
+import { formatCoverage } from "@p5/kit-host";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   coverageOf,

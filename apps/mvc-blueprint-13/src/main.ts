@@ -1,14 +1,13 @@
 /// <reference types="vite/client" />
 import "./index.css";
-import { shellRoot } from "@b/shell/api";
-import { type ApplicationManifest, application, type Context } from "@kernel";
+import { type ApplicationManifest, application, type Context } from "@p5/kernel";
+import { shellRoot } from "@p5/shell/api";
 
+const react = () => import("./apps/react.js");
 const apps: Record<string, () => Promise<ApplicationManifest>> = {
-  "workbench.react": () => import("./apps/workbench.react.js").then((m) => m.workbenchReact),
-  "workbench.dom": () => import("./apps/workbench.dom.js").then((m) => m.workbenchDom),
-  "todos.standalone": () => import("./apps/todos.standalone.js").then((m) => m.todosStandalone),
-  "contacts.standalone": () =>
-    import("./apps/contacts.standalone.js").then((m) => m.contactsStandalone),
+  "workbench.react": () => react().then((m) => m.workbenchReact),
+  "todos.react": () => react().then((m) => m.todosReactStandalone),
+  "contacts.react": () => react().then((m) => m.contactsReactStandalone),
 };
 
 const root = document.getElementById("root");

@@ -1,8 +1,6 @@
 import { defineConfig } from "vitest/config";
-import { alias } from "./aliases.js";
 
 export default defineConfig({
-  resolve: { alias },
   test: {
     name: "node",
     environment: "node",

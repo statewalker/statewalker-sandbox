@@ -1,0 +1,12 @@
+{
+  "name": "@p5/todos",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./api": "./api/index.ts"
+  },
+  "dependencies": {
+    "@p5/kernel": "link:../../kernel"
+  }
+}

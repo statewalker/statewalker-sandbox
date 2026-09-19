@@ -1,8 +1,8 @@
-import type { ContactEditorView } from "@b/contacts/api";
-import { MemContactsApi } from "@b/contacts.core";
-import { dialogsSlot } from "@b/shell/api";
-import type { ConfirmView, TodoListView } from "@b/todos/api";
-import { callsSlot } from "@kernel";
+import type { ContactEditorView } from "@p5/contacts/api";
+import { MemContactsApi } from "@p5/contacts.core";
+import { dialogsSlot } from "@p5/shell/api";
+import type { ConfirmView, TodoListView } from "@p5/todos/api";
+import { callsSlot } from "@p5/kernel";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorLogs, panel, start, toasts, until, workbenchHeadless } from "../support/harness.js";
 import { contactList, titles, todoList, toolbarAction } from "../support/scenarios.js";

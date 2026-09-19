@@ -1,8 +1,8 @@
-import { activate as contactsUiReact } from "@b/contacts.ui.react";
-import { activate as helloUiReact } from "@b/hello.ui.react";
-import { activate as shellReact } from "@b/shell.react";
-import { activate as todosUiReact } from "@b/todos.ui.react";
-import type { FeatureManifest } from "@kernel";
+import { activate as contactsUiReact } from "@p5/contacts.ui.react";
+import { activate as helloUiReact } from "@p5/hello.ui.react";
+import { activate as shellReact } from "@p5/shell.react";
+import { activate as todosUiReact } from "@p5/todos.ui.react";
+import type { FeatureManifest } from "@p5/kernel";
 
 export const shellReactFeature: FeatureManifest = {
   id: "shell",

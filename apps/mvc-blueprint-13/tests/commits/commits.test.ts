@@ -1,7 +1,7 @@
-import type { ContactEditorView } from "@b/contacts/api";
-import { MemContactsApi } from "@b/contacts.core";
-import type { ConfirmView, TitleFormView } from "@b/todos/api";
-import { MemTodoApi } from "@b/todos.core";
+import type { ContactEditorView } from "@p5/contacts/api";
+import { MemContactsApi } from "@p5/contacts.core";
+import type { ConfirmView, TitleFormView } from "@p5/todos/api";
+import { MemTodoApi } from "@p5/todos.core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   dialog,

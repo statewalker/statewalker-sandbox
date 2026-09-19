@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { workbenchDom } from "../../src/apps/workbench.dom.js";
-import { workbenchReact } from "../../src/apps/workbench.react.js";
+import { workbenchReact } from "../../src/apps/react.js";
 import { click, open, waitFor } from "./dom.js";
 
 /**
@@ -10,18 +9,6 @@ import { click, open, waitFor } from "./dom.js";
  * (flushSync) and Solid (synchronous) rows.
  */
 describe("flush per technology", () => {
-  it("dom: the count is on the page before submit() returns", async () => {
-    const page = await open(workbenchDom);
-    await waitFor(() => page.root.querySelector("[data-hello-count]") !== null);
-    click(
-      [...page.root.querySelectorAll('[role="menuitem"]')].find(
-        (b) => b.textContent === "Say hello",
-      ),
-    );
-    expect(page.root.querySelector("[data-hello-count]")?.textContent).toBe("Count: 1");
-    await page.stop();
-  });
-
   it("react: not yet after submit(); after React commits", async () => {
     const page = await open(workbenchReact);
     await waitFor(() => page.root.querySelector("[data-hello-count]") !== null);

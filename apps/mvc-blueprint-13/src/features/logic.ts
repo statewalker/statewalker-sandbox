@@ -1,14 +1,14 @@
-import { activate as contactsCore } from "@b/contacts.core";
-import { activate as contactsEdit } from "@b/contacts.edit";
-import { activate as contactsList } from "@b/contacts.list";
-import { activate as todosClearCompleted } from "@b/todos.clear-completed";
-import { activate as todosContactsLink } from "@b/todos.contacts-link";
-import { activate as todosCore } from "@b/todos.core";
-import { activate as todosEdit } from "@b/todos.edit";
-import { activate as todosList } from "@b/todos.list";
-import { activate as todosRename } from "@b/todos.rename";
-import { activate as todosStatus } from "@b/todos.status";
-import type { FeatureManifest } from "@kernel";
+import { activate as contactsCore } from "@p5/contacts.core";
+import { activate as contactsEdit } from "@p5/contacts.edit";
+import { activate as contactsList } from "@p5/contacts.list";
+import { activate as todosClearCompleted } from "@p5/todos.clear-completed";
+import { activate as todosContactsLink } from "@p5/todos.contacts-link";
+import { activate as todosCore } from "@p5/todos.core";
+import { activate as todosEdit } from "@p5/todos.edit";
+import { activate as todosList } from "@p5/todos.list";
+import { activate as todosRename } from "@p5/todos.rename";
+import { activate as todosStatus } from "@p5/todos.status";
+import type { FeatureManifest } from "@p5/kernel";
 
 /** Logic features — technology-free. UI features live in `features/<tech>.ts`. */
 
@@ -48,6 +48,6 @@ export const todosContacts: FeatureManifest = {
 export const hello: FeatureManifest = {
   id: "hello",
   bundles: [
-    { id: "hello", lazy: true, activator: () => import("@b/hello").then((m) => m.activate) },
+    { id: "hello", lazy: true, activator: () => import("@p5/hello").then((m) => m.activate) },
   ],
 };

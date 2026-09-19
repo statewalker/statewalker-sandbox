@@ -7,9 +7,9 @@ import {
   type PanelContribution,
   panelsSlot,
   shellCoverage,
-} from "@b/shell/api";
-import { reactRenderersSlot } from "@b/shell/api/react";
-import { headlessShell } from "@b/shell.test";
+} from "@p5/shell/api";
+import { reactRenderersSlot } from "@p5/shell/api/react";
+import { headlessShell } from "@p5/shell.test";
 import {
   type ApplicationManifest,
   application,
@@ -19,8 +19,8 @@ import {
   getSlots,
   type KernelSlots,
   loggerAdapter,
-} from "@kernel";
-import { byOrder } from "@kit/slots";
+} from "@p5/kernel";
+import { byOrder } from "@p5/kit-slots";
 import {
   contacts,
   hello,

@@ -1,11 +1,11 @@
-import { shellRoot } from "@b/shell/api";
+import { shellRoot } from "@p5/shell/api";
 import {
   type ApplicationManifest,
   application,
   type Context,
   configAdapter,
   loggerAdapter,
-} from "@kernel";
+} from "@p5/kernel";
 import { newRecordingLogger } from "../support/logging.js";
 
 /**

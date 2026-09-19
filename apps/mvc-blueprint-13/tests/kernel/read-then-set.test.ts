@@ -1,5 +1,5 @@
-import { todoApiAdapter } from "@b/todos/api";
-import { MemTodoApi, activate as todosCore } from "@b/todos.core";
+import { todoApiAdapter } from "@p5/todos/api";
+import { MemTodoApi, activate as todosCore } from "@p5/todos.core";
 import {
   type ApplicationManifest,
   application,
@@ -10,7 +10,7 @@ import {
   newAdapter,
   plan,
   wasRead,
-} from "@kernel";
+} from "@p5/kernel";
 import { describe, expect, it } from "vitest";
 import { newRecordingLogger } from "../support/logging.js";
 

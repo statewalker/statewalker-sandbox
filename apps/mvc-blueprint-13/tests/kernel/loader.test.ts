@@ -6,7 +6,7 @@ import {
   loggerAdapter,
   resolveFeatures,
   without,
-} from "@kernel";
+} from "@p5/kernel";
 import { describe, expect, it } from "vitest";
 import { newRecordingLogger } from "../support/logging.js";
 

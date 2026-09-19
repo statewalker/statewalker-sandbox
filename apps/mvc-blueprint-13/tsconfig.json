@@ -9,12 +9,7 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "jsx": "react-jsx",
-    "types": ["node"],
-    "paths": {
-      "@kernel": ["./src/kernel/index.ts"],
-      "@kit/*": ["./src/kits/*/index.ts"],
-      "@b/*": ["./src/bundles/*/index.ts"]
-    }
+    "types": ["node"]
   },
-  "include": ["src/**/*", "tests/**/*", "*.ts"]
+  "include": ["packages/**/*", "src/**/*", "tests/**/*", "*.ts"]
 }

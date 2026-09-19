@@ -1,5 +1,5 @@
-import type { ContactEditorView, ContactListView } from "@b/contacts/api";
-import type { ConfirmView, TitleFormView, TodoListView } from "@b/todos/api";
+import type { ContactEditorView, ContactListView } from "@p5/contacts/api";
+import type { ConfirmView, TitleFormView, TodoListView } from "@p5/todos/api";
 import { expect } from "vitest";
 import { dialog, menuItem, panel, type Running, toasts, until } from "./harness.js";
 
