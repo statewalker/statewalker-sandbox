@@ -417,9 +417,9 @@ Findings:
    mis-declared `lazy` was a runtime `TypeError` before; now the shape is self-describing.
 2. **A wrong module is caught one step later than a wrong wiring.** `requires`/`provides` are
    checked before anything activates; a missing default export is only known once the module is
-   loaded, so it fails at that bundle's turn and rolls back. For eager namespaces `tsc` already
-   catches it at the manifest (`BundleModule` is structurally checked), so the runtime check
-   matters for lazy imports and untyped code.
+   loaded, so it fails at that bundle's turn and rolls back. `tsc` already catches it at the
+   manifest for both forms (a namespace and a typed `import()` are checked against
+   `BundleModule`), so the runtime check matters only for untyped or cast modules.
 3. **The function type annotation moved to the parameters.** A function declaration cannot carry
    `: Controller`, so each bundle types `(context: Context, scope: Scope)` and the return type is
    inferred; compatibility with `Activator` is checked where the manifest names the module.
