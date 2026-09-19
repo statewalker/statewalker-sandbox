@@ -25,7 +25,7 @@ export function loc(text) {
 
 function moduleOf(file) {
   const m =
-    /^src\/bundles\/([^/]+\/api(?:\/(?:react|dom))?)\//.exec(file) ??
+    /^src\/bundles\/([^/]+\/api(?:\/(?:dom|solid|spec))?)\//.exec(file) ??
     /^src\/bundles\/([^/]+)\//.exec(file) ??
     /^src\/(kits\/[^/]+)\//.exec(file) ??
     /^src\/(kernel)\//.exec(file) ??
@@ -55,7 +55,7 @@ const kind = (m) =>
         ? "kit"
         : /\/api/.test(m)
           ? "api"
-          : /\.ui\.|^shell\.(react|dom|test)/.test(m)
+          : /\.ui\.|^ui\.|^shell\.(dom|solid|test)/.test(m)
             ? "ui"
             : m.startsWith("app")
               ? "app"
