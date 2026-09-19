@@ -387,3 +387,58 @@ LOC, counted as in P5.1 (`node scripts/loc.mjs`):
 | logic | 1219 | **1221** (+2: one `answer` line wrapped) |
 | UI (React host) | 334 | **338** (the name provider) |
 
+
+## P5.3 iteration
+
+An owner decision, built on branch `spike/p5-iteration-3`, in place: **a bundle's activator is the
+default export of its package entry (`"."`)**. The minimal valid bundle is
+`export default function hello(context, scope) { … }`. The loader test was written first and
+failed (7 of 10 red: `activator is not a function`), then the loader made it pass. Tests:
+`pnpm test` **234** (231 + 3), `pnpm test:browser` **33**, `pnpm typecheck`, `pnpm build`,
+`pnpm packages --check`. No new dependency.
+
+| What | Before (P5.2) | **P5.3** |
+| --- | --- | --- |
+| Manifest | `activator: Activator \| (() => Promise<Activator>)` + `lazy?: boolean` | `module: BundleModule \| (() => Promise<BundleModule>)`, `BundleModule = { readonly default: Activator }`; `lazy` removed |
+| Eager | `import { activate as todosCore } …; activator: todosCore` | `import * as todosCore …; module: todosCore` |
+| Lazy | `lazy: true, activator: () => import("@p5/hello").then((m) => m.activate)` | `module: () => import("@p5/hello")` |
+| Bundle entry | `export const activate: Controller = async (context, scope) => {…};` | `export default async function todosCore(context: Context, scope: Scope) {…}` (19 bundles) |
+| Loader | trusted `lazy` to cast `activator` | an object is the namespace, a function is awaited; `.default` must be a function, else `bundle "x": module has no default export activator` — thrown inside the activation `try`, so what already activated rolls back |
+
+New loader tests: an eager namespace; a lazy module loaded in order (after the bundle before it
+activated); a module with no default, a non-function default, and a lazy module exporting only
+`activate` — each throws the named error and rolls back; `lazy` and `activator` are
+`@ts-expect-error` on `BundleManifest`.
+
+Findings:
+
+1. **One manifest flag and one cast disappear.** The lazy form no longer needs `.then((m) =>
+   m.activate)`, and the loader no longer trusts a boolean to decide how to call a union. A
+   mis-declared `lazy` was a runtime `TypeError` before; now the shape is self-describing.
+2. **A wrong module is caught one step later than a wrong wiring.** `requires`/`provides` are
+   checked before anything activates; a missing default export is only known once the module is
+   loaded, so it fails at that bundle's turn and rolls back. For eager namespaces `tsc` already
+   catches it at the manifest (`BundleModule` is structurally checked), so the runtime check
+   matters for lazy imports and untyped code.
+3. **The function type annotation moved to the parameters.** A function declaration cannot carry
+   `: Controller`, so each bundle types `(context: Context, scope: Scope)` and the return type is
+   inferred; compatibility with `Activator` is checked where the manifest names the module.
+4. **Biome wraps long imports.** Adding `Context`/`Scope` to `hello`'s kernel import pushed it
+   over the line width (72 → 79 LOC, breaking the ≤ 80 `hello` budget). A separate `import type`
+   line brings it to 73; `hello` + API = **80**.
+5. **`shell.test` is not converted.** Its entry exports a factory `headlessShell(renderers)`, not
+   an activator, because the test shell is parameterised by the renderer slot; tests wrap it as
+   `module: { default: headlessShell(reactRenderersSlot) }`. Same for the in-test probe bundles.
+6. **No enforcement check looked for `activate`.** The R-rules and `packages --check` are
+   unchanged and green. No rule was removed from the checks; one manifest rule (`lazy`) is gone.
+
+LOC (`node scripts/loc.mjs`):
+
+| | P5.2 | **P5.3** |
+| --- | --- | --- |
+| kernel | 476 | **481** (+5: `BundleModule`, the `activatorOf` check; the `lazy` branch gone) |
+| logic | 1221 | **1224** (+3: `hello`, `todos.core`, `contacts.core` imports; `hello` 72 → 73) |
+| app (features, apps, main) | 184 | **182** (the lazy `hello` line) |
+| kits / API / UI | 1036 / 270 / 1015 | unchanged |
+| non-test total | 4202 | **4214** (+12) |
+| tests | 4259 | **4325** (+66: 3 new loader tests, `module: { default: … }` wrappers) |

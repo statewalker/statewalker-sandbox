@@ -29,8 +29,8 @@ pnpm packages        # regenerates every package.json from its imports (--check 
 ## K in one screen
 
 ```ts
-// A controller receives its bundle scope. What it defers is disposed on deactivation.
-export const activate: Controller = async (context, scope) => {
+// A bundle's activator is the default export of its entry (P5.3); it receives its bundle scope.
+export default async function contactsEdit(context: Context, scope: Scope) {
   const { slots, log } = fields(context);                       // 1. resolve dependencies
   let session: Scope | undefined;
   scope.defer(answer(slots, contactsEditOpen, "contacts.edit", ({ payload }) => { // the one answer; `observe` never claims
@@ -49,7 +49,7 @@ export const activate: Controller = async (context, scope) => {
     drainCommits(drain, on(model.control.cancel, () => void editor.close())); // Cancel: its own lane
     editor.defer(slots.register(panelsSlot, "contacts:editor", { …, model: model.view })); // 3. publish
   }));
-};
+}
 ```
 
 **P5.1** (the iteration after the independent analysis): per-contribution error boundaries in both
@@ -59,6 +59,12 @@ scope-aware `call`, changed-fields patches, singleton peer kernel. See `LESSONS.
 **P5.2** (after the re-check): a drain's claim ends with its session once its records are settled
 (N1); `each()` releases its disposer when the stream ends (N2); the React dev guard names the
 contribution (N3); a second `answer` to a command throws, naming both bundles. See `LESSONS.md` § P5.2.
+
+**P5.3** (owner decision): a bundle's activator is the **default export** of its entry `"."`, a
+named function (`export default async function todosCore(context, scope)`). A manifest names the
+entry as `module` — the namespace (`import * as todosCore from "@p5/todos.core"`) or a lazy import
+(`() => import("@p5/hello")`); `typeof` tells them apart, so `lazy` is gone. The loader throws
+`bundle "x": module has no default export activator` inside the rollback path. See `LESSONS.md` § P5.3.
 
 | Piece | Where | What it guarantees |
 | --- | --- | --- |
@@ -78,7 +84,7 @@ packages/kernel/              @p5/kernel — context + read-then-set guard, useF
 packages/kits/<k>/            @p5/kit-<k> — OPTIONAL: signals (private substrate), model (channels, stableGroup,
                               createValue), commit (C + drain), form, track, slots, notify, host (coverage, focus
                               return), shell (neutral host model), react, solid
-packages/bundles/<b>/         @p5/<b> — a bundle's activator ("."), its API module ("./api"), e.g.
+packages/bundles/<b>/         @p5/<b> — a bundle's activator (default export of "."), its API module ("./api"), e.g.
                               @p5/todos/api, @p5/todos.core, @p5/shell/api/solid
 src/features/ src/apps/       manifests: logic, react, solid features; React and Solid workbenches + standalones
 tests/                        kernel/ contract/ commits/ dispose/ glitch/ late/ standalone/ removal/ boundaries/ e2e/ support/
@@ -103,7 +109,7 @@ Rewritten:
 - **6 Command** — a slot whose contributions are handlers: `answer` contributes the claiming
   handler (at most one, named by its bundle), `observe` a watcher that never claims; `call` dispatches to the handlers present now; a
   caller whose owner leaves gets `abandoned` (P1; split verbs since P5.1).
-- **9 Bundle** — a package: an activator and at most one API module (`./api`); it imports the
+- **9 Bundle** — a package: an activator (the default export of `.`) and at most one API module (`./api`); it imports the
   kernel, kits and API modules only, each declared in its `package.json`.
 - **11 Controller** — `(context, scope) => Promise<void | cleanup>`; resolves, creates models,
   publishes (`scope.defer(...)`), drains commits. **Scope** replaces "check you are still active
@@ -143,4 +149,4 @@ model.
 | D14 | the guard wrapper kept (`packages/kernel/context.ts`) |
 | D15 | neutral host model tried for Solid: host 180 LOC (U1: 286), above the 150 bar |
 | D16 | `toggleSelected(id)` in the list model |
-| D17 | `provides` / `requires` / `optional` + `lazy`, checked by the loader |
+| D17 | `provides` / `requires` / `optional`, checked by the loader; `module` is the entry's namespace or a lazy import (P5.3: `lazy` removed) |
