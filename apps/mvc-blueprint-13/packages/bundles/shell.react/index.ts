@@ -1,6 +1,6 @@
 import { shellCoverage, shellRoot } from "@p5/shell/api";
 import { reactRenderersSlot } from "@p5/shell/api/react";
-import { type Controller, getLogger, getSlots, useFields } from "@p5/kernel";
+import { type Context, getLogger, getSlots, type Scope, useFields } from "@p5/kernel";
 import { createCoverage, newFocusReturn } from "@p5/kit-host";
 import { createElement } from "react";
 import { flushSync } from "react-dom";
@@ -15,7 +15,7 @@ const fields = useFields({ slots: getSlots, log: getLogger, root: shellRoot.get 
  * with the renderer for its kind from `ui.react:renderers`. Provides `shell:coverage`. Each
  * contribution renders inside an error boundary: a failure is logged and listed as `failed`.
  */
-export const activate: Controller = async (context, scope) => {
+export default async function shellReact(context: Context, scope: Scope) {
   const { slots, log, root } = fields(context);
   const coverage = createCoverage(slots, reactRenderersSlot);
   scope.defer(() => coverage.dispose());
@@ -40,4 +40,4 @@ export const activate: Controller = async (context, scope) => {
       }),
     ),
   );
-};
+}

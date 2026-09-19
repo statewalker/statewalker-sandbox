@@ -1,5 +1,6 @@
 import { menuSlot, panelsSlot } from "@p5/shell/api";
-import { type ActionState, type Controller, getSlots, type Listener, useFields } from "@p5/kernel";
+import type { ActionState, Context, Listener, Scope } from "@p5/kernel";
+import { getSlots, useFields } from "@p5/kernel";
 import { type HelloView, helloKind } from "./api/index.js";
 
 /** One group: a value, and listeners told synchronously, in order, isolated, when it changes. */
@@ -38,7 +39,7 @@ function group<T>(initial: T) {
 const fields = useFields({ slots: getSlots });
 
 /** The minimal bundle: one menu item and one panel; the action increments a counter. */
-export const activate: Controller = async (context, scope) => {
+export default async function hello(context: Context, scope: Scope) {
   const { slots } = fields(context);
   const count = group(0);
   const submits = group(0);
@@ -75,4 +76,4 @@ export const activate: Controller = async (context, scope) => {
       action: view.increment,
     }),
   );
-};
+}

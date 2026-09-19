@@ -95,9 +95,11 @@ describe("kernel scope (K §4.1.4)", () => {
     const scopes: Scope[] = [];
     const bundle = (id: string) => ({
       id,
-      activator: async (_: Context, scope: Scope) => {
-        scopes.push(scope);
-        scope.defer(() => void events.push(`-${id}`));
+      module: {
+        default: async (_: Context, scope: Scope) => {
+          scopes.push(scope);
+          scope.defer(() => void events.push(`-${id}`));
+        },
       },
     });
     const app: ApplicationManifest = {

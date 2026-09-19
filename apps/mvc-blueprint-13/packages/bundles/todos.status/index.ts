@@ -1,4 +1,4 @@
-import { type Controller, getSlots, useFields } from "@p5/kernel";
+import { type Context, getSlots, type Scope, useFields } from "@p5/kernel";
 import { createValue } from "@p5/kit-model";
 import { followFirst } from "@p5/kit-slots";
 import { headerSlot } from "@p5/shell/api";
@@ -11,7 +11,7 @@ const fields = useFields({ slots: getSlots });
  * read through the Todos API only. Shown while a collection exists — in whichever order the
  * collection's owner and this bundle activate.
  */
-export const activate: Controller = async (context, scope) => {
+export default async function todosStatus(context: Context, scope: Scope) {
   const { slots } = fields(context);
   const state = createValue({ text: "" });
   scope.defer(() => state.dispose());
@@ -28,4 +28,4 @@ export const activate: Controller = async (context, scope) => {
       };
     }),
   );
-};
+}

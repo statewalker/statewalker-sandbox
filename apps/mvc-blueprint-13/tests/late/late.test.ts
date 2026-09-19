@@ -1,8 +1,8 @@
 import { panelsSlot } from "@p5/shell/api";
 import { reactRenderersSlot } from "@p5/shell/api/react";
-import { activate as todosCore } from "@p5/todos.core";
-import { activate as todosStatus } from "@p5/todos.status";
-import { activate as todosUiReact } from "@p5/todos.ui.react";
+import todosCore from "@p5/todos.core";
+import todosStatus from "@p5/todos.status";
+import todosUiReact from "@p5/todos.ui.react";
 import {
   type ApplicationManifest,
   application,
@@ -32,8 +32,8 @@ describe("late subscribers: any arrival order works", () => {
         {
           id: "f",
           bundles: [
-            { id: "todos.status", activator: todosStatus },
-            { id: "todos.core", activator: todosCore, provides: ["todos:api"] },
+            { id: "todos.status", module: { default: todosStatus } },
+            { id: "todos.core", module: { default: todosCore }, provides: ["todos:api"] },
           ],
         },
       ],

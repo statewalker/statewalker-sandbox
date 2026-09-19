@@ -5,7 +5,7 @@ import {
   contactsEditOpen,
   contactsUpdate,
 } from "@p5/contacts/api";
-import { answer, type Controller, getLogger, getSlots, type Scope, useFields } from "@p5/kernel";
+import { answer, type Context, getLogger, getSlots, type Scope, useFields } from "@p5/kernel";
 import { attempt, drainCommits, on } from "@p5/kit-commit";
 import { changes, createForm } from "@p5/kit-form";
 import { getNotificationTimeout, newNotifier } from "@p5/kit-notify";
@@ -26,7 +26,7 @@ const fields = useFields({
  * Outcome rule: every failure notifies, and writes the form too while the session is open; a Save
  * that finishes after Cancel or a replacing open is still reported. Nothing after deactivation.
  */
-export const activate: Controller = async (context, scope) => {
+export default async function contactsEdit(context: Context, scope: Scope) {
   const { slots, log: rootLog, timeoutMs, validateMs } = fields(context);
   const log = rootLog.child({ bundle: "contacts.edit" });
   const notifier = newNotifier(slots, timeoutMs, log);
@@ -78,4 +78,4 @@ export const activate: Controller = async (context, scope) => {
       );
     }),
   );
-};
+}

@@ -2,6 +2,7 @@ import {
   type ApplicationManifest,
   application,
   type BundleManifest,
+  type BundleModule,
   type Context,
   loggerAdapter,
   resolveFeatures,
@@ -17,13 +18,15 @@ function recorder() {
     opts: { failActivate?: boolean; failCleanup?: boolean } = {},
   ): BundleManifest => ({
     id,
-    activator: async () => {
-      events.push(`+${id}`);
-      if (opts.failActivate) throw new Error(`${id} failed`);
-      return async () => {
-        events.push(`-${id}`);
-        if (opts.failCleanup) throw new Error(`${id} cleanup failed`);
-      };
+    module: {
+      default: async () => {
+        events.push(`+${id}`);
+        if (opts.failActivate) throw new Error(`${id} failed`);
+        return async () => {
+          events.push(`-${id}`);
+          if (opts.failCleanup) throw new Error(`${id} cleanup failed`);
+        };
+      },
     },
   });
   return { events, bundle };
@@ -103,21 +106,70 @@ describe("loader", () => {
     );
   });
 
-  it("a lazy activator is loaded by the loader", async () => {
+  it("an eager module (an imported namespace) activates its default export", async () => {
     const { events, bundle } = recorder();
-    const lazy = bundle("lazy");
+    const ns = bundle("eager").module as BundleModule;
+    const app: ApplicationManifest = {
+      id: "a",
+      features: [{ id: "f", bundles: [{ id: "eager", module: ns }] }],
+    };
+    const { context } = ctxWithLogger();
+    const stop = await application(app)(context);
+    await stop?.();
+    expect(events).toEqual(["+eager", "-eager"]);
+  });
+
+  it("a lazy module (a function returning the namespace) is loaded by the loader, in order", async () => {
+    const { events, bundle } = recorder();
+    const lazy = bundle("lazy").module as BundleModule;
     const app: ApplicationManifest = {
       id: "a",
       features: [
         {
           id: "f",
-          bundles: [{ id: "lazy", lazy: true, activator: async () => lazy.activator as never }],
+          bundles: [
+            bundle("before"),
+            {
+              id: "lazy",
+              module: async () => {
+                events.push("load:lazy");
+                return lazy;
+              },
+            },
+          ],
         },
       ],
     };
     const { context } = ctxWithLogger();
     await application(app)(context);
-    expect(events).toEqual(["+lazy"]);
+    expect(events).toEqual(["+before", "load:lazy", "+lazy"]);
+  });
+
+  it("a module without a default export activator is a clear error; what activated rolls back", async () => {
+    const { events, bundle } = recorder();
+    const broken = (m: unknown): ApplicationManifest => ({
+      id: "a",
+      features: [
+        { id: "f", bundles: [bundle("x"), { id: "bad", module: m as BundleModule }, bundle("z")] },
+      ],
+    });
+    const { context } = ctxWithLogger();
+    for (const m of [{}, { default: 42 }, async () => ({ activate: async () => {} })]) {
+      events.length = 0;
+      await expect(application(broken(m))(context)).rejects.toThrow(
+        'bundle "bad": module has no default export activator',
+      );
+      expect(events).toEqual(["+x", "-x"]);
+    }
+  });
+
+  it("`lazy` and `activator` are gone from the manifest type", () => {
+    const fn = async () => {};
+    // @ts-expect-error — `lazy` was removed in P5.3: typeof tells a namespace from a lazy import
+    const lazy: BundleManifest = { id: "l", lazy: true, module: { default: fn } };
+    // @ts-expect-error — `activator` was replaced by `module` in P5.3
+    const old: BundleManifest = { id: "o", activator: fn };
+    expect([lazy.id, old.id]).toEqual(["l", "o"]);
   });
 
   it("an application is a controller: it activates inside another application", async () => {
@@ -129,7 +181,10 @@ describe("loader", () => {
     const outer: ApplicationManifest = {
       id: "outer",
       features: [
-        { id: "o", bundles: [bundle("o1"), { id: "inner", activator: application(inner) }] },
+        {
+          id: "o",
+          bundles: [bundle("o1"), { id: "inner", module: { default: application(inner) } }],
+        },
       ],
     };
     const { context } = ctxWithLogger();

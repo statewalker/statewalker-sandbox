@@ -37,7 +37,7 @@ export const headlessShellFeature: FeatureManifest = {
   bundles: [
     {
       id: "shell.test",
-      activator: headlessShell(reactRenderersSlot),
+      module: { default: headlessShell(reactRenderersSlot) },
       provides: ["shell:coverage"],
     },
   ],

@@ -196,19 +196,24 @@ async function run(order: "late" | "early") {
     bundles: [
       {
         id: "observer",
-        activator: async (context: Context, scope: Scope) => {
-          // Early: subscribe to each model the moment it is published — before the bundles that
-          // derive from it (status, link, rename, clear-completed) have subscribed.
-          const slots = getSlots(context);
-          scope.defer(slots.observe(panelsSlot, () => probe.attach()));
-          scope.defer(slots.observe(headerSlot, () => probe.attach()));
+        module: {
+          default: async (context: Context, scope: Scope) => {
+            // Early: subscribe to each model the moment it is published — before the bundles that
+            // derive from it (status, link, rename, clear-completed) have subscribed.
+            const slots = getSlots(context);
+            scope.defer(slots.observe(panelsSlot, () => probe.attach()));
+            scope.defer(slots.observe(headerSlot, () => probe.attach()));
+          },
         },
       },
     ],
   };
   const features = [
     ...(order === "early" ? [observer] : []),
-    { id: "shell", bundles: [{ id: "shell.test", activator: headlessShell(reactRenderersSlot) }] },
+    {
+      id: "shell",
+      bundles: [{ id: "shell.test", module: { default: headlessShell(reactRenderersSlot) } }],
+    },
     todos,
     todosStatusFeature,
     contacts,

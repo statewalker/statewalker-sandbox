@@ -1,4 +1,4 @@
-import { type Controller, getLogger, getSlots, useFields } from "@p5/kernel";
+import { type Context, getLogger, getSlots, type Scope, useFields } from "@p5/kernel";
 import { attempt, drainCommits, on, type Turn } from "@p5/kit-commit";
 import { byOrder, followFirst } from "@p5/kit-slots";
 import { panelsSlot } from "@p5/shell/api";
@@ -23,7 +23,7 @@ const fields = useFields({ slots: getSlots, log: getLogger });
  * (selection actions, REFUSED while running). Each record carries what its commit means. Two
  * lanes: Add, and the selection actions — a queue of Adds never delays a Toggle.
  */
-export const activate: Controller = async (context, scope) => {
+export default async function todosList(context: Context, scope: Scope) {
   const { slots, log: rootLog } = fields(context);
   const log = rootLog.child({ bundle: "todos.list" });
   const model = createListModel();
@@ -99,4 +99,4 @@ export const activate: Controller = async (context, scope) => {
   scope.defer(
     slots.provide(todosSelectionActionsSlot, { id: "todos.delete", order: 30, action: remove }),
   );
-};
+}

@@ -12,18 +12,32 @@ import { getLogger } from "./services.js";
 export type Controller = (context: Context, scope: Scope) => Promise<void | Cleanup>;
 export type Activator = Controller;
 
+/** A bundle's package entry (`"."`): its activator is the default export (P5.3). */
+export type BundleModule = { readonly default: Activator };
+
 export interface BundleManifest {
   readonly id: string;
-  /** A value, or a lazy import — the loader's business. */
-  readonly activator: Activator | (() => Promise<Activator>);
+  /**
+   * The bundle's entry module: the namespace itself (`import * as m`), or a lazy import
+   * (`() => import(…)`). An object is used as-is, a function is awaited — how the code arrives is
+   * the loader's business.
+   */
+  readonly module: BundleModule | (() => Promise<BundleModule>);
   /** Service keys this bundle sets (JupyterLab `provides`). */
   readonly provides?: readonly string[];
   /** Service keys it must resolve (hard: missing ⇒ error before anything activates). */
   readonly requires?: readonly string[];
   /** Service keys it resolves if present. */
   readonly optional?: readonly string[];
-  /** When true, `activator` is the lazy form `() => import(…)`. */
-  readonly lazy?: boolean;
+}
+
+/** The activator of `bundle`: its module's default export. Throws, naming the bundle, if absent. */
+async function activatorOf(bundle: BundleManifest): Promise<Activator> {
+  const module = typeof bundle.module === "function" ? await bundle.module() : bundle.module;
+  const activator = (module as Partial<BundleModule> | undefined)?.default;
+  if (typeof activator !== "function")
+    throw new Error(`bundle "${bundle.id}": module has no default export activator`);
+  return activator;
 }
 
 export interface FeatureManifest {
@@ -144,9 +158,7 @@ export function application(
       app.defer(() => scope.close().catch(() => {})); // failures are logged by `deactivate`
       active.push({ id: bundle.id, scope });
       try {
-        const activator = bundle.lazy
-          ? await (bundle.activator as () => Promise<Activator>)()
-          : (bundle.activator as Activator);
+        const activator = await activatorOf(bundle);
         const cleanup = await activator(context, scope);
         if (cleanup) scope.defer(cleanup);
         log.debug("loader:activated", { bundle: bundle.id });

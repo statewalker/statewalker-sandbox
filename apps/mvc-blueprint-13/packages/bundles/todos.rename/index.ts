@@ -1,4 +1,4 @@
-import { type Controller, getLogger, getSlots, useFields } from "@p5/kernel";
+import { type Context, getLogger, getSlots, type Scope, useFields } from "@p5/kernel";
 import { attempt, createCommitAction, drainCommits, on, session } from "@p5/kit-commit";
 import { createForm } from "@p5/kit-form";
 import { getNotificationTimeout, newNotifier } from "@p5/kit-notify";
@@ -22,7 +22,7 @@ const fields = useFields({ slots: getSlots, log: getLogger, timeoutMs: getNotifi
  * session (the action runs until it closes); the dialog's Rename commits the title captured at
  * submit through `todos:update`; an empty title is refused with a form error.
  */
-export const activate: Controller = async (context, scope) => {
+export default async function todosRename(context: Context, scope: Scope) {
   const { slots, log, timeoutMs } = fields(context);
   const notifier = newNotifier(slots, timeoutMs, log);
   scope.defer(() => notifier.dispose());
@@ -92,4 +92,4 @@ export const activate: Controller = async (context, scope) => {
       action: action.view,
     }),
   );
-};
+}

@@ -191,10 +191,10 @@ modelContract<ActionState>("action · hand-rolled", {
 // ── the hello bundle's hand-rolled presentation, through its controller ─────────────────────
 describe("presentation · hello (hand-rolled, kernel only)", () => {
   it("passes the contract points it can express through the bundle", async () => {
-    const { activate } = await import("@p5/hello");
+    const { default: hello } = await import("@p5/hello");
     const ctx: Context = {};
     loggerAdapter.set(ctx, newRecordingLogger().logger);
-    const stop = await activateAlone(activate, ctx);
+    const stop = await activateAlone(hello, ctx);
     const view = getSlots(ctx).getSnapshot(panelsSlot).get("hello")?.model as HelloView;
     const seen: number[] = [];
     const off = view.onCountUpdate(() => seen.push(view.getCount()));

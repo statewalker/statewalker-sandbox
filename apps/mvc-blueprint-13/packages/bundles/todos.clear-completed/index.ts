@@ -1,4 +1,4 @@
-import { answer, type Controller, getLogger, getSlots, useFields } from "@p5/kernel";
+import { answer, type Context, getLogger, getSlots, type Scope, useFields } from "@p5/kernel";
 import { attempt, createCommitAction, drainCommits, on, session } from "@p5/kit-commit";
 import { getNotificationTimeout, newNotifier } from "@p5/kit-notify";
 import { trackFirst } from "@p5/kit-track";
@@ -23,7 +23,7 @@ const plural = (n: number) => `${n} completed todo${n === 1 ? "" : "s"}`;
  * when the dialog closes — so the action is `running` (and refuses) exactly as long as the dialog
  * is open, with no controller write. Clear removes those ids and notifies how many.
  */
-export const activate: Controller = async (context, scope) => {
+export default async function todosClearCompleted(context: Context, scope: Scope) {
   const { slots, log: rootLog, timeoutMs } = fields(context);
   const log = rootLog.child({ bundle: "todos.clear-completed" });
   const notifier = newNotifier(slots, timeoutMs, log);
@@ -100,4 +100,4 @@ export const activate: Controller = async (context, scope) => {
       action: action.view,
     }),
   );
-};
+}

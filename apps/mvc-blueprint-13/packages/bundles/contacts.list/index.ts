@@ -6,7 +6,7 @@ import {
   contactsSelectionActionsSlot,
   contactsSelectionSlot,
 } from "@p5/contacts/api";
-import { type Controller, getLogger, getSlots, useFields } from "@p5/kernel";
+import { type Context, getLogger, getSlots, type Scope, useFields } from "@p5/kernel";
 import { attempt, drainCommits, on, type Turn } from "@p5/kit-commit";
 import { getNotificationTimeout, newNotifier } from "@p5/kit-notify";
 import { byOrder, followFirst } from "@p5/kit-slots";
@@ -20,7 +20,7 @@ const fields = useFields({ slots: getSlots, log: getLogger, timeoutMs: getNotifi
  * panel (published while a contact is selected), and Edit (a selection action + the main-menu item
  * "Edit contact"), which opens the editor on the contact selected AT COMMIT TIME.
  */
-export const activate: Controller = async (context, scope) => {
+export default async function contactsList(context: Context, scope: Scope) {
   const { slots, log: rootLog, timeoutMs } = fields(context);
   const log = rootLog.child({ bundle: "contacts.list" });
   const notifier = newNotifier(slots, timeoutMs, log);
@@ -100,4 +100,4 @@ export const activate: Controller = async (context, scope) => {
       action: model.editFromMenu.view,
     }),
   );
-};
+}

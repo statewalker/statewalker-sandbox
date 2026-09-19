@@ -1,5 +1,5 @@
 import { todoApiAdapter } from "@p5/todos/api";
-import { MemTodoApi, activate as todosCore } from "@p5/todos.core";
+import todosCore, { MemTodoApi } from "@p5/todos.core";
 import {
   type ApplicationManifest,
   application,
@@ -53,8 +53,8 @@ describe("read-then-set", () => {
         {
           id: "f",
           bundles: [
-            { id: "consumer", activator: consumer, optional: ["todos:api"] },
-            { id: "todos.core", activator: todosCore, provides: ["todos:api"] },
+            { id: "consumer", module: { default: consumer }, optional: ["todos:api"] },
+            { id: "todos.core", module: { default: todosCore }, provides: ["todos:api"] },
           ],
         },
       ],
@@ -77,8 +77,8 @@ describe("read-then-set", () => {
         {
           id: "f",
           bundles: [
-            { id: "sneaky", activator: sneaky },
-            { id: "todos.core", activator: todosCore, provides: ["todos:api"] },
+            { id: "sneaky", module: { default: sneaky } },
+            { id: "todos.core", module: { default: todosCore }, provides: ["todos:api"] },
           ],
         },
       ],
@@ -97,8 +97,10 @@ describe("read-then-set", () => {
             {
               id: "needs-root",
               requires: ["shell:root"],
-              activator: async () => {
-                activated = true;
+              module: {
+                default: async () => {
+                  activated = true;
+                },
               },
             },
           ],

@@ -101,7 +101,10 @@ function withBadFeature(tech: keyof typeof technologies): ApplicationManifest {
   };
   return {
     ...t.app,
-    features: [...t.app.features, { id: "bad", bundles: [{ id: "bad", activator: bad }] }],
+    features: [
+      ...t.app.features,
+      { id: "bad", bundles: [{ id: "bad", module: { default: bad } }] },
+    ],
   };
 }
 

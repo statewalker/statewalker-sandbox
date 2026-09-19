@@ -7,11 +7,12 @@ import {
 } from "@p5/contacts/api";
 import {
   answer,
-  type Controller,
+  type Context,
   getConfig,
   getLogger,
   getSlots,
   isProvided,
+  type Scope,
   useFields,
 } from "@p5/kernel";
 import { createValue } from "@p5/kit-model";
@@ -22,7 +23,7 @@ export { MemContactsApi, seedContacts };
 const fields = useFields({ slots: getSlots, log: getLogger, api: contactsApiAdapter.get });
 
 /** `contacts.core`: provides `contacts:api` unless the host did; owns `contacts:collection`; answers `contacts:update`. */
-export const activate: Controller = async (context, scope) => {
+export default async function contactsCore(context: Context, scope: Scope) {
   if (!isProvided(context, contactsApiAdapter.key)) {
     const delay = Number(getConfig(context)["contacts:delay-ms"] ?? 0);
     contactsApiAdapter.set(context, new MemContactsApi(seedContacts, delay));
@@ -49,4 +50,4 @@ export const activate: Controller = async (context, scope) => {
     }),
   );
   scope.defer(slots.provide(contactsCollectionSlot, view));
-};
+}

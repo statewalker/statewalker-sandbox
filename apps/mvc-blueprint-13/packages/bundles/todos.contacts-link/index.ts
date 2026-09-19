@@ -1,5 +1,5 @@
 import { contactsSelectionActionsSlot, contactsSelectionSlot } from "@p5/contacts/api";
-import { type Controller, getLogger, getSlots, useFields } from "@p5/kernel";
+import { type Context, getLogger, getSlots, type Scope, useFields } from "@p5/kernel";
 import { attempt, createCommitAction, drainCommits, on } from "@p5/kit-commit";
 import { getNotificationTimeout, newNotifier } from "@p5/kit-notify";
 import { trackFirst } from "@p5/kit-track";
@@ -13,7 +13,7 @@ const fields = useFields({ slots: getSlots, log: getLogger, timeoutMs: getNotifi
  * over the other bundle's selection); the record carries the contact's name AT SUBMIT and the
  * handler calls `todos:compose`. Edits no Contacts file.
  */
-export const activate: Controller = async (context, scope) => {
+export default async function todosContactsLink(context: Context, scope: Scope) {
   const { slots, log, timeoutMs } = fields(context);
   const notifier = newNotifier(slots, timeoutMs, log);
   scope.defer(() => notifier.dispose());
@@ -42,4 +42,4 @@ export const activate: Controller = async (context, scope) => {
       action: action.view,
     }),
   );
-};
+}

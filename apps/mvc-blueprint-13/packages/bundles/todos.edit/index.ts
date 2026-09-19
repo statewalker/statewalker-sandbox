@@ -1,4 +1,4 @@
-import { answer, type Controller, getLogger, getSlots, type Scope, useFields } from "@p5/kernel";
+import { answer, type Context, getLogger, getSlots, type Scope, useFields } from "@p5/kernel";
 import { attempt, createCommitAction, drainCommits, on } from "@p5/kit-commit";
 import { createForm } from "@p5/kit-form";
 import { getNotificationTimeout, newNotifier } from "@p5/kit-notify";
@@ -21,7 +21,7 @@ const fields = useFields({ slots: getSlots, log: getLogger, timeoutMs: getNotifi
  * Contributes the main-menu item "New todo…", which calls its own `todos:compose`.
  * Save is REFUSED while running; Cancel is its own lane. Outcomes as in `contacts.edit`.
  */
-export const activate: Controller = async (context, scope) => {
+export default async function todosEdit(context: Context, scope: Scope) {
   const { slots, log: rootLog, timeoutMs } = fields(context);
   const log = rootLog.child({ bundle: "todos.edit" });
   const notifier = newNotifier(slots, timeoutMs, log);
@@ -103,4 +103,4 @@ export const activate: Controller = async (context, scope) => {
       action: newTodo.view,
     }),
   );
-};
+}

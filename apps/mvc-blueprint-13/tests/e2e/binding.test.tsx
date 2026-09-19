@@ -95,7 +95,11 @@ function probeApp(
   return {
     manifest: {
       id: `probe.${tech}`,
-      features: [ui.shell, { id: "contacts", bundles: [{ id: "probe", activator }] }, ui.contacts],
+      features: [
+        ui.shell,
+        { id: "contacts", bundles: [{ id: "probe", module: { default: activator } }] },
+        ui.contacts,
+      ],
     },
     withdraw: () => withdraw(),
   };

@@ -1,10 +1,11 @@
 import {
   answer,
-  type Controller,
+  type Context,
   getConfig,
   getLogger,
   getSlots,
   isProvided,
+  type Scope,
   useFields,
 } from "@p5/kernel";
 import {
@@ -27,7 +28,7 @@ const fields = useFields({ slots: getSlots, log: getLogger, api: todoApiAdapter.
  * goes through the bundle scope: after deactivation no continuation writes, and a caller whose
  * call was claimed here gets `abandoned` (its handler is withdrawn with the scope).
  */
-export const activate: Controller = async (context, scope) => {
+export default async function todosCore(context: Context, scope: Scope) {
   if (!isProvided(context, todoApiAdapter.key)) {
     const delay = Number(getConfig(context)["todos:delay-ms"] ?? 0);
     todoApiAdapter.set(context, new MemTodoApi(seedTodos, delay));
@@ -71,4 +72,4 @@ export const activate: Controller = async (context, scope) => {
     }),
   );
   scope.defer(slots.provide(todosCollectionSlot, collection.view));
-};
+}
