@@ -1,157 +1,136 @@
-# @statewalker/mvc-blueprint-09 — prototype **P1**
+# @statewalker/mvc-blueprint-13 — prototype **P5**
 
-**P1 — commands over slots**: P0 (`apps/mvc-blueprint-04`) with its command bus replaced by
-**dispatch over handlers published in slots**. A command declaration is a slot declaration plus a
-policy; answering a command is contributing a handler to that slot; calling it dispatches to the
-handlers in the slot *at call time*. The kernel has two primitives (context, slots) instead of
-three (context, slots, commands). Everything else is P0, unchanged.
+**P5 — the consolidated architecture K** on the full benchmark, with **React and Solid**: P0's
+structure, P1's kernel (commands over slots), P3's commit records (mechanism C), and **kernel
+scopes** in place of the "check you are still active after `await`" rule. The logic is split into
+linked packages with `exports` (D13). The 17 owner decisions of CONSOLIDATION §6 are built as their
+**recommended** option, provisionally.
 
-- Brief (with the lessons section): umbrella repository,
-  [`docs/sandbox-apps/architecture/prototypes/P1.md`](../../../../../docs/sandbox-apps/architecture/prototypes/P1.md)
-  (`statewalker/umbrella`, path `docs/sandbox-apps/architecture/prototypes/P1.md`).
-- The base: [`../mvc-blueprint-04`](../mvc-blueprint-04) (P0) — its README explains the rest of the
-  layout and the choices, which P1 keeps.
-- Full lessons and fitness numbers: [`LESSONS.md`](LESSONS.md).
+- Brief (goal, acceptance criteria, lessons section): umbrella repository,
+  [`docs/sandbox-apps/architecture/prototypes/P5.md`](../../../../../docs/sandbox-apps/architecture/prototypes/P5.md)
+  (`statewalker/umbrella`, path `docs/sandbox-apps/architecture/prototypes/P5.md`).
+- Specification: `docs/sandbox-apps/architecture/CONSOLIDATION.md` §3 (trait ledger) and §4 (K).
+- Full lessons and the fitness table beside P0: [`LESSONS.md`](LESSONS.md).
+- Started from P1 (`apps/mvc-blueprint-09`, itself P0 + commands over slots); copied P3's
+  `@kit/commit` and races (`apps/mvc-blueprint-11`), U1's Solid binding, renderers and probe
+  (`apps/mvc-blueprint-08`), P4's `track`/`firstOf` and glitch test (`apps/mvc-blueprint-12`),
+  P2's dispose-mid-commit tests (`apps/mvc-blueprint-10`).
 
-## The command mechanism (`src/kernel/commands.ts`, 124 LOC)
+```
+pnpm dev             # http://localhost:5173/?app=workbench.react | workbench.solid | todos.react | todos.solid | contacts.react | contacts.solid
+pnpm test            # node: kernel (+scope, dispatcher), contract, single writer, commits (+15 races, D4 outcomes), dispose, glitch, late, standalone, removal, boundaries (+graph)
+pnpm test:browser    # Chromium: the same e2e scenarios under React and Solid, standalone per technology, flush, binding probe
+pnpm typecheck       # also compiles the type-level single-writer checks (`running` is not writable)
+pnpm build
+pnpm loc [prefix…]   # LOC per module (non-blank, non-comment), e.g. pnpm loc packages/bundles/hello
+pnpm packages        # regenerates every package.json from its imports (--check in CI)
+```
+
+## K in one screen
 
 ```ts
-export const todosAdd = defineCommand<{ title: string }, Todo>("todos:add");   // API module
-register(answer(slots, todosAdd, async ({ payload }) => api.add(payload.title))); // owner
-const todo = await call(slots, todosAdd, { title }).promise;                       // caller
+// A controller receives its bundle scope. What it defers is disposed on deactivation.
+export const activate: Controller = async (context, scope) => {
+  const { slots, log } = fields(context);                       // 1. resolve dependencies
+  let session: Scope | undefined;
+  scope.defer(answer(slots, contactsEditOpen, async ({ payload }) => {
+    void session?.close();                                       //    a new open replaces the session
+    const editor = (session = scope.child());                    //    a child scope = one editor
+    const model = createForm<ContactDraft>(base);                // 2. create models
+    editor.defer(() => model.dispose());
+    drainCommits(editor, log,                                    // 4. drain commits
+      on(model.control.save, async (draft, { task }) => {        //    the record's snapshot is the argument
+        const result = await task(attempt(log, "save", () => call(slots, contactsUpdate, { id, patch: draft }).promise));
+        if (!result.ok) return fail(result.message);            //    form (if open) + notification
+        notifier.notify({ message: `Saved ${draft.name}`, tone: "success" });
+        void editor.close();
+      }),
+      on(model.control.cancel, () => void editor.close()));
+    editor.defer(slots.register(panelsSlot, "contacts:editor", { …, model: model.view })); // 3. publish
+  }));
+};
 ```
 
-| Rule | P1 |
-| --- | --- |
-| Declaration | `defineCommand<P, R>(key, { policy?, label? })` — a frozen plain-slot declaration of `Handler<P, R>` plus `policy` |
-| Answer | `answer(slots, decl, fn, { priority? })` = `slots.provide(decl, { handle: fn, priority })`; returns the disposer |
-| Call | `call(slots, decl, payload)` → `Call<P, R>` (`promise`, first-wins `resolve` / `reject`) |
-| Transient | handlers are read from the slot at call time; no call is retained, so a late handler never sees an earlier call |
-| Order | higher `priority` first; equal priorities in arrival order |
-| Claim | a handler returning a promise (or `true`, settling the call itself) claims; **the first claim stops the dispatch**; a handler returning nothing only observes |
-| Mid-dispatch | a handler withdrawn before its turn is skipped; one added during a dispatch is not called |
-| `required` | no handler ⇒ `CommandError("no-handlers")`; handlers but no claim ⇒ `"not-claimed"` |
-| `silent` | no claim ⇒ resolves `undefined` (declare `R` as `X \| undefined`) |
-| Failures | a handler's throw / rejection reaches the caller unchanged (no wrapper) |
-| In flight | a claimed, unsettled call is a contribution to the keyed slot `sys:calls` until it settles |
-| Abandoned | the claiming handler withdrawn while its call is pending ⇒ the call rejects `CommandError("abandoned")` |
-
-Bookkeeping: P0 needed `KernelSlots` (observer counts) **and** `KernelCommands` (listener counts).
-P1 has only `KernelSlots`; `usage()` marks command slots (`command: true`) so coverage does not
-report handlers as unobserved, and the dispose test's "no leftovers" covers handlers and in-flight
-calls in one query.
-
-```
-pnpm dev             # http://localhost:5173/?app=workbench.react | workbench.dom | todos.standalone | contacts.standalone
-pnpm test            # node: kernel, contract, single writer, commits, dispose, late, standalone, removal, boundaries (+ graph report)
-pnpm test:browser    # Chromium: the same e2e scenarios under React and plain DOM, standalone runs, flush per technology
-pnpm typecheck       # also compiles the type-level single-writer checks
-pnpm build
-pnpm loc [prefix…]   # LOC per module (non-blank, non-comment); e.g. pnpm loc src/bundles/hello
-```
-
-## Layout
-
-```
-src/kernel/               context + adapters (read-then-set guard), useFields, KernelSlots (bookkeeping for
-                          coverage and dispose), commands over slots, logger/config, model-kind types, loader
-src/kits/                 OPTIONAL helpers: signals (alien-signals, private), model (createAction, stableGroup,
-                          channels, createValue, onSubmits), loop (update loop, attempt), slots (followFirst,
-                          byOrder), notify (owner-published notifications), host (coverage), react (useModel),
-                          dom (bind — the DOM binding)
-src/bundles/
-  shell/api/ (+react, +dom)     the shell API: header, menu, panels, dialogs, notifications, renderer slots,
-                                shell:root, shell:coverage
-  shell.react/ shell.dom/       the two shell hosts
-  shell.test/ (+dom)            the trivial test shell: headless (node) and a minimal DOM host
-  todos/api/                    the Todos API
-  todos.core/ todos.list/ todos.edit/ todos.clear-completed/ todos.status/ todos.rename/
-  todos.ui.react/ todos.ui.dom/
-  contacts/api/ contacts.core/ contacts.list/ contacts.edit/ contacts.ui.react/ contacts.ui.dom/
-  todos.contacts-link/          interaction (1), feature `todos-contacts`
-  hello/ (+api) hello.ui.react/ hello.ui.dom/   the minimal kernel-only bundle (§13.1)
-src/features/             logic.ts, react.ts, dom.ts — feature manifests
-src/apps/                 workbench.react, workbench.dom, todos.standalone, contacts.standalone
-tests/                    kernel/ (+ commands.test.ts: the dispatcher) contract/ commits/ dispose/ late/ standalone/ removal/ boundaries/ e2e/ support/
-scripts/loc.mjs           the LOC script (§13)
-```
-
-Every importable module is a folder with an `index.ts`: `@kernel`, `@kit/<name>`, `@b/<bundle>[/api]`.
-Only `src/features/*` imports bundle implementations (activators); bundles import the kernel, kits and
-API modules only (the boundary suite enforces it).
-
-## What a newcomer must learn — 26 concepts and rules (P0's list; only 5 and 6 are restated)
-
-Kernel (8)
-
-1. **Context** — one flat object per application; namespaced keys (`sys:*`, `<bundle>:*`); services, never data.
-2. **Adapter** — a typed key; only kernel `sys:*` adapters have factories; a bundle service is declared
-   (key + type) in its API module and set by its provider (`isProvided` → `set`).
-3. **Read-then-set throws** — set a key before anyone reads it (a `find` that returns nothing is a read too).
-4. **`useFields`** — resolve every dependency in one place, at the top of the activator.
-5. **Slot** — an extension point for what *exists*; `provide`/`register` returns a disposer; `observe`
-   calls back at once (retained, so any arrival order works). Plain or keyed.
-6. **Command** — a slot whose contributions are handlers; `answer` contributes one, `call` dispatches
-   a typed request to the handlers present *now* and returns the typed response. Not retained (never
-   call another bundle's command while activating). `required` / `silent`; first claim wins.
-7. **Logger** — a child logger per bundle; a failure is logged at `warn` (it is owner state), only a
-   broken invariant at `error`.
-8. **`sys:config`** — plain host settings (e.g. `shell:notification-timeout-ms`).
-
-Structure (6)
-
-9. **Bundle** — an activator plus at most one API module; imports the kernel, kits and API modules only.
-10. **API module** — declarations only: keys, slot and command declarations, model interfaces, view kinds.
-11. **Controller** — `(context) => Promise<cleanup | void>`; publishes, listens, returns the reverse;
-    after every `await` it checks it is still active.
-12. **Feature** — bundles + required features; **application** — features; an application is a controller.
-13. **Loader rules** — required features first, bundles in order, rollback on a throwing activator,
-    reverse cleanup; missing feature / cycle / mis-ordered provider is an error before activation.
-14. **Manifest service declarations** (P0 addition) — `provides` / `requires` / `optional` service keys,
-    checked statically by the loader; `lazy: true` for an activator obtained by `import()`.
-
-Models (7)
-
-15. **The model contract** — coarse groups, `getX()` + `onXUpdate(() => void)`, the nine timing points.
-16. **Two facets** — `view` (what a renderer gets) and `control` (what the controller keeps), both frozen.
-17. **Presentation** — written by the controller only.
-18. **Form / input** — written by the view field by field; the controller only seeds or resets it whole.
-19. **Action** — the view calls `submit()`; the controller describes it (`label`, `running`, base
-    `enabled`); no payload; effective `enabled` derived synchronously.
-20. **Single writer** — every field has exactly one writer, fixed by its kind.
-21. **Shared state** — published by its single owner as a model in a slot; changed only through a
-    command the owner answers (`todos:add/update/remove`, `contacts:update`).
-
-Views and commits (5)
-
-22. **View kind + publication** — a view exists exactly as long as its contribution to `shell:panels` /
-    `shell:dialogs` (+ menu, header, notifications).
-23. **Renderer** — per technology, keyed by kind; reads view facets, calls view-facet members; never
-    publishes, calls a command or reaches a service.
-24. **Commit time** — a commit acts on the state captured synchronously in the submit listener.
-25. **Refuse or queue** — a submit while running is visibly refused (`running: true`) or queued and
-    honoured; never dropped.
-26. **Errors are owner state** — form errors / outcome lines; user messages are notifications the owner
-    publishes and withdraws; the **coverage report** lists what no one renders or observes.
-
-Kit-only concepts (not counted; `hello` uses none): signals, `stableGroup`, the update loop,
-`onSubmits`, `followFirst`, the notifier.
-
-## Choices where the definition was ambiguous
-
-| # | Question | Choice |
+| Piece | Where | What it guarantees |
 | --- | --- | --- |
-| 1 | Who owns `todos:collection` | `todos.core` (the service owner). Writes are commands it answers: `todos:add`, `todos:update`, `todos:remove` (added to the Todos API); the collection is patched before the command resolves. No `todos:changed` broadcast (03 had one). Contacts mirrors it: `contacts:collection` + `contacts:update`. |
-| 2 | Queue or disable | **Refuse** for Save (both editors), Clear completed (from the ask until the answer is handled), Toggle/Edit/Delete, Rename. **Queue** for Add (every submit honoured with the title it was submitted with). Two refused-mode submits in one tick are one commit on the state of the first (`??=`). |
-| 3 | How a renderer shows an app's own action extension points | The list **controller** observes `todos:toolbar-actions` / `todos:selection-actions` (and `contacts:selection-actions`) and folds them, sorted, into presentation groups `getToolbar()` / `getSelectionActions()`. Renderers never read slots; only shell hosts do. |
-| 4 | Selection needed by selection actions from other bundles | Added **`todos:selection`** to the Todos API (the definition had `contacts:selection` only); `todos.rename` reads it. |
-| 5 | The row checkbox (an action has no payload) | `select([id])` then `toggle.submit()` in one tick; the action's guard is derived in the model, so it is enabled for that same tick. |
-| 6 | "Set unless the host already has" vs the guard | `isProvided(ctx, key)` — does not count as a read. `find()` (optional get) does. |
-| 7 | `Activator \| (() => Promise<Activator>)` | Indistinguishable at runtime (both are `() => Promise<…>`); a manifest flag `lazy: true` says which. |
-| 8 | Coverage: "contributions to known extension points that no one renders" | `KernelSlots` counts observers per key; a slot with contributions and **no observer** is reported `unobserved` (this also lists shared state no one reads — informational). Panels/dialogs whose kind has no renderer in the host's technology are `unrendered`. |
-| 9 | Notification timeout "injected by tests" | `sys:config["shell:notification-timeout-ms"]`, read at the top of the owner's activator; `kits/notify` clears the timer on withdrawal. |
-| 10 | Where the DOM element comes from | `shell:root` (declared in `shell/api`, set by the application entry / test before activation, `requires`d by the DOM-based hosts). |
-| 11 | Menu group order | Unspecified → alphabetical by group key; items by `order` then `id`. |
-| 12 | Cross-bundle action guards | "`enabled` derived in the model" is impossible when the data lives in another bundle's model (contacts link ← `contacts:selection`, Rename ← `todos:selection`, Clear completed ← collection counts): the controller sets the base flag from a synchronous listener — still same-tick. |
-| 13 | MODELS.md §6 rebase / conflict, editor refcount | Not built: the benchmark has no concurrent writer of an open record; one editor per app at a time. |
-| 14 | `todos.status` removal | `todos.status` is its own feature (requires `todos`), so it can be removed alone. `hello` is in both workbenches. |
+| `Scope` | `packages/kernel/scope.ts` (84 LOC) | `defer` (reverse disposal; `release` early), `child()` (closed first), `task(p)` (continuation dropped once closed), `signal` (aborted on close). The loader gives each activation a bundle scope and closes them in reverse. |
+| Commands | `packages/kernel/commands.ts` (P1) | dispatch over handler slots; first claim stops; errors unwrapped; in-flight calls in `sys:calls`; a claimed call whose handler leaves (its scope closed) rejects `abandoned`. |
+| Commit records | `@p5/kit-commit` | `createCommitAction({ capture, queue?, when? })`: `submit()` captures a deep-frozen record; `running` is derived and not writable; refuse by default. `drainCommits(scope, log, …on(action, handler))`: one at a time in submit order; settles each record. |
+| Outcome rule (D4) | `drainCommits` | records accepted in a session are handled even after the session closes — the drain continues in the bundle scope; writes to the session's disposed models are ignored and the bundle's notification remains. When the bundle closes, the drain and its `task` continuations are dropped. |
+| Cross-bundle guards | `@p5/kit-track` | `trackFirst(slots, decl, pick)` as an action's `when`; glitch-free kit-to-kit (a producer marks its getters `readable`), bridged otherwise. |
+| Forms | `@p5/kit-form` | one form factory for both editors and the rename dialog (the ledger's "share model factories through a kit"). |
+| Neutral host model | `@p5/kit-shell` | menu groups, header, main/side panels + active tab, dialog stack, toasts, renderer per contribution — the Solid host renders it (D15). |
+
+## Layout (D13: every folder under `packages/` is a package)
+
+```
+packages/kernel/              @p5/kernel — context + read-then-set guard, useFields, KernelSlots (bookkeeping),
+                              commands over slots, scopes, logger/config, loader, model-kind types
+packages/kits/<k>/            @p5/kit-<k> — OPTIONAL: signals (private substrate), model (channels, stableGroup,
+                              createValue), commit (C + drain), form, track, slots, notify, host (coverage, focus
+                              return), shell (neutral host model), react, solid
+packages/bundles/<b>/         @p5/<b> — a bundle's activator ("."), its API module ("./api"), e.g.
+                              @p5/todos/api, @p5/todos.core, @p5/shell/api/solid
+src/features/ src/apps/       manifests: logic, react, solid features; React and Solid workbenches + standalones
+tests/                        kernel/ contract/ commits/ dispose/ glitch/ late/ standalone/ removal/ boundaries/ e2e/ support/
+scripts/                      loc.mjs (LOC per module), packages.mjs (package.json from imports; app link: deps)
+```
+
+The app links every package (`"@p5/x": "link:packages/…"`), so `@p5/*` resolves through
+`node_modules` in Vite, Vitest and `tsc` alike — no alias table. Each package's `package.json`
+declares its `@p5/*` dependencies; the boundary suite (R12) fails on an undeclared import or a
+cycle. Solid files carry `/** @jsxImportSource solid-js */`; `vite.config.ts` gives Solid's plugin
+the Solid paths and React's plugin the rest.
+
+## What a newcomer must learn — P0's 26, rewritten for K
+
+Unchanged from P0 (see `apps/mvc-blueprint-04/README.md`): 1 context, 2 adapter, 3 read-then-set,
+4 `useFields`, 5 slot, 7 logger, 8 `sys:config`, 10 API module, 12 feature/application, 13 loader
+rules, 14 manifest declarations, 15 the model contract, 16 two facets, 17 presentation, 18 form,
+20 single writer, 21 shared state, 22 view kind + publication, 23 renderer.
+
+Rewritten:
+
+- **6 Command** — a slot whose contributions are handlers: `answer` contributes, `call` dispatches
+  to the handlers present now; first claim wins; a caller whose owner leaves gets `abandoned` (P1).
+- **9 Bundle** — a package: an activator and at most one API module (`./api`); it imports the
+  kernel, kits and API modules only, each declared in its `package.json`.
+- **11 Controller** — `(context, scope) => Promise<void | cleanup>`; resolves, creates models,
+  publishes (`scope.defer(...)`), drains commits. **Scope** replaces "check you are still active
+  after every `await`": await through `task(…)`; a session is `scope.child()`.
+- **19 Action** — the view calls `submit()` (no payload); the action captures a commit record;
+  `running` is derived (a record is unsettled) and cannot be written; label/hint/base `enabled` are
+  the controller's.
+- **24 Commit time** — a commit is the record captured at `submit()`; the controller's drain hands
+  its snapshot to the handler, one at a time, in submit order.
+- **25 Refuse or queue** — a declaration: refuse by default, `queue: true` for event edges (Add).
+- **26 Errors are owner state** — plus the outcome rule: the narrowest open scope takes the outcome
+  (form + notification while the session is open; notification only after it closed; nothing
+  after the bundle closed).
+
+Count: **26** as the ledger counts it (Scope added, "check still active" removed); 27 if one counts
+Scope as new and the removed rule as part of concept 11. Kit-only (not counted; `hello` uses none):
+signals, `stableGroup`, `drainCommits`/`on`, `createForm`, `track`, the notifier, the shell-host
+model.
+
+## Decisions (CONSOLIDATION §6), as built — provisional
+
+| # | Built as |
+| --- | --- |
+| D1 | C: every commit in every controller is a record (`@p5/kit-commit`) |
+| D2 | K: drain + scopes; no machines (K-M not tried) |
+| D3 | kernel scopes with dropped continuations; no write interception |
+| D4 | narrowest open scope; 7 tests (`tests/commits/outcome.test.ts`) |
+| D5 | P1's commands over slots |
+| D6 | `silent` resolves `undefined` |
+| D7 | `abandoned` rejects; `describeError` reads it as "not completed" |
+| D8 | refuse by default; Add is `queue: true` |
+| D9 | `todos.core` / `contacts.core` own shared state and answer writes |
+| D10 | boundary rule R9: an `<app>:api` service is used only by `<app>.core` |
+| D11 | private substrate + `@p5/kit-track`; "glitch-free kit-to-kit only" |
+| D12 | not exercised (no machines) |
+| D13 | package exports: 35 linked packages, R12 |
+| D14 | the guard wrapper kept (`packages/kernel/context.ts`) |
+| D15 | neutral host model tried for Solid: host 180 LOC (U1: 286), above the 150 bar |
+| D16 | `toggleSelected(id)` in the list model |
+| D17 | `provides` / `requires` / `optional` + `lazy`, checked by the loader |
