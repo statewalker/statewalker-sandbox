@@ -71,7 +71,12 @@ export const { registry } = defineRegistry(catalog, {
           aria-label={c.props.label}
           class={c.props.grow ? "flex-1 rounded border px-2" : "rounded border px-2"}
           value={c.props.value ?? ""}
-          onInput={(e) => setValue(e.currentTarget.value)}
+          onInput={(e) => {
+            setValue(e.currentTarget.value);
+            // Controlled: Solid wrote the model's answer synchronously; if the write was refused
+            // or normalised nothing changed, so put the model's value back.
+            e.currentTarget.value = c.props.value ?? "";
+          }}
         />
       );
     },

@@ -4,20 +4,22 @@ import type { ActionContribution, ActionState, ActionView, Listener, Unsubscribe
 /** One model group: its getter and its change channel (the model contract, MODELS §4). */
 export type Group<T = unknown> = readonly [read: () => T, subscribe: (l: Listener) => Unsubscribe];
 
-/** An action offered in a list, as the spec sees it: `{ id }`, identity-stable while listed. */
-export interface ActionEntry {
-  readonly id: string;
+/** An action list as the spec sees it: `ids` to `repeat` over, `states` to look each one up. */
+export interface ActionList {
+  /** One `{ id }` per action, each identity-stable while listed; the array too while unchanged. */
+  readonly ids: readonly { readonly id: string }[];
+  readonly states: Readonly<Record<string, ActionState>>;
 }
 
 /**
  * How one view model appears to a spec. The ONLY place a spec meets a model:
  * - `values`: top-level state keys, one model group each — read-only;
  * - `actions`: `ActionView`s, readable as `/<key>` (their `ActionState`), raised by `submit {ref: key}`;
- * - `actionLists`: contributed actions: `/<key>` is the list (`ActionEntry[]`, one `{ id }` per
- *   action, to `repeat` over), `/<key>State` maps each id to its `ActionState`; raised by
- *   `submit {ref: "<key>/<id>"}`. Split in two because `@json-render/solid` ignores `repeat.key`
- *   and keys rows by item identity: an entry that carried its state would be re-created (and lose
- *   focus) whenever that action's state changed;
+ * - `actionLists`: contributed actions, readable as `/<key>` (an `ActionList`: `ids` to repeat
+ *   over, `states` by id), raised by `submit {ref: "<key>/<id>"}`. Ids and states are apart because
+ *   `@json-render/solid` ignores `repeat.key` and keys rows by item identity: an item carrying its
+ *   state would be re-created (and lose focus) whenever that action's state changed. They are ONE
+ *   group, so a listener never sees ids and states from two different moments;
  * - `writes`: the writable JSON Pointers, each turned into the model's intent mutator;
  * - `intents`: named intents a spec may invoke (`on: { press: { action: "<name>", params } }`).
  * Every other write path is refused.
@@ -33,33 +35,26 @@ export interface ModelBinding {
 /** Group helper for a model group whose value never changes (e.g. `ConfirmView.getQuestion`). */
 export const constant = <T>(value: T): Group<T> => [() => value, () => () => {}];
 
-/** Keeps the previous array when every element is the same (contract point 7 for derived lists). */
-function stable<T>(read: () => readonly T[]): () => readonly T[] {
-  let last: readonly T[] = [];
-  return () => {
-    const next = read();
-    if (next.length !== last.length || next.some((e, i) => e !== last[i])) last = next;
+/** An `ActionContribution[]` group as one `ActionList` group (see `ModelBinding.actionLists`). */
+function actionList([read, subscribe]: Group<readonly ActionContribution[]>): Group<ActionList> {
+  const byId = new Map<string, { readonly id: string }>();
+  let last: ActionList = { ids: [], states: {} };
+  const get = () => {
+    const list = read();
+    const ids = list.map(
+      (c) => byId.get(c.id) ?? (byId.set(c.id, { id: c.id }).get(c.id) as never),
+    );
+    const states = Object.fromEntries(list.map((c) => [c.id, c.action.getState()]));
+    const sameIds = ids.length === last.ids.length && ids.every((e, i) => e === last.ids[i]);
+    const keys = Object.keys(states);
+    const sameStates =
+      keys.length === Object.keys(last.states).length &&
+      keys.every((k) => last.states[k] === states[k]);
+    if (!sameIds || !sameStates)
+      last = { ids: sameIds ? last.ids : ids, states: sameStates ? last.states : states };
     return last;
   };
-}
-
-/** An `ActionContribution[]` group as `[ids, states]` groups (see `ModelBinding.actionLists`). */
-function actionList([read, subscribe]: Group<readonly ActionContribution[]>): [Group, Group] {
-  const byId = new Map<string, ActionEntry>();
-  const ids = stable(() =>
-    read().map((c) => byId.get(c.id) ?? (byId.set(c.id, { id: c.id }).get(c.id) as ActionEntry)),
-  );
-  let lastStates: Record<string, ActionState> = {};
-  const states = () => {
-    const next = Object.fromEntries(read().map((c) => [c.id, c.action.getState()]));
-    const keys = Object.keys(next);
-    const same =
-      keys.length === Object.keys(lastStates).length &&
-      keys.every((k) => lastStates[k] === next[k]);
-    if (!same) lastStates = next;
-    return lastStates;
-  };
-  const onStates = (listener: Listener) => {
+  const on = (listener: Listener) => {
     let inner: Unsubscribe[] = [];
     const drop = () => {
       for (const u of inner) u();
@@ -75,10 +70,7 @@ function actionList([read, subscribe]: Group<readonly ActionContribution[]>): [G
       drop();
     };
   };
-  return [
-    [ids, subscribe],
-    [states, onStates],
-  ];
+  return [get, on];
 }
 
 export interface ModelStore {
@@ -104,13 +96,8 @@ export function modelStore(binding: ModelBinding, refuse: (message: string) => v
   const groups: Record<string, Group> = { ...binding.values };
   for (const [key, action] of Object.entries(binding.actions ?? {}))
     groups[key] = [action.getState, action.onStateUpdate];
-  for (const [key, list] of Object.entries(binding.actionLists ?? {})) {
-    // States first: both keys follow the same list, and a listener sees the ids refreshed only
-    // after the states they index — otherwise a new row resolves `at(states, id)` to undefined.
-    const [ids, states] = actionList(list);
-    groups[`${key}State`] = states;
-    groups[key] = ids;
-  }
+  for (const [key, list] of Object.entries(binding.actionLists ?? {}))
+    groups[key] = actionList(list);
   const keys = Object.keys(groups);
   const writes = binding.writes ?? {};
 
@@ -154,10 +141,15 @@ export function modelStore(binding: ModelBinding, refuse: (message: string) => v
     },
     getSnapshot: current,
     subscribe(listener) {
+      if (!unsubscribe) current(); // before the listener is added: it must not see this refresh
       listeners.add(listener);
       if (!unsubscribe) {
-        current();
-        unsubscribe = keys.map((k) => (groups[k] as Group)[1](() => refresh(k)));
+        // Mark subscribed BEFORE subscribing: a group calls back immediately (contract point 1),
+        // and a listener reading the snapshot then must get the cached one, not re-refresh (with
+        // a model breaking point 7 that re-refresh recursed until the stack overflowed).
+        const offs: Unsubscribe[] = [];
+        unsubscribe = offs;
+        for (const k of keys) offs.push((groups[k] as Group)[1](() => refresh(k)));
       }
       return () => {
         if (!listeners.delete(listener) || listeners.size > 0 || !unsubscribe) return;

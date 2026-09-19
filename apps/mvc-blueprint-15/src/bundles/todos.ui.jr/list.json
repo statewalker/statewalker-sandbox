@@ -19,7 +19,7 @@
     "toolbar": {
       "type": "Toolbar",
       "props": { "label": "Todo actions" },
-      "repeat": { "statePath": "/toolbar", "key": "id" },
+      "repeat": { "statePath": "/toolbar/ids", "key": "id" },
       "children": ["toolbarButton"]
     },
     "toolbarButton": {
@@ -27,7 +27,7 @@
       "props": {
         "action": {
           "$computed": "at",
-          "args": { "map": { "$state": "/toolbarState" }, "key": { "$item": "id" } }
+          "args": { "map": { "$state": "/toolbar/states" }, "key": { "$item": "id" } }
         }
       },
       "on": {
@@ -75,7 +75,7 @@
     "selectionBar": {
       "type": "Toolbar",
       "props": { "label": "Selection actions" },
-      "repeat": { "statePath": "/selectionActions", "key": "id" },
+      "repeat": { "statePath": "/selectionActions/ids", "key": "id" },
       "children": ["selectionButton"]
     },
     "selectionButton": {
@@ -83,7 +83,7 @@
       "props": {
         "action": {
           "$computed": "at",
-          "args": { "map": { "$state": "/selectionActionsState" }, "key": { "$item": "id" } }
+          "args": { "map": { "$state": "/selectionActions/states" }, "key": { "$item": "id" } }
         }
       },
       "on": {
