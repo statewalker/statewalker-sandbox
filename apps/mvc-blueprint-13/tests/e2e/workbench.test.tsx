@@ -1,4 +1,4 @@
-import { without } from "@p5/kernel";
+import { without } from "../support/without.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { workbenchReact } from "../../src/apps/react.js";
 import { workbenchSolid } from "../../src/apps/solid.js";

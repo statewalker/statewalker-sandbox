@@ -1,4 +1,4 @@
-import { without } from "@p5/kernel";
+import { without } from "../support/without.js";
 import { formatCoverage } from "@p5/kit-host";
 import { afterEach, describe, expect, it } from "vitest";
 import {

@@ -1,5 +1,6 @@
 import { answer, defineCommand, KernelSlots, newScope } from "@p5/kernel";
 import { createCommitAction, drainCommits, each, on, session } from "@p5/kit-commit";
+import { newNotifier } from "@p5/kit-notify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -161,5 +162,17 @@ describe("P5.1 drain seams", () => {
     await inner?.close();
     await closed;
     expect(done).toBe(true);
+  });
+
+  it("N1 → the notifier keeps nothing once a notification is withdrawn (W11)", async () => {
+    const slots = new KernelSlots();
+    const warned: unknown[] = [];
+    const notifier = newNotifier(slots, 1, { warn: (...a: unknown[]) => void warned.push(a) });
+    for (let i = 0; i < 100; i++) notifier.notify({ message: `n${i}`, tone: "info" });
+    notifier.fail("bad");
+    expect(notifier.size).toBe(101);
+    await later(null, 20);
+    expect(notifier.size).toBe(0);
+    expect(warned).toHaveLength(1); // fail() logs, notify() does not
   });
 });

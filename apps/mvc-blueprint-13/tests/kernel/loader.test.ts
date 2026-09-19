@@ -5,8 +5,8 @@ import {
   type Context,
   loggerAdapter,
   resolveFeatures,
-  without,
 } from "@p5/kernel";
+import { without } from "../support/without.js";
 import { describe, expect, it } from "vitest";
 import { newRecordingLogger } from "../support/logging.js";
 

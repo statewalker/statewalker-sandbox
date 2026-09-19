@@ -8,11 +8,12 @@ import {
 } from "@p5/contacts/api";
 import { type Controller, getLogger, getSlots, useFields } from "@p5/kernel";
 import { attempt, drainCommits, on, type Turn } from "@p5/kit-commit";
+import { getNotificationTimeout, newNotifier } from "@p5/kit-notify";
 import { byOrder, followFirst } from "@p5/kit-slots";
 import { menuSlot, panelsSlot } from "@p5/shell/api";
 import { createContactListModel } from "./list.model.js";
 
-const fields = useFields({ slots: getSlots, log: getLogger });
+const fields = useFields({ slots: getSlots, log: getLogger, timeoutMs: getNotificationTimeout });
 
 /**
  * `contacts.list`: the list panel, the selection (owner of `contacts:selection`), the details
@@ -20,8 +21,10 @@ const fields = useFields({ slots: getSlots, log: getLogger });
  * "Edit contact"), which opens the editor on the contact selected AT COMMIT TIME.
  */
 export const activate: Controller = async (context, scope) => {
-  const { slots, log: rootLog } = fields(context);
+  const { slots, log: rootLog, timeoutMs } = fields(context);
   const log = rootLog.child({ bundle: "contacts.list" });
+  const notifier = newNotifier(slots, timeoutMs, log);
+  scope.defer(() => notifier.dispose());
   const model = createContactListModel();
   scope.defer(() => model.dispose());
 
@@ -61,8 +64,10 @@ export const activate: Controller = async (context, scope) => {
     }),
   );
 
-  const edit = (id: string, { task, call }: Turn) =>
-    task(attempt(log, "open the contact editor", () => call(contactsEditOpen, { id })));
+  const edit = async (id: string, { task, call }: Turn) => {
+    const result = await task(attempt(log, "open editor", () => call(contactsEditOpen, { id })));
+    if (!result.ok) notifier.fail(`Could not open the editor: ${result.message}`);
+  };
   drainCommits(
     { scope, slots, log },
     on(model.edit.control, edit),
