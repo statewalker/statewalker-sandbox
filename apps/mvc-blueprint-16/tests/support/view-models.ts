@@ -1,4 +1,6 @@
+import { seedContacts } from "@b/contacts.core";
 import type { HelloView } from "@b/hello/api";
+import { seedTodos } from "@b/todos.core";
 import { createAction } from "@kit/model";
 import { createContactEditorModel } from "../../src/bundles/contacts.edit/editor.model.js";
 import { createContactListModel } from "../../src/bundles/contacts.list/list.model.js";
@@ -12,7 +14,11 @@ import { createRenameModel } from "../../src/bundles/todos.rename/rename.model.j
  * publishes). `hello` builds its model inside its activator, so it gets a plain equivalent.
  */
 export function viewModels(): Record<string, unknown> {
+  const list = createListModel();
+  list.control.publishItems(seedTodos);
   const contacts = createContactListModel();
+  contacts.control.publishContacts(seedContacts);
+  contacts.view.select("c1");
   const increment = createAction({ label: "Say hello" });
   const hello: HelloView = Object.freeze({
     getCount: () => 0,
@@ -23,7 +29,7 @@ export function viewModels(): Record<string, unknown> {
     increment: increment.view,
   });
   return {
-    "todos:list": createListModel().view,
+    "todos:list": list.view,
     "todos:editor": createEditorModel({ title: "x" }).view,
     "todos:rename": createRenameModel("x").view,
     "todos:clear-completed": createConfirmModel("Delete?", "Clear").view,
