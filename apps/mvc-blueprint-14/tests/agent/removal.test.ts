@@ -1,7 +1,9 @@
 import { specGeneratorAdapter } from "@b/agent/api";
-import { without } from "@kernel";
+import { catalogSlot } from "@b/catalog/api";
+import { getSlots, without } from "@kernel";
 import { formatCoverage } from "@kit/host";
 import { afterEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import { todoForContact } from "../../src/bundles/agent.fixtures/fixtures.js";
 import {
   agentHeadless,
@@ -121,5 +123,29 @@ describe("J1 removal: start the agent workbench without a feature", () => {
     expect(report("agent.react", r).unrendered).toEqual([
       { slot: "shell:panels", id: "agent:assistant", kind: "jr:generated" },
     ]);
+  });
+});
+
+describe("J1: vocabulary clashes", () => {
+  it("a second bundle contributing an existing component name fails its activation, loudly", async () => {
+    const clash = {
+      id: "test.clash",
+      requires: ["ui.catalog"],
+      bundles: [
+        {
+          id: "test.clash",
+          activator: async (context: Record<string, unknown>) =>
+            getSlots(context).register(catalogSlot, "Button", {
+              props: z.object({}),
+              slots: [],
+              events: ["press"],
+              description: "another button",
+            }),
+        },
+      ],
+    };
+    await expect(
+      start({ id: "clash", features: [...agentHeadless.features, clash] }),
+    ).rejects.toThrow(/id "Button" is already registered/);
   });
 });

@@ -1,127 +1,137 @@
-# @statewalker/mvc-blueprint-04 — prototype **P0**
+# @statewalker/mvc-blueprint-14 — prototype **J1**
 
-**P0 — the defined architecture**, implemented as written: kernel, bundles, features, loader, the
-three model kinds, controllers as activators, views as publications, and per-technology renderers
-for **React and plain DOM**, with the full benchmark scenario. It is the yardstick the other
-prototypes are measured against.
+**J1 — agent-generated UIs as ordinary publications.** This is P0 (`apps/mvc-blueprint-04`) plus
+P3's commit records (`apps/mvc-blueprint-11`, `@kit/commit`). On top of that base it adds
+[json-render](https://json-render.dev) **only for generated UIs** (research options c + d):
+
+- **The catalog is an extension point.** Any bundle can contribute a component. The definitions go
+  to `ui:catalog` and the React implementations go to `ui.react:catalog`.
+- **A generated UI is one view kind, `jr:generated`.** Its model keeps our three model kinds: the
+  spec is a presentation group, the values are a form group, and the allowed actions are
+  `ActionView`s.
+- **An agent controller runs the generation.** It streams a SpecStream, validates it and publishes
+  the panel. It drains the generated actions into **existing commands** (`todos:compose`,
+  `contacts:edit:open`).
+
+The Todos and Contacts code is unchanged: all 71 of P0's source files are byte-identical. Only
+`src/main.ts` changed, to add one more app to the picker.
 
 - Brief (with the lessons section): umbrella repository,
-  [`docs/sandbox-apps/architecture/prototypes/P0.md`](../../../../../docs/sandbox-apps/architecture/prototypes/P0.md)
-  (`statewalker/umbrella`, path `docs/sandbox-apps/architecture/prototypes/P0.md`).
-- The definition it implements: `docs/sandbox-apps/architecture/ARCHITECTURE.md` and
-  `docs/sandbox-apps/MODELS.md` in the same repository.
-- Full lessons and fitness numbers: [`LESSONS.md`](LESSONS.md).
+  [`docs/sandbox-apps/architecture/prototypes/J1.md`](../../../../../docs/sandbox-apps/architecture/prototypes/J1.md)
+  (`statewalker/umbrella`, path `docs/sandbox-apps/architecture/prototypes/J1.md`).
+- Research: `docs/sandbox-apps/architecture/research/json-render.md` (§4 c/d, §5 J1).
+- Full lessons and numbers: [`LESSONS.md`](LESSONS.md).
+- New dependencies, pinned exactly: `@json-render/core` **0.21.0** and `@json-render/react`
+  **0.21.0**. `zod` 4.5.4 was already a P0 dependency and was already in P0's bundle.
 
 ```
-pnpm dev             # http://localhost:5173/?app=workbench.react | workbench.dom | todos.standalone | contacts.standalone
-pnpm test            # node: kernel, contract, single writer, commits, dispose, late, standalone, removal, boundaries (+ graph report)
-pnpm test:browser    # Chromium: the same e2e scenarios under React and plain DOM, standalone runs, flush per technology
-pnpm typecheck       # also compiles the type-level single-writer checks
+pnpm dev             # http://localhost:5173/?app=workbench.agent (default) | workbench.react | workbench.dom | …
+                     # select a contact, then Assistant → Assistant… (the recorded stream replays at 40 ms/chunk)
+pnpm test            # node: P0's suites + tests/agent (generation, refusal, commit time, sessions, removal)
+                     #       + tests/identity (P0 byte-identical)
+pnpm test:browser    # Chromium: P0's 24 + the generated panel under React (streaming, refusal, commit time,
+                     #       json-render's own write paths) + P0's scenarios on the agent workbench
+pnpm typecheck
 pnpm build
-pnpm loc [prefix…]   # LOC per module (non-blank, non-comment); e.g. pnpm loc src/bundles/hello
+node scripts/loc.mjs src/bundles/agent   # LOC per module
 ```
 
-## Layout
+No real LLM is called. `agent.fixtures` replays a **recorded** SpecStream (JSONL, RFC 6902 patches)
+line by line, in two chunks per line, so the compiler also sees partial lines. Tests inject their
+own `agent:generator`, either a controlled stream or a fixed text. A live LLM would be one more
+`SpecGenerator` that sends `request.system` (the prompt generated from the catalog) and streams back
+its text.
+
+## What J1 adds to P0
 
 ```
-src/kernel/               context + adapters (read-then-set guard), useFields, KernelSlots/KernelCommands
-                          (bookkeeping for coverage and dispose tests), logger/config, model-kind types, loader
-src/kits/                 OPTIONAL helpers: signals (alien-signals, private), model (createAction, stableGroup,
-                          channels, createValue, onSubmits), loop (update loop, attempt), slots (followFirst,
-                          byOrder), notify (owner-published notifications), host (coverage), react (useModel),
-                          dom (bind — the DOM binding)
+src/kits/commit/            P3's commit records, verbatim (createCommitAction, drainCommits, on)
+src/kits/catalog/           json-render schema WITHOUT built-ins + buildCatalog(components, actions)
+                            + prop helpers dyn()/bindable() ($state / $bindState expressions)
 src/bundles/
-  shell/api/ (+react, +dom)     the shell API: header, menu, panels, dialogs, notifications, renderer slots,
-                                shell:root, shell:coverage
-  shell.react/ shell.dom/       the two shell hosts
-  shell.test/ (+dom)            the trivial test shell: headless (node) and a minimal DOM host
-  todos/api/                    the Todos API
-  todos.core/ todos.list/ todos.edit/ todos.clear-completed/ todos.status/ todos.rename/
-  todos.ui.react/ todos.ui.dom/
-  contacts/api/ contacts.core/ contacts.list/ contacts.edit/ contacts.ui.react/ contacts.ui.dom/
-  todos.contacts-link/          interaction (1), feature `todos-contacts`
-  hello/ (+api) hello.ui.react/ hello.ui.dom/   the minimal kernel-only bundle (§13.1)
-src/features/             logic.ts, react.ts, dom.ts — feature manifests
-src/apps/                 workbench.react, workbench.dom, todos.standalone, contacts.standalone
-tests/                    kernel/ contract/ commits/ dispose/ late/ standalone/ removal/ boundaries/ e2e/ support/
-scripts/loc.mjs           the LOC script (§13)
+  catalog/api/ (+react)     slots ui:catalog (definition) and ui.react:catalog (implementation);
+                            CatalogRenderProps = { props, children, loading, action(event), write(prop) }
+  catalog/                  8 generic definitions: Card Stack Text Input Select Checkbox Button Table
+  catalog.ui.react/         their React implementations (controlled inputs, no private state)
+  badge/ badge.ui.react/    one more component from an independent feature (the cost of vocabulary)
+  agent/api/                agent:actions (the allow-list), agent:data (read-only /data),
+                            agent:generator, GeneratedView + kind jr:generated
+  agent/                    the agent controller: aggregation, sessions, stream, policy, drain
+    generated.model.ts      the GeneratedView model (+ json-render StateStore facade)
+    policy.ts               what a spec may contain beyond the catalog (on/watch/state/pointers)
+  agent.ui.react/           the generic jr:generated renderer (json-render Renderer in controlled mode)
+  agent.fixtures/           recorded SpecStream; provides agent:generator unless the host set one
+  agent.todos-actions/      allow-lists todos:compose as "todos.compose"          (feature agent.todos)
+  agent.contacts-actions/   allow-lists contacts:edit:open; /data/selectedContacts (feature agent.contacts)
+src/features/agent.ts, agent.react.ts   ui.catalog, ui.badge, agent, agent.todos, agent.contacts;
+                                        ui.catalog.react, ui.badge.react, agent.react
+src/apps/workbench.agent.ts             P0's workbench.react features + the J1 features
 ```
 
-Every importable module is a folder with an `index.ts`: `@kernel`, `@kit/<name>`, `@b/<bundle>[/api]`.
-Only `src/features/*` imports bundle implementations (activators); bundles import the kernel, kits and
-API modules only (the boundary suite enforces it).
+Names versus the brief: the brief's `ui.catalog` is split into `catalog` (definitions, logic) and
+`catalog.ui.react` (implementations), following P0's `<bundle>` / `<bundle>.ui.react` convention and
+the boundary tooling's `*.ui.*` rule. The brief's `agent.ui` controller is `agent`.
 
-## What a newcomer must learn — 26 concepts and rules
+## How it works
 
-Kernel (8)
+1. **Aggregation.**
+   - The `agent` controller observes `ui:catalog` (components), `agent:actions` (actions) and
+     `agent:data` (data sources), all three keyed by name.
+   - On any change it drops its cached catalog. The next use rebuilds the catalog with
+     `defineCatalog`, and an open session re-checks its spec.
+   - A second bundle that contributes an existing name fails its activation (`RangeError` from the
+     keyed slot). The loader then rolls back.
+   - The React renderer's activator follows `ui.react:catalog` the same way and rebuilds the
+     json-render registry.
+2. **Session.** The "Assistant…" menu item is a commit action. The drain handles it in four steps.
+   - It opens a session: it publishes the `agent:assistant` side panel with a fresh model, and it
+     calls `generator.generate({ request, system: catalog.prompt(), data }, signal)`.
+   - For each chunk, it runs `compiler.push` and then the policy on every element.
+     - While everything is valid, it publishes a **valid prefix**: `{ root, elements }` only. The
+       `state.form` seed goes to the form group instead.
+     - At the first issue it publishes `spec = null` and `status = invalid`, logs a warning, and
+       aborts the stream. Nothing of that spec stays on screen.
+   - When the stream ends, it checks the whole spec (`checkComplete`). It then creates one commit
+     action per bound action, and the `capture` resolves the binding's params against the model at
+     submit time. Then it publishes the actions and `ready`, and starts a drain.
+   - The drain handles each record: it parses the params with the action's Zod schema, calls
+     `run` (the existing command) and publishes the outcome.
+3. **Rendering.** `agent.ui.react` renders `JSONUIProvider store={model.store}` (controlled mode) and
+   `<Renderer spec>`.
+   - Each catalog implementation is wrapped. It receives resolved `props` and two capabilities:
+     `action(event)`, our `ActionView` for its allow-listed binding, and `write(prop)`, a store
+     `set` on its bound pointer.
+   - It never receives json-render's `emit`, so a component cannot raise a built-in action.
+4. **End.** Close, a new request or deactivation ends the session synchronously, in this order:
+   abort, unsubscribe, withdraw the panel, stop the drains, dispose the actions and the model.
+   Whatever a generator yields after that is ignored.
 
-1. **Context** — one flat object per application; namespaced keys (`sys:*`, `<bundle>:*`); services, never data.
-2. **Adapter** — a typed key; only kernel `sys:*` adapters have factories; a bundle service is declared
-   (key + type) in its API module and set by its provider (`isProvided` → `set`).
-3. **Read-then-set throws** — set a key before anyone reads it (a `find` that returns nothing is a read too).
-4. **`useFields`** — resolve every dependency in one place, at the top of the activator.
-5. **Slot** — an extension point for what *exists*; `provide`/`register` returns a disposer; `observe`
-   calls back at once (retained, so any arrival order works). Plain or keyed.
-6. **Command** — a typed request with a response for what *happens*; declared by the bundle that
-   answers it; not retained (never fire another bundle's command while activating).
-7. **Logger** — a child logger per bundle; a failure is logged at `warn` (it is owner state), only a
-   broken invariant at `error`.
-8. **`sys:config`** — plain host settings (e.g. `shell:notification-timeout-ms`).
+## What a newcomer must learn on top of P0 — +6, all local to the agent feature
 
-Structure (6)
+P0's 26 concepts stay. P3's commit record (capture at submit, drained records) replaces P0's
+`onSubmits` in the new code only, and it is already part of architecture K.
 
-9. **Bundle** — an activator plus at most one API module; imports the kernel, kits and API modules only.
-10. **API module** — declarations only: keys, slot and command declarations, model interfaces, view kinds.
-11. **Controller** — `(context) => Promise<cleanup | void>`; publishes, listens, returns the reverse;
-    after every `await` it checks it is still active.
-12. **Feature** — bundles + required features; **application** — features; an application is a controller.
-13. **Loader rules** — required features first, bundles in order, rollback on a throwing activator,
-    reverse cleanup; missing feature / cycle / mis-ordered provider is an error before activation.
-14. **Manifest service declarations** (P0 addition) — `provides` / `requires` / `optional` service keys,
-    checked statically by the loader; `lazy: true` for an activator obtained by `import()`.
+27. **Catalog entry**: a component definition (Zod props, slots, events, description) in
+    `ui:catalog`, plus an implementation per technology in `ui.<tech>:catalog`. A dynamic prop must
+    say so with `dyn` / `bindable`.
+28. **Spec / SpecStream**: json-render's flat element tree, streamed as JSON Patch lines. It is data,
+    not code, and is only ever produced by a generator.
+29. **Policy**: a spec may bind only allow-listed actions (one binding each, no lists, no
+    `onSuccess` / `onError` / `confirm`) and must not contain `watch`. Reads are allowed under
+    `/form` and `/data`, binds only onto `/form/<field>`, and seeds only onto `/state/form`.
+30. **GeneratedView**: the spec (presentation), the values (form, `editField` on seeded fields only),
+    the data (presentation) and the actions (`ActionView`s). `store` is a facade over these, not a
+    writer.
+31. **Agent action**: an allow-list entry `{ description, params (Zod), run }` in `agent:actions`,
+    contributed from outside the app it acts on. `run` calls an existing command.
+32. **Generator / data source**: `agent:generator` (an LLM or fixtures), and `agent:data` entries
+    (read-only JSON under `/data`).
 
-Models (7)
+## Answers and choices (details in LESSONS.md)
 
-15. **The model contract** — coarse groups, `getX()` + `onXUpdate(() => void)`, the nine timing points.
-16. **Two facets** — `view` (what a renderer gets) and `control` (what the controller keeps), both frozen.
-17. **Presentation** — written by the controller only.
-18. **Form / input** — written by the view field by field; the controller only seeds or resets it whole.
-19. **Action** — the view calls `submit()`; the controller describes it (`label`, `running`, base
-    `enabled`); no payload; effective `enabled` derived synchronously.
-20. **Single writer** — every field has exactly one writer, fixed by its kind.
-21. **Shared state** — published by its single owner as a model in a slot; changed only through a
-    command the owner answers (`todos:add/update/remove`, `contacts:update`).
-
-Views and commits (5)
-
-22. **View kind + publication** — a view exists exactly as long as its contribution to `shell:panels` /
-    `shell:dialogs` (+ menu, header, notifications).
-23. **Renderer** — per technology, keyed by kind; reads view facets, calls view-facet members; never
-    publishes, calls a command or reaches a service.
-24. **Commit time** — a commit acts on the state captured synchronously in the submit listener.
-25. **Refuse or queue** — a submit while running is visibly refused (`running: true`) or queued and
-    honoured; never dropped.
-26. **Errors are owner state** — form errors / outcome lines; user messages are notifications the owner
-    publishes and withdraws; the **coverage report** lists what no one renders or observes.
-
-Kit-only concepts (not counted; `hello` uses none): signals, `stableGroup`, the update loop,
-`onSubmits`, `followFirst`, the notifier.
-
-## Choices where the definition was ambiguous
-
-| # | Question | Choice |
-| --- | --- | --- |
-| 1 | Who owns `todos:collection` | `todos.core` (the service owner). Writes are commands it answers: `todos:add`, `todos:update`, `todos:remove` (added to the Todos API); the collection is patched before the command resolves. No `todos:changed` broadcast (03 had one). Contacts mirrors it: `contacts:collection` + `contacts:update`. |
-| 2 | Queue or disable | **Refuse** for Save (both editors), Clear completed (from the ask until the answer is handled), Toggle/Edit/Delete, Rename. **Queue** for Add (every submit honoured with the title it was submitted with). Two refused-mode submits in one tick are one commit on the state of the first (`??=`). |
-| 3 | How a renderer shows an app's own action extension points | The list **controller** observes `todos:toolbar-actions` / `todos:selection-actions` (and `contacts:selection-actions`) and folds them, sorted, into presentation groups `getToolbar()` / `getSelectionActions()`. Renderers never read slots; only shell hosts do. |
-| 4 | Selection needed by selection actions from other bundles | Added **`todos:selection`** to the Todos API (the definition had `contacts:selection` only); `todos.rename` reads it. |
-| 5 | The row checkbox (an action has no payload) | `select([id])` then `toggle.submit()` in one tick; the action's guard is derived in the model, so it is enabled for that same tick. |
-| 6 | "Set unless the host already has" vs the guard | `isProvided(ctx, key)` — does not count as a read. `find()` (optional get) does. |
-| 7 | `Activator \| (() => Promise<Activator>)` | Indistinguishable at runtime (both are `() => Promise<…>`); a manifest flag `lazy: true` says which. |
-| 8 | Coverage: "contributions to known extension points that no one renders" | `KernelSlots` counts observers per key; a slot with contributions and **no observer** is reported `unobserved` (this also lists shared state no one reads — informational). Panels/dialogs whose kind has no renderer in the host's technology are `unrendered`. |
-| 9 | Notification timeout "injected by tests" | `sys:config["shell:notification-timeout-ms"]`, read at the top of the owner's activator; `kits/notify` clears the timer on withdrawal. |
-| 10 | Where the DOM element comes from | `shell:root` (declared in `shell/api`, set by the application entry / test before activation, `requires`d by the DOM-based hosts). |
-| 11 | Menu group order | Unspecified → alphabetical by group key; items by `order` then `id`. |
-| 12 | Cross-bundle action guards | "`enabled` derived in the model" is impossible when the data lives in another bundle's model (contacts link ← `contacts:selection`, Rename ← `todos:selection`, Clear completed ← collection counts): the controller sets the base flag from a synchronous listener — still same-tick. |
-| 13 | MODELS.md §6 rebase / conflict, editor refcount | Not built: the benchmark has no concurrent writer of an open record; one editor per app at a time. |
-| 14 | `todos.status` removal | `todos.status` is its own feature (requires `todos`), so it can be removed alone. `hello` is in both workbenches. |
+- **Allow-list** in `agent.*` bundles, not a flag on the command declaration. This needs 0 changes
+  in Todos and Contacts. The allow-list is the `agent:actions` slot.
+- **Params schema** is Zod, written in the `agent.*` bundle. P0's command declarations use
+  `passthrough` and carry no schema to convert.
+- **`validateForm` / `checks`** stay out. Errors come only from the command's schema at drain time
+  (shown as the outcome) and from the command itself.

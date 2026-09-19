@@ -1,159 +1,199 @@
-# P0 — lessons
+# J1: lessons
 
-Prototype **P0** (`apps/mvc-blueprint-04`): ARCHITECTURE.md implemented as written, React **and** plain
-DOM. Status: **DONE** — every acceptance criterion met; the definition held, with the gaps and
-reinterpretations listed below.
+Prototype J1: json-render's generative half (catalog → prompt → SpecStream → validated spec) inside
+architecture K, as one view kind. The base is P0 with P3's commit records. Brief:
+`docs/sandbox-apps/architecture/prototypes/J1.md` (umbrella). Research:
+`research/json-render.md`.
 
-## History (the commits are part of the evidence)
+**Status: DONE.** Every acceptance criterion is met.
 
-| Commit | What | Logic-bundle files touched |
-| --- | --- | --- |
-| `88783ab` | kernel, loader, all logic bundles, React host + renderers, node suites, React e2e | (created) |
-| `3452ea1` | **plain DOM**: `kits/dom`, `shell.dom`, `*.ui.dom`, trivial DOM test shell, `workbench.dom`, standalone apps; the same e2e scenarios now run for both | **0** (17 files, all UI / features / apps / tests) |
-| `6767f87` | boundary suite, dependency-graph report, LOC script | 0 |
-| `cac3951` | **Rename a todo** (§14.6) in one commit | new bundle `todos.rename` + 2 API lines |
+Tests:
+
+- `pnpm test`: **258** node tests. That is P0's 150, plus 74 identity tests, plus 34 J1 tests.
+- `pnpm test:browser`: **35** Chromium tests. That is P0's 24, plus 11 J1 tests.
+- `pnpm typecheck` passes, and `pnpm build` passes.
+- The node suite passed 3 runs in a row, and the browser suite 3 runs in a row.
+
+## Verdict
+
+**Green, and cheap where it matters.** One view kind, one controller bundle, two catalog slots and
+one kit host agent-generated UIs:
+
+- 0 changes to Todos and Contacts (71/71 of P0's source files are byte-identical);
+- single writer holds by construction, and commit time holds through P3's records.
+
+json-render does the parts it is good at: the prompt from the catalog, the SpecStream compiler, and
+the element walker with `$state` / `$bindState` resolution. **Its safety is not usable as shipped.**
+Its validation misses what matters, and its runtime has five writers. J1 therefore adds its own
+policy (108 LOC) and a store facade (inside the 157-LOC model). Those are the load-bearing pieces,
+and each has a negative control.
 
 ## What worked
 
-- **The kernel is small and sufficient**: 344 LOC (context + guard, `useFields`, two bookkeeping
-  subclasses, services, loader, model types). Every bundle runs on `{}`.
-- **Slots' retention makes order irrelevant.** `todos.status` before `todos.core`, renderer before
-  model, model before renderer, a feature activated after the shell — all tested, all work with no
-  code for the case. `followFirst` (a kit helper, 20 lines) was the only pattern needed.
-- **Views as publications** removed every "open/close view" API. Editors, dialogs and details panels
-  are `register` / disposer; the dispose test (every slot empty, unobserved, no command listener,
-  no timer) needed no production-code fix: each controller owns one registry, released in reverse.
-- **The second technology touched zero logic files** (commit `3452ea1`). The DOM binding is 12 lines
-  (`bind` = the contract's subscribe loop); the rest of `kits/dom` is element helpers.
-- **The same e2e scenarios** (DOM-level, technology-neutral markup contract) pass under React, plain
-  DOM and the trivial test shell: 10 scenarios × 2 technologies + 2 standalone runs.
-- **Shared state owned by the service bundle** (`todos.core`) with writes as commands removed 03's
-  `todos:changed` broadcast and every reload; five consumers (list, edit, clear-completed, status,
-  rename) follow one published model.
-- **Extension without edits**: interaction (1) is one 54-LOC bundle; no Contacts file mentions
-  Todos. Rename was a new bundle plus a view kind; existing renderers were reused for the new kind.
-- **Commit-time snapshots** in the submit listener (MODELS.md §12) were enough for every race test:
-  typing after submit, typing while running, two submits in one tick, a selection changed after the
-  link's submit, Clear completed acting on what was done *when asked*.
+- **Catalog as an extension point.** Three independent features contribute vocabulary, and the
+  agent aggregates it into one catalog, one prompt and one validator:
+  - `ui.catalog` contributes 8 components, `ui.badge` contributes 1, and `agent.todos` /
+    `agent.contacts` contribute actions and data.
+  - Removing a feature removes its entries from rendering, from the prompt and from validation.
+    This was tested for `ui.badge`, `todos` (`todos.compose` leaves the prompt, and a spec that
+    binds it is refused) and `ui.catalog`.
+  - A withdrawal during a session re-checks the live spec. A spec that still uses the withdrawn
+    component or action is refused, even after `ready`.
+  - A name clash (a second `Button`) fails the second bundle's activation loudly (`RangeError` from
+    the keyed slot), and the loader rolls it back.
+- **The model kept our three kinds.**
+  - Presentation groups: `spec`, `status`, `data`, `actions`, `outcome`, all written only by the
+    controller.
+  - A form group: `values`, written only through `editField` on a field the spec seeded.
+  - Actions: one commit action per allow-listed binding, plus `close`.
+  - json-render reads a stable composite (`{ form, data }`, with identity kept by `stableGroup`)
+    through a `StateStore` facade.
+- **Commit time holds.** The capture resolves the binding's params (`{ "$state": "/form/title" }`)
+  against the model inside `submit()`.
+  - "Type A, press, type B" in one tick composes "A". This is tested headless and through the real
+    DOM and json-render.
+  - A double press in one tick composes once: `running` flips inside `submit()`, as in P3.
+  - Data captured from `/data` is also press-time: selecting another contact right after pressing
+    "Open contact" still opens Ada.
+- **Partial rendering is safe.**
+  - The panel shows the valid prefix while streaming, and half a line shows nothing new.
+  - Buttons render **inert** until the whole spec is checked, because no action exists for a partial
+    spec.
+  - The first invalid element clears everything (`spec = null`, `status = invalid`, issues listed)
+    and aborts the stream.
+- **Session scope.**
+  - Closing mid-stream, a new request, or stopping the application aborts the stream.
+  - After that there are 0 notifications, 0 writes and 0 warnings, even from a test generator that
+    ignores the abort and keeps yielding.
+  - After stopping, every slot is empty and no command has a listener.
+- **Interaction (1) is reproduced through a generated UI.** Select Ada, open Assistant…, the
+  recorded stream plays, and the table shows Ada. Create opens the todos editor with "Call Ada
+  Lovelace" prefilled, and Save adds the todo. Nothing in Todos or Contacts knows about the agent.
+- **Adding a component is cheap.** `Badge` costs 11 LOC for the definition (1 file), 12 + 5 LOC for
+  React (2 files) and 2 feature entries, with 0 edits elsewhere.
 
-## What failed or needed a patch to the definition
+## What failed (json-render findings that forced our own code)
 
-1. **The read-then-set guard vs "set it unless the host already has".** Checking "already set" with
-   the adapter's optional get *is* a read, so the provider's own `set` throws. Needed a non-reading
-   `isProvided(ctx, key)`. The rule is right; the definition must name the non-reading probe.
-2. **`Activator | (() => Promise<Activator>)` is ambiguous at runtime** — both are `() => Promise<…>`.
-   The loader needs a discriminator (`lazy: true`).
-3. **Coverage needs introspection the libraries do not have.** "Contributions nobody renders" is only
-   answerable if the slots bus knows its observers: `KernelSlots` (40 LOC) counts them; the same
-   bookkeeping (`KernelCommands.listened()`) was needed for the dispose test's "no command has a
-   listener". Side effect: shared state no one reads shows as `unobserved` (informational) — the
-   standalone reports flipped from `todos:selection unobserved` to complete when `todos.rename`
-   began to read it, so coverage expectations are part of a feature's cost.
-4. **"Effective `enabled` is derived in the model implementation"** holds only for guards over the
-   same model. Every cross-bundle guard (contacts link ← `contacts:selection`; Rename ←
-   `todos:selection`; Clear completed ← collection counts) is set by the **controller** from a
-   synchronous listener. Still same-tick in process; would not be across a realm.
-5. **Refuse mode has a same-tick hole**: the controller sets `running` a microtask after the submit,
-   so a second submit in the same tick passes the model's guard. Controllers must fold it (`pending
-   ??= snapshot`). Better: the action model flips a pending flag synchronously in `submit()`.
-6. **The definition's Todos API lacked `todos:selection`** (Contacts had its equivalent). Any bundle
-   that contributes a selection action from outside needs it.
-7. **Renderers vs an app's own extension points**: renderers may not read slots, so the list
-   *controller* folds `todos:toolbar-actions` / `*:selection-actions` into its presentation model.
-   Works well, but the definition did not say it.
-8. **Focus return** needs the last focused element, not `activeElement` at dialog time: the opener
-   (Clear completed) is disabled by `running: true` and the browser blurs it. Both hosts track
-   `focusin`.
-9. **Heterogeneous keyed renderer slots** need an existential cast
-   (`as unknown as ReactRenderer<never>`); `ViewKind<M>` types the pair only at the call site.
+1. **`catalog.validate` does not check props in a real catalog.**
+   - With two or more components, the schema's `propsOf` falls back to `record(string, unknown)`
+     (`packages/core/src/schema.ts`, `case "propsOf"`). `{ "type": "Button", "props": { "label": 42 } }`
+     validates.
+   - With exactly one component, props *are* checked, which is how the research probe missed it.
+   - The policy parses props per component type itself.
+2. **Prop schemas reject json-render's own expressions.** `z.string()` rejects `{ "$state": … }`
+   and `{ "$bindState": … }`, so the docs' example (an `Input` with `value: z.string()` bound by
+   `$bindState`) does not validate. Every dynamic prop must be declared with `dyn()` / `bindable()`
+   (`@kit/catalog`), which makes this a per-catalog rule a contributor can get wrong.
+3. **`validate` silently strips `on`, `watch` and `state` under the React schema.** A validated spec
+   has no events. J1 copies the schema and keeps these fields, so that the policy can check them.
+4. **`builtInActions: []` does not remove built-ins from the prompt.** The default prompt text still
+   teaches `setState` / `pushState` with examples. J1 appends an override rule. The policy refuses
+   built-ins anyway, but an LLM will waste generations on them.
+5. **The runtime has five write paths into one tree** (research §3): `$bindState`, the built-ins
+   inside `ActionProvider`, handlers' `setState`, `onSuccess` / `onError` `set`, and the seed.
+   - J1 closes them with two independent layers:
+     1. **the policy**: no built-in, `watch`, `onSuccess` / `onError` / `confirm` or action list, and
+        binds only onto `/form/<field>`;
+     2. **the store facade**: every `set` / `update` outside `/form/<seeded field>` is refused and
+        logged, and not even the snapshot identity changes.
+   - The browser test reaches layer 2 *around* layer 1 through json-render's own hooks
+     (`useStateStore().set`, `useActions().execute({ action: "setState" | "pushState" })`). All three
+     illegal writes are refused, and the legal `/form/title` write lands through `editField`.
+6. **Components get `emit`, not an element key.** A registry component cannot tell which element it
+   is, so J1 does not use json-render's action execution at all.
+   - Each implementation receives `action(event)` (looked up from `element.on`) and never `emit`.
+   - The policy makes each action bindable at most once per spec, so the name alone identifies the
+     capture.
 
 ## Pros
 
-- Everything is mechanically checkable: 8 boundary rules with negative controls, type-level single
-  writer, contract suite on two implementations per kind, a graph with 0 violations.
-- Independence is real: standalone runs load no code of the other app; removal runs log no error.
-- A kernel-only bundle is 80 LOC; the kit is optional and visibly so.
-- The UI layer really is replaceable: 0 logic files changed; the DOM renderers are ~1.35× the React ones (303 vs 224 LOC).
+- A new capability, contained in 9 bundles, 2 kits and 2 feature files. P0 is byte-identical, and
+  so are the 29 Todos and Contacts files.
+- Correctness is structural:
+  - single writer (the store facade plus a form group that accepts only seeded fields);
+  - commit time (P3's capture);
+  - refuse (P3's same-tick `running`);
+  - scope (a synchronous `end()`, and every write checks `open`).
+- The vocabulary composes like any other slot: arrival order does not matter, removal is clean, and
+  coverage reports unobserved vocabulary.
+- json-render is used only for what it does well: the prompt generation, the SpecStream compiler and
+  the renderer walk. The library's churn is contained in `@kit/catalog`, `agent` and
+  `agent.ui.react`.
 
 ## Cons
 
-- **26 concepts** before a newcomer can write a bundle — more than 03, mostly from structure
-  (feature/application/loader/manifests) and the three model kinds.
-- **Ceremony per interaction**: a feature touches an API module (keys, commands, kinds), a controller,
-  a model, and two renderers. Rename: 11 files / +291 lines for one dialog (212 of them the new
-  bundle, 64 of those a form model that duplicates `todos.edit`'s — private models cannot be shared
-  across bundles without a kit).
-- Controllers are long (todos.list 283 LOC incl. model): snapshots, update loop, running flags, and
-  `active` checks are hand-written in every bundle.
-- Cross-bundle writes as commands mean the owner re-implements a store's write path (patch the
-  collection before resolving).
-- The shell hosts are the largest UI units (≈300 LOC each), and the DOM host re-implements
-  reconciliation (mount/unmount per renderer arrival).
+- The safety comes from us, not from the library: a 108-LOC policy and the store facade, plus the
+  `dyn` / `bindable` convention. A reviewer must trust these two, and the negative controls are
+  their only guard.
+- A second visual vocabulary sits beside the hand-written views, with generic components that are
+  styled separately.
+- No DOM renderer exists (json-render has none). The agent feature is React-only here: a DOM host
+  would report `jr:generated` as unrendered.
+- The concepts are local but real: +6 (catalog entry, spec/stream, policy, GeneratedView, agent
+  action, generator/data).
+- Zod is in the catalog API types. It was already in P0's bundle through `@statewalker/shared-commands`,
+  so it costs 0 KB here.
+- One action binding per spec limits what the generator can say. For example, "Create" on each
+  table row is impossible without per-element action identity.
 
 ## Fitness table
 
-| Axis | Measurement | Value | Notes |
-| --- | --- | --- | --- |
-| Simplicity | concepts and rules a newcomer must learn | **26** | README lists them (kernel 8, structure 6, models 7, views & commits 5); kit concepts excluded |
-| Simplicity | LOC / files of the minimal no-kit bundle (`hello`) | **80 LOC / 2 files** (logic: activator 73 + API 7) | renderers: React 20 LOC / 2 files, DOM 20 LOC / 1 file; kernel only |
-| Simplicity | Rename a todo: files touched, lines +/− (logic / UI / tests) | **11 files, +291/−11** — logic 4 files +216/−0 · UI 2 files +4/−2 · tests 5 files +71/−9 | logic = new bundle (2 files, +212), API +2 (view kind), features +2; UI = register the existing editor renderer for the new kind; tests include 2 coverage expectations that changed |
-| Separation | boundary suite: rules / violations | **8 rules / 0 violations**, negative control per rule | R1 renderer value imports, R2 no provide/register/call/listen/await in renderers, R3 no UI lib in logic/neutral API, R4 no DOM globals in logic, R5 cross-bundle → API only, R6 kernel imports no bundle/kit, R7 substrate private, R8 API = declarations only |
-| Separation | single-writer violations | **0** | type-level over 14 view facets and 6 control facets (+2 negative controls, `@ts-expect-error`); runtime: 8 view + 6 control facets frozen and writer-free |
-| Separation | domain-logic hits in views | **2** (0 await / .call / .provide / .register / service imports) | the Ctrl-click selection arithmetic in `todos.ui.react` and `todos.ui.dom` — fix: a `toggleSelected(id)` intent on the list model. Other conditionals are rendering choices (line-through, aria-current, error shown) |
-| Independence | cross-bundle edges / to API modules / violations | **53 import sites (35 distinct) / 53 / 0** | fan-out 3–8 modules per bundle (logic bundles 3–8, renderers 4, hosts 4–6); report printed by `pnpm graph` |
-| Independence | standalone runs (Todos, Contacts) | **pass / pass** | headless test shell (node) and trivial DOM test shell (Chromium) |
-| Independence | removal runs: errors / coverage report | **4 runs, 0 error logs** | without `todos-contacts`: `unobserved contacts:selection`; without `todos.status`: complete; without `contacts` (+`todos-contacts`): complete; without `todos` (+`todos.status`, `todos-contacts`): `unobserved contacts:selection` |
-| Composability | interactions (1)–(3) pass | **3/3** under React, DOM and headless | (3) also with Contacts removed and Todos removed |
-| Composability | files changed in Contacts for interaction (1) | **0** | no `contacts.*` file mentions Todos; the link is one bundle in its own feature |
-| Composability | second UI technology: logic files changed / new UI LOC | **0 / 791** | binding kit 78 (the binding itself 12) · renderers 303 (todos 156, contacts 127, hello 20) · host `shell.dom` 304 · trivial DOM test shell 106 |
-| Correctness gate | contract · commit races · dispose · late subscriber · read-then-set | **green** | contract 83 tests (3 kinds × kit + hand-rolled implementations, hello through its bundle, point 9, 7 suite negative controls) + single writer 4; commits 9; dispose 4; late 3; read-then-set 7 + loader 7 |
+Measured as ARCHITECTURE.md §13 prescribes, side by side with P0.
 
-Totals: node 150 tests, Chromium 24 tests. LOC (non-test): kernel 344, kits 573, API modules 288,
-logic bundles 1758, UI bundles 1232, features/apps/main 191; tests 2348 (`pnpm loc`).
+| Axis | Measurement | P0 | J1 | Notes |
+| --- | --- | --- | --- | --- |
+| Simplicity | concepts a newcomer must learn | 26 | **26 + 6** (agent feature only) | + P3's commit record, already in K |
+| Simplicity | LOC of the new capability (src) | n/a | **1 467** (logic 801, UI 284, API 80, kits 231 incl. P3's 161, manifests 71) | per bundle: agent 539 (controller 274, model 157, policy 108), agent.fixtures 106 (81 recorded fixture), catalog 70, agent.contacts-actions 57, agent.todos-actions 18, badge 11; UI: catalog.ui.react 144, agent.ui.react 123, badge.ui.react 17; kit catalog 70 |
+| Simplicity | cost to add a component | n/a | **definition 11 LOC / 1 file + React 17 LOC / 2 files, 0 edits elsewhere** | per additional technology: one implementation |
+| Simplicity | cost to let an agent use a command | n/a | **18 LOC / 1 bundle** (`agent.todos-actions`) | no edit in the app it acts on |
+| Separation | boundary suite: rules / violations | 8 / 0 | **8 / 0** | R1 widened: renderers may value-import `@json-render/react`; R7 as P3 (`@kit/commit`) |
+| Separation | single-writer violations | 0 | **0** | + the store facade's negative controls: 7 refused paths headless, 3 through json-render's own hooks in Chromium |
+| Separation | domain-logic hits in views | 2 | **2** (0 new) | catalog components are generic; the agent renderer has no domain code |
+| Independence | cross-bundle edges / to API / violations | 53 / 53 / 0 | **73 / 73 / 0** (50 distinct) | the new bundles reach only `agent/api`, `catalog/api(+react)`, `shell/api(+react)`, `todos/api`, `contacts/api` |
+| Independence | Todos/Contacts files changed | n/a | **0 / 29** (P0: 0 / 71 files changed) | SHA identity test with a negative control |
+| Independence | removal runs: errors | 4 / 0 | **4 + 5 / 0** | −agent: `ui:catalog` and `ui.react:catalog` reported unobserved; −ui.catalog: complete; −todos: `todos.compose` refused; −ui.badge; −agent.react: `jr:generated` unrendered |
+| Composability | interactions (1)–(3) | 3/3 | **3/3 + (1) through a generated UI** | P0's scenarios pass on the agent workbench (Chromium) |
+| Composability | vocabulary contributors aggregated | n/a | **5 bundles in 4 features → 1 catalog** | clash = loud activation failure |
+| Correctness gate | contract · commit races · dispose · late · read-then-set | green | **green** (P0's suites unchanged) | + J1: commit time ×2 (node, DOM), double press ×2, press-time `/data`, session close / replace / stop |
+| Negative controls | spec refusals | n/a | **14** | 11 mid-stream (unknown type, bad props, `setState`, `todos.remove`, `watch`, bind `/data`, read `/secrets`, seed `/data`, action list, `onSuccess`, undeclared event) + 3 complete-spec (double binding, unseeded field, dangling child); each: nothing shown, stream aborted, 0 commands, 0 errors |
+| Bundle | JS added (vite build, all chunks) | 677 KB / 175 KB gz | **+106 KB / +33 KB gz** | json-render core + react as imported: 68.6 KB / 21.9 KB gz (esbuild, zod and react external); Zod: **+0**, already in P0's bundle (`core` chunk, 324 KB / 72 KB gz); without that, zod v4 would add ≈92 KB gz (research) |
 
 ## Answers to the points to clarify
 
-- **Queue or disable?** Save (both editors), Clear completed, Toggle/Edit/Delete and Rename
-  **refuse** (`running: true`, button disabled + `aria-busy`); Add **queues**. User-visible
-  difference, pinned by tests: a refused second Save produces one api call and the button is
-  disabled meanwhile; three Adds while the first runs keep the button enabled and land in order with
-  their own titles. Queue costs a snapshot *list* instead of one snapshot; refuse needs the
-  same-tick fold (lesson 5). Recommendation: refuse by default, queue for event-edge actions.
-- **Owner of `todos:collection`?** `todos.core` (the service owner). Simpler: one writer, no
-  change broadcast, no reloads, consumers in any order. Cost: every write is a command in the API
-  (3 commands), handlers must publish before resolving, and `todos.core` does optimistic patching.
-  A domain-controller owner would have put the write path in `todos.list`, making Rename and the
-  contacts link depend on the list bundle's presence — worse for removal.
-- **Was one flat context a problem?** No clash. One reach we could not prevent: `todos:api` is
-  declared in the Todos API (the host must be able to set it), so any bundle *could* read it and
-  write around the owner's commands. That is the only case for scoping seen; a boundary rule ("only
-  the owner resolves `todos:api`") would cover it without scopes. `sys:config` became a second flat
-  namespace inside one service.
-- **Did activation order matter beyond "required first"?** Only for services: a provider before any
-  bundle that reads its key (checked statically from `provides`/`requires`/`optional`, and at
-  runtime by the guard — both tested), and host keys (`shell:root`, `sys:logger`, `sys:config`) set
-  before `application()` (the loader itself reads `sys:logger`). Slots and commands: no.
-- **Was the shell API sufficient?** Yes, plus two services: `shell:root` (where a DOM host renders)
-  and `shell:coverage` (the report). No new extension points. Tab selection is host-local state.
-- **How much of 03's kit was kept?** The signals wrapper, `stableGroup`/channels, the action model
-  (+ a `queue` option), the update loop and `attempt`; `watchSubmits` became `onSubmits`
-  (synchronous, per batch). New small kits: `slots` (`followFirst`), `notify`, `host` (coverage),
-  `react`, `dom`. A newcomer does not need the kit for a first bundle (`hello`), but every real
-  bundle here uses it; without it the list/editor models would roughly double.
-- **What had to be reinterpreted?** See "What failed" 1–9 and the README's choices table: the
-  non-reading probe, the lazy discriminator, coverage via observer counts, cross-bundle guards set
-  by controllers, the missing `todos:selection`, controllers folding action extension points into
-  models, write commands on the owner, `sys:config` for the timeout, `shell:root`.
+- **Flag in the command declaration, or allow-list in `agent.*` bundles?** The allow-list in
+  `agent.*` bundles, as contributions to `agent:actions`.
+  - This keeps the app untouched (0 Todos and Contacts changes), and removing the app removes the
+    entry.
+  - A flag would edit every app API and would still need the `run` glue somewhere.
+  - The allow-list IS the slot. The policy refuses everything else, including real commands such as
+    `todos.remove` and every built-in.
+- **Zod params, or the command's own schema?**
+  - Zod, written next to the allow-list entry. P0's commands are `passthrough` and have no schema to
+    convert.
+  - json-render needs Zod for the prompt, and the drain parses the captured params with the same
+    schema before `run`. For example, a whitespace title is refused and never reaches
+    `todos:compose`.
+  - If commands gain schemas (the deferred item), the agent entry should *reference* the command's
+    schema instead of repeating it. A converter is then needed only if that schema is not Zod.
+- **`validateForm` / `checks` in generated UIs?** They stay out: the policy refuses a
+  `validateForm` binding as not allow-listed, and `checks` is not in any catalog prop.
+  - Errors come from the command's schema at drain time (published as the model's `outcome`) and
+    from the command itself.
+  - One validation system per form, owner-side, as ADR-013 says.
 
 ## Recommendation for consolidation
 
-Keep the definition's core — flat context with the guard, slots/commands/registry, bundles/features
-with a loader, views as publications, per-technology renderers, the model contract with facets.
-Amend: (1) name `isProvided` and a manifest `lazy` flag; add `provides/requires/optional` to bundle
-manifests and let the loader check them; (2) make shared state's write path explicit (owner-answered
-commands) and add `todos:selection`; (3) specify that controllers fold an app's own extension points
-into presentation models; (4) define coverage as "unrendered kinds + unobserved slots" and require
-the bus bookkeeping in the kernel; (5) let the action model refuse same-tick resubmits itself; (6)
-allow cross-bundle guards to be controller-set base flags. To cut the concept count and per-feature
-ceremony, look at P3 (commit mechanism in the model) and P2 (controller shape) — the hand-written
-snapshot/loop/`active` pattern is the largest repeated cost here.
+- Adopt **option (c) + (d) as J1 built them**: two keyed catalog slots, one `jr:generated` view kind
+  whose model keeps the three kinds, an agent controller that drains commit records into existing
+  commands, and agent actions as allow-list contributions.
+- Make three J1 inventions **normative** if agents are adopted:
+  1. the **policy** (no built-ins, `watch`, outcome hooks or action lists; binds only onto
+     `/form/<seeded>`; reads only `/form` and `/data`; one binding per action);
+  2. the **store facade** as the only writer json-render sees;
+  3. **components receive capabilities (`action`, `write`), never `emit`**.
+- Keep the policy's negative controls in the correctness gate.
+- Pin json-render exactly and treat its validation as a type check only. Findings 1–4 are
+  library-level. Report them upstream, and re-verify them on every bump.
+- Do not extend json-render to hand-written views (J2). J1 confirms the research: the library's
+  state model needs a guard at every entry point, which is acceptable for a sandboxed form group and
+  not for our models.
