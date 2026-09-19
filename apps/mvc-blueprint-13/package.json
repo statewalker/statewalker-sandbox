@@ -47,6 +47,7 @@
     "@p5/todos.core": "link:packages/bundles/todos.core",
     "@p5/todos.edit": "link:packages/bundles/todos.edit",
     "@p5/todos.list": "link:packages/bundles/todos.list",
+    "@p5/todos.rename": "link:packages/bundles/todos.rename",
     "@p5/todos.status": "link:packages/bundles/todos.status",
     "@p5/todos.ui.react": "link:packages/bundles/todos.ui.react",
     "@p5/todos.ui.solid": "link:packages/bundles/todos.ui.solid",

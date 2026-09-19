@@ -42,10 +42,8 @@ describe("the workbench, headless: interactions (1)–(3)", () => {
     r = await start(workbenchHeadless);
     expect(groups(r)).toEqual(["Contacts", "Hello", "Todos"]);
     expect(errorLogs(r.logs)).toEqual([]);
-    expect(coverageOf(r.context)).toEqual({
-      unrendered: [],
-      unobserved: [{ slot: "todos:selection", contributions: 1 }],
-    });
+    // todos.rename reads the selection, so nothing is left unobserved.
+    expect(coverageOf(r.context)).toEqual({ unrendered: [], unobserved: [] });
   });
 });
 

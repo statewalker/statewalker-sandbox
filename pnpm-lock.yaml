@@ -1498,6 +1498,9 @@ importers:
       '@p5/todos.list':
         specifier: link:packages/bundles/todos.list
         version: link:packages/bundles/todos.list
+      '@p5/todos.rename':
+        specifier: link:packages/bundles/todos.rename
+        version: link:packages/bundles/todos.rename
       '@p5/todos.status':
         specifier: link:packages/bundles/todos.status
         version: link:packages/bundles/todos.status

@@ -130,3 +130,5 @@ export interface ConfirmView {
 export const todoListKind = defineViewKind<TodoListView>("todos:list");
 export const todoEditorKind = defineViewKind<TitleFormView>("todos:editor");
 export const clearCompletedKind = defineViewKind<ConfirmView>("todos:clear-completed");
+/** The rename dialog: one title field, Rename and Cancel. */
+export const todoRenameKind = defineViewKind<TitleFormView>("todos:rename");

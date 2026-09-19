@@ -1,8 +1,10 @@
 import type { ContactEditorView } from "@p5/contacts/api";
 import { MemContactsApi } from "@p5/contacts.core";
+import type { TitleFormView } from "@p5/todos/api";
 import { MemTodoApi } from "@p5/todos.core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  dialog,
   errorLogs,
   panel,
   type Running,
@@ -43,6 +45,15 @@ describe("commit races (K: commit records drained in scopes)", () => {
   const editorGone = (running: Running) => () =>
     panel(running.slots, "contacts:editor") === undefined;
   const updates = (api: MemContactsApi) => api.calls.filter((c) => c.method === "update");
+
+  async function renameDialog(running: Running, id: string): Promise<TitleFormView> {
+    await until(() => titles(running).length === 3);
+    const list = todoList(running);
+    list.select([id]);
+    selectionAction(list, "Rename…").submit();
+    await until(() => dialog(running.slots, "todos:rename") !== undefined);
+    return dialog<TitleFormView>(running.slots, "todos:rename")?.model as TitleFormView;
+  }
 
   // ── where `running` becomes visible ────────────────────────────────────────────────────────
   it("running is visible in the submit's own tick", async () => {
@@ -234,5 +245,46 @@ describe("commit races (K: commit records drained in scopes)", () => {
     expect(api.calls.filter((c) => c.method === "add").map((c) => c.args[0])).toEqual(["one"]);
     expect(running.slots.usage().filter((u) => u.contributions > 0)).toEqual([]);
     expect(errorLogs(running.logs)).toEqual([]);
+  });
+
+  it("Rename — typing after the submit and while it runs is not committed", async () => {
+    const api = new MemTodoApi(undefined, DELAY);
+    r = await start(workbenchHeadless, { services: { "todos:api": api } });
+    const form = await renameDialog(r, "t1");
+    form.editField("title", "Buy oat milk");
+    form.save.submit();
+    form.editField("title", "same tick");
+    await until(() => form.save.getState().running);
+    form.editField("title", "while running");
+    await until(() => dialog(r?.slots as never, "todos:rename") === undefined);
+    expect(api.calls.filter((c) => c.method === "update").map((c) => c.args[1])).toEqual([
+      { title: "Buy oat milk" },
+    ]);
+  });
+
+  it("Rename — two submits in one tick are one commit, on the state of the first", async () => {
+    const api = new MemTodoApi(undefined, DELAY);
+    r = await start(workbenchHeadless, { services: { "todos:api": api } });
+    const form = await renameDialog(r, "t2");
+    form.editField("title", "first");
+    form.save.submit();
+    form.editField("title", "second");
+    form.save.submit();
+    await until(() => dialog(r?.slots as never, "todos:rename") === undefined);
+    const calls = api.calls.filter((c) => c.method === "update");
+    expect(calls.map((c) => c.args[1])).toEqual([{ title: "first" }]);
+  });
+
+  it("Rename — a submit while running is visibly refused", async () => {
+    const api = new MemTodoApi(undefined, DELAY);
+    r = await start(workbenchHeadless, { services: { "todos:api": api } });
+    const form = await renameDialog(r, "t1");
+    form.editField("title", "A");
+    form.save.submit();
+    await until(() => form.save.getState().running);
+    form.editField("title", "B");
+    form.save.submit();
+    await until(() => dialog(r?.slots as never, "todos:rename") === undefined);
+    expect(api.calls.filter((c) => c.method === "update")).toHaveLength(1);
   });
 });
