@@ -6,8 +6,8 @@ import {
   contactsSelectionActionsSlot,
   contactsSelectionSlot,
 } from "@p5/contacts/api";
-import { type Controller, call, getLogger, getSlots, useFields } from "@p5/kernel";
-import { attempt, drainCommits, on } from "@p5/kit-commit";
+import { type Controller, getLogger, getSlots, useFields } from "@p5/kernel";
+import { attempt, drainCommits, on, type Turn } from "@p5/kit-commit";
 import { byOrder, followFirst } from "@p5/kit-slots";
 import { menuSlot, panelsSlot } from "@p5/shell/api";
 import { createContactListModel } from "./list.model.js";
@@ -61,11 +61,13 @@ export const activate: Controller = async (context, scope) => {
     }),
   );
 
-  const edit = (id: string, { task }: { task: <R>(p: Promise<R>) => Promise<R> }) =>
-    task(
-      attempt(log, "open the contact editor", () => call(slots, contactsEditOpen, { id }).promise),
-    );
-  drainCommits(scope, log, on(model.edit.control, edit), on(model.editFromMenu.control, edit));
+  const edit = (id: string, { task, call }: Turn) =>
+    task(attempt(log, "open the contact editor", () => call(contactsEditOpen, { id })));
+  drainCommits(
+    { scope, slots, log },
+    on(model.edit.control, edit),
+    on(model.editFromMenu.control, edit),
+  );
 
   scope.defer(
     slots.register(panelsSlot, "contacts:list", {

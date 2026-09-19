@@ -1,16 +1,8 @@
-import {
-  answer,
-  type Call,
-  CommandError,
-  call,
-  callsSlot,
-  defineCommand,
-  KernelSlots,
-} from "@p5/kernel";
-import { describe, expect, it } from "vitest";
+import { answer, CommandError, call, defineCommand, KernelSlots, observe } from "@p5/kernel";
+import { describe, expect, it, vi } from "vitest";
 
 const ping = defineCommand<{ n: number }, string>("t:ping");
-const note = defineCommand<string, string | undefined>("t:note", { policy: "silent" });
+const note = defineCommand<string, string>("t:note", { policy: "silent" });
 
 const kind = async (p: Promise<unknown>) =>
   p.then(
@@ -19,7 +11,7 @@ const kind = async (p: Promise<unknown>) =>
   );
 
 describe("commands over slots: a command is a slot of handlers, a call is a dispatch", () => {
-  it("a typed request gets its typed response; the handler is a contribution in the slot", async () => {
+  it("a typed request gets its typed response; the answer is a contribution in the slot", async () => {
     const slots = new KernelSlots();
     const off = answer(slots, ping, async ({ payload }) => `pong ${payload.n}`);
     expect(slots.getSnapshot(ping)).toHaveLength(1); // visible like any contribution
@@ -29,91 +21,72 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
     expect(slots.getSnapshot(ping)).toHaveLength(0);
   });
 
-  it("no handler: `required` rejects (no-handlers); `silent` resolves undefined", async () => {
+  it("no answer: `required` rejects (no-handlers); `silent` resolves undefined, typed so", async () => {
     const slots = new KernelSlots();
     expect(await kind(call(slots, ping, { n: 1 }).promise)).toBe("no-handlers");
-    expect(await call(slots, note, "x").promise).toBeUndefined();
+    const r: string | undefined = await call(slots, note, "x").promise;
+    expect(r).toBeUndefined();
   });
 
-  it("observers only: `required` rejects (not-claimed) after they ran; `silent` resolves", async () => {
+  it("observers only: they run; `required` still rejects, `silent` resolves", async () => {
     const slots = new KernelSlots();
     const seen: string[] = [];
-    answer(slots, ping, () => void seen.push("ping"));
-    answer(slots, note, () => void seen.push("note"));
-    expect(await kind(call(slots, ping, { n: 1 }).promise)).toBe("not-claimed");
+    observe(slots, ping, () => void seen.push("ping"));
+    observe(slots, note, () => void seen.push("note"));
+    expect(await kind(call(slots, ping, { n: 1 }).promise)).toBe("no-handlers");
     expect(await call(slots, note, "x").promise).toBeUndefined();
     expect(seen).toEqual(["ping", "note"]);
   });
 
-  it("claim: the first claimer answers and dispatch stops; observers before it still run", async () => {
+  it("K1/K2 inverted: an observer never claims and sees every call, whatever the order", async () => {
     const slots = new KernelSlots();
     const ran: string[] = [];
-    answer(slots, ping, () => void ran.push("observer"), { priority: 10 });
-    answer(slots, ping, async () => {
+    observe(slots, ping, () => void ran.push("early observer"));
+    answer(slots, ping, async ({ payload }) => {
       ran.push("owner");
-      return "owner";
+      return `owner ${payload.n}`;
     });
-    answer(slots, ping, async () => {
-      ran.push("second");
-      return "second";
-    });
-    expect(await call(slots, ping, { n: 1 }).promise).toBe("owner");
-    expect(ran).toEqual(["observer", "owner"]);
+    observe(slots, ping, () => void ran.push("late observer"));
+    expect(await call(slots, ping, { n: 2 }).promise).toBe("owner 2");
+    expect(ran).toEqual(["early observer", "late observer", "owner"]);
   });
 
-  it("claim with `true`: the handler settles the call itself, later", async () => {
-    const slots = new KernelSlots();
-    let held: Call<{ n: number }, string> | undefined;
-    answer(slots, ping, (c) => {
-      held = c;
-      return true;
-    });
-    const c = call(slots, ping, { n: 2 });
-    expect(slots.getSnapshot(callsSlot).size).toBe(1);
-    held?.resolve("later");
-    held?.resolve("ignored");
-    expect(await c.promise).toBe("later");
-    expect(slots.getSnapshot(callsSlot).size).toBe(0);
-  });
-
-  it("priority order: higher first; equal priorities in arrival order", async () => {
+  it("the first answer present claims; a second answer never runs", async () => {
     const slots = new KernelSlots();
     const ran: string[] = [];
-    const obs = (id: string, priority?: number) =>
-      answer(slots, note, () => void ran.push(id), { priority });
-    obs("a");
-    obs("b", 5);
-    obs("c");
-    obs("d", -1);
-    obs("e", 5);
-    await call(slots, note, "x").promise;
-    expect(ran).toEqual(["b", "e", "a", "c", "d"]);
+    answer(slots, ping, () => (ran.push("first"), "first")); // a sync answer claims too
+    answer(slots, ping, () => (ran.push("second"), "second"));
+    expect(await call(slots, ping, { n: 1 }).promise).toBe("first");
+    expect(ran).toEqual(["first"]);
   });
 
-  it("a handler withdrawn during a dispatch is skipped; one added during it is not called", async () => {
+  it("a throwing observer is reported and changes nothing for the caller", async () => {
+    const slots = new KernelSlots();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    observe(slots, ping, () => {
+      throw new Error("observer bug");
+    });
+    answer(slots, ping, () => "ok");
+    expect(await call(slots, ping, { n: 1 }).promise).toBe("ok");
+    expect(logged).toHaveBeenCalledTimes(1);
+    logged.mockRestore();
+  });
+
+  it("a handler added during a dispatch is not called; the next call sees the slot as it is", async () => {
     const slots = new KernelSlots();
     const ran: string[] = [];
-    let offB: () => void = () => {};
-    answer(
-      slots,
-      note,
-      () => {
-        ran.push("a");
-        offB();
-        answer(slots, note, () => void ran.push("late"));
-      },
-      { priority: 1 },
-    );
-    offB = answer(slots, note, () => void ran.push("b"));
+    observe(slots, note, () => {
+      ran.push("a");
+      if (ran.length === 1) observe(slots, note, () => void ran.push("late"));
+    });
     await call(slots, note, "x").promise;
     expect(ran).toEqual(["a"]);
-    // The next call sees the slot as it is now.
     ran.length = 0;
     await call(slots, note, "y").promise;
     expect(ran).toEqual(["a", "late"]);
   });
 
-  it("transient: a late handler does not receive calls made before it arrived", async () => {
+  it("transient: a late answer does not receive calls made before it arrived", async () => {
     const slots = new KernelSlots();
     const early = call(slots, ping, { n: 1 });
     const earlySilent = call(slots, note, "early");
@@ -122,7 +95,7 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
       got.push(payload);
       return "ok";
     });
-    answer(slots, note, ({ payload }) => void got.push(payload));
+    observe(slots, note, ({ payload }) => void got.push(payload));
     expect(await kind(early.promise)).toBe("no-handlers");
     expect(await earlySilent.promise).toBeUndefined();
     expect(got).toEqual([]);
@@ -130,7 +103,7 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
     expect(got).toEqual([{ n: 2 }]);
   });
 
-  it("a handler's own failure reaches the caller unchanged (thrown or rejected)", async () => {
+  it("an answer's own failure reaches the caller unchanged (thrown or rejected)", async () => {
     const slots = new KernelSlots();
     const off = answer(slots, ping, () => {
       throw new Error("sync boom");
@@ -143,28 +116,16 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
     expect(await kind(call(slots, ping, { n: 1 }).promise)).toBe("raw:Name is required");
   });
 
-  it("the claimer withdrawn while a call is pending ⇒ the call rejects (abandoned); nothing is left", async () => {
+  it("the answer withdrawn while a call is pending ⇒ the call rejects (abandoned); nothing is left", async () => {
     const slots = new KernelSlots();
     let release: (v: string) => void = () => {};
     const off = answer(slots, ping, () => new Promise<string>((r) => (release = r)));
     const c = call(slots, ping, { n: 1 });
-    expect([...slots.getSnapshot(callsSlot).values()].map((p) => p.key)).toEqual(["t:ping"]);
     off();
     expect(await kind(c.promise)).toBe("abandoned");
     release("too late"); // the late answer is ignored
     const left = slots.usage().filter((u) => u.contributions > 0 || u.observers > 0);
     expect(left).toEqual([]);
-  });
-
-  it("in-flight calls are state: `running` for a command is derivable from `sys:calls`", async () => {
-    const slots = new KernelSlots();
-    const runs: boolean[] = [];
-    slots.observe(callsSlot, (calls) =>
-      runs.push([...calls.values()].some((p) => p.key === ping.key)),
-    );
-    answer(slots, ping, async () => "ok");
-    await call(slots, ping, { n: 1 }).promise;
-    expect(runs).toEqual([false, true, false]);
   });
 
   it("usage marks command slots so coverage does not report handlers as unobserved", () => {
@@ -173,5 +134,20 @@ describe("commands over slots: a command is a slot of handlers, a call is a disp
     expect(slots.usage()).toEqual([
       { key: "t:ping", contributions: 1, observers: 0, command: true },
     ]);
+  });
+
+  it("T1 inverted: the confusing forms do not compile (checked by `pnpm typecheck`)", () => {
+    const slots = new KernelSlots();
+    const unit = defineCommand<void, void>("t:unit");
+    // @ts-expect-error — an observer cannot be async: it could look like a claim
+    observe(slots, unit, async () => {});
+    // @ts-expect-error — no priorities: order is not a mechanism
+    answer(slots, unit, () => {}, { priority: 10 });
+    const later = async () => {
+      // @ts-expect-error — a silent command's result may be undefined
+      const n: string = await call(slots, note, "x").promise;
+      return n;
+    };
+    expect(typeof later).toBe("function");
   });
 });

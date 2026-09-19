@@ -1,10 +1,11 @@
 import { contactsSelectionActionsSlot, contactsSelectionSlot } from "@p5/contacts/api";
-import { type Controller, call, getLogger, getSlots, useFields } from "@p5/kernel";
+import { type Controller, getLogger, getSlots, useFields } from "@p5/kernel";
 import { attempt, createCommitAction, drainCommits, on } from "@p5/kit-commit";
+import { getNotificationTimeout, newNotifier } from "@p5/kit-notify";
 import { trackFirst } from "@p5/kit-track";
 import { todosCompose } from "@p5/todos/api";
 
-const fields = useFields({ slots: getSlots, log: getLogger });
+const fields = useFields({ slots: getSlots, log: getLogger, timeoutMs: getNotificationTimeout });
 
 /**
  * `todos.contacts-link` (feature `todos-contacts`): "New todo for this contact" in
@@ -13,7 +14,9 @@ const fields = useFields({ slots: getSlots, log: getLogger });
  * handler calls `todos:compose`. Edits no Contacts file.
  */
 export const activate: Controller = async (context, scope) => {
-  const { slots, log } = fields(context);
+  const { slots, log, timeoutMs } = fields(context);
+  const notifier = newNotifier(slots, timeoutMs, log);
+  scope.defer(() => notifier.dispose());
   const [selected, stop] = trackFirst(slots, contactsSelectionSlot, (s) => [
     s.getSelected,
     s.onSelectedUpdate,
@@ -26,11 +29,11 @@ export const activate: Controller = async (context, scope) => {
   });
   scope.defer(() => action.dispose());
   drainCommits(
-    scope,
-    log,
-    on(action.control, (title, { task }) =>
-      task(attempt(log, "todos:compose", () => call(slots, todosCompose, { title }).promise)),
-    ),
+    { scope, slots, log },
+    on(action.control, async (title, { task, call }) => {
+      const result = await task(attempt(log, "todos:compose", () => call(todosCompose, { title })));
+      if (!result.ok) notifier.fail(`Could not start a todo for ${title}: ${result.message}`);
+    }),
   );
   scope.defer(
     slots.provide(contactsSelectionActionsSlot, {

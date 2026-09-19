@@ -29,8 +29,12 @@ export interface ActionState {
 export interface ActionView {
   getState(): ActionState;
   onStateUpdate(listener: Listener): Unsubscribe;
-  /** Raises the intent. Ignored while disabled, after dispose, and — unless queued — while running. */
-  submit(): void;
+  /**
+   * Raises the intent. Refused (`false`) while disabled, after dispose, and — unless queued — while
+   * running; `true` when a record was accepted. A view may ignore it; any other intent source
+   * (a command, an agent) must check it.
+   */
+  submit(): boolean;
 }
 
 /** An action offered at an extension point: a toolbar, a selection menu. */

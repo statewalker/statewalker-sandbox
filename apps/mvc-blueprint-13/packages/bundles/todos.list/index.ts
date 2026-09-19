@@ -1,4 +1,4 @@
-import { type Controller, call, getLogger, getSlots, useFields } from "@p5/kernel";
+import { type Controller, getLogger, getSlots, useFields } from "@p5/kernel";
 import { attempt, drainCommits, on, type Turn } from "@p5/kit-commit";
 import { byOrder, followFirst } from "@p5/kit-slots";
 import { panelsSlot } from "@p5/shell/api";
@@ -20,7 +20,8 @@ const fields = useFields({ slots: getSlots, log: getLogger });
 /**
  * `todos.list`: the list panel, the selection (published to `todos:selection`), Add (toolbar,
  * QUEUED: every submit is honoured with the title it was submitted with) and Toggle/Edit/Delete
- * (selection actions, REFUSED while running). Each record carries what its commit means.
+ * (selection actions, REFUSED while running). Each record carries what its commit means. Two
+ * lanes: Add, and the selection actions — a queue of Adds never delays a Toggle.
  */
 export const activate: Controller = async (context, scope) => {
   const { slots, log: rootLog } = fields(context);
@@ -51,30 +52,29 @@ export const activate: Controller = async (context, scope) => {
     if (result.ok) then();
   };
   const { actions } = control;
+  const drain = { scope, slots, log };
   drainCommits(
-    scope,
-    log,
+    drain,
     on(actions.add, (raw, turn) =>
       run(
         "add",
         turn,
-        () => call(slots, todosAdd, { title: raw.trim() }).promise,
+        () => turn.call(todosAdd, { title: raw.trim() }),
         // Clear the input only if it still holds what was added (typing went on meanwhile).
         () => view.getNewTitle() === raw && control.resetNewTitle(),
       ),
     ),
+  );
+  drainCommits(
+    drain,
     on(actions.toggle, (targets, turn) =>
       run("toggle", turn, async () => {
         for (const t of targets)
-          await turn.task(call(slots, todosUpdate, { id: t.id, patch: { done: !t.done } }).promise);
+          await turn.call(todosUpdate, { id: t.id, patch: { done: !t.done } });
       }),
     ),
-    on(actions.edit, ([id], turn) =>
-      run("edit", turn, () => call(slots, todosEditOpen, { id }).promise),
-    ),
-    on(actions.remove, (ids, turn) =>
-      run("delete", turn, () => call(slots, todosRemove, { ids }).promise),
-    ),
+    on(actions.edit, ([id], turn) => run("edit", turn, () => turn.call(todosEditOpen, { id }))),
+    on(actions.remove, (ids, turn) => run("delete", turn, () => turn.call(todosRemove, { ids }))),
   );
 
   // ── publications ─────────────────────────────────────────────────────────────────────────

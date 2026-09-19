@@ -83,11 +83,7 @@ describe("commit races (K: commit records drained in scopes)", () => {
     await until(() => updates(api).length === 1);
     editor.editField("phone", "during update"); // step 2 in flight
     await until(editorGone(r));
-    expect(updates(api)[0].args[1]).toEqual({
-      name: "Ada Lovelace",
-      email: "ada@committed.org",
-      phone: "+44 20 0001",
-    });
+    expect(updates(api)[0].args[1]).toEqual({ email: "ada@committed.org" }); // changed fields only
   });
 
   it("Save — a step-1 failure (validation) reports on the form and a later Save commits anew", async () => {
@@ -191,9 +187,7 @@ describe("commit races (K: commit records drained in scopes)", () => {
     editor.cancel.submit();
     await until(editorGone(r));
     await until(() => toasts(r?.slots as never).some((t) => t.message.startsWith("Saved")));
-    expect(updates(api).map((c) => c.args[1])).toEqual([
-      { name: "Grace B. Hopper", email: "grace@example.org", phone: "+1 212 0003" },
-    ]);
+    expect(updates(api).map((c) => c.args[1])).toEqual([{ name: "Grace B. Hopper" }]);
     expect(errorLogs(r.logs)).toEqual([]);
   });
 

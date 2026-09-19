@@ -12,7 +12,6 @@
     "@p5/kit-commit": "link:../../kits/commit",
     "@p5/kit-form": "link:../../kits/form",
     "@p5/kit-notify": "link:../../kits/notify",
-    "@p5/kit-slots": "link:../../kits/slots",
     "@p5/shell": "link:../shell"
   }
 }

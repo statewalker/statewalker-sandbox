@@ -1,4 +1,4 @@
-import type { ContactEditorView } from "@p5/contacts/api";
+import type { ContactEditorView, ContactPatch } from "@p5/contacts/api";
 import { contactsEditOpen } from "@p5/contacts/api";
 import { MemContactsApi } from "@p5/contacts.core";
 import { call } from "@p5/kernel";
@@ -27,6 +27,16 @@ import { contactList, selectionAction, titles, todoList } from "../support/scena
  * - bundle deactivated: nothing is written (races.test.ts, dispose.test.ts).
  */
 const DELAY = 30;
+
+/** A backend whose `update` hangs until the test releases it (probe A1). */
+class HungContactsApi extends MemContactsApi {
+  release: () => void = () => {};
+  override async update(id: string, patch: ContactPatch) {
+    this.calls.push({ method: "hung", args: [id, patch] });
+    await new Promise<void>((r) => (this.release = r));
+    return super.update(id, patch);
+  }
+}
 const messages = (r: Running) => toasts(r.slots).map((t) => t.message);
 
 describe("outcome of an in-flight Save after its session closed (D4)", () => {
@@ -49,7 +59,7 @@ describe("outcome of an in-flight Save after its session closed (D4)", () => {
   }
   const updates = (api: MemContactsApi) => api.calls.filter((c) => c.method === "update");
 
-  it("cancel mid-save, success: Cancel is drained after the Save; it lands and is notified", async () => {
+  it("cancel mid-save, success: Cancel closes at once (its own lane); the Save lands and is notified", async () => {
     const api = new MemContactsApi(undefined, DELAY);
     r = await start(workbenchHeadless, { services: { "contacts:api": api } });
     const editor = await openContact(r, "c1");
@@ -57,12 +67,14 @@ describe("outcome of an in-flight Save after its session closed (D4)", () => {
     editor.save.submit();
     editor.cancel.submit(); // while the Save is running
     await until(() => panel(r?.slots as never, "contacts:editor") === undefined);
+    expect(messages(r)).toEqual([]); // closed before the Save settled
+    await until(() => messages(r as Running).length > 0);
     expect(messages(r)).toEqual(["Saved Ada K. Lovelace"]);
     expect(updates(api)).toHaveLength(1);
     expect(errorLogs(r.logs)).toEqual([]);
   });
 
-  it("cancel mid-save, failure: the failure is notified, then the editor closes", async () => {
+  it("cancel mid-save, failure: the editor closes at once; the failure is notified later", async () => {
     const api = new MemContactsApi(undefined, DELAY);
     r = await start(workbenchHeadless, { services: { "contacts:api": api } });
     const editor = await openContact(r, "c1");
@@ -70,6 +82,8 @@ describe("outcome of an in-flight Save after its session closed (D4)", () => {
     editor.save.submit();
     editor.cancel.submit();
     await until(() => panel(r?.slots as never, "contacts:editor") === undefined);
+    expect(messages(r)).toEqual([]);
+    await until(() => messages(r as Running).length > 0);
     expect(messages(r)).toEqual(["Could not save Ada Lovelace: Name is required"]);
     expect(errorLogs(r.logs)).toEqual([]);
   });
@@ -131,9 +145,7 @@ describe("outcome of an in-flight Save after its session closed (D4)", () => {
     first.save.submit(); // the record exists; the drain runs a microtask later …
     void call(r.slots, contactsEditOpen, { id: "c2" }); // … after this replaces s1, same tick
     await until(() => messages(r as Running).length > 0);
-    expect(updates(api).map((c) => c.args)).toEqual([
-      ["c1", { name: "Ada K. Lovelace", email: "ada@example.org", phone: "+44 20 0001" }],
-    ]);
+    expect(updates(api).map((c) => c.args)).toEqual([["c1", { name: "Ada K. Lovelace" }]]);
     expect(messages(r)).toEqual(["Saved Ada K. Lovelace"]);
     expect(panel(r.slots, "contacts:editor")?.title).toBe("Edit Alan Turing");
   });
@@ -157,5 +169,38 @@ describe("outcome of an in-flight Save after its session closed (D4)", () => {
     const second = panel<TitleFormView>(r.slots, "todos:editor")?.model as TitleFormView;
     expect(second).not.toBe(first);
     expect(second.getStatus().errors).toEqual({});
+  });
+
+  it("A1 inverted: a hung Save does not trap the editor — Cancel closes it; the Save reports when it lands", async () => {
+    const api = new HungContactsApi();
+    r = await start(workbenchHeadless, { services: { "contacts:api": api } });
+    const editor = await openContact(r, "c1");
+    editor.editField("name", "Ada K.");
+    editor.save.submit();
+    await until(() => api.calls.some((c) => c.method === "hung"));
+    editor.cancel.submit();
+    await until(() => panel(r?.slots as never, "contacts:editor") === undefined, 100);
+    expect(messages(r)).toEqual([]);
+    api.release();
+    await until(() => messages(r as Running).length > 0);
+    expect(messages(r)).toEqual(["Saved Ada K."]);
+    expect(errorLogs(r.logs)).toEqual([]);
+  });
+
+  it("A7: an editor opened mid-Save on the same contact does not revert that Save (changed fields only)", async () => {
+    const api = new MemContactsApi(undefined, 50);
+    r = await start(workbenchHeadless, { services: { "contacts:api": api } });
+    const first = await openContact(r, "c1");
+    first.editField("name", "Ada K.");
+    first.save.submit();
+    await until(() => updates(api).length === 1); // in flight
+    const second = await openContact(r, "c1"); // replaces the first, seeded before the Save landed
+    expect(second.getDraft().name).toBe("Ada Lovelace");
+    await until(() => messages(r as Running).includes("Saved Ada K."));
+    second.editField("phone", "+44 99");
+    second.save.submit();
+    await until(() => updates(api).length === 2 && messages(r as Running).length === 2);
+    expect(await api.get("c1")).toMatchObject({ name: "Ada K.", phone: "+44 99" });
+    expect(updates(api)[1].args[1]).toEqual({ phone: "+44 99" });
   });
 });

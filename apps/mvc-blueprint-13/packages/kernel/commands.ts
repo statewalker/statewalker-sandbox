@@ -1,4 +1,4 @@
-import { defineKeyedSlot, type SlotDeclaration } from "@statewalker/shared-slots";
+import type { SlotDeclaration } from "@statewalker/shared-slots";
 import type { KernelSlots } from "./slots.js";
 
 /**
@@ -8,39 +8,43 @@ import type { KernelSlots } from "./slots.js";
  * No call is retained, so a handler only ever receives calls made while it is contributed.
  */
 
-/** `required`: no handler, or none claimed ⇒ the call rejects. `silent`: ⇒ it resolves `undefined`. */
+/** `required`: no answerer ⇒ the call rejects. `silent`: ⇒ it resolves `undefined`. */
 export type CommandPolicy = "required" | "silent";
 
-/** One dispatched call. `resolve` / `reject` are first-wins; later calls no-op. */
-export interface Call<P, R> {
-  readonly id: number;
+/** What a handler sees of one call. */
+export interface CallView<P> {
   readonly key: string;
   readonly payload: P;
+}
+
+/** One dispatched call. */
+export interface Call<R> {
   readonly promise: Promise<R>;
-  readonly settled: boolean;
-  resolve(value: R): void;
-  reject(error: unknown): void;
 }
 
 /**
- * Return a promise ⇒ claim (its outcome settles the call); `true` ⇒ claim, settle via `call`
- * yourself; nothing ⇒ observe only. The first claim (in priority order) stops the dispatch.
+ * What a command slot holds: an ANSWER (claims the call; its result or throw settles it) or an
+ * OBSERVER (sees every call, before the answer; never claims, whatever it returns).
  */
-// biome-ignore lint/suspicious/noConfusingVoidType: an observe-only handler returns nothing
-export type HandlerFn<P, R> = (call: Call<P, R>) => Promise<R> | true | void;
-
-/** What a command slot holds. Higher `priority` runs first; equal priorities run in arrival order. */
-export interface Handler<P, R> {
-  readonly handle: HandlerFn<P, R>;
-  readonly priority: number;
-}
+export type Handler<P, R> =
+  | { readonly answer: (call: CallView<P>) => R | Promise<R> }
+  | { readonly observe: (call: CallView<P>) => undefined };
 
 export interface CommandDeclaration<P, R> extends SlotDeclaration<Handler<P, R>> {
   readonly policy: CommandPolicy;
   readonly label?: string;
 }
 
+/** A `silent` command's result may be `undefined` (no answerer), and is typed so. */
 export function defineCommand<P = void, R = void>(
+  key: string,
+  options?: { policy?: "required"; label?: string },
+): CommandDeclaration<P, R>;
+export function defineCommand<P = void, R = void>(
+  key: string,
+  options: { policy: "silent"; label?: string },
+): CommandDeclaration<P, R | undefined>;
+export function defineCommand<P, R>(
   key: string,
   options: { policy?: CommandPolicy; label?: string } = {},
 ): CommandDeclaration<P, R> {
@@ -52,9 +56,9 @@ export function defineCommand<P = void, R = void>(
   });
 }
 
-export type CommandErrorKind = "no-handlers" | "not-claimed" | "abandoned";
+export type CommandErrorKind = "no-handlers" | "abandoned";
 
-/** Kernel failures only; a handler's own throw or rejection reaches the caller unchanged. */
+/** Kernel failures only; an answer's own throw or rejection reaches the caller unchanged. */
 export class CommandError extends Error {
   constructor(
     readonly kind: CommandErrorKind,
@@ -66,95 +70,67 @@ export class CommandError extends Error {
   }
 }
 
-/** A call in flight, as the kernel records it (`sys:calls`, keyed by call id). */
-export interface PendingCall {
-  readonly id: number;
-  readonly key: string;
-  readonly payload: unknown;
-}
-
-/** In-flight calls: registered at dispatch, withdrawn when settled. Debugging and dispose read it. */
-export const callsSlot = defineKeyedSlot<PendingCall>("sys:calls");
-
-/** Answers `decl` with `fn`: contributes a handler; returns the disposer. */
+/**
+ * Answers `decl` with `fn`: contributes the handler that CLAIMS every call (sync or async, its
+ * result or throw settles the call). The first answer present at call time claims. Returns the
+ * disposer.
+ */
 export function answer<P, R>(
   slots: KernelSlots,
   decl: CommandDeclaration<P, R>,
-  fn: HandlerFn<P, R>,
-  options: { priority?: number } = {},
+  fn: (call: CallView<P>) => R | Promise<R>,
 ): () => void {
-  return slots.provide(decl, Object.freeze({ handle: fn, priority: options.priority ?? 0 }));
+  return slots.provide(decl, Object.freeze({ answer: fn }));
+}
+
+/** Observes `decl`: `fn` sees every call, before the answer, and can never claim one. */
+export function observe<P, R>(
+  slots: KernelSlots,
+  decl: CommandDeclaration<P, R>,
+  fn: (call: CallView<P>) => undefined,
+): () => void {
+  return slots.provide(decl, Object.freeze({ observe: fn }));
 }
 
 /**
- * Dispatches `payload` to the handlers of `decl` currently in the slot, highest priority first.
- * A handler withdrawn before its turn is skipped. The claiming handler's withdrawal while the call
- * is pending rejects the call (`abandoned`) — an owner that stops never leaves a caller waiting.
+ * Dispatches `payload` to the handlers of `decl` present now: every observer (a throwing observer
+ * is reported and skipped), then the first answer. The answer's withdrawal while the call is
+ * pending rejects the call (`abandoned`) — an owner that stops never leaves a caller waiting.
  */
 export function call<P, R>(
   slots: KernelSlots,
   decl: CommandDeclaration<P, R>,
   payload: P,
-): Call<P, R> {
-  const id = slots.nextCallId();
-  let settle!: (ok: boolean, v: unknown) => void;
-  const promise = new Promise<R>((res, rej) => {
-    settle = (ok, v) => (ok ? res(v as R) : rej(v));
-  });
-  let settled = false;
-  let offPending: (() => void) | undefined;
-  let offWatch: (() => void) | undefined;
-  const finish = (ok: boolean, v: unknown) => {
-    if (settled) return;
-    settled = true;
-    offWatch?.();
-    offPending?.();
-    settle(ok, v);
-  };
-  const c: Call<P, R> = {
-    id,
-    key: decl.key,
-    payload,
-    promise,
-    get settled() {
-      return settled;
-    },
-    resolve: (value) => finish(true, value),
-    reject: (error) => finish(false, error),
-  };
-
-  const handlers = [...slots.getSnapshot(decl)].sort((a, b) => b.priority - a.priority);
-  let claimer: Handler<P, R> | undefined;
+): Call<R> {
+  const view: CallView<P> = Object.freeze({ key: decl.key, payload });
+  const handlers = slots.getSnapshot(decl);
   for (const h of handlers) {
-    if (settled) break;
-    if (!slots.getSnapshot(decl).includes(h)) continue; // withdrawn during this dispatch
-    let out: ReturnType<HandlerFn<P, R>>;
     try {
-      out = h.handle(c);
+      if ("observe" in h) h.observe(view);
     } catch (error) {
-      finish(false, error); // the handler's own failure reaches the caller unwrapped
-      break;
-    }
-    if (out === true || (out && typeof (out as Promise<R>).then === "function")) {
-      claimer = h;
-      if (out !== true) (out as Promise<R>).then(c.resolve, c.reject);
-      break;
+      console.error(`${decl.key}: observer failed`, error);
     }
   }
-  if (!settled && !claimer) {
-    if (decl.policy === "silent") finish(true, undefined);
-    else finish(false, new CommandError(handlers.length ? "not-claimed" : "no-handlers", decl.key));
+  const owner = handlers.find((h) => "answer" in h);
+  if (!owner || !("answer" in owner)) {
+    return decl.policy === "silent"
+      ? { promise: Promise.resolve(undefined as R) }
+      : { promise: Promise.reject(new CommandError("no-handlers", decl.key)) };
   }
-  if (!settled && claimer) {
-    offPending = slots.register(
-      callsSlot,
-      String(id),
-      Object.freeze({ id, key: decl.key, payload }),
-    );
-    const h = claimer;
-    offWatch = slots.observe(decl, (hs) => {
-      if (!hs.includes(h)) c.reject(new CommandError("abandoned", decl.key));
+  const promise = new Promise<R>((resolve, reject) => {
+    let off = () => {};
+    const done = (settle: (v: never) => void) => (v: unknown) => {
+      off();
+      settle(v as never);
+    };
+    off = slots.observe(decl, (hs) => {
+      if (!hs.includes(owner)) done(reject)(new CommandError("abandoned", decl.key));
     });
-  }
-  return c;
+    try {
+      Promise.resolve(owner.answer(view)).then(done(resolve), done(reject));
+    } catch (error) {
+      done(reject)(error);
+    }
+  });
+  return { promise };
 }

@@ -1,5 +1,5 @@
-import { type Controller, call, getLogger, getSlots, useFields } from "@p5/kernel";
-import { attempt, createCommitAction, drainCommits, on } from "@p5/kit-commit";
+import { type Controller, getLogger, getSlots, useFields } from "@p5/kernel";
+import { attempt, createCommitAction, drainCommits, on, session } from "@p5/kit-commit";
 import { createForm } from "@p5/kit-form";
 import { getNotificationTimeout, newNotifier } from "@p5/kit-notify";
 import { trackFirst } from "@p5/kit-track";
@@ -24,7 +24,7 @@ const fields = useFields({ slots: getSlots, log: getLogger, timeoutMs: getNotifi
  */
 export const activate: Controller = async (context, scope) => {
   const { slots, log, timeoutMs } = fields(context);
-  const notifier = newNotifier(slots, timeoutMs);
+  const notifier = newNotifier(slots, timeoutMs, log);
   scope.defer(() => notifier.dispose());
   const [selected, offSelected] = trackFirst(slots, todosSelectionSlot, (s) => [
     s.getSelected,
@@ -49,28 +49,27 @@ export const activate: Controller = async (context, scope) => {
 
   /** The dialog session over `todo`; resolves when it closes. */
   const rename = (todo: Todo) =>
-    new Promise<void>((closed) => {
-      const dialog = scope.child();
-      dialog.defer(closed);
+    session(scope, (dialog) => {
       const form = createForm<TitleDraft>({ title: todo.title }, { saveLabel: "Rename" });
       dialog.defer(() => form.dispose());
+      const drain = { scope, session: dialog, slots, log };
       drainCommits(
-        dialog,
-        log,
-        on(form.control.save, async ({ title }, { task }) => {
+        drain,
+        on(form.control.save, async ({ title }, { task, call }) => {
           const next = title.trim();
           if (next === "") return form.control.reportErrors({ form: "Title is required" });
           const result = await task(
-            attempt(
-              log,
-              "rename",
-              () => call(slots, todosUpdate, { id: todo.id, patch: { title: next } }).promise,
+            attempt(log, "rename", () =>
+              call(todosUpdate, { id: todo.id, patch: { title: next } }),
             ),
           );
           if (result.ok) return void dialog.close();
           form.control.reportErrors({ form: `Rename failed: ${result.message}` });
-          notifier.notify({ message: `Could not rename "${todo.title}"`, tone: "error" });
+          notifier.fail(`Could not rename "${todo.title}"`);
         }),
+      );
+      drainCommits(
+        drain,
         on(form.control.cancel, () => void dialog.close()),
       );
       dialog.defer(
@@ -83,8 +82,7 @@ export const activate: Controller = async (context, scope) => {
     });
 
   drainCommits(
-    scope,
-    log,
+    { scope, slots, log },
     on(action.control, (todo, { task }) => task(rename(todo))),
   );
   scope.defer(

@@ -1,6 +1,7 @@
 import {
   answer,
   type ApplicationManifest,
+  KernelSlots,
   application,
   type Context,
   CommandError,
@@ -18,6 +19,11 @@ import { newRecordingLogger } from "../support/logging.js";
 const flush = () => new Promise((r) => setTimeout(r, 0));
 const later = <T>(value: T, ms = 5) => new Promise<T>((r) => setTimeout(() => r(value), ms));
 const silent = { error: () => {} };
+const own = (scope: Scope, log: { error: (...a: unknown[]) => void } = silent) => ({
+  scope,
+  slots: new KernelSlots(),
+  log,
+});
 
 describe("kernel scope (K §4.1.4)", () => {
   it("closes children first (newest first), then its own disposers in reverse", async () => {
@@ -101,7 +107,7 @@ describe("kernel scope (K §4.1.4)", () => {
     const context: Context = {};
     loggerAdapter.set(context, newRecordingLogger().logger);
     const stop = await application(app)(context);
-    expect(scopes.map((s) => s.isBundle)).toEqual([true, true]);
+    expect(scopes.map((s) => s.closed)).toEqual([false, false]);
     await stop?.();
     expect(events).toEqual(["-y", "-x"]);
   });
@@ -110,7 +116,7 @@ describe("kernel scope (K §4.1.4)", () => {
     const context: Context = {};
     const slots = getSlots(context);
     const cmd = defineCommand<void, number>("x:slow");
-    const owner = newScope(undefined, true);
+    const owner = newScope();
     owner.defer(answer(slots, cmd, () => owner.task(later(1, 50))));
     const c = call(slots, cmd, undefined);
     await owner.close();
@@ -123,13 +129,12 @@ describe("kernel scope (K §4.1.4)", () => {
 
 describe("drainCommits in scopes (K §4.4–4.5)", () => {
   it("handles records one at a time in submit order across actions, settling each", async () => {
-    const bundle = newScope(undefined, true);
+    const bundle = newScope();
     const a = createCommitAction({ label: "A", queue: true, capture: () => "a" });
     const b = createCommitAction({ label: "B", queue: true, capture: () => "b" });
     const seen: string[] = [];
     drainCommits(
-      bundle,
-      silent,
+      own(bundle),
       on(a.control, async (v, { task }) => {
         seen.push(`${v}+`);
         await task(later(null));
@@ -148,12 +153,11 @@ describe("drainCommits in scopes (K §4.4–4.5)", () => {
   });
 
   it("settles a record whose handler threw, and logs it", async () => {
-    const bundle = newScope(undefined, true);
+    const bundle = newScope();
     const a = createCommitAction({ label: "A", capture: () => 1 });
     const errors: unknown[] = [];
     drainCommits(
-      bundle,
-      { error: (...args: unknown[]) => void errors.push(args) },
+      own(bundle, { error: (...args: unknown[]) => void errors.push(args) }),
       on(a.control, () => {
         throw new Error("bad");
       }),
@@ -165,14 +169,13 @@ describe("drainCommits in scopes (K §4.4–4.5)", () => {
   });
 
   it("a session's records outlive the session: handled in the bundle scope", async () => {
-    const bundle = newScope(undefined, true);
+    const bundle = newScope();
     const session = bundle.child();
     const a = createCommitAction({ label: "A", capture: () => "v" });
     session.defer(() => a.dispose());
     const outcomes: string[] = [];
     drainCommits(
-      session,
-      silent,
+      { ...own(bundle), session },
       on(a.control, async (v, { task }) => {
         await task(later(null));
         outcomes.push(`done ${v}`);
@@ -185,15 +188,14 @@ describe("drainCommits in scopes (K §4.4–4.5)", () => {
   });
 
   it("closing the bundle drops the drain: an in-flight continuation and queued records never run", async () => {
-    const bundle = newScope(undefined, true);
+    const bundle = newScope();
     const a = createCommitAction({ label: "Add", queue: true, capture: () => 0 });
     bundle.defer(() => a.dispose());
     const started: number[] = [];
     const finished: number[] = [];
     let n = 0;
     drainCommits(
-      bundle,
-      silent,
+      own(bundle),
       on(a.control, async (_, { task }) => {
         const me = ++n;
         started.push(me);

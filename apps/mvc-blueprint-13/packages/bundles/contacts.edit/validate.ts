@@ -10,14 +10,15 @@ export const getValidateDelay = (context: Context): number =>
  * Step 1 of Save, the multi-step commit (P3): an asynchronous check standing in for a server-side
  * validation. Step 2 is `contacts:update`. Both steps must act on the draft AT COMMIT TIME.
  */
-export async function validateContact(
+export function validateContact(
   draft: ContactDraft,
   delayMs: number,
 ): Promise<{ email: string; form: string } | undefined> {
-  if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
-  else await Promise.resolve();
-  if (draft.email.trim() !== "" && !draft.email.includes("@")) {
-    return { email: "Invalid email", form: "Invalid email" };
-  }
-  return undefined;
+  const check = () =>
+    draft.email.trim() !== "" && !draft.email.includes("@")
+      ? { email: "Invalid email", form: "Invalid email" }
+      : undefined;
+  return new Promise((r) =>
+    delayMs > 0 ? setTimeout(() => r(check()), delayMs) : queueMicrotask(() => r(check())),
+  );
 }

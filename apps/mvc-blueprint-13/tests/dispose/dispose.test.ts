@@ -2,7 +2,6 @@ import type { ContactEditorView } from "@p5/contacts/api";
 import { MemContactsApi } from "@p5/contacts.core";
 import { dialogsSlot } from "@p5/shell/api";
 import type { ConfirmView, TodoListView } from "@p5/todos/api";
-import { callsSlot } from "@p5/kernel";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { errorLogs, panel, start, toasts, until, workbenchHeadless } from "../support/harness.js";
 import { contactList, titles, todoList, toolbarAction } from "../support/scenarios.js";
@@ -78,11 +77,7 @@ describe("dispose: after the application's cleanup", () => {
     editor.editField("name", "Ada K. Lovelace");
     editor.save.submit();
     expect(editor.save.getState().running).toBe(true); // K: in the submit's own tick
-    await until(() => r.slots.getSnapshot(callsSlot).size > 0);
-    // P1: the in-flight write is visible as state — a pending call in `sys:calls`.
-    expect([...r.slots.getSnapshot(callsSlot).values()].map((c) => c.key)).toEqual([
-      "contacts:update",
-    ]);
+    await until(() => api.calls.some((c) => c.method === "update")); // the write is in flight
     await r.stop(); // while the save is in flight: its owner's handler leaves ⇒ the call is abandoned
     const before = r.slots.usage().filter((u) => u.contributions > 0);
     await new Promise((resolve) => setTimeout(resolve, 80)); // the save lands now

@@ -52,6 +52,11 @@ export interface FormOptions<D extends Draft> {
   readonly valid?: (draft: D) => boolean;
 }
 
+/** The fields of `draft` that differ from `base`: an update sends only these, never the whole draft. */
+export function changes<D extends Draft>(base: D, draft: D): Partial<D> {
+  return Object.fromEntries(Object.entries(draft).filter(([k, v]) => base[k] !== v)) as Partial<D>;
+}
+
 const NO_ERRORS = Object.freeze({});
 const frozen = <D extends Draft>(d: D): D => Object.freeze({ ...d });
 

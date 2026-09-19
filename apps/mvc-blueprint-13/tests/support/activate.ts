@@ -5,7 +5,7 @@ export async function activateAlone(
   activate: Controller,
   context: Context,
 ): Promise<() => Promise<void>> {
-  const scope = newScope(undefined, true);
+  const scope = newScope();
   const cleanup = await activate(context, scope);
   if (cleanup) scope.defer(cleanup);
   return () => scope.close();

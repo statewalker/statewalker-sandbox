@@ -2,6 +2,8 @@ import type { ContactEditorView } from "@p5/contacts/api";
 import { MemContactsApi } from "@p5/contacts.core";
 import type { ConfirmView, TitleFormView } from "@p5/todos/api";
 import { MemTodoApi } from "@p5/todos.core";
+import { todosClearCompletedAsk } from "@p5/todos/api";
+import { call } from "@p5/kernel";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   dialog,
@@ -41,7 +43,7 @@ describe("commit time (ARCHITECTURE §10)", () => {
     editor.editField("phone", "999"); // while the save runs
     await until(() => panel(r?.slots as never, "contacts:editor") === undefined);
     const update = api.calls.find((c) => c.method === "update");
-    expect(update?.args[1]).toMatchObject({ email: "ada@new.org", phone: "+44 20 0001" });
+    expect(update?.args[1]).toEqual({ email: "ada@new.org" }); // the commit's changes, nothing typed later
   });
 
   it("Save is REFUSED while running: visibly (running: true), never silently queued", async () => {
@@ -161,5 +163,37 @@ describe("commit time (ARCHITECTURE §10)", () => {
     expect(editor.getStatus().errors.form).toBe("Save failed: disk full");
     expect(panel(r.slots, "todos:editor")).toBeDefined();
     expect(editor.getDraft().title).toBe("Write it");
+  });
+
+  it("B1: a queue of Adds never delays a Toggle — Add and the selection actions are two lanes", async () => {
+    const api = new MemTodoApi(undefined, 100);
+    r = await start(workbenchHeadless, { services: { "todos:api": api } });
+    await until(() => titles(r as Running).length === 3, 3000);
+    const list = todoList(r);
+    for (const title of ["a", "b", "c"]) {
+      list.setNewTitle(title);
+      toolbarAction(list, "Add").submit();
+    }
+    list.select(["t1"]);
+    const t0 = Date.now();
+    list.toggle.submit();
+    await until(() => !list.toggle.getState().running, 3000);
+    const took = Date.now() - t0;
+    expect(took).toBeLessThan(150); // one 100 ms write, not behind three
+    expect(api.calls.filter((c) => c.method === "add").length).toBeLessThan(3);
+  });
+
+  it("C2: todos:clear-completed:ask rejects when the action refuses (busy, or nothing to clear)", async () => {
+    r = await start(workbenchHeadless);
+    await until(() => titles(r as Running).length === 3);
+    const ask = () => call(r?.slots as never, todosClearCompletedAsk, undefined).promise;
+    await ask(); // t3 is done: the dialog opens
+    await until(() => dialog(r?.slots as never, "todos:clear-completed") !== undefined);
+    await expect(ask()).rejects.toThrow("busy");
+    const confirm = dialog<ConfirmView>(r.slots, "todos:clear-completed")?.model as ConfirmView;
+    confirm.confirm.submit();
+    await until(() => titles(r as Running).length === 2);
+    await until(() => dialog(r?.slots as never, "todos:clear-completed") === undefined);
+    await expect(ask()).rejects.toThrow("nothing to clear");
   });
 });

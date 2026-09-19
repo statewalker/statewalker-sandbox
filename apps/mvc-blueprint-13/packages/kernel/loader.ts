@@ -140,7 +140,7 @@ export function application(
       await app.close();
     };
     for (const bundle of bundles) {
-      const scope = newScope(app, true);
+      const scope = newScope();
       app.defer(() => scope.close().catch(() => {})); // failures are logged by `deactivate`
       active.push({ id: bundle.id, scope });
       try {

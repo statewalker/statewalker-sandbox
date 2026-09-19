@@ -11,14 +11,16 @@
 
 export type Cleanup = () => void | Promise<void>;
 
+/**
+ * `close()` withdraws SYNCHRONOUSLY — children, then disposers — before it returns; its promise only
+ * reports async cleanup failures (close an old session before registering the new one's ids). A
+ * dropped continuation never settles, so its `finally` never runs: never hold a resource owned
+ * outside the scope in a `try/finally` around `task`.
+ */
 export interface Scope {
   /** Aborted when the scope closes: hand it to `fetch` and friends. */
   readonly signal: AbortSignal;
   readonly closed: boolean;
-  /** The parent scope, if any (a session's parent is its bundle scope). */
-  readonly parent?: Scope;
-  /** Whether the loader opened it for one bundle activation. */
-  readonly isBundle: boolean;
   /**
    * Registers a disposer (run on close, in reverse). Returns `release`: runs it now, once, and
    * forgets it — for something withdrawn before its scope closes. After close, runs it at once.
@@ -28,14 +30,15 @@ export interface Scope {
   child(): Scope;
   /**
    * Settles as `work` does, but only while this scope is open: once it has closed, the returned
-   * promise never settles, so the `await`ing continuation is dropped.
+   * promise never settles, so the `await`ing continuation is dropped. Work given as a function is
+   * not started at all on a closed scope.
    */
   task<T>(work: Promise<T> | ((signal: AbortSignal) => Promise<T>)): Promise<T>;
   /** Closes children, runs disposers; idempotent. Rejects with the first disposer failure. */
   close(): Promise<void>;
 }
 
-export function newScope(parent?: Scope, isBundle = false): Scope {
+export function newScope(): Scope {
   const abort = new AbortController();
   const disposers: Cleanup[] = [];
   const children = new Set<Scope>();
@@ -47,8 +50,6 @@ export function newScope(parent?: Scope, isBundle = false): Scope {
     get closed() {
       return closed;
     },
-    parent,
-    isBundle,
     defer(dispose) {
       if (closed) {
         void dispose();
@@ -63,7 +64,7 @@ export function newScope(parent?: Scope, isBundle = false): Scope {
       };
     },
     child() {
-      const c = newScope(scope);
+      const c = newScope();
       if (closed) {
         void c.close();
         return c;
@@ -73,9 +74,9 @@ export function newScope(parent?: Scope, isBundle = false): Scope {
       return c;
     },
     task<T>(work: Promise<T> | ((signal: AbortSignal) => Promise<T>)) {
-      const p = typeof work === "function" ? work(abort.signal) : work;
       return new Promise<T>((resolve, reject) => {
-        p.then(
+        if (closed && typeof work === "function") return;
+        (typeof work === "function" ? work(abort.signal) : work).then(
           (value) => {
             if (!closed) resolve(value);
           },

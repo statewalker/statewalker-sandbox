@@ -96,7 +96,9 @@ export function plainAction(label: string): {
       onStateUpdate: state.on,
       submit: () => {
         const s = state.get();
-        if (live && s.enabled && !s.running) submits.set(submits.get() + 1);
+        if (!live || !s.enabled || s.running) return false;
+        submits.set(submits.get() + 1);
+        return true;
       },
     }),
     control: Object.freeze({

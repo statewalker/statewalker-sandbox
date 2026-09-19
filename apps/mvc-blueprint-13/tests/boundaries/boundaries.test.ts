@@ -82,10 +82,29 @@ const moduleState = (s: Source) =>
     ),
   ].map((m) => `${s.file}: ${m[0]}`);
 
-/** R11: controller files — a logic bundle's activator module. */
-const controllerFiles = logicFiles.filter((s) => s.file.endsWith("/index.ts"));
+/**
+ * R11: every logic file that can reach a scope, a slot or a command (it value-imports an `@p5`
+ * package) — not only activators. Pure backends (`mem-*-api.ts`: type imports only) are exempt: a
+ * bare await there cannot write to a model or dispatch.
+ */
+const scopedFiles = logicFiles.filter((s) =>
+  s.imports.some((i) => !i.typeOnly && i.spec.startsWith("@p5/")),
+);
+/** Awaits allowed: `task(…)`, `x.task(…)`, and the turn's scope-aware `call(…)` (not the kernel's `.promise`). */
 const bareAwaits = (code: string) =>
-  [...code.matchAll(/\bawait\s+(?!(?:\w+\.)?task\()[^;\n]*/g)].map((m) => m[0]);
+  [...code.matchAll(/\bawait\s+([^;\n]*)/g)]
+    .filter(([, rest]) => {
+      if (/^(?:\w+\.)?task\(/.test(rest)) return false;
+      return !/^(?:turn\.)?call\(/.test(rest) || /\.promise\b/.test(rest);
+    })
+    .map((m) => m[0]);
+/** `.then(` on anything but a `task(…)`: a continuation the scope cannot drop. */
+const bareThens = (code: string) =>
+  [...code.matchAll(/\.then\(/g)]
+    .filter((m) => !/task\((?:[^()]|\([^()]*\))*\)\s*$/.test(code.slice(0, m.index)))
+    .map((m) => code.slice(Math.max(0, (m.index ?? 0) - 40), (m.index ?? 0) + 6));
+
+const controllerCount = () => logicFiles.filter((s) => s.file.endsWith("/index.ts")).length;
 
 /** R12: the package graph (D13), from each package.json. */
 function packageJsons(): { dir: string; name: string; deps: string[] }[] {
@@ -200,8 +219,12 @@ describe("boundary suite", () => {
     expect(hits).toEqual([]);
   });
 
-  it("R11 a controller awaits only through a scope (`task(…)`): no 'still active?' check needed", () => {
-    for (const s of controllerFiles) expect(bareAwaits(s.code), s.file).toEqual([]);
+  it("R11 logic awaits only through a scope (`task(…)`, the turn's `call`), chains `.then` only on a task", () => {
+    expect(scopedFiles.length).toBeGreaterThan(controllerCount());
+    for (const s of scopedFiles) {
+      expect(bareAwaits(s.code), s.file).toEqual([]);
+      expect(bareThens(s.code), s.file).toEqual([]);
+    }
   });
 
   it("R12 every @p5 import is a declared dependency of its package; the package graph is acyclic", () => {
@@ -299,7 +322,13 @@ describe("boundary suite", () => {
       expect(moduleState(fake("packages/kits/x/index.ts", "const w = new WeakMap();"))).toEqual([]);
       expect(moduleState(fake("packages/kits/x/index.ts", "  let inside = 0;"))).toEqual([]);
       expect(bareAwaits("await call(slots, x, p).promise;")).toHaveLength(1);
+      expect(bareAwaits("for await (const c of stream) f(c);")).toHaveLength(1);
+      expect(bareAwaits("await new Promise((r) => setTimeout(r, 5));")).toHaveLength(1);
       expect(bareAwaits("await task(p); await scope.task(q); await turn.task(r);")).toEqual([]);
+      expect(bareAwaits("await call(todosAdd, { t }); await turn.call(x, y);")).toEqual([]);
+      expect(bareThens("validate(d).then(() => call(x, d))")).toHaveLength(1);
+      expect(bareThens("p.then(f)")).toHaveLength(1);
+      expect(bareThens("scope\n    .task(api.list())\n    .then(publish, warn)")).toEqual([]);
       expect(
         cycleIn(
           new Map([

@@ -52,7 +52,7 @@ export const activate: Controller = async (context, scope) => {
     increment: Object.freeze({
       getState: state.get,
       onStateUpdate: state.on,
-      submit: () => submits.set(submits.get() + 1),
+      submit: () => (submits.set(submits.get() + 1), true),
     }),
   });
   // The controller: the only writer of `count`.

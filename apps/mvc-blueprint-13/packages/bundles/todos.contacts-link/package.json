@@ -10,6 +10,7 @@
     "@p5/contacts": "link:../contacts",
     "@p5/kernel": "link:../../kernel",
     "@p5/kit-commit": "link:../../kits/commit",
+    "@p5/kit-notify": "link:../../kits/notify",
     "@p5/kit-track": "link:../../kits/track",
     "@p5/todos": "link:../todos"
   }
