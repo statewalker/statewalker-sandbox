@@ -2,8 +2,13 @@
 import type { FocusReturn } from "@p5/kit-host";
 import type { Rendered, ShellHostView } from "@p5/kit-shell";
 import { useModel } from "@p5/kit-solid";
-import type { HeaderContribution, MenuContribution, NotificationContribution } from "@p5/shell/api";
-import { type Component, For, onCleanup, Show } from "solid-js";
+import type {
+  FailedEntry,
+  HeaderContribution,
+  MenuContribution,
+  NotificationContribution,
+} from "@p5/shell/api";
+import { type Component, ErrorBoundary, For, type JSX, onCleanup, Show } from "solid-js";
 import { Dynamic, render } from "solid-js/web";
 
 type Shell = ShellHostView<Component<{ model: never }>>;
@@ -15,7 +20,37 @@ type Entry = Rendered<Component<{ model: never }>>;
  * its contribution or renderer changes — so a renderer is re-created exactly when its model changes
  * identity (U1's host rule).
  */
-export function mountShell(container: HTMLElement, shell: Shell, focus: FocusReturn): () => void {
+export function mountShell(
+  container: HTMLElement,
+  shell: Shell,
+  focus: FocusReturn,
+  fail: (entry: FailedEntry) => void,
+): () => void {
+  /** W1: each contribution in its own boundary — shown as failed, reported, never propagated. */
+  const Contained = (props: { slot: string; id: string; title: string; children: JSX.Element }) => (
+    <ErrorBoundary
+      fallback={(error) => {
+        fail({ slot: props.slot, id: props.id, error: String(error?.message ?? error) });
+        return (
+          <span role="alert" data-failed={props.id}>
+            ⚠ {props.title} failed
+          </span>
+        );
+      }}
+    >
+      {props.children}
+    </ErrorBoundary>
+  );
+  /** The contribution's renderer, or nothing (the coverage report lists the gap). */
+  const Draw = (props: { slot: string; entry: Entry }) => (
+    <Show when={props.entry.component}>
+      {(c) => (
+        <Contained slot={props.slot} id={props.entry.id} title={props.entry.contribution.title}>
+          <Dynamic component={c()} model={props.entry.contribution.model as never} />
+        </Contained>
+      )}
+    </Show>
+  );
   return render(() => {
     const groups = useModel(shell.getMenu, shell.onMenuUpdate);
     const header = useModel(shell.getHeader, shell.onHeaderUpdate);
@@ -37,14 +72,26 @@ export function mountShell(container: HTMLElement, shell: Shell, focus: FocusRet
                     aria-label={g.label}
                     class="absolute z-10 flex flex-col border bg-white"
                   >
-                    <For each={g.items}>{(item) => <MenuItem item={item} />}</For>
+                    <For each={g.items}>
+                      {(item) => (
+                        <Contained slot="shell:menu" id={item.id} title={item.id}>
+                          <MenuItem item={item} />
+                        </Contained>
+                      )}
+                    </For>
                   </div>
                 </details>
               )}
             </For>
           </nav>
           <header data-shell="header" class="ml-auto flex gap-4 text-sm">
-            <For each={header()}>{(item) => <HeaderItem item={item} />}</For>
+            <For each={header()}>
+              {(item) => (
+                <Contained slot="shell:header" id={item.id} title={item.id}>
+                  <HeaderItem item={item} />
+                </Contained>
+              )}
+            </For>
           </header>
         </div>
         <div class="grid flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
@@ -72,7 +119,7 @@ export function mountShell(container: HTMLElement, shell: Shell, focus: FocusRet
                   aria-label={p.contribution.title}
                   hidden={p.id !== active()}
                 >
-                  <Draw entry={p} />
+                  <Draw slot="shell:panels" entry={p} />
                 </section>
               )}
             </For>
@@ -86,7 +133,7 @@ export function mountShell(container: HTMLElement, shell: Shell, focus: FocusRet
                   class="rounded border p-3"
                 >
                   <h2 class="mb-2 font-semibold">{p.contribution.title}</h2>
-                  <Draw entry={p} />
+                  <Draw slot="shell:panels" entry={p} />
                 </section>
               )}
             </For>
@@ -108,27 +155,24 @@ export function mountShell(container: HTMLElement, shell: Shell, focus: FocusRet
                   class="rounded bg-white p-4 shadow"
                 >
                   <h2 class="mb-2 font-semibold">{d.contribution.title}</h2>
-                  <Draw entry={d} />
+                  <Draw slot="shell:dialogs" entry={d} />
                 </div>
               </div>
             );
           }}
         </For>
         <div data-shell="notifications" class="fixed right-4 bottom-4 flex flex-col gap-2">
-          <For each={toasts()}>{(item) => <Toast item={item} />}</For>
+          <For each={toasts()}>
+            {(item) => (
+              <Contained slot="shell:notifications" id={item.id} title="Notification">
+                <Toast item={item} />
+              </Contained>
+            )}
+          </For>
         </div>
       </div>
     );
   }, container);
-}
-
-/** The contribution's renderer, or nothing (the coverage report lists the gap). */
-function Draw(props: { entry: Entry }) {
-  return (
-    <Show when={props.entry.component}>
-      {(c) => <Dynamic component={c()} model={props.entry.contribution.model as never} />}
-    </Show>
-  );
 }
 
 function HeaderItem(props: { item: HeaderContribution }) {

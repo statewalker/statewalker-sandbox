@@ -23,7 +23,7 @@ describe("standalone runs in the headless test shell", () => {
     expect(menu(r.slots).map((m) => m.group)).toEqual(["Todos", "Todos"]);
     expect(errorLogs(r.logs)).toEqual([]);
     // todos.rename reads the selection, so nothing is left unobserved.
-    expect(coverageOf(r.context)).toEqual({ unrendered: [], unobserved: [] });
+    expect(coverageOf(r.context)).toEqual({ unrendered: [], failed: [], unobserved: [] });
   });
 
   it("Contacts alone: the whole Contacts suite", async () => {
@@ -33,6 +33,7 @@ describe("standalone runs in the headless test shell", () => {
     expect(errorLogs(r.logs)).toEqual([]);
     expect(coverageOf(r.context)).toEqual({
       unrendered: [],
+      failed: [],
       unobserved: [{ slot: "contacts:selection", contributions: 1 }],
     });
   });

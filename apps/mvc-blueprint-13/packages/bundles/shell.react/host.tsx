@@ -1,6 +1,7 @@
 import {
   type DialogContribution,
   dialogsSlot,
+  type FailedEntry,
   type HeaderContribution,
   headerSlot,
   type MenuContribution,
@@ -16,6 +17,7 @@ import type { FocusReturn } from "@p5/kit-host";
 import { useModel } from "@p5/kit-react";
 import { byOrder } from "@p5/kit-slots";
 import {
+  Component,
   type ComponentType,
   createContext,
   type ReactNode,
@@ -30,6 +32,40 @@ import {
 type Slots = Pick<KernelSlots, "observe" | "getSnapshot">;
 const SlotsContext = createContext<Slots | null>(null);
 const FocusContext = createContext<FocusReturn | null>(null);
+type Fail = (entry: FailedEntry) => void;
+const FailContext = createContext<Fail>(() => {});
+
+/**
+ * W1 — fault containment: every contribution renders inside its own error boundary. A throwing
+ * renderer or model shows "⚠ <title> failed" in place, is reported (log + `shell:coverage`), and
+ * never takes the rest of the shell down. A new contribution under the same id renders afresh.
+ */
+class Contained extends Component<
+  { slot: string; id: string; title: string; of: unknown; children: ReactNode },
+  { failed?: unknown }
+> {
+  static contextType = FailContext;
+  declare context: Fail;
+  state: { failed?: unknown } = {};
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error: unknown) {
+    this.setState({ failed: this.props.of });
+    const message = error instanceof Error ? error.message : String(error);
+    this.context({ slot: this.props.slot, id: this.props.id, error: message });
+  }
+  render() {
+    const { failed } = this.state;
+    if (failed === undefined || (failed !== true && failed !== this.props.of))
+      return this.props.children;
+    return (
+      <span role="alert" data-failed={this.props.id}>
+        ⚠ {this.props.title} failed
+      </span>
+    );
+  }
+}
 
 function useSlots(): Slots {
   const slots = useContext(SlotsContext);
@@ -57,25 +93,39 @@ function useRenderer(kindId: string): ComponentType<{ model: unknown }> | undefi
 }
 
 /** A contribution whose kind has a renderer; otherwise nothing (the coverage report lists it). */
-function Rendered({ contribution }: { contribution: PanelContribution | DialogContribution }) {
-  const Component = useRenderer(contribution.kind.id);
-  return Component ? <Component model={contribution.model} /> : null;
+function Rendered({
+  slot,
+  id,
+  contribution,
+}: {
+  slot: string;
+  id: string;
+  contribution: PanelContribution | DialogContribution;
+}) {
+  const View = useRenderer(contribution.kind.id);
+  return View ? (
+    <Contained slot={slot} id={id} title={contribution.title} of={contribution}>
+      <View model={contribution.model} />
+    </Contained>
+  ) : null;
 }
 
-export function Shell({ slots, focus }: { slots: Slots; focus: FocusReturn }) {
+export function Shell({ slots, focus, fail }: { slots: Slots; focus: FocusReturn; fail: Fail }) {
   return (
     <SlotsContext.Provider value={slots}>
-      <FocusContext.Provider value={focus}>
-        <div className="flex min-h-screen flex-col">
-          <div className="flex items-center gap-4 border-b px-4 py-2">
-            <Menu />
-            <Header />
+      <FailContext.Provider value={fail}>
+        <FocusContext.Provider value={focus}>
+          <div className="flex min-h-screen flex-col">
+            <div className="flex items-center gap-4 border-b px-4 py-2">
+              <Menu />
+              <Header />
+            </div>
+            <Panels />
+            <Dialogs />
+            <Notifications />
           </div>
-          <Panels />
-          <Dialogs />
-          <Notifications />
-        </div>
-      </FocusContext.Provider>
+        </FocusContext.Provider>
+      </FailContext.Provider>
     </SlotsContext.Provider>
   );
 }
@@ -90,7 +140,9 @@ function Header() {
   return (
     <header data-shell="header" className="ml-auto flex gap-4 text-sm">
       {items.map((item) => (
-        <HeaderItem key={item.id} item={item} />
+        <Contained key={item.id} slot={headerSlot.key} id={item.id} title={item.id} of={item}>
+          <HeaderItem item={item} />
+        </Contained>
       ))}
     </header>
   );
@@ -118,7 +170,9 @@ function Menu() {
             className="absolute z-10 flex flex-col border bg-white"
           >
             {entries.map((item) => (
-              <MenuItem key={item.id} item={item} />
+              <Contained key={item.id} slot={menuSlot.key} id={item.id} title={item.id} of={item}>
+                <MenuItem item={item} />
+              </Contained>
             ))}
           </div>
         </details>
@@ -182,7 +236,7 @@ function Panels() {
             aria-label={p.title}
             hidden={id !== active}
           >
-            <Rendered contribution={p} />
+            <Rendered slot={panelsSlot.key} id={id} contribution={p} />
           </section>
         ))}
       </main>
@@ -190,7 +244,7 @@ function Panels() {
         {side.map(([id, p]) => (
           <section key={id} data-panel={id} aria-label={p.title} className="rounded border p-3">
             <h2 className="mb-2 font-semibold">{p.title}</h2>
-            <Rendered contribution={p} />
+            <Rendered slot={panelsSlot.key} id={id} contribution={p} />
           </section>
         ))}
       </aside>
@@ -216,7 +270,7 @@ function Dialogs() {
               className="rounded bg-white p-4 shadow"
             >
               <h2 className="mb-2 font-semibold">{d.title}</h2>
-              <Rendered contribution={d} />
+              <Rendered slot={dialogsSlot.key} id={id} contribution={d} />
             </div>
           </div>
         </FocusReturn>
@@ -254,7 +308,15 @@ function Notifications() {
   return (
     <div data-shell="notifications" className="fixed right-4 bottom-4 flex flex-col gap-2">
       {items.map((item) => (
-        <Toast key={item.id} item={item} />
+        <Contained
+          key={item.id}
+          slot={notificationsSlot.key}
+          id={item.id}
+          title="Notification"
+          of={item}
+        >
+          <Toast item={item} />
+        </Contained>
       ))}
     </div>
   );

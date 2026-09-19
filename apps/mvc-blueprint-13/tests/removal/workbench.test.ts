@@ -43,7 +43,7 @@ describe("the workbench, headless: interactions (1)–(3)", () => {
     expect(groups(r)).toEqual(["Contacts", "Hello", "Todos"]);
     expect(errorLogs(r.logs)).toEqual([]);
     // todos.rename reads the selection, so nothing is left unobserved.
-    expect(coverageOf(r.context)).toEqual({ unrendered: [], unobserved: [] });
+    expect(coverageOf(r.context)).toEqual({ unrendered: [], failed: [], unobserved: [] });
   });
 });
 

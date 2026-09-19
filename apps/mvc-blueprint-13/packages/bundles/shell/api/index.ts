@@ -94,9 +94,17 @@ export interface UnobservedEntry {
   readonly slot: string;
   readonly contributions: number;
 }
+export interface FailedEntry {
+  readonly slot: string;
+  readonly id: string;
+  /** The failure, as a message. */
+  readonly error: string;
+}
 export interface CoverageReport {
   /** Panels and dialogs whose kind has no renderer in this host. */
   readonly unrendered: readonly CoverageEntry[];
+  /** Contributions whose rendering threw: contained by the host, shown as failed, listed here. */
+  readonly failed: readonly FailedEntry[];
   /** Slots holding contributions that no one observes. */
   readonly unobserved: readonly UnobservedEntry[];
 }

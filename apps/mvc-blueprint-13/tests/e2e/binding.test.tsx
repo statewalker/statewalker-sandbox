@@ -110,7 +110,8 @@ const flush: Record<Technology, () => Promise<void>> = {
 describe.each(["react", "solid"] as const)("binding probe: %s", (tech) => {
   // React's useSyncExternalStore does not survive a model that breaks point 7 (a fresh snapshot on
   // every read): it re-renders until "Maximum update depth exceeded". Measured once, then excluded —
-  // the contract suite, not the binding, is what protects a React renderer.
+  // the contract suite protects a React renderer, and since P5.1 the dev guard in `useModel` names
+  // the getter and the host's error boundary contains it (containment.test.tsx, R1).
   it.each(
     tech === "react"
       ? ([["stable", false]] as const)
