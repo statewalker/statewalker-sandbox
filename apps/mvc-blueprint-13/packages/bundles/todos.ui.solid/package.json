@@ -6,9 +6,11 @@
   "exports": {
     ".": "./index.ts"
   },
+  "peerDependencies": {
+    "@p5/kernel": "0.0.0",
+    "@p5/kit-solid": "0.0.0"
+  },
   "dependencies": {
-    "@p5/kernel": "link:../../kernel",
-    "@p5/kit-solid": "link:../../kits/solid",
     "@p5/shell": "link:../shell",
     "@p5/todos": "link:../todos",
     "solid-js": "1.9.15"

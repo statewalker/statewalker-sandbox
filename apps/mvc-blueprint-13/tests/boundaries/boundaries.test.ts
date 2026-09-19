@@ -107,11 +107,17 @@ const bareThens = (code: string) =>
 const controllerCount = () => logicFiles.filter((s) => s.file.endsWith("/index.ts")).length;
 
 /** R12: the package graph (D13), from each package.json. */
-function packageJsons(): { dir: string; name: string; deps: string[] }[] {
-  const out: { dir: string; name: string; deps: string[] }[] = [];
+function packageJsons(): { dir: string; name: string; deps: string[]; hard: string[] }[] {
+  const out: { dir: string; name: string; deps: string[]; hard: string[] }[] = [];
   const add = (dir: string) => {
     const pkg = JSON.parse(readFileSync(join(ROOT, dir, "package.json"), "utf8"));
-    out.push({ dir, name: pkg.name, deps: Object.keys(pkg.dependencies ?? {}) });
+    const hard = Object.keys(pkg.dependencies ?? {});
+    out.push({
+      dir,
+      name: pkg.name,
+      deps: [...hard, ...Object.keys(pkg.peerDependencies ?? {})],
+      hard,
+    });
   };
   add("packages/kernel");
   for (const group of ["kits", "bundles"])
@@ -149,6 +155,12 @@ export function cycleIn(graph: ReadonlyMap<string, readonly string[]>): string[]
   }
   return undefined;
 }
+/** W8: the kernel and kits are singletons — a peer of every package, never a hard dependency. */
+const SINGLETON = /^@p5\/(?:kernel|kit-[\w-]+)$/;
+const hardSingletons = () =>
+  packageJsons().flatMap((p) =>
+    p.hard.filter((d) => SINGLETON.test(d)).map((d) => `${p.name} → ${d}`),
+  );
 const packageCycle = () =>
   cycleIn(new Map(packageJsons().map((p) => [p.name, p.deps.filter((d) => d.startsWith("@p5/"))])));
 
@@ -230,6 +242,12 @@ describe("boundary suite", () => {
   it("R12 every @p5 import is a declared dependency of its package; the package graph is acyclic", () => {
     expect(undeclared()).toEqual([]);
     expect(packageCycle()).toBeUndefined();
+  });
+
+  it("R13 the kernel and kits are singleton peer dependencies, never hard ones (W8)", () => {
+    expect(hardSingletons()).toEqual([]);
+    expect(SINGLETON.test("@p5/kit-commit")).toBe(true); // negative control
+    expect(SINGLETON.test("@p5/todos")).toBe(false);
   });
 
   describe("negative controls: every rule can fail", () => {

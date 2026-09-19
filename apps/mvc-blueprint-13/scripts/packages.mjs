@@ -73,23 +73,30 @@ const pkgOf = (spec) =>
 const packages = listPackages();
 const byName = new Map(packages.map((p) => [p.name, p]));
 let stale = 0;
+/** The kernel and kits are singletons: every package takes them as PEER dependencies (W8). */
+const isPeer = (name) => name === "@p5/kernel" || name.startsWith("@p5/kit-");
 for (const p of packages) {
   const deps = {};
+  const peers = {};
   for (const spec of importsOf(p.dir)) {
     const name = pkgOf(spec);
     if (name === p.name) continue;
-    if (byName.has(name)) deps[name] = `link:${relative(p.dir, byName.get(name).dir)}`;
+    if (isPeer(name)) peers[name] = "0.0.0";
+    else if (byName.has(name)) deps[name] = `link:${relative(p.dir, byName.get(name).dir)}`;
     else if (name.startsWith("node:")) continue;
     else if (external[name]) deps[name] = external[name];
     else throw new Error(`${p.name}: imports ${spec}, which the app does not depend on`);
   }
+  const sorted = (o) =>
+    Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b)));
   const json = {
     name: p.name,
     version: "0.0.0",
     private: true,
     type: "module",
     exports: exportsOf(p.dir),
-    dependencies: Object.fromEntries(Object.entries(deps).sort(([a], [b]) => a.localeCompare(b))),
+    ...(Object.keys(peers).length > 0 ? { peerDependencies: sorted(peers) } : {}),
+    dependencies: sorted(deps),
   };
   const text = `${JSON.stringify(json, null, 2)}\n`;
   const file = join(p.dir, "package.json");

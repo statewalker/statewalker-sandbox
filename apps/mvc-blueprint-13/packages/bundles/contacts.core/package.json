@@ -6,9 +6,11 @@
   "exports": {
     ".": "./index.ts"
   },
+  "peerDependencies": {
+    "@p5/kernel": "0.0.0",
+    "@p5/kit-model": "0.0.0"
+  },
   "dependencies": {
-    "@p5/contacts": "link:../contacts",
-    "@p5/kernel": "link:../../kernel",
-    "@p5/kit-model": "link:../../kits/model"
+    "@p5/contacts": "link:../contacts"
   }
 }

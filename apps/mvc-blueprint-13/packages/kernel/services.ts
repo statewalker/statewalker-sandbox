@@ -1,5 +1,5 @@
 import { type Logger, newConsoleLogger } from "@statewalker/shared-logger";
-import { newAdapter } from "./context.js";
+import { type Context, newAdapter } from "./context.js";
 import { KernelSlots } from "./slots.js";
 
 export type { Logger, LoggerLevel } from "@statewalker/shared-logger";
@@ -15,6 +15,13 @@ export const configAdapter = newAdapter<Readonly<Record<string, unknown>>>("sys:
   Object.freeze({}),
 );
 
-export const getSlots = slotsAdapter.get;
+/** This copy's identity. A second kernel copy on one context is refused, loudly (W8). */
+const KERNEL = Symbol("@p5/kernel");
+/** Resolves the bus — and claims the context for this kernel copy: the kernel is a singleton. */
+export const getSlots = (context: Context): KernelSlots => {
+  const owner = (context["sys:kernel"] ??= KERNEL);
+  if (owner !== KERNEL) throw new Error("two copies of @p5/kernel: make it a singleton peer");
+  return slotsAdapter.get(context);
+};
 export const getLogger = loggerAdapter.get;
 export const getConfig = configAdapter.get;

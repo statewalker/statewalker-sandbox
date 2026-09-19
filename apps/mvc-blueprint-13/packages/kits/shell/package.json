@@ -6,11 +6,13 @@
   "exports": {
     ".": "./index.ts"
   },
+  "peerDependencies": {
+    "@p5/kernel": "0.0.0",
+    "@p5/kit-model": "0.0.0",
+    "@p5/kit-signals": "0.0.0",
+    "@p5/kit-slots": "0.0.0"
+  },
   "dependencies": {
-    "@p5/kernel": "link:../../kernel",
-    "@p5/kit-model": "link:../model",
-    "@p5/kit-signals": "link:../signals",
-    "@p5/kit-slots": "link:../slots",
     "@p5/shell": "link:../../bundles/shell"
   }
 }

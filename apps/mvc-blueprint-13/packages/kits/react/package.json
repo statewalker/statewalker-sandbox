@@ -6,8 +6,10 @@
   "exports": {
     ".": "./index.ts"
   },
+  "peerDependencies": {
+    "@p5/kernel": "0.0.0"
+  },
   "dependencies": {
-    "@p5/kernel": "link:../../kernel",
     "@p5/shell": "link:../../bundles/shell",
     "react": "catalog:"
   }
