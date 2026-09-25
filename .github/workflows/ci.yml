@@ -21,6 +21,10 @@ jobs:
           node-version: "24"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The browser suites (vitest browser mode in fm-protos and mvc-blueprint-*,
+      # httpeers-stack's two-browser e2e) launch real browsers through the one
+      # Playwright version in the lockfile. A fresh runner has none installed.
+      - run: pnpm --filter @statewalker/httpeers-stack exec playwright install --with-deps chromium firefox
       - run: pnpm run lint:check
       - run: pnpm run format:check
       # Some checks need the umbrella repository around this one, so a
