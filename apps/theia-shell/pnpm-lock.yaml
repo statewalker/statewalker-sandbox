@@ -119,6 +119,43 @@ importers:
         specifier: 1.76.0
         version: 1.76.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
 
+  protos/p4-editor-save:
+    dependencies:
+      '@theia-shell/p3-extension':
+        specifier: workspace:*
+        version: link:../p3-explorer/extension
+      '@theia-shell/theia-files-api':
+        specifier: workspace:*
+        version: link:../../packages/theia-files-api
+      '@theia/core':
+        specifier: 1.76.0
+        version: 1.76.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@theia/editor':
+        specifier: 1.76.0
+        version: 1.76.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@theia/filesystem':
+        specifier: 1.76.0
+        version: 1.76.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/messages':
+        specifier: 1.76.0
+        version: 1.76.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@theia/monaco':
+        specifier: 1.76.0
+        version: 1.76.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/navigator':
+        specifier: 1.76.0
+        version: 1.76.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/preferences':
+        specifier: 1.76.0
+        version: 1.76.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/workspace':
+        specifier: 1.76.0
+        version: 1.76.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+    devDependencies:
+      '@theia/cli':
+        specifier: 1.76.0
+        version: 1.76.0
+
 packages:
 
   '@babel/runtime@7.29.7':
