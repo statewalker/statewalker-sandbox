@@ -1,0 +1,10 @@
+.pdf-viewer-widget {
+  display: flex;
+  overflow: hidden;
+}
+
+.pdf-viewer-widget .pdf-viewer {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
