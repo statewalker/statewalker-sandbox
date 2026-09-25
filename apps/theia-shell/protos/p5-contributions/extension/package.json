@@ -1,0 +1,19 @@
+{
+  "name": "@theia-shell/p5-extension",
+  "version": "0.0.0",
+  "private": true,
+  "description": "P5: a Theia extension contributing a command, keybinding, menus and a view.",
+  "theiaExtensions": [
+    {
+      "frontend": "lib/p5-frontend-module",
+      "frontendOnly": "lib/p5-frontend-module"
+    }
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@theia/core": "1.76.0",
+    "@theia/navigator": "1.76.0"
+  }
+}

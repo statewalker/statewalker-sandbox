@@ -1,0 +1,13 @@
+packages:
+  - "packages/*"
+  - "protos/*"
+  - "protos/*/extension"
+  - "app"
+  - "app/files"
+
+onlyBuiltDependencies:
+  - drivelist
+  - keytar
+  - node-pty
+  - nsfw
+  - "@parcel/watcher"

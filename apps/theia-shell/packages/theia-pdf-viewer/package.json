@@ -1,0 +1,27 @@
+{
+  "name": "@theia-shell/theia-pdf-viewer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Theia extension: opens .pdf files in an EmbedPDF viewer (PDFium in WebAssembly), fully offline.",
+  "main": "lib/common/index.js",
+  "types": "lib/common/index.d.ts",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/pdf-viewer-frontend-module",
+      "frontendOnly": "lib/browser/pdf-viewer-frontend-module"
+    }
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@embedpdf/snippet": "2.15.1",
+    "@theia/core": "1.76.0",
+    "@theia/filesystem": "1.76.0"
+  }
+}

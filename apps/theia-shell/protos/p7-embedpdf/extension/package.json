@@ -1,0 +1,17 @@
+{
+  "name": "@theia-shell/p7-extension",
+  "version": "0.0.0",
+  "private": true,
+  "description": "P7's app module: a FilesApi holding a generated PDF.",
+  "theiaExtensions": [
+    {
+      "frontendOnly": "app-module.js"
+    }
+  ],
+  "dependencies": {
+    "@statewalker/webrun-files-mem": "0.10.0",
+    "@theia-shell/theia-files-api": "workspace:*",
+    "@theia-shell/theia-pdf-viewer": "workspace:*",
+    "@theia/core": "1.76.0"
+  }
+}

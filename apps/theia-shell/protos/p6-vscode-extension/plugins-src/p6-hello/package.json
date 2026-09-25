@@ -1,0 +1,26 @@
+{
+  "name": "p6-hello",
+  "displayName": "P6 Hello",
+  "publisher": "statewalker",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "browser": "./extension.js",
+  "activationEvents": [
+    "onCommand:p6.hello",
+    "onCommand:p6.readmeTitle"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "p6.hello",
+        "title": "P6: Hello from a VS Code extension"
+      },
+      {
+        "command": "p6.readmeTitle",
+        "title": "P6: Show README Title"
+      }
+    ]
+  }
+}

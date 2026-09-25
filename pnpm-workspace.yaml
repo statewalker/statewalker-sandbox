@@ -1,6 +1,9 @@
 packages:
   - "packages/*"
   - "apps/*"
+  # theia-shell is its own pnpm workspace (hoisted node_modules, own lockfile).
+  - "!apps/theia-shell"
+  - "!apps/theia-shell/**"
 
 
 # Dependency build scripts are blocked by default in pnpm 10; only the ones listed here run.
