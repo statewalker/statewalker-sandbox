@@ -23,9 +23,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint:check
       - run: pnpm run format:check
-      # httpeers-lib-protos links to packages in the sibling webrun-wire repository
-      # (`link:../../../webrun-wire/...`). They exist only in an umbrella assembly,
-      # so this package cannot be type-checked or tested from a standalone checkout.
+      # Some checks need the umbrella repository around this one, so a
+      # standalone checkout like this runner's cannot run them:
+      # - httpeers-lib-protos links to packages in the sibling webrun-wire
+      #   repository (`link:../../../webrun-wire/...`);
+      # - httpeers-conformance's coverage and parse-ids tests compare the suite
+      #   with the specification in the umbrella's docs/ (HTTPEERS_SPEC).
+      # Its other tests still run below.
       - run: pnpm -r --filter '!@statewalker/httpeers-lib-protos' run typecheck
       - run: pnpm run build
-      - run: pnpm -r --filter '!@statewalker/httpeers-lib-protos' run test
+      - run: >-
+          pnpm -r --filter '!@statewalker/httpeers-lib-protos'
+          --filter '!@statewalker/httpeers-conformance' run test
+      - run: >-
+          pnpm --filter @statewalker/httpeers-conformance exec vitest run
+          --exclude tests/coverage.test.ts --exclude tests/parse-ids.test.ts
