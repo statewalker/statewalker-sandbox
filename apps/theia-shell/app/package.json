@@ -1,0 +1,39 @@
+{
+  "name": "@theia-shell/app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A browser-only Theia Markdown editor over a FilesApi.",
+  "theia": {
+    "target": "browser-only",
+    "frontend": {
+      "config": {
+        "applicationName": "Theia Shell — Markdown",
+        "preferences": {
+          "security.workspace.trust.enabled": false
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-markdown --filter @theia-shell/app-files build && theia build --mode development",
+    "build:prod": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-markdown --filter @theia-shell/app-files build && theia build --mode production",
+    "start": "node ../tools/serve.mjs lib/frontend 3000",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@theia-shell/app-files": "workspace:*",
+    "@theia-shell/theia-files-api": "workspace:*",
+    "@theia-shell/theia-markdown": "workspace:*",
+    "@theia/core": "1.76.0",
+    "@theia/editor": "1.76.0",
+    "@theia/filesystem": "1.76.0",
+    "@theia/messages": "1.76.0",
+    "@theia/monaco": "1.76.0",
+    "@theia/navigator": "1.76.0",
+    "@theia/preferences": "1.76.0",
+    "@theia/workspace": "1.76.0"
+  },
+  "devDependencies": {
+    "@theia/cli": "1.76.0"
+  }
+}

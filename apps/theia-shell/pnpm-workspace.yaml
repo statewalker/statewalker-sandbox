@@ -3,6 +3,7 @@ packages:
   - "protos/*"
   - "protos/*/extension"
   - "app"
+  - "app/files"
 
 onlyBuiltDependencies:
   - drivelist

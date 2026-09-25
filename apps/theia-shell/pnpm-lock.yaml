@@ -21,6 +21,64 @@ importers:
         specifier: 4.1.11
         version: 4.1.11(@types/node@26.6.2)(vite@8.3.1(@types/node@26.6.2)(esbuild@0.28.2)(yaml@2.9.1))
 
+  app:
+    dependencies:
+      '@theia-shell/app-files':
+        specifier: workspace:*
+        version: link:files
+      '@theia-shell/theia-files-api':
+        specifier: workspace:*
+        version: link:../packages/theia-files-api
+      '@theia-shell/theia-markdown':
+        specifier: workspace:*
+        version: link:../packages/theia-markdown
+      '@theia/core':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@theia/editor':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@theia/filesystem':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/messages':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@theia/monaco':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/navigator':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/preferences':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/workspace':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+    devDependencies:
+      '@theia/cli':
+        specifier: 1.76.0
+        version: 1.76.0
+
+  app/files:
+    dependencies:
+      '@statewalker/webrun-files':
+        specifier: 0.10.0
+        version: 0.10.0
+      '@statewalker/webrun-files-browser':
+        specifier: 0.10.0
+        version: 0.10.0
+      '@statewalker/webrun-files-mem':
+        specifier: 0.10.0
+        version: 0.10.0
+      '@theia-shell/theia-files-api':
+        specifier: workspace:*
+        version: link:../../packages/theia-files-api
+      '@theia/core':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+
   packages/theia-files-api:
     dependencies:
       '@statewalker/webrun-files':
@@ -35,6 +93,30 @@ importers:
       '@theia/filesystem':
         specifier: 1.76.0
         version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/navigator':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/workspace':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+
+  packages/theia-markdown:
+    dependencies:
+      '@theia/core':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@theia/editor':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@theia/filesystem':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/monaco':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/monaco-editor-core':
+        specifier: 1.108.201
+        version: 1.108.201
       '@theia/navigator':
         specifier: 1.76.0
         version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
@@ -772,6 +854,9 @@ packages:
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
+  '@statewalker/webrun-files-browser@0.10.0':
+    resolution: {integrity: sha512-QW4QngeLfLcjxvcKcVRwsg5x/7WhTw1jY1C/jABt9491rJmbOk8hM3TWClihF7ZHwwjGo65mJFz2a9/Lqn9BCA==}
+
   '@statewalker/webrun-files-mem@0.10.0':
     resolution: {integrity: sha512-6e37MJhbl5JB4AZwyeRi0hmDLMODKKG2RICCIA3RuATH5n4U8d/FIEdWJNm+DeYwlTLivY0BOvzKLkOWn3hqww==}
 
@@ -1013,6 +1098,9 @@ packages:
 
   '@types/markdown-it-emoji@3.0.1':
     resolution: {integrity: sha512-cz1j8R35XivBqq9mwnsrP2fsz2yicLhB8+PDtuVkKOExwEdsVBNI+ROL3sbhtR5occRZ66vT0QnwFZCqdjf3pA==}
+
+  '@types/markdown-it@14.1.2':
+    resolution: {integrity: sha512-promo4eFwuiW+TfGxhi+0x3czqTYJkG8qB17ZUJiVF10Xm7NLVRSLUsfRTU/6h1e24VvRnXCx+hG7li58lkzog==}
 
   '@types/markdown-it@14.2.0':
     resolution: {integrity: sha512-NoQ2yGlLWj4wpxMs+TYmRKk3thDrQ97agr7sFqfLsAlvoS8SNQuTrlObhFqG9iugdTtgOE9jpJ6FNM4ZGsa5xQ==}
@@ -4372,6 +4460,10 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
+  '@statewalker/webrun-files-browser@0.10.0':
+    dependencies:
+      '@statewalker/webrun-files': 0.10.0
+
   '@statewalker/webrun-files-mem@0.10.0':
     dependencies:
       '@statewalker/webrun-files': 0.10.0
@@ -5497,7 +5589,12 @@ snapshots:
 
   '@types/markdown-it-emoji@3.0.1':
     dependencies:
-      '@types/markdown-it': 14.2.0
+      '@types/markdown-it': 14.1.2
+
+  '@types/markdown-it@14.1.2':
+    dependencies:
+      '@types/linkify-it': 5.0.0
+      '@types/mdurl': 2.0.0
 
   '@types/markdown-it@14.2.0':
     dependencies:

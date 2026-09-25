@@ -1,0 +1,23 @@
+{
+  "name": "@theia-shell/app-files",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The app's FilesApi: OPFS (persistent) by default, or in-memory with ?storage=memory; seeded with sample Markdown.",
+  "main": "lib/app-files-frontend-module.js",
+  "theiaExtensions": [
+    {
+      "frontendOnly": "lib/app-files-frontend-module"
+    }
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@statewalker/webrun-files": "0.10.0",
+    "@statewalker/webrun-files-browser": "0.10.0",
+    "@statewalker/webrun-files-mem": "0.10.0",
+    "@theia-shell/theia-files-api": "workspace:*",
+    "@theia/core": "1.76.0"
+  }
+}

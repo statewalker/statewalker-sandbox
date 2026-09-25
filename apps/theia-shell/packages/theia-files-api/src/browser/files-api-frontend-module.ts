@@ -1,11 +1,17 @@
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { FrontendApplicationContribution } from "@theia/core/lib/browser/frontend-application-contribution";
+import { LabelProviderContribution } from "@theia/core/lib/browser/label-provider";
 import { ContainerModule } from "@theia/core/shared/inversify";
 import { FileSystemProvider } from "@theia/filesystem/lib/common/files";
 import { BrowserOnlyWorkspaceServer } from "@theia/workspace/lib/browser-only/browser-only-workspace-server";
 import { WorkspaceServer } from "@theia/workspace/lib/common/workspace-protocol";
 import { FilesApiFileSystemProvider } from "../common/files-api-fs-provider";
-import { FilesApiSource, FilesApiWorkspaceRoot } from "../common/files-api-source";
+import {
+  FilesApiRootLabel,
+  FilesApiSource,
+  FilesApiWorkspaceRoot,
+} from "../common/files-api-source";
+import { FilesApiRootLabelContribution } from "./files-api-root-label";
 import { FilesApiWorkspaceServer } from "./files-api-workspace-server";
 import { RevealExplorerContribution } from "./reveal-explorer-contribution";
 
@@ -20,6 +26,7 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
   // Defaults an app overrides with `rebind`: an empty in-memory tree at file:///.
   bind(FilesApiSource).toConstantValue(() => new MemFilesApi());
   bind(FilesApiWorkspaceRoot).toConstantValue("file:///");
+  bind(FilesApiRootLabel).toConstantValue("/");
 
   bind(FilesApiFileSystemProvider)
     .toDynamicValue(({ container }) => {
@@ -43,6 +50,9 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
   if (isBound(BrowserOnlyWorkspaceServer)) {
     rebind(BrowserOnlyWorkspaceServer).toService(FilesApiWorkspaceServer);
   }
+
+  bind(FilesApiRootLabelContribution).toSelf().inSingletonScope();
+  bind(LabelProviderContribution).toService(FilesApiRootLabelContribution);
 
   bind(RevealExplorerContribution).toSelf().inSingletonScope();
   bind(FrontendApplicationContribution).toService(RevealExplorerContribution);

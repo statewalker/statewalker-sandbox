@@ -1,5 +1,8 @@
 # theia-shell — plan
 
+> **Status (2026-09-25): done.** P1–P6 answered (see each `protos/pN-*/README.md`
+> and the summary in `README.md`); the app is in `app/` with 38 unit and 10 e2e tests.
+
 Goal: an **in-browser-only** Eclipse Theia application (no backend process) that
 
 - shows a **file explorer** over a provided `FilesApi` instance (`@statewalker/webrun-files`),

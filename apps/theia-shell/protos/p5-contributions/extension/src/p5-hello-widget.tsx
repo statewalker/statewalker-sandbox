@@ -1,6 +1,6 @@
 import { ReactWidget } from "@theia/core/lib/browser/widgets/react-widget";
 import { injectable, postConstruct } from "@theia/core/shared/inversify";
-import type * as React from "@theia/core/shared/react";
+import * as React from "@theia/core/shared/react";
 
 @injectable()
 export class P5HelloWidget extends ReactWidget {

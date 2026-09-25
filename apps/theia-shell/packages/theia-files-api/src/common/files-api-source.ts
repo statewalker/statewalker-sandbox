@@ -12,3 +12,7 @@ export type FilesApiSource = () => FilesApi | Promise<FilesApi>;
 /** DI key for the URI opened as the workspace when none was opened before. */
 export const FilesApiWorkspaceRoot = Symbol("FilesApiWorkspaceRoot");
 export type FilesApiWorkspaceRoot = string;
+
+/** DI key for the label shown for the FilesApi root (instead of "/"). */
+export const FilesApiRootLabel = Symbol("FilesApiRootLabel");
+export type FilesApiRootLabel = string;
