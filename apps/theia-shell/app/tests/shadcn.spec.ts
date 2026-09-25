@@ -1,5 +1,13 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { explorer, openFile, runFromPalette, start } from "./helpers";
+import {
+  explorer,
+  openFile,
+  openMain,
+  runFromPalette,
+  start,
+  unlockVault,
+  waitForSettings,
+} from "./helpers";
 
 /** The computed colour a shadcn token resolves to on <body>, in the form getComputedStyle reports. */
 async function token(page: Page, name: string): Promise<string> {
@@ -97,7 +105,12 @@ test.describe("default style: stock Theia", () => {
     await expect(page.locator("body")).toHaveClass(/\bshadcn-ui\b/);
     expect(await radius()).toBe("8px");
 
+    // Theia writes settings.json just after the change: wait before reloading.
+    await waitForSettings(page, '"appearance.style"');
+    await waitForSettings(page, '"workbench.colorTheme"');
     await page.reload();
+    await unlockVault(page, "test-password");
+    await openMain(page);
     await expect(explorer(page).getByText("welcome.md", { exact: true })).toBeVisible();
     await expect(page.locator("body")).toHaveClass(/\bshadcn-ui\b/);
     await expect(page.locator("body")).toHaveClass(/theia-dark/);

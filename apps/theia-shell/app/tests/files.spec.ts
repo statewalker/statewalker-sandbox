@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { explorer, openFile, readFile, start } from "./helpers";
+import { explorer, openFile, openMain, readFile, start, unlockVault } from "./helpers";
 
 test("the explorer shows the seeded FilesApi under its root label", async ({ page }) => {
   const errors = await start(page);
@@ -7,6 +7,7 @@ test("the explorer shows the seeded FilesApi under its root label", async ({ pag
   await expect(
     page.locator("#explorer-view-container--files").getByText("Files", { exact: true }),
   ).toBeVisible();
+  await expect(explorer(page).getByText("Browser Storage", { exact: true })).toBeVisible();
   await expect(explorer(page).getByText("notes", { exact: true })).toBeVisible();
   await explorer(page).getByText("notes", { exact: true }).click();
   await expect(explorer(page).getByText("ideas.md", { exact: true })).toBeVisible();
@@ -21,9 +22,9 @@ test("a file opens in the editor and saves back to the FilesApi", async ({ page 
   await editor.locator(".view-lines").click();
   await page.keyboard.press("Control+End");
   await page.keyboard.type("\nSaved from Theia.");
-  expect(await readFile(page, "/welcome.md")).not.toContain("Saved from Theia.");
+  expect(await readFile(page, "/browser/welcome.md")).not.toContain("Saved from Theia.");
   await page.keyboard.press("Control+S");
-  await expect.poll(() => readFile(page, "/welcome.md")).toContain("Saved from Theia.");
+  await expect.poll(() => readFile(page, "/browser/welcome.md")).toContain("Saved from Theia.");
   expect(errors).toEqual([]);
 });
 
@@ -34,11 +35,14 @@ test("the default OPFS storage keeps saved edits across a reload", async ({ page
   await page.keyboard.press("Control+End");
   await page.keyboard.type("\nStill here after reload.");
   await page.keyboard.press("Control+S");
-  await expect.poll(() => readFile(page, "/welcome.md")).toContain("Still here after reload.");
+  await expect
+    .poll(() => readFile(page, "/browser/welcome.md"))
+    .toContain("Still here after reload.");
 
   await page.reload();
-  await expect(explorer(page).getByText("welcome.md", { exact: true })).toBeVisible();
-  expect(await readFile(page, "/welcome.md")).toContain("Still here after reload.");
+  await unlockVault(page, "test-password");
+  await openMain(page);
+  expect(await readFile(page, "/browser/welcome.md")).toContain("Still here after reload.");
   expect(errors).toEqual([]);
 });
 
@@ -48,9 +52,9 @@ test("?storage=memory starts from the seed every time", async ({ page }) => {
   await editor.locator(".view-lines").click();
   await page.keyboard.type("Gone after reload. ");
   await page.keyboard.press("Control+S");
-  await expect.poll(() => readFile(page, "/welcome.md")).toContain("Gone after reload.");
+  await expect.poll(() => readFile(page, "/browser/welcome.md")).toContain("Gone after reload.");
   await page.reload();
-  await expect(explorer(page).getByText("welcome.md", { exact: true })).toBeVisible();
-  expect(await readFile(page, "/welcome.md")).not.toContain("Gone after reload.");
+  await openMain(page);
+  expect(await readFile(page, "/browser/welcome.md")).not.toContain("Gone after reload.");
   expect(errors).toEqual([]);
 });

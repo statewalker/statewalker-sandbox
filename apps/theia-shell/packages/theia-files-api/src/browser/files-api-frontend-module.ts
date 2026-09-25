@@ -5,8 +5,9 @@ import { ContainerModule } from "@theia/core/shared/inversify";
 import { FileSystemProvider } from "@theia/filesystem/lib/common/files";
 import { BrowserOnlyWorkspaceServer } from "@theia/workspace/lib/browser-only/browser-only-workspace-server";
 import { WorkspaceServer } from "@theia/workspace/lib/common/workspace-protocol";
-import { FilesApiFileSystemProvider } from "../common/files-api-fs-provider";
+import { FilesApiFileSystemProvider, toFileChanges } from "../common/files-api-fs-provider";
 import {
+  FilesApiChanges,
   FilesApiRootLabel,
   FilesApiSource,
   FilesApiWorkspaceRoot,
@@ -31,7 +32,14 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
   bind(FilesApiFileSystemProvider)
     .toDynamicValue(({ container }) => {
       const source = container.get<FilesApiSource>(FilesApiSource);
-      return new FilesApiFileSystemProvider(() => source());
+      const provider = new FilesApiFileSystemProvider(() => source());
+      if (container.isBound(FilesApiChanges)) {
+        const root = container.get<FilesApiWorkspaceRoot>(FilesApiWorkspaceRoot);
+        container.get<FilesApiChanges>(FilesApiChanges)((changes) =>
+          provider.notifyChanges(toFileChanges(root, changes)),
+        );
+      }
+      return provider;
     })
     .inSingletonScope();
   if (isBound(FileSystemProvider)) {

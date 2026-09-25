@@ -1,5 +1,7 @@
 node_modules/
 lib/
+# …but not source folders named lib (build output is lib/ next to src/).
+!**/src/**/lib/
 src-gen/
 gen-webpack.config.js
 gen-webpack.node.config.js
