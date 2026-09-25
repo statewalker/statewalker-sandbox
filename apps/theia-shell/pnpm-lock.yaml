@@ -112,6 +112,39 @@ importers:
         specifier: 1.76.0
         version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
 
+  packages/theia-files-mounts:
+    dependencies:
+      '@statewalker/webrun-files':
+        specifier: 0.10.0
+        version: 0.10.0
+      '@statewalker/webrun-files-browser':
+        specifier: 0.10.0
+        version: 0.10.0
+      '@statewalker/webrun-files-composite':
+        specifier: 0.10.0
+        version: 0.10.0
+      '@statewalker/webrun-files-mem':
+        specifier: 0.10.0
+        version: 0.10.0
+      '@theia-shell/theia-files-api':
+        specifier: workspace:*
+        version: link:../theia-files-api
+      '@theia-shell/theia-secret-vault':
+        specifier: workspace:*
+        version: link:../theia-secret-vault
+      '@theia/core':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@theia/filesystem':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/navigator':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/userstorage':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+
   packages/theia-files-s3:
     dependencies:
       '@aws-sdk/client-s3':
@@ -1462,6 +1495,9 @@ packages:
 
   '@statewalker/webrun-files-browser@0.10.0':
     resolution: {integrity: sha512-QW4QngeLfLcjxvcKcVRwsg5x/7WhTw1jY1C/jABt9491rJmbOk8hM3TWClihF7ZHwwjGo65mJFz2a9/Lqn9BCA==}
+
+  '@statewalker/webrun-files-composite@0.10.0':
+    resolution: {integrity: sha512-dfOkvgHA94Z+HdT8UjnK9GIbm6leQk0mNr7TyKZymSaHpMNlX3vKVhQZQ8yCqOqdXwHaIzd6/KvC2OyWlJjfHQ==}
 
   '@statewalker/webrun-files-mem@0.10.0':
     resolution: {integrity: sha512-6e37MJhbl5JB4AZwyeRi0hmDLMODKKG2RICCIA3RuATH5n4U8d/FIEdWJNm+DeYwlTLivY0BOvzKLkOWn3hqww==}
@@ -5808,6 +5844,10 @@ snapshots:
   '@standard-schema/spec@1.1.0': {}
 
   '@statewalker/webrun-files-browser@0.10.0':
+    dependencies:
+      '@statewalker/webrun-files': 0.10.0
+
+  '@statewalker/webrun-files-composite@0.10.0':
     dependencies:
       '@statewalker/webrun-files': 0.10.0
 
