@@ -31,6 +31,12 @@ Three rules keep Tailwind from disturbing Theia:
   does not, exclude the name, or switch to a Tailwind prefix (`tw:`, which
   shadcn's CLI supports).
 
-Tests: `pnpm test` runs 5 unit tests on the compiled `lib/app.css`, so build it
-first. They check that there is no preflight, that no utility is in a layer,
-that both theme types have tokens, and that the excluded names are absent.
+Tests: `pnpm test` runs 6 unit tests on the compiled `lib/app.css`, so build it
+first. They check that:
+
+- there is no preflight;
+- no utility is in a cascade layer;
+- both theme types have tokens;
+- every rule on Theia's own classes is scoped to `body.shadcn-ui`, so the
+  default style stays stock Theia;
+- the excluded names are absent.

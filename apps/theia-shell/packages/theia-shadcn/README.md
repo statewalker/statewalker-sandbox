@@ -48,6 +48,42 @@ global keybinding handler and Lumino's focus tracking can also fight Radix's
 focus trap. Add one only together with an e2e test of Esc, Tab and shortcuts
 while it is open.
 
+## Icons: Lucide (not yet used)
+
+shadcn's icon set is [Lucide](https://lucide.dev/). In Theia it comes in two
+ways, because Theia does not draw icons the way shadcn does.
+
+- **Inside React widgets: `lucide-react`.** Its only peer is React, and here it
+  gets the React that Theia shares, so it works like any other component, e.g.
+  `<Button size="icon"><ZoomIn /></Button>`. Icons are SVG drawn in
+  `currentColor`, so they follow the tokens, and `Button` already sizes them
+  (`[&_svg:not([class*='size-'])]:size-4`).
+- **Theia's own icons: CSS, with `@iconify/tailwind4` and
+  `@iconify-json/lucide`.** Commands, tab titles, tab-bar toolbars, view
+  containers and the explorer take a CSS *class* (`iconClass`, today always
+  `codicon codicon-*`), not a component. The plugin makes each icon a utility,
+  `icon-[lucide--zoom-in]`: the SVG is inlined as a data URL and used as a
+  mask over `currentColor`. So the icon follows the theme and makes no request,
+  which matters because this app is offline. Only icons that are named end up in
+  the CSS. The utility also works in `@apply`, which was checked with Tailwind
+  4.3. That lets the shadcn style swap Theia's icons with CSS alone, and leaves
+  the default style on codicons:
+
+  ```css
+  body.shadcn-ui .codicon-zoom-in::before {
+    content: "";
+    @apply icon-[lucide--zoom-in] size-4;
+  }
+  ```
+
+  Swapping icons needs a map from codicon to Lucide names, starting with the
+  icons our extensions use (zoom, fit, outline, preview, image, PDF), then the
+  explorer and activity bar. Each entry is only as good as a test that the
+  element is drawn from the Lucide mask.
+- **Not `lucide-static`'s icon font.** Its CSS styles every element whose class
+  starts with `icon-` and sets its font with `!important`. That can catch class
+  names Theia or Monaco use, and the font files would also need bundling.
+
 ## The stylesheet: `src/browser/style/theme.css`
 
 This is a Tailwind v4 **source** file, so it cannot be imported as it is. An
