@@ -183,6 +183,13 @@ describe("the gaps this rung leaves open", () => {
     const root = document.createElement("div");
     document.body.appendChild(root);
     let delivered = 0;
+    // The last message waits on a gate this test opens, not on a timer: "5 ms
+    // outlasts two setTimeout(0) ticks" does not hold on a loaded machine, and
+    // this test failed on CI when it did not.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
     const mount = mountPeerApp(
       root,
       createPeerTransport({
@@ -201,7 +208,7 @@ describe("the gaps this rung leaves open", () => {
             },
           };
           delivered++;
-          await new Promise((r) => setTimeout(r, 5));
+          await gate;
           yield {
             version: "v0.9.1",
             updateComponents: {
@@ -228,6 +235,7 @@ describe("the gaps this rung leaves open", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(settled).toBe(false);
 
+    release();
     await mount;
     expect(delivered).toBe(3);
     expect(root.textContent).toBe("second");
