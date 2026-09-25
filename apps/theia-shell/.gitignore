@@ -1,0 +1,11 @@
+node_modules/
+lib/
+src-gen/
+gen-webpack.config.js
+gen-webpack.node.config.js
+webpack.config.js
+test-results/
+playwright-report/
+plugins/
+esbuild.mjs
+gen-esbuild.*.mjs

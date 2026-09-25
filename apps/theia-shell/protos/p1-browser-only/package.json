@@ -1,0 +1,30 @@
+{
+  "name": "@theia-shell/p1-browser-only",
+  "version": "0.0.0",
+  "private": true,
+  "theia": {
+    "target": "browser-only",
+    "frontend": {
+      "config": {
+        "applicationName": "P1 browser-only"
+      }
+    }
+  },
+  "scripts": {
+    "build": "theia build --mode development",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@theia/core": "1.76.0",
+    "@theia/editor": "1.76.0",
+    "@theia/filesystem": "1.76.0",
+    "@theia/messages": "1.76.0",
+    "@theia/monaco": "1.76.0",
+    "@theia/navigator": "1.76.0",
+    "@theia/preferences": "1.76.0",
+    "@theia/workspace": "1.76.0"
+  },
+  "devDependencies": {
+    "@theia/cli": "1.76.0"
+  }
+}
