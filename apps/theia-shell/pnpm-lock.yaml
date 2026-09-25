@@ -169,6 +169,18 @@ importers:
         specifier: 1.76.0
         version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
 
+  packages/theia-secret-vault:
+    dependencies:
+      '@statewalker/webrun-files':
+        specifier: 0.10.0
+        version: 0.10.0
+      '@statewalker/webrun-files-mem':
+        specifier: 0.10.0
+        version: 0.10.0
+      '@theia/core':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+
   protos/p1-browser-only:
     dependencies:
       '@theia/core':
