@@ -1,0 +1,34 @@
+{
+  "name": "@theia-shell/theia-files-mounts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Theia extension: a composite, filterable FilesApi of user-defined mount points over a main storage.",
+  "main": "lib/common/index.js",
+  "types": "lib/common/index.d.ts",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/mounts-frontend-module",
+      "frontendOnly": "lib/browser/mounts-frontend-module"
+    }
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@statewalker/webrun-files": "0.10.0",
+    "@statewalker/webrun-files-browser": "0.10.0",
+    "@statewalker/webrun-files-composite": "0.10.0",
+    "@statewalker/webrun-files-mem": "0.10.0",
+    "@theia-shell/theia-files-api": "workspace:*",
+    "@theia-shell/theia-secret-vault": "workspace:*",
+    "@theia/core": "1.76.0",
+    "@theia/filesystem": "1.76.0",
+    "@theia/navigator": "1.76.0",
+    "@theia/userstorage": "1.76.0"
+  }
+}

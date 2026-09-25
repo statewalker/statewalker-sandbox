@@ -48,10 +48,58 @@ export async function openFile(page: Page, ...segments: string[]) {
   return editor;
 }
 
-export async function start(page: Page, query = "") {
+export const MAIN = "Browser Storage";
+
+/**
+ * Opens the app and the main storage. With OPFS (no `storage=memory`) the
+ * first visit asks for a new vault password; it is answered with `password`.
+ */
+export async function start(
+  page: Page,
+  query = "",
+  { password = "test-password" }: { password?: string } = {},
+) {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message.split("\n")[0]));
   await page.goto(`/${query}`);
-  await expect(explorer(page).getByText("welcome.md", { exact: true })).toBeVisible();
+  if (!query.includes("storage=memory")) await unlockVault(page, password);
+  await openMain(page);
   return errors;
+}
+
+export async function openMain(page: Page) {
+  const main = explorer(page).getByText(MAIN, { exact: true });
+  await expect(main).toBeVisible();
+  const welcome = explorer(page).getByText("welcome.md", { exact: true });
+  if (!(await welcome.isVisible())) await main.click();
+  await expect(welcome).toBeVisible();
+}
+
+/** Creates or unlocks the vault through its dialog. */
+export async function unlockVault(page: Page, password: string, remember = false) {
+  const dialog = page.locator(".vault-dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.locator(".vault-password").fill(password);
+  const confirm = dialog.locator(".vault-password-confirm");
+  if (await confirm.count()) await confirm.fill(password);
+  if (remember) await dialog.locator(".vault-remember").check();
+  await dialog.locator(".theia-button.main").click();
+  await expect(dialog).toHaveCount(0);
+}
+
+/** The main storage's settings.json, read straight from OPFS (default storage only). */
+export async function settingsText(page: Page): Promise<string> {
+  return page.evaluate(async () => {
+    const main = await (await navigator.storage.getDirectory()).getDirectoryHandle("main");
+    const settings = await (await main.getDirectoryHandle(".shell")).getDirectoryHandle("settings");
+    return (await (await settings.getFileHandle("settings.json")).getFile()).text();
+  });
+}
+
+/**
+ * Theia fires a preference change before it writes settings.json; a reload in
+ * between loses the change. Wait for the file before reloading.
+ */
+export async function waitForSettings(page: Page, text: string) {
+  await expect.poll(() => settingsText(page).catch(() => "")).toContain(text);
 }

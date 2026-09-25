@@ -1,7 +1,7 @@
 import type { FilesApi } from "@statewalker/webrun-files";
 import type { Disposable } from "@theia/core/lib/common/disposable";
 import { Emitter, Event } from "@theia/core/lib/common/event";
-import type URI from "@theia/core/lib/common/uri";
+import URI from "@theia/core/lib/common/uri";
 import {
   createFileSystemProviderError,
   type FileChange,
@@ -17,6 +17,7 @@ import {
   type Stat,
 } from "@theia/filesystem/lib/common/files";
 import { Capabilities, ChangeType } from "./const-enums";
+import type { FilesApiChange } from "./files-api-source";
 
 /** A FilesApi, or something that resolves to one the first time it is needed. */
 export type FilesApiSourceLike = FilesApi | (() => FilesApi | Promise<FilesApi>);
@@ -61,6 +62,11 @@ export class FilesApiFileSystemProvider
   watch(): Disposable {
     // Changes are pushed from the mutating methods below; nothing to set up.
     return { dispose: () => {} };
+  }
+
+  /** Reports changes made to the FilesApi outside this provider (see `FilesApiChanges`). */
+  notifyChanges(changes: readonly FileChange[]): void {
+    if (changes.length > 0) this.changes.fire(changes);
   }
 
   async stat(resource: URI): Promise<Stat> {
@@ -195,6 +201,21 @@ export class FilesApiFileSystemProvider
   private fire(type: FileChangeType, resource: URI): void {
     this.changes.fire([{ type, resource }]);
   }
+}
+
+const CHANGE_TYPES = {
+  added: ChangeType.ADDED,
+  updated: ChangeType.UPDATED,
+  deleted: ChangeType.DELETED,
+} as const;
+
+/** FilesApi paths → Theia file changes under `root` (e.g. `file:///`). */
+export function toFileChanges(root: string, changes: readonly FilesApiChange[]): FileChange[] {
+  const base = new URI(root);
+  return changes.map((change) => ({
+    type: CHANGE_TYPES[change.type],
+    resource: base.withPath(change.path),
+  }));
 }
 
 function pathOf(resource: URI): string {

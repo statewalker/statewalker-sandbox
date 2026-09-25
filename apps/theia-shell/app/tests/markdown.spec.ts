@@ -9,7 +9,7 @@ test.describe("markdown extension", () => {
 
     await expect(page.locator(".lm-TabBar-tab", { hasText: "untitled.md" })).toBeVisible();
     await expect(explorer(page).getByText("untitled.md", { exact: true })).toBeVisible();
-    await expect.poll(() => readFile(page, "/untitled.md")).toBe("# Untitled\n\n");
+    await expect.poll(() => readFile(page, "/browser/untitled.md")).toBe("# Untitled\n\n");
     expect(errors).toEqual([]);
   });
 
@@ -67,7 +67,7 @@ test.describe("markdown extension", () => {
     await page.locator(".lm-Menu-item", { hasText: "Toggle Bold" }).click();
 
     await page.keyboard.press("Control+S");
-    await expect.poll(() => readFile(page, "/notes/ideas.md")).toContain("**Plain line**");
+    await expect.poll(() => readFile(page, "/browser/notes/ideas.md")).toContain("**Plain line**");
     expect(errors).toEqual([]);
   });
 
@@ -77,7 +77,7 @@ test.describe("markdown extension", () => {
     await editor.getByText("Another line").click();
     await page.keyboard.press("Control+Alt+H");
     await page.keyboard.press("Control+S");
-    await expect.poll(() => readFile(page, "/notes/ideas.md")).toContain("# Another line");
+    await expect.poll(() => readFile(page, "/browser/notes/ideas.md")).toContain("# Another line");
     expect(errors).toEqual([]);
   });
 });
