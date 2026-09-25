@@ -6,6 +6,24 @@ and toasts with them. It follows the approach in the *Theia — theming &
 shadcn/ui alignment* note: shadcn's variables are the single source of truth,
 Theia's DOM is restyled with them, and its rendering is left alone.
 
+## Two styles, on top of any colour theme
+
+The style is independent of the colour theme, so one app can run with either
+look:
+
+| `appearance.style` | Look |
+|---|---|
+| `"theia"` (default) | Stock Theia. The shadcn tokens borrow the colour theme's colours (`--primary` is the theme's button colour, `--accent` its list hover, and so on). Theia's widgets are untouched, and the shadcn components in our widgets look native. |
+| `"shadcn"` | shadcn/ui. Light and dark themes get shadcn's *neutral* tokens, Theia's colour variables are mapped onto them, and Theia's menus, dialogs, buttons, inputs and toasts take shadcn's shape. High-contrast themes keep their own colours and get only the shape. |
+
+Switch it with *Appearance: Toggle shadcn/ui Style* in the command palette, or
+in Preferences. The change applies live and is stored as a user preference. The
+extension's frontend module registers the preference and the command, and
+keeps `shadcn-ui` on `<body>` in step with the preference. Every rule of the
+shadcn style is scoped to `body.shadcn-ui`. A unit test in
+[`app/style`](../../app/style) checks that no rule on Theia's own classes
+escapes that scope.
+
 ## Components
 
 `Button`, `Badge`, `Card` (with `CardHeader`, `CardTitle`, `CardDescription`,
@@ -36,18 +54,18 @@ This is a Tailwind v4 **source** file, so it cannot be imported as it is. An
 app compiles it into its own Tailwind entry. See [`app/style`](../../app/style)
 for how, including why preflight is left out. It holds:
 
-1. **Tokens per Theia theme type.** Theia puts `theia-light`, `theia-dark`,
-   `theia-hc` or `theia-hcLight` on `<body>`. Light and dark get shadcn's
-   *neutral* values. High-contrast themes map the tokens *to* Theia's colours,
-   so they keep their contrast.
+1. **Tokens.** By default they map *to* Theia's colour variables, for every
+   theme. Under `body.shadcn-ui.theia-light` and `.theia-dark` they take
+   shadcn's *neutral* values. Theia puts `theia-<type>` on `<body>`.
 2. **`@theme inline`**, which turns the tokens into utilities (`bg-primary`,
    `rounded-md` = `var(--radius) - 2px`, …). The `dark:` variant is keyed to
    `.theia-dark` and `.theia-hc`.
 3. **Theia's variables mapped to the tokens** (`--theia-menu-*`,
-   `--theia-button-*`, notifications, `--theia-ui-font-family`), for light and
-   dark only. They are defined on `body`, not `:root`, because the active VS
+   `--theia-button-*`, notifications, `--theia-ui-font-family`). This happens
+   only under the shadcn style, and only for light and dark. They are defined on `body`, not `:root`, because the active VS
    Code theme writes `--theia-*` on `:root`.
-4. **Native widgets in shadcn's shape.** Each is written with `@apply` and the
+4. **Native widgets in shadcn's shape**, only under the shadcn style. Each is
+   written with `@apply` and the
    class string of the matching shadcn component:
    - Lumino menus: `DropdownMenuContent` / `DropdownMenuItem`;
    - `.dialogBlock`: `DialogContent`;
@@ -55,8 +73,8 @@ for how, including why preflight is left out. It holds:
    - `.theia-input`: `Input`;
    - notification toasts.
 
-   Every selector starts with `body`, so it beats Theia's rule whatever order
-   the bundle puts the stylesheets in.
+   Every selector starts with `body.shadcn-ui`, so it beats Theia's rule
+   whatever order the bundle puts the stylesheets in.
 5. **A scoped preflight** for `[data-slot]` elements (the shadcn components):
    no UA borders, margins or button chrome. It is in `@layer base`, so any
    utility overrides it.

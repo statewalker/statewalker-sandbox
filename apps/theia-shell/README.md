@@ -4,7 +4,7 @@ An Eclipse Theia 1.76 application that runs **only in the browser**. It has a
 file explorer over a `@statewalker/webrun-files` `FilesApi`, a Monaco editor
 that saves back to it, a Markdown extension contributing commands, menus,
 keybindings and views, and separate image and PDF viewer extensions (the PDF
-viewer uses EmbedPDF). Its look is shadcn/ui, applied with Tailwind. It is the first rung toward the HTTPeers shell: a Theia
+viewer uses EmbedPDF). Its look is stock Theia or, with one switch, shadcn/ui applied with Tailwind. It is the first rung toward the HTTPeers shell: a Theia
 host for mesh apps and components installed at runtime.
 
 **Start with [`app/README.md`](app/README.md)** for running it and for how to

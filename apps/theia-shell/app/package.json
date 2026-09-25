@@ -27,6 +27,7 @@
     "@theia-shell/theia-image-viewer": "workspace:*",
     "@theia-shell/theia-markdown": "workspace:*",
     "@theia-shell/theia-pdf-viewer": "workspace:*",
+    "@theia-shell/theia-shadcn": "workspace:*",
     "@theia/core": "1.76.0",
     "@theia/editor": "1.76.0",
     "@theia/filesystem": "1.76.0",

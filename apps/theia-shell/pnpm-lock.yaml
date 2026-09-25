@@ -41,6 +41,9 @@ importers:
       '@theia-shell/theia-pdf-viewer':
         specifier: workspace:*
         version: link:../packages/theia-pdf-viewer
+      '@theia-shell/theia-shadcn':
+        specifier: workspace:*
+        version: link:../packages/theia-shadcn
       '@theia/core':
         specifier: 1.76.0
         version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)

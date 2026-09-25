@@ -5,3 +5,4 @@ export * from "./components/ui/input";
 export * from "./components/ui/kbd";
 export * from "./components/ui/separator";
 export { cn } from "./lib/utils";
+export * from "./shadcn-style";

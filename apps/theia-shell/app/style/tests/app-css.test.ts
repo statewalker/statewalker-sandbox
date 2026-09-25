@@ -16,10 +16,22 @@ describe("the compiled app stylesheet", () => {
   });
 
   it("carries the shadcn tokens for both theme types and the Theia alignment", () => {
-    expect(css).toContain("body.theia-light {");
-    expect(css).toContain("body.theia-dark {");
-    expect(css).toContain("body .lm-Menu {");
-    expect(css).toContain("body .lm-Widget.dialogOverlay .dialogBlock {");
+    expect(css).toContain("body.shadcn-ui.theia-light {");
+    expect(css).toContain("body.shadcn-ui.theia-dark {");
+    expect(css).toContain("body.shadcn-ui .lm-Menu {");
+    expect(css).toContain("body.shadcn-ui .lm-Widget.dialogOverlay .dialogBlock {");
+  });
+
+  it("touches Theia's own widgets only under the shadcn/ui style", () => {
+    // Rules on Theia's classes (lm-*, theia-*, dialog*) must start with body.shadcn-ui.
+    const selectors = [...css.matchAll(/^([^@\s{}][^{}]*)\{/gm)].map((m) => m[1]);
+    const theia = selectors.filter((s) =>
+      /\.(lm-|theia-button|theia-input|theia-notification|dialog)/.test(s),
+    );
+    expect(theia.length).toBeGreaterThan(10);
+    for (const selector of theia) {
+      for (const part of selector.split(",")) expect(part.trim()).toMatch(/^body\.shadcn-ui\b/);
+    }
   });
 
   it("never generates utilities named like Theia's or Monaco's own classes", () => {

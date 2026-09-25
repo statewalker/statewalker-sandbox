@@ -7,6 +7,8 @@ a [`FilesApi`](https://github.com/statewalker/webrun-files)
 
 ![The app: explorer over the FilesApi, the editor, the live preview and the outline](docs/screenshot.png)
 
+The screenshots show the opt-in shadcn/ui style (*Appearance: Toggle shadcn/ui Style*). The default is stock Theia.
+
 | Image viewer | PDF viewer (EmbedPDF) |
 |---|---|
 | ![Image viewer](docs/image-viewer.png) | ![PDF viewer](docs/pdf-viewer.png) |
@@ -40,7 +42,7 @@ An empty `FilesApi` is seeded with `welcome.md`, `notes/ideas.md`,
 | [`packages/theia-markdown`](../packages/theia-markdown) | **The extension.** Commands, menus, keybindings, the preview and the outline view (below). |
 | [`packages/theia-image-viewer`](../packages/theia-image-viewer) | **Image viewer extension.** Opens PNG, JPEG, GIF, WebP, AVIF, BMP, ICO and SVG files in a zoomable view, with commands, tab-toolbar buttons, a *View → Image* menu and keybindings. |
 | [`packages/theia-pdf-viewer`](../packages/theia-pdf-viewer) | **PDF viewer extension.** Opens `.pdf` files in [EmbedPDF](https://www.embedpdf.com/) (PDFium in WebAssembly), offline. |
-| [`packages/theia-shadcn`](../packages/theia-shadcn) | **shadcn/ui.** The components (on Theia's shared React), the tokens per Theia theme type, and a CSS-only alignment of Theia's menus, dialogs, buttons, inputs and toasts. |
+| [`packages/theia-shadcn`](../packages/theia-shadcn) | **shadcn/ui.** The components (on Theia's shared React), the tokens, and an opt-in *shadcn/ui style* (`appearance.style`, or *Appearance: Toggle shadcn/ui Style*) that restyles Theia's menus, dialogs, buttons, inputs and toasts with CSS only. The default is stock Theia. Either style works with any colour theme. |
 | [`app/files`](files) | **The app's `FilesApi`**: OPFS or memory, plus the seed. |
 | [`app/style`](style) | **The app's stylesheet**: Tailwind v4 without preflight over the extensions' sources, plus the shadcn theme. The extensions are styled with Tailwind classes, so an app that uses them must compile those classes too. |
 | `app` | The browser-only Theia application (`"theia": { "target": "browser-only" }`). |
@@ -93,8 +95,8 @@ pnpm --filter @theia-shell/theia-image-viewer test # 9 unit tests: MIME types, f
 pnpm --filter @theia-shell/theia-pdf-viewer test  # 5 unit tests: the generated PDF
 pnpm --filter @theia-shell/theia-shadcn test      # 6 unit tests: cn, the button variants, data-slots
 pnpm --filter @theia-shell/app-files test         # 7 unit tests: seeding, the PNG encoder
-pnpm --filter @theia-shell/app-style test         # 5 unit tests on the compiled CSS (build first)
-pnpm --filter @theia-shell/app test:e2e           # 25 Playwright tests against the static build
+pnpm --filter @theia-shell/app-style test         # 6 unit tests on the compiled CSS (build first)
+pnpm --filter @theia-shell/app test:e2e           # 28 Playwright tests against the static build
 ```
 
 The e2e tests serve `lib/frontend` with a plain static server and drive
@@ -109,7 +111,11 @@ Chromium:
 - images: the viewer opens instead of the editor, zoom works from the tab
   toolbar, the keyboard and the palette, and SVG is shown as an image;
 - a PDF renders in EmbedPDF with no request to any host other than the app;
-- shadcn/ui alignment, by computed style against the tokens:
+- the default style is stock Theia: menus and dialogs keep Theia's shape, and
+  the shadcn components take the theme's colours;
+- *Toggle shadcn/ui Style* switches the look live on a dark theme, the choice
+  survives a reload, and toggling again restores stock Theia;
+- the shadcn/ui style, by computed style against the tokens:
   - menus and confirm dialogs take shadcn's shape and colours;
   - the tokens follow a theme switch;
   - Theia's own elements get no preflight;
@@ -155,3 +161,11 @@ Every test also asserts that the page raised no errors.
   - Unit, `app-style`: the excluded-names test was 1 red, then green. The
     `theia-shadcn` unit tests were written with the components and were never
     seen red.
+- **Style switch.** The shadcn look became opt-in, on top of any colour theme.
+  - End to end: 9 of 10 red. The 3 new default-style tests and the 6 shadcn
+    tests, which now switch the style on first, all failed; the preflight guard
+    passed.
+  - Green: 10 of 10. The full suite is 28 of 28.
+  - Unit, `app-style`: the scoping test, that no rule on Theia's classes
+    escapes `body.shadcn-ui`, was checked by removing the scope from one rule.
+    2 tests failed, and they passed again once the scope was restored.
