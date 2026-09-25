@@ -60,14 +60,24 @@ export class ImageViewerWidget extends BaseWidget {
     this.title.caption = uri.path.toString();
     this.title.iconClass = "codicon codicon-file-media";
     this.title.closable = true;
-    this.addClass("image-viewer-widget");
+    this.node.classList.add(
+      "image-viewer-widget",
+      "flex",
+      "flex-col",
+      "overflow-hidden",
+      "bg-background",
+    );
     this.node.tabIndex = 0;
 
-    this.canvas.className = "image-viewer-canvas";
-    this.image.className = "image-viewer-image";
+    this.canvas.className =
+      "image-viewer-canvas grid min-h-0 flex-1 place-items-center overflow-auto p-4";
+    // The checkerboard behind the image stays in image-viewer.css.
+    this.image.className =
+      "image-viewer-image ring-border cursor-zoom-in ring-1 [&:not(.fit)]:cursor-zoom-out";
     this.image.alt = uri.path.base;
     this.image.draggable = false;
-    this.status.className = "image-viewer-status";
+    this.status.className =
+      "image-viewer-status border-border text-muted-foreground flex-none border-t px-2 py-0.5 text-xs";
     this.canvas.appendChild(this.image);
     this.node.append(this.canvas, this.status);
 

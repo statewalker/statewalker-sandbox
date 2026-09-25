@@ -17,5 +17,9 @@ those file types. It works in browser-only apps and in apps with a backend.
 SVG is displayed through `<img>`, so scripts inside an SVG never run. That
 matters when files come from other peers (HTTPeers security model, §2).
 
+Styling is Tailwind utility classes coloured by the shadcn/ui tokens. The app
+compiles them, as [`app/style`](../../app/style) does. In an app without that
+build, the classes have no CSS and the layout falls apart.
+
 Tests: `pnpm test` runs 9 unit tests (MIME types, fit, zoom steps). The e2e
 tests are in [`app/tests/viewers.spec.ts`](../../app/tests/viewers.spec.ts).

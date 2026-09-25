@@ -49,7 +49,7 @@ export class PdfViewerWidget extends BaseWidget {
     this.title.caption = uri.path.toString();
     this.title.iconClass = "codicon codicon-file-pdf";
     this.title.closable = true;
-    this.addClass("pdf-viewer-widget");
+    this.node.classList.add("pdf-viewer-widget", "flex", "overflow-hidden");
     this.node.tabIndex = 0;
 
     this.toDispose.push(Disposable.create(() => this.clear()));
@@ -73,7 +73,7 @@ export class PdfViewerWidget extends BaseWidget {
       if (ticket !== this.loads || this.isDisposed) return;
       this.clear();
       const message = document.createElement("div");
-      message.className = "pdf-viewer-message";
+      message.className = "pdf-viewer-message text-muted-foreground m-auto text-sm";
       message.textContent = `${this.uri.path.base} cannot be read (deleted or moved?)`;
       this.node.appendChild(message);
       this.shown = Disposable.create(() => message.remove());
@@ -84,7 +84,7 @@ export class PdfViewerWidget extends BaseWidget {
 
     const src = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" }));
     const target = document.createElement("div");
-    target.className = "pdf-viewer";
+    target.className = "pdf-viewer h-full min-w-0 flex-1";
     this.node.appendChild(target);
     this.viewer = EmbedPDF.init({
       type: "container",
