@@ -40,7 +40,9 @@ An empty `FilesApi` is seeded with `welcome.md`, `notes/ideas.md`,
 | [`packages/theia-markdown`](../packages/theia-markdown) | **The extension.** Commands, menus, keybindings, the preview and the outline view (below). |
 | [`packages/theia-image-viewer`](../packages/theia-image-viewer) | **Image viewer extension.** Opens PNG, JPEG, GIF, WebP, AVIF, BMP, ICO and SVG files in a zoomable view, with commands, tab-toolbar buttons, a *View → Image* menu and keybindings. |
 | [`packages/theia-pdf-viewer`](../packages/theia-pdf-viewer) | **PDF viewer extension.** Opens `.pdf` files in [EmbedPDF](https://www.embedpdf.com/) (PDFium in WebAssembly), offline. |
+| [`packages/theia-shadcn`](../packages/theia-shadcn) | **shadcn/ui.** The components (on Theia's shared React), the tokens per Theia theme type, and a CSS-only alignment of Theia's menus, dialogs, buttons, inputs and toasts. |
 | [`app/files`](files) | **The app's `FilesApi`**: OPFS or memory, plus the seed. |
+| [`app/style`](style) | **The app's stylesheet**: Tailwind v4 without preflight over the extensions' sources, plus the shadcn theme. The extensions are styled with Tailwind classes, so an app that uses them must compile those classes too. |
 | `app` | The browser-only Theia application (`"theia": { "target": "browser-only" }`). |
 
 ### Markdown extension contributions
@@ -89,8 +91,10 @@ pnpm --filter @theia-shell/theia-files-api test   # 21 unit tests: the FileSyste
 pnpm --filter @theia-shell/theia-markdown test    # 15 unit tests: outline, rendering, edits
 pnpm --filter @theia-shell/theia-image-viewer test # 9 unit tests: MIME types, fit, zoom steps
 pnpm --filter @theia-shell/theia-pdf-viewer test  # 5 unit tests: the generated PDF
+pnpm --filter @theia-shell/theia-shadcn test      # 6 unit tests: cn, the button variants, data-slots
 pnpm --filter @theia-shell/app-files test         # 7 unit tests: seeding, the PNG encoder
-pnpm --filter @theia-shell/app test:e2e           # 18 Playwright tests against the static build
+pnpm --filter @theia-shell/app-style test         # 5 unit tests on the compiled CSS (build first)
+pnpm --filter @theia-shell/app test:e2e           # 25 Playwright tests against the static build
 ```
 
 The e2e tests serve `lib/frontend` with a plain static server and drive
@@ -104,7 +108,14 @@ Chromium:
 - *Toggle Heading* by keybinding;
 - images: the viewer opens instead of the editor, zoom works from the tab
   toolbar, the keyboard and the palette, and SVG is shown as an image;
-- a PDF renders in EmbedPDF with no request to any host other than the app.
+- a PDF renders in EmbedPDF with no request to any host other than the app;
+- shadcn/ui alignment, by computed style against the tokens:
+  - menus and confirm dialogs take shadcn's shape and colours;
+  - the tokens follow a theme switch;
+  - Theia's own elements get no preflight;
+  - the outline's items are shadcn buttons;
+  - the preview is typeset with Tailwind Typography;
+  - the image status line uses the muted token.
 
 Every test also asserts that the page raised no errors.
 
@@ -135,3 +146,12 @@ Every test also asserts that the page raised no errors.
     on screen unchanged; the PDF viewer never reloaded. The SVG reload test was
     already green. The PDF delete test was written after the fix and was never
     seen red. The full suite is 18 of 18.
+- **shadcn/ui and Tailwind.**
+  - End to end: 6 of 7 red before the change. The preflight test is a guard
+    and passed before and after.
+  - First green run: 6 of 7. The active menu item's radius stayed 4px, because
+    Theia's rule for the item's cells has specificity 0,3,0. It is now 7 of 7,
+    and the full suite is 25 of 25.
+  - Unit, `app-style`: the excluded-names test was 1 red, then green. The
+    `theia-shadcn` unit tests were written with the components and were never
+    seen red.

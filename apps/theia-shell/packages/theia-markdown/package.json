@@ -2,7 +2,7 @@
   "name": "@theia-shell/theia-markdown",
   "version": "0.0.0",
   "private": true,
-  "description": "Theia extension: a Markdown editor \u2014 commands, menus, keybindings, a live preview and an outline view.",
+  "description": "Theia extension: a Markdown editor — commands, menus, keybindings, a live preview and an outline view.",
   "main": "lib/common/index.js",
   "types": "lib/common/index.d.ts",
   "files": [
@@ -20,6 +20,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@theia-shell/theia-shadcn": "workspace:*",
     "@theia/core": "1.76.0",
     "@theia/editor": "1.76.0",
     "@theia/filesystem": "1.76.0",

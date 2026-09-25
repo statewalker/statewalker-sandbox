@@ -1,0 +1,297 @@
+/*
+ * shadcn/ui for Theia — a Tailwind v4 *source* stylesheet, not loadable as is.
+ * An app compiles it into its own Tailwind entry (see app/style), which must
+ * leave Tailwind's preflight out: preflight resets Theia's own CSS.
+ *
+ * 1. shadcn's tokens (neutral base) per Theia theme type. Theia puts
+ *    `theia-<type>` on <body>; high-contrast themes borrow Theia's colours.
+ * 2. Theia's colour variables mapped onto the tokens. They are defined on
+ *    <body>, not :root, because the active VS Code theme writes `--theia-*`
+ *    on :root and the nearer definition wins.
+ * 3. Theia's native menus, dialogs, buttons, inputs and toasts restyled in
+ *    shadcn's shape with the class strings of the matching shadcn components.
+ *    Every selector starts with `body`, so it wins over Theia's rule whatever
+ *    order the bundle puts the stylesheets in.
+ */
+
+@source "..";
+
+@custom-variant dark (&:where(.theia-dark, .theia-dark *, .theia-hc, .theia-hc *));
+
+/* ---------------------------------------------------------------- tokens */
+
+body {
+  --radius: 0.625rem;
+}
+
+body.theia-light {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+}
+
+body.theia-dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+}
+
+/* High contrast keeps the theme's own colours: the tokens follow Theia instead. */
+body.theia-hc,
+body.theia-hcLight {
+  --background: var(--theia-editor-background);
+  --foreground: var(--theia-foreground);
+  --card: var(--theia-editorWidget-background);
+  --card-foreground: var(--theia-editorWidget-foreground);
+  --popover: var(--theia-menu-background);
+  --popover-foreground: var(--theia-menu-foreground);
+  --primary: var(--theia-button-background);
+  --primary-foreground: var(--theia-button-foreground);
+  --secondary: var(--theia-button-secondaryBackground);
+  --secondary-foreground: var(--theia-button-secondaryForeground);
+  --muted: var(--theia-editorWidget-background);
+  --muted-foreground: var(--theia-descriptionForeground);
+  --accent: var(--theia-list-hoverBackground);
+  --accent-foreground: var(--theia-foreground);
+  --destructive: var(--theia-errorForeground);
+  --border: var(--theia-contrastBorder);
+  --input: var(--theia-input-border);
+  --ring: var(--theia-focusBorder);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--theia-ui-font-family);
+  --font-mono: var(--theia-code-font-family);
+}
+
+/*
+ * Preflight is off, so shadcn components get the part of it they rely on
+ * (no UA borders, margins or button chrome), scoped to their `data-slot`.
+ * In a layer, so any utility overrides it.
+ */
+@layer base {
+  :where([data-slot], [data-slot] *) {
+    box-sizing: border-box;
+    margin: 0;
+    border: 0 solid var(--border);
+    outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
+  }
+  :where(button, input)[data-slot] {
+    padding: 0;
+    font: inherit;
+    color: inherit;
+    background-color: transparent;
+    appearance: none;
+  }
+  :where(button)[data-slot]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+/* Tailwind Typography coloured by the tokens: `prose prose-shadcn`. */
+.prose.prose-shadcn {
+  --tw-prose-body: var(--foreground);
+  --tw-prose-headings: var(--foreground);
+  --tw-prose-lead: var(--muted-foreground);
+  --tw-prose-links: var(--primary);
+  --tw-prose-bold: var(--foreground);
+  --tw-prose-counters: var(--muted-foreground);
+  --tw-prose-bullets: var(--muted-foreground);
+  --tw-prose-hr: var(--border);
+  --tw-prose-quotes: var(--foreground);
+  --tw-prose-quote-borders: var(--border);
+  --tw-prose-captions: var(--muted-foreground);
+  --tw-prose-kbd: var(--foreground);
+  --tw-prose-code: var(--foreground);
+  --tw-prose-pre-code: var(--foreground);
+  --tw-prose-pre-bg: var(--muted);
+  --tw-prose-th-borders: var(--border);
+  --tw-prose-td-borders: var(--border);
+}
+
+/* ------------------------------------------------- Theia variables → tokens */
+
+body.theia-light,
+body.theia-dark {
+  --theia-ui-font-family: "Geist", "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  --theia-menu-background: var(--popover);
+  --theia-menu-foreground: var(--popover-foreground);
+  --theia-menu-selectionBackground: var(--accent);
+  --theia-menu-selectionForeground: var(--accent-foreground);
+  --theia-menu-selectionBorder: transparent;
+  --theia-menu-border: var(--border);
+  --theia-menu-separatorBackground: var(--border);
+  --theia-menubar-selectionBackground: var(--accent);
+  --theia-menubar-selectionForeground: var(--accent-foreground);
+  --theia-menubar-selectionBorder: transparent;
+
+  --theia-button-background: var(--primary);
+  --theia-button-foreground: var(--primary-foreground);
+  --theia-button-hoverBackground: color-mix(in oklab, var(--primary) 90%, transparent);
+  --theia-secondaryButton-background: var(--background);
+  --theia-secondaryButton-foreground: var(--foreground);
+  --theia-secondaryButton-hoverBackground: var(--accent);
+
+  --theia-notifications-background: var(--popover);
+  --theia-notifications-foreground: var(--popover-foreground);
+  --theia-notificationToast-border: var(--border);
+  --theia-notificationCenter-border: var(--border);
+}
+
+/* -------------------------------------------- menus (DropdownMenuContent/Item) */
+
+body .lm-Menu {
+  @apply bg-popover text-popover-foreground rounded-md border border-border p-1 shadow-md;
+}
+
+/* Items are table rows, which cannot be rounded: the end cells carry the radius. */
+body .lm-Menu .lm-Menu-item > div:first-child {
+  @apply rounded-l-sm;
+}
+body .lm-Menu .lm-Menu-item > div:last-child {
+  @apply rounded-r-sm;
+}
+body .lm-Menu-item.lm-mod-active > div {
+  @apply bg-accent text-accent-foreground;
+}
+body .lm-Menu-itemShortcut {
+  @apply text-muted-foreground text-xs tracking-widest;
+}
+body .lm-Menu-item[data-type="separator"] > div {
+  opacity: 1;
+}
+
+body .lm-MenuBar-item {
+  @apply rounded-sm;
+}
+
+/* ------------------------------------------------- dialogs (DialogContent) */
+
+body .lm-Widget.dialogOverlay {
+  @apply bg-black/50;
+}
+
+body .lm-Widget.dialogOverlay .dialogBlock {
+  @apply bg-background text-foreground gap-4 rounded-lg border border-border p-6 shadow-lg;
+}
+
+body .lm-Widget.dialogOverlay .dialogTitle {
+  @apply text-foreground min-h-0 border-0 bg-transparent p-0 text-lg leading-none font-semibold;
+}
+
+body .lm-Widget.dialogOverlay .dialogTitle i.closeButton {
+  @apply rounded-xs opacity-70 transition-opacity hover:opacity-100;
+}
+
+body .lm-Widget.dialogOverlay .dialogContent {
+  @apply p-0 text-sm;
+}
+
+body .lm-Widget.dialogOverlay .dialogControl {
+  @apply min-h-0 justify-end gap-2 p-0;
+}
+
+/* --------------------------------------------------------------- Button */
+
+body .theia-button {
+  @apply bg-primary text-primary-foreground hover:bg-primary/90 inline-flex items-center justify-center gap-2 rounded-md border border-transparent text-sm font-medium whitespace-nowrap transition-all outline-none;
+  @apply focus-visible:ring-ring/50 focus-visible:ring-[3px];
+}
+
+body .theia-button:focus {
+  outline: none;
+}
+
+body .theia-button.secondary {
+  @apply bg-background text-foreground border-border hover:bg-accent hover:text-accent-foreground shadow-xs;
+  @apply dark:bg-input/30 dark:border-input dark:hover:bg-input/50;
+}
+
+body .theia-button[disabled] {
+  @apply pointer-events-none opacity-50;
+}
+
+/* ---------------------------------------------------------------- Input */
+
+body .theia-input {
+  @apply border-input rounded-md border bg-transparent px-3 shadow-xs transition-[color,box-shadow] outline-none;
+  @apply dark:bg-input/30 focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px];
+}
+
+/* Buttons and inputs in dialogs take shadcn's default size. */
+
+body .lm-Widget.dialogOverlay .dialogControl .theia-button {
+  @apply m-0 h-9 px-4 py-2;
+}
+
+body .lm-Widget.dialogOverlay .theia-input {
+  @apply h-9;
+}
+
+/* ------------------------------------------------------ toasts (Sonner's look) */
+
+body .theia-notifications-container.theia-notification-toasts .theia-notification-list-item,
+body
+  .theia-notifications-container.theia-notification-toasts
+  .theia-notification-list-item-container,
+body .theia-notifications-container.theia-notification-center {
+  @apply rounded-lg;
+}
+
+body .theia-notifications-container.theia-notification-toasts .theia-notification-list-item,
+body .theia-notifications-container.theia-notification-center {
+  @apply border-border shadow-lg;
+}

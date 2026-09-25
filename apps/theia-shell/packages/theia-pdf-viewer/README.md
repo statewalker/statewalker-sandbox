@@ -30,5 +30,9 @@ The app's sample file and the tests use it, so no binary fixture is needed.
 
 Cost: about 2 MB of JS plus the 4.6 MB wasm (base64 in the bundle).
 
+Styling is Tailwind utility classes coloured by the shadcn/ui tokens. The app
+compiles them, as [`app/style`](../../app/style) does. In an app without that
+build, the classes have no CSS and the layout falls apart.
+
 Tests: `pnpm test` runs 5 unit tests. The e2e tests are in P7 and in
 [`app/tests/viewers.spec.ts`](../../app/tests/viewers.spec.ts).

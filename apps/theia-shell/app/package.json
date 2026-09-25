@@ -7,7 +7,7 @@
     "target": "browser-only",
     "frontend": {
       "config": {
-        "applicationName": "Theia Shell \u2014 Markdown",
+        "applicationName": "Theia Shell — Markdown",
         "preferences": {
           "security.workspace.trust.enabled": false
         }
@@ -15,13 +15,14 @@
     }
   },
   "scripts": {
-    "build": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-markdown --filter @theia-shell/theia-image-viewer --filter @theia-shell/theia-pdf-viewer --filter @theia-shell/app-files build && theia build --mode development",
-    "build:prod": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-markdown --filter @theia-shell/theia-image-viewer --filter @theia-shell/theia-pdf-viewer --filter @theia-shell/app-files build && theia build --mode production",
+    "build": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-shadcn --filter @theia-shell/theia-markdown --filter @theia-shell/theia-image-viewer --filter @theia-shell/theia-pdf-viewer --filter @theia-shell/app-files --filter @theia-shell/app-style build && theia build --mode development",
+    "build:prod": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-shadcn --filter @theia-shell/theia-markdown --filter @theia-shell/theia-image-viewer --filter @theia-shell/theia-pdf-viewer --filter @theia-shell/app-files --filter @theia-shell/app-style build && theia build --mode production",
     "start": "node ../tools/serve.mjs lib/frontend 3000",
     "test:e2e": "playwright test"
   },
   "dependencies": {
     "@theia-shell/app-files": "workspace:*",
+    "@theia-shell/app-style": "workspace:*",
     "@theia-shell/theia-files-api": "workspace:*",
     "@theia-shell/theia-image-viewer": "workspace:*",
     "@theia-shell/theia-markdown": "workspace:*",

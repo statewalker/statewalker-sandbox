@@ -1,0 +1,25 @@
+{
+  "name": "@theia-shell/app-style",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The app's stylesheet: Tailwind (no preflight) over the app's extensions, with the shadcn/ui tokens and Theia alignment from @theia-shell/theia-shadcn.",
+  "main": "lib/app-style-frontend-module.js",
+  "theiaExtensions": [
+    {
+      "frontendOnly": "lib/app-style-frontend-module"
+    }
+  ],
+  "scripts": {
+    "build": "tailwindcss -i src/app.css -o lib/app.css && tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@theia/core": "1.76.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "@tailwindcss/typography": "0.5.20",
+    "@theia-shell/theia-shadcn": "workspace:*",
+    "tailwindcss": "4.3.3"
+  }
+}
