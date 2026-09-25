@@ -9,6 +9,12 @@
     "lib",
     "src"
   ],
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/s3-frontend-module",
+      "frontendOnly": "lib/browser/s3-frontend-module"
+    }
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run"
@@ -17,6 +23,7 @@
     "@aws-sdk/client-s3": "3.1140.0",
     "@statewalker/webrun-files": "0.10.0",
     "@statewalker/webrun-files-s3": "0.10.0",
+    "@theia-shell/theia-files-mounts": "workspace:*",
     "@theia/core": "1.76.0"
   }
 }

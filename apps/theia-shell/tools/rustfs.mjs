@@ -15,6 +15,7 @@ export const S3_BROWSER_HEADERS = [
   "x-amz-content-sha256",
   "x-amz-user-agent",
   "x-amz-checksum-crc32",
+  "x-amz-checksum-mode",
   "x-amz-sdk-checksum-algorithm",
   "amz-sdk-invocation-id",
   "amz-sdk-request",

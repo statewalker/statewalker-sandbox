@@ -1,5 +1,13 @@
 import { expect, test } from "@playwright/test";
-import { explorer, openMain, readFile, runFromPalette, start, unlockVault } from "./helpers";
+import {
+  explorer,
+  openMain,
+  readFile,
+  runFromPalette,
+  start,
+  unlockVault,
+  waitForSettings,
+} from "./helpers";
 
 async function mountMemory(page: import("@playwright/test").Page, name: string, key?: string) {
   await runFromPalette(page, "Files: Mount File System…");
@@ -113,6 +121,7 @@ test("an OPFS mount and its files survive a reload", async ({ page }) => {
   await page.keyboard.press("Enter"); // key: drafts
   await page.keyboard.press("Enter"); // directory: drafts
   await expect(explorer(page).getByText("Drafts", { exact: true })).toBeVisible();
+  await waitForSettings(page, '"drafts"');
   await page.evaluate(async () => {
     const files = (
       window as unknown as {
@@ -146,6 +155,7 @@ test("a local folder mounts through the picker and reconnects after a reload", a
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
   await expect(explorer(page).getByText("Local Computer", { exact: true })).toBeVisible();
+  await waitForSettings(page, '"local-computer"');
   await page.reload();
   await unlockVault(page, "test-password");
   await openMain(page);

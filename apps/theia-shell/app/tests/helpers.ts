@@ -86,3 +86,20 @@ export async function unlockVault(page: Page, password: string, remember = false
   await dialog.locator(".theia-button.main").click();
   await expect(dialog).toHaveCount(0);
 }
+
+/** The main storage's settings.json, read straight from OPFS (default storage only). */
+export async function settingsText(page: Page): Promise<string> {
+  return page.evaluate(async () => {
+    const main = await (await navigator.storage.getDirectory()).getDirectoryHandle("main");
+    const settings = await (await main.getDirectoryHandle(".shell")).getDirectoryHandle("settings");
+    return (await (await settings.getFileHandle("settings.json")).getFile()).text();
+  });
+}
+
+/**
+ * Theia fires a preference change before it writes settings.json; a reload in
+ * between loses the change. Wait for the file before reloading.
+ */
+export async function waitForSettings(page: Page, text: string) {
+  await expect.poll(() => settingsText(page).catch(() => "")).toContain(text);
+}

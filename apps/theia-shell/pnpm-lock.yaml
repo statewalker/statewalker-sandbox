@@ -32,6 +32,9 @@ importers:
       '@theia-shell/theia-files-mounts':
         specifier: workspace:*
         version: link:../packages/theia-files-mounts
+      '@theia-shell/theia-files-s3':
+        specifier: workspace:*
+        version: link:../packages/theia-files-s3
       '@theia-shell/theia-image-viewer':
         specifier: workspace:*
         version: link:../packages/theia-image-viewer
@@ -162,6 +165,9 @@ importers:
       '@statewalker/webrun-files-s3':
         specifier: 0.10.0
         version: 0.10.0(@aws-sdk/client-s3@3.1140.0)
+      '@theia-shell/theia-files-mounts':
+        specifier: workspace:*
+        version: link:../theia-files-mounts
       '@theia/core':
         specifier: 1.76.0
         version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
