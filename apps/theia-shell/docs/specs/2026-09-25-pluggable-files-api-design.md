@@ -169,11 +169,14 @@ given the `FilesApi` of the folder holding `vault.key.json` and `secrets.json`.
     readonly fields: MountField[];    // what the wizard asks, in order
     isAvailable(): boolean;           // e.g. OPFS / showDirectoryPicker present
     create(mount: MountConfig, ctx: MountContext): Promise<FilesApi>;
+    configure?(mount: MountConfig): Promise<Record<string, string> | undefined>; // interactive step after the fields (folder picker)
+    forget?(mount: MountConfig): Promise<void>;                                  // on unmount
   }
   interface MountField {
     name: string; label: string;
-    kind: "text" | "secret" | "url" | "directory";
-    required?: boolean; default?: string;
+    kind: "text" | "secret" | "url";
+    required?: boolean;
+    default?: string | ((mount: { key: string; name: string }) => string);
   }
   interface MountConfig {             // one entry of the `files.mounts` preference
     key: string; name: string; type: string;
@@ -181,6 +184,7 @@ given the `FilesApi` of the folder holding `vault.key.json` and `secrets.json`.
   }
   interface MountContext {
     interactive: boolean;             // running from a user gesture
+    locked: boolean;                  // the vault is locked: a missing secret means "locked"
     secret(field: string): Promise<string | undefined>; // from the vault
   }
   ```
@@ -196,8 +200,9 @@ given the `FilesApi` of the folder holding `vault.key.json` and `secrets.json`.
   folder) throws `NeedsUserGesture` then.
 
 - **Built-in types**: memory; OPFS (field `directory`, default the key; storage
-  under OPFS `mounts/<directory>`); local folder (field `directory` = pick a
-  folder; the handle is kept in IndexedDB under `mount:<key>`, not in JSON).
+  under OPFS `mounts/<directory>`); local folder (no field; `configure` opens the
+  directory picker and stores the handle in IndexedDB under a random `handleId`
+  kept in `config`, so renaming the key keeps it).
 
 - **`files.mounts` preference** (user scope → `/.shell/settings/settings.json`
   in the main storage): an array of `MountConfig` for the mounts other than
@@ -287,10 +292,11 @@ work.
 
 1. Boot: read `MainStorage` from IndexedDB → (boot gate for a local folder) →
    open the main `FilesApi` → register `shell-system:` → preferences load →
-   `FilesApiSource` resolves → `MountService` mounts main, reads `files.mounts`
-   (or the defaults), creates the other mounts (secret-needing ones wait for
-   the vault), builds and wraps the composite → the explorer shows one folder
-   per mount.
+   `FilesApiSource` resolves with the main mount only → when preferences are
+   ready, `MountService` reads `files.mounts` (or the defaults) and creates the
+   other mounts (secret-needing ones wait for the vault), reported as changes.
+   The root never waits for preferences: folder-scope preferences are read
+   through it, so waiting would deadlock.
 2. Vault: once the workbench is up, the unlock (or create) dialog runs, or a
    remembered key unlocks silently → `onDidUnlock` → `locked` mounts are
    created.
@@ -309,8 +315,7 @@ work.
 - Editing only the key or name is a rename: the mounted `FilesApi` instance is
   reused (nothing is lost, even in memory) and its secrets move with it. For
   OPFS the `directory` config, not the key, names the storage.
-- Editing a type's config re-creates the mount; for an in-memory mount that
-  means empty, and the wizard says so before applying.
+- Editing a type's config re-creates the mount.
 
 ## Errors and reconnect
 
