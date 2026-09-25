@@ -1,9 +1,12 @@
 # theia-shell — plan
 
 > **Status (2026-09-25): done.** P1–P7 answered (see each `protos/pN-*/README.md`
-> and the summary in `README.md`); the app is in `app/` with 57 unit and 18 e2e tests
-> (the prototypes add 12 more e2e). P7 and the image/PDF viewers came after the
-> plan below was written; they are recorded here, not planned.
+> and the summary in `README.md`); the app is in `app/` with 105 unit and 37 e2e tests
+> (the prototypes add 12 more e2e). P7, the image/PDF viewers, and the mounts and
+> vault came after the plan below was written; they are recorded here, not planned.
+> The mounts and vault have their own
+> [design](docs/specs/2026-09-25-pluggable-files-api-design.md) and
+> [plan](docs/plans/2026-09-25-pluggable-files-api.md).
 
 Goal: an **in-browser-only** Eclipse Theia application (no backend process) that
 
@@ -63,8 +66,11 @@ apps/theia-shell/
   packages/theia-markdown/     Theia extension: Markdown commands, menus, preview + outline views
   packages/theia-image-viewer/ Theia extension: image viewer (open handler, zoom commands)
   packages/theia-pdf-viewer/   Theia extension: PDF viewer over EmbedPDF (after P7)
+  packages/theia-files-mounts/ Theia extension: mount points over a main storage (after the plan)
+  packages/theia-secret-vault/ Theia extension: the encrypted secret vault (after the plan)
+  packages/theia-files-s3/     Theia extension: the S3 mount type (after the plan)
   app/                         the browser-only application assembling them
-  app/files/                   its FilesApi (OPFS, or memory) and the demo seed
+  app/files/                   its defaults (Temporary mount, hidden paths) and the demo seed
 ```
 
 **How the `FilesApi` is provided.** `theia-files-api` exports a DI symbol

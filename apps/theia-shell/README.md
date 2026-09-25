@@ -34,8 +34,22 @@ packages/theia-files-api    FilesApi → Theia file system (extension)
 packages/theia-markdown     the Markdown extension
 packages/theia-image-viewer the image viewer extension
 packages/theia-pdf-viewer   the PDF viewer extension (EmbedPDF)
-app/                        the application, app/files (its FilesApi), e2e tests
+packages/theia-files-mounts mount points over a main storage; settings under shell-system:
+packages/theia-secret-vault the encrypted secret vault behind Theia's KeyStoreService
+packages/theia-files-s3     the S3 mount type
+app/                        the application, app/files (its defaults and seed), e2e tests
+tools/rustfs.mjs            test fixture: RustFS (S3) in Docker, with CORS for the app
 ```
+
+## Mounts and secrets
+
+The app's file system is a set of **mount points** — browser storage, memory,
+folders on the computer, S3 buckets — each a `@statewalker/webrun-files`
+`FilesApi` shown as a top-level folder, over a main storage that holds the
+settings and a password-protected, WebCrypto-encrypted vault for secrets. See
+[`app/README.md`](app/README.md), the
+[design](docs/specs/2026-09-25-pluggable-files-api-design.md) and the
+[plan](docs/plans/2026-09-25-pluggable-files-api.md).
 
 ## What the prototypes established
 
