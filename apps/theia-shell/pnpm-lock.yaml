@@ -29,6 +29,9 @@ importers:
       '@theia-shell/theia-files-api':
         specifier: workspace:*
         version: link:../packages/theia-files-api
+      '@theia-shell/theia-files-mounts':
+        specifier: workspace:*
+        version: link:../packages/theia-files-mounts
       '@theia-shell/theia-image-viewer':
         specifier: workspace:*
         version: link:../packages/theia-image-viewer

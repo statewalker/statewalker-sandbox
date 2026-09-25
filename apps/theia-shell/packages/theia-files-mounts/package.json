@@ -9,6 +9,12 @@
     "lib",
     "src"
   ],
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/mounts-frontend-module",
+      "frontendOnly": "lib/browser/mounts-frontend-module"
+    }
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run"
