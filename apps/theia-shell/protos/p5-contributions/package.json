@@ -1,0 +1,36 @@
+{
+  "name": "@theia-shell/p5-contributions",
+  "version": "0.0.0",
+  "private": true,
+  "theia": {
+    "target": "browser-only",
+    "frontend": {
+      "config": {
+        "applicationName": "P5 contributions",
+        "preferences": {
+          "security.workspace.trust.enabled": false
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "pnpm --filter @theia-shell/p5-extension build && theia build --mode development",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@theia-shell/p3-extension": "workspace:*",
+    "@theia-shell/p5-extension": "workspace:*",
+    "@theia-shell/theia-files-api": "workspace:*",
+    "@theia/core": "1.76.0",
+    "@theia/editor": "1.76.0",
+    "@theia/filesystem": "1.76.0",
+    "@theia/messages": "1.76.0",
+    "@theia/monaco": "1.76.0",
+    "@theia/navigator": "1.76.0",
+    "@theia/preferences": "1.76.0",
+    "@theia/workspace": "1.76.0"
+  },
+  "devDependencies": {
+    "@theia/cli": "1.76.0"
+  }
+}
