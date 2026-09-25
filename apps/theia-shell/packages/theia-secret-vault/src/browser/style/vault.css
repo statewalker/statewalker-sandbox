@@ -1,0 +1,11 @@
+.vault-dialog .dialogContent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 320px;
+}
+
+.vault-dialog .vault-message {
+  color: var(--theia-errorForeground);
+  margin: 0;
+}

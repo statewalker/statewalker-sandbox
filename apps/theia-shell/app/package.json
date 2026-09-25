@@ -15,8 +15,8 @@
     }
   },
   "scripts": {
-    "build": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-markdown --filter @theia-shell/theia-image-viewer --filter @theia-shell/theia-pdf-viewer --filter @theia-shell/app-files build && theia build --mode development",
-    "build:prod": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-markdown --filter @theia-shell/theia-image-viewer --filter @theia-shell/theia-pdf-viewer --filter @theia-shell/app-files build && theia build --mode production",
+    "build": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-markdown --filter @theia-shell/theia-image-viewer --filter @theia-shell/theia-pdf-viewer --filter @theia-shell/theia-secret-vault --filter @theia-shell/app-files build && theia build --mode development",
+    "build:prod": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-markdown --filter @theia-shell/theia-image-viewer --filter @theia-shell/theia-pdf-viewer --filter @theia-shell/theia-secret-vault --filter @theia-shell/app-files build && theia build --mode production",
     "start": "node ../tools/serve.mjs lib/frontend 3000",
     "test:e2e": "playwright test"
   },
@@ -26,6 +26,7 @@
     "@theia-shell/theia-image-viewer": "workspace:*",
     "@theia-shell/theia-markdown": "workspace:*",
     "@theia-shell/theia-pdf-viewer": "workspace:*",
+    "@theia-shell/theia-secret-vault": "workspace:*",
     "@theia/core": "1.76.0",
     "@theia/editor": "1.76.0",
     "@theia/filesystem": "1.76.0",
