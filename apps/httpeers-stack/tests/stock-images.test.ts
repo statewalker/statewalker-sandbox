@@ -64,6 +64,45 @@ describe("loadStockImages", () => {
     expect(images).toEqual([]);
   });
 
+  // A request that never settles must not stall the page. `main.ts` waits
+  // for this load before the peer joins the mesh, so a hung request (seen in
+  // Firefox, where a ServiceWorker-controlled page's picsum fetches never
+  // settle) used to leave the peer "not started" for good. It also broke this
+  // module's contract: failure is partial, never total, and the fixtures take
+  // over.
+  it("gives up on a request that never settles, and keeps the ones that did load", async () => {
+    let n = 0;
+    const fetchMock = vi.fn(() => {
+      n += 1;
+      // Never settles, and ignores any abort signal: the worst case.
+      if (n === 1) return new Promise<Response>(() => {});
+      return Promise.resolve(jpeg());
+    });
+    const started = performance.now();
+    const { images } = await loadStockImages({
+      fetch: fetchMock as never,
+      count: 2,
+      timeoutMs: 50,
+    });
+    expect(images).toHaveLength(1);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  it("aborts the request it gave up on, so the network stops too", async () => {
+    let signal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>(() => {});
+    });
+    const { images } = await loadStockImages({
+      fetch: fetchMock as never,
+      count: 1,
+      timeoutMs: 20,
+    });
+    expect(images).toEqual([]);
+    expect(signal?.aborted).toBe(true);
+  });
+
   it("has a sensible default count", () => {
     expect(STOCK_IMAGE_COUNT).toBeGreaterThan(0);
     expect(STOCK_IMAGE_COUNT).toBeLessThanOrEqual(8);

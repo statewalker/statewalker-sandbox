@@ -33,10 +33,22 @@ const STOCK_BASE = "https://picsum.photos/seed";
 const WIDTH = 600;
 const HEIGHT = 400;
 
+/**
+ * How long one stock request may take before it counts as failed. The load
+ * blocks the peer's start-up (`main.ts` waits for it before joining), so a
+ * request that never settles must not be allowed to block it forever. In
+ * Firefox, a page controlled by its ServiceWorker has been seen to issue picsum
+ * fetches that never settle. The requests run in parallel, so this is also
+ * about how long a stalled stock delays the fallback to the bundled fixtures.
+ */
+export const STOCK_TIMEOUT_MS = 8_000;
+
 export interface LoadStockImagesInit {
   /** Injected so tests exercise the real code path without a network. */
   fetch?: typeof globalThis.fetch;
   count?: number;
+  /** Per request; see `STOCK_TIMEOUT_MS`. */
+  timeoutMs?: number;
 }
 
 export interface LoadedStockImages {
@@ -53,32 +65,14 @@ function freshSeed(): string {
 export async function loadStockImages(init: LoadStockImagesInit = {}): Promise<LoadedStockImages> {
   const doFetch = init.fetch ?? globalThis.fetch;
   const count = init.count ?? STOCK_IMAGE_COUNT;
+  const timeoutMs = init.timeoutMs ?? STOCK_TIMEOUT_MS;
 
   const settled = await Promise.allSettled(
-    Array.from({ length: count }, async (): Promise<{ info: ImageInfo; bytes: Uint8Array }> => {
-      const seed = freshSeed();
-      const res = await doFetch(`${STOCK_BASE}/${seed}/${WIDTH}/${HEIGHT}`);
-      if (!res.ok) throw new Error(`stock image ${seed}: HTTP ${res.status}`);
-
-      // A stock under load answers with an HTML error page and status 200.
-      // Serving that as `image/jpeg` would put a broken picture in every peer's
-      // gallery, with nothing anywhere saying why.
-      const contentType = res.headers.get("content-type") ?? "";
-      if (!contentType.startsWith("image/")) {
-        throw new Error(`stock image ${seed}: expected an image, got "${contentType}"`);
-      }
-
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      return {
-        info: {
-          id: `stock-${seed}`,
-          title: `From an image stock (${WIDTH}x${HEIGHT})`,
-          contentType,
-          size: bytes.length,
-        },
-        bytes,
-      };
-    }),
+    Array.from(
+      { length: count },
+      (): Promise<{ info: ImageInfo; bytes: Uint8Array }> =>
+        withTimeout(timeoutMs, (signal) => fetchOne(doFetch, signal)),
+    ),
   );
 
   const initialFiles: Record<string, Uint8Array> = {};
@@ -92,4 +86,50 @@ export async function loadStockImages(init: LoadStockImagesInit = {}): Promise<L
     images.push(outcome.value.info);
   }
   return { initialFiles, images };
+}
+
+/**
+ * Runs `task` and rejects after `ms` if it has not settled, aborting its
+ * signal. A timer races the task instead of trusting the signal, because a
+ * fetch that ignores its signal must not stall the load either.
+ */
+function withTimeout<T>(ms: number, task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const reason = new Error(`stock request timed out after ${ms}ms`);
+      controller.abort(reason);
+      reject(reason);
+    }, ms);
+  });
+  return Promise.race([task(controller.signal), timeout]).finally(() => clearTimeout(timer));
+}
+
+async function fetchOne(
+  doFetch: typeof globalThis.fetch,
+  signal: AbortSignal,
+): Promise<{ info: ImageInfo; bytes: Uint8Array }> {
+  const seed = freshSeed();
+  const res = await doFetch(`${STOCK_BASE}/${seed}/${WIDTH}/${HEIGHT}`, { signal });
+  if (!res.ok) throw new Error(`stock image ${seed}: HTTP ${res.status}`);
+
+  // A stock under load answers with an HTML error page and status 200.
+  // Serving that as `image/jpeg` would put a broken picture in every peer's
+  // gallery, with nothing anywhere saying why.
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.startsWith("image/")) {
+    throw new Error(`stock image ${seed}: expected an image, got "${contentType}"`);
+  }
+
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  return {
+    info: {
+      id: `stock-${seed}`,
+      title: `From an image stock (${WIDTH}x${HEIGHT})`,
+      contentType,
+      size: bytes.length,
+    },
+    bytes,
+  };
 }
