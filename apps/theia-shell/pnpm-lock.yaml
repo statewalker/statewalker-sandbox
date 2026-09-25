@@ -78,15 +78,18 @@ importers:
       '@statewalker/webrun-files':
         specifier: 0.10.0
         version: 0.10.0
-      '@statewalker/webrun-files-browser':
-        specifier: 0.10.0
-        version: 0.10.0
       '@statewalker/webrun-files-mem':
         specifier: 0.10.0
         version: 0.10.0
       '@theia-shell/theia-files-api':
         specifier: workspace:*
         version: link:../../packages/theia-files-api
+      '@theia-shell/theia-files-mounts':
+        specifier: workspace:*
+        version: link:../../packages/theia-files-mounts
+      '@theia-shell/theia-markdown':
+        specifier: workspace:*
+        version: link:../../packages/theia-markdown
       '@theia-shell/theia-pdf-viewer':
         specifier: workspace:*
         version: link:../../packages/theia-pdf-viewer

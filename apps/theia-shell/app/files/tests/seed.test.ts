@@ -16,6 +16,12 @@ describe("seedIfEmpty", () => {
     expect(await seedIfEmpty(files, { "/a.md": "# A" })).toBe(false);
     expect(await files.exists("/a.md")).toBe(false);
   });
+
+  it("counts a storage holding only the system folder .shell as empty", async () => {
+    const files = new MemFilesApi({ initialFiles: { "/.shell/settings/settings.json": "{}" } });
+    expect(await seedIfEmpty(files, { "/a.md": "# A" })).toBe(true);
+    expect(await readText(files, "/a.md")).toBe("# A");
+  });
 });
 
 describe("seedIfEmpty with binary files", () => {

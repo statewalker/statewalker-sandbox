@@ -1,7 +1,6 @@
 import { ConfirmDialog } from "@theia/core/lib/browser/dialogs";
 import type { FrontendApplicationContribution } from "@theia/core/lib/browser/frontend-application-contribution";
 import type { Command, CommandContribution, CommandRegistry } from "@theia/core/lib/common/command";
-import { MessageService } from "@theia/core/lib/common/message-service";
 import { inject, injectable } from "@theia/core/shared/inversify";
 import { WrongPasswordError } from "../common/secret-vault";
 import { type VaultDialogMode, VaultPasswordDialog } from "./vault-dialog";
@@ -28,7 +27,6 @@ export namespace VaultCommands {
 @injectable()
 export class VaultUi implements FrontendApplicationContribution, CommandContribution {
   @inject(VaultService) protected readonly vaults!: VaultService;
-  @inject(MessageService) protected readonly messages!: MessageService;
 
   onDidInitializeLayout(): void {
     void this.ensureUnlocked();
@@ -43,32 +41,36 @@ export class VaultUi implements FrontendApplicationContribution, CommandContribu
 
   protected async prompt(mode: VaultDialogMode): Promise<boolean> {
     const vault = await this.vaults.vault();
-    let message: string | undefined;
-    for (;;) {
-      const title = {
-        create: "Protect your secrets",
-        unlock: "Unlock secrets",
-        change: "Change the secrets password",
-      }[mode];
-      const result = await new VaultPasswordDialog({ title, mode, message }).open();
-      if (!result) return false;
-      try {
-        const key =
-          mode === "create"
-            ? await vault.create(result.password)
-            : mode === "unlock"
-              ? await vault.unlock(result.password)
-              : await vault.changePassword(result.password);
-        if (result.remember) await this.vaults.remember(key);
-        return true;
-      } catch (error) {
-        if (error instanceof WrongPasswordError) {
-          message = "Wrong password. Try again.";
-          continue;
-        }
-        this.messages.error(`Secrets: ${(error as Error).message}`);
-        return false;
-      }
+    const title = {
+      create: "Protect your secrets",
+      unlock: "Unlock secrets",
+      change: "Change the secrets password",
+    }[mode];
+    const result = await new VaultPasswordDialog({
+      title,
+      mode,
+      submit: (value) =>
+        this.run(async () => {
+          const key =
+            mode === "create"
+              ? await vault.create(value.password)
+              : mode === "unlock"
+                ? await vault.unlock(value.password)
+                : await vault.changePassword(value.password);
+          if (value.remember) await this.vaults.remember(key);
+        }),
+    }).open();
+    return !!result;
+  }
+
+  /** A vault operation for a dialog's `submit`: "" when done, else the error to show in the dialog. */
+  protected async run(operation: () => Promise<void>): Promise<string> {
+    try {
+      await operation();
+      return "";
+    } catch (error) {
+      if (error instanceof WrongPasswordError) return "Wrong password. Try again.";
+      return `Secrets: ${(error as Error).message}`;
     }
   }
 
@@ -96,12 +98,15 @@ export class VaultUi implements FrontendApplicationContribution, CommandContribu
       ok: "Reset",
     }).open();
     if (!confirmed) return;
-    const result = await new VaultPasswordDialog({
+    const vault = await this.vaults.vault();
+    await new VaultPasswordDialog({
       title: "New secrets password",
       mode: "create",
+      submit: (value) =>
+        this.run(async () => {
+          const key = await vault.reset(value.password);
+          if (value.remember) await this.vaults.remember(key);
+        }),
     }).open();
-    if (!result) return;
-    const key = await (await this.vaults.vault()).reset(result.password);
-    if (result.remember) await this.vaults.remember(key);
   }
 }

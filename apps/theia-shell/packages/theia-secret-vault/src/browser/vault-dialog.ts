@@ -1,11 +1,22 @@
-import { AbstractDialog, type DialogError, DialogProps } from "@theia/core/lib/browser/dialogs";
+import {
+  AbstractDialog,
+  type DialogError,
+  type DialogMode,
+  DialogProps,
+} from "@theia/core/lib/browser/dialogs";
 
 export type VaultDialogMode = "unlock" | "create" | "change";
 
 export class VaultDialogProps extends DialogProps {
   readonly mode!: VaultDialogMode;
-  /** Shown above the fields, e.g. "Wrong password. Try again." */
+  /** Shown above the fields. */
   readonly message?: string;
+  /**
+   * Runs on accept, before the dialog closes: the vault operation itself.
+   * Resolves to an error to show in the dialog (e.g. "Wrong password"), or ""
+   * on success — so the dialog closes only once the vault is really unlocked.
+   */
+  readonly submit?: (result: VaultDialogResult) => Promise<string>;
 }
 
 export interface VaultDialogResult {
@@ -53,11 +64,19 @@ export class VaultPasswordDialog extends AbstractDialog<VaultDialogResult> {
     return { password: this.password.value, remember: this.rememberBox.checked };
   }
 
-  protected override isValid(value: VaultDialogResult): DialogError {
-    if (!value.password) return "Enter a password.";
+  protected override async isValid(
+    value: VaultDialogResult,
+    mode: DialogMode,
+  ): Promise<DialogError> {
+    // While typing, an empty password only disables the button; on Enter it is said.
+    if (!value.password)
+      return mode === "open" ? "Enter a password." : { message: "", result: false };
     if (this.props.mode !== "unlock" && value.password !== this.confirm.value) {
-      return "The passwords do not match.";
+      return mode === "open" || this.confirm.value
+        ? "The passwords do not match."
+        : { message: "", result: false };
     }
+    if (mode === "open" && this.props.submit) return this.props.submit(value);
     return "";
   }
 
