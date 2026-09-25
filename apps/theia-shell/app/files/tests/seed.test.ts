@@ -17,3 +17,14 @@ describe("seedIfEmpty", () => {
     expect(await files.exists("/a.md")).toBe(false);
   });
 });
+
+describe("seedIfEmpty with binary files", () => {
+  it("writes Uint8Array entries byte for byte", async () => {
+    const files = new MemFilesApi();
+    const bytes = new Uint8Array([0, 1, 2, 250, 255]);
+    await seedIfEmpty(files, { "/img/x.bin": bytes });
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of files.read("/img/x.bin")) chunks.push(chunk);
+    expect(Array.from(chunks.flatMap((c) => Array.from(c)))).toEqual([0, 1, 2, 250, 255]);
+  });
+});

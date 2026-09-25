@@ -1,11 +1,15 @@
 # Theia Shell: Markdown
 
-A Markdown editor built on **Eclipse Theia 1.76** that runs entirely in the
-browser. There is no backend: the build output is static files. Files come from
+A Markdown editor with image and PDF viewers, built on **Eclipse Theia 1.76**,
+that runs entirely in the browser. There is no backend: the build output is static files. Files come from
 a [`FilesApi`](https://github.com/statewalker/webrun-files)
 (`@statewalker/webrun-files`).
 
 ![The app: explorer over the FilesApi, the editor, the live preview and the outline](docs/screenshot.png)
+
+| Image viewer | PDF viewer (EmbedPDF) |
+|---|---|
+| ![Image viewer](docs/image-viewer.png) | ![PDF viewer](docs/pdf-viewer.png) |
 
 ## Run it
 
@@ -23,8 +27,10 @@ Any static file server works: `app/lib/frontend/` is the whole app.
 - `http://127.0.0.1:3000/?storage=memory` uses an in-memory `MemFilesApi`,
   fresh on every load.
 
-An empty `FilesApi` is seeded with `welcome.md`, `notes/ideas.md` and
-`docs/cheatsheet.md`.
+An empty `FilesApi` is seeded with `welcome.md`, `notes/ideas.md`,
+`docs/cheatsheet.md`, `docs/sample.pdf`, `media/gradient.png` and
+`media/logo.svg`. The PNG and the PDF are generated in code (`app/files/src/png.ts`,
+`createTextPdf`), so no binary fixtures are checked in.
 
 ## What is in it
 
@@ -32,6 +38,8 @@ An empty `FilesApi` is seeded with `welcome.md`, `notes/ideas.md` and
 |---|---|
 | [`packages/theia-files-api`](../packages/theia-files-api) | **The file system.** `FilesApiFileSystemProvider` implements Theia's `FileSystemProvider` over a `FilesApi`. The frontend module rebinds `FileSystemProvider` (replacing browser-only OPFS) and `WorkspaceServer` (opening the `FilesApi` root on a first visit), reveals the explorer, and names the root. |
 | [`packages/theia-markdown`](../packages/theia-markdown) | **The extension.** Commands, menus, keybindings, the preview and the outline view (below). |
+| [`packages/theia-image-viewer`](../packages/theia-image-viewer) | **Image viewer extension.** Opens PNG, JPEG, GIF, WebP, AVIF, BMP, ICO and SVG files in a zoomable view, with commands, tab-toolbar buttons, a *View → Image* menu and keybindings. |
+| [`packages/theia-pdf-viewer`](../packages/theia-pdf-viewer) | **PDF viewer extension.** Opens `.pdf` files in [EmbedPDF](https://www.embedpdf.com/) (PDFium in WebAssembly), offline. |
 | [`app/files`](files) | **The app's `FilesApi`**: OPFS or memory, plus the seed. |
 | `app` | The browser-only Theia application (`"theia": { "target": "browser-only" }`). |
 
@@ -79,8 +87,10 @@ own `package.json`.
 ```bash
 pnpm --filter @theia-shell/theia-files-api test   # 21 unit tests: the FileSystemProvider contract
 pnpm --filter @theia-shell/theia-markdown test    # 15 unit tests: outline, rendering, edits
-pnpm --filter @theia-shell/app-files test         # 2 unit tests: seeding
-pnpm --filter @theia-shell/app test:e2e           # 10 Playwright tests against the static build
+pnpm --filter @theia-shell/theia-image-viewer test # 8 unit tests: MIME types, fit, zoom steps
+pnpm --filter @theia-shell/theia-pdf-viewer test  # 5 unit tests: the generated PDF
+pnpm --filter @theia-shell/app-files test         # 7 unit tests: seeding, the PNG encoder
+pnpm --filter @theia-shell/app test:e2e           # 14 Playwright tests against the static build
 ```
 
 The e2e tests serve `lib/frontend` with a plain static server and drive
@@ -91,7 +101,10 @@ Chromium:
 - the live preview, from the palette and from the explorer context menu;
 - the outline, and revealing a heading;
 - *Toggle Bold* from the editor context menu;
-- *Toggle Heading* by keybinding.
+- *Toggle Heading* by keybinding;
+- images: the viewer opens instead of the editor, zoom works from the tab
+  toolbar, the keyboard and the palette, and SVG is shown as an image;
+- a PDF renders in EmbedPDF with no request to any host other than the app.
 
 Every test also asserts that the page raised no errors.
 
@@ -109,3 +122,9 @@ Every test also asserts that the page raised no errors.
   - The root-label test was failing because of a wrong locator: the single root
     is the explorer section's header, not a tree node.
   - Green: 10 of 10 with the extension.
+- **Viewers.**
+  - Unit: 8 of 8 red, then green (image logic); 4 of 4 red, then green (PNG
+    encoder and binary seeding); 4 of 4 green for `createTextPdf`, whose red run
+    was a load failure.
+  - End to end: 4 of 4 red before the viewers were added to the app, then 4 of
+    4 green. The full suite is 14 of 14.

@@ -4,13 +4,13 @@
  * Text is ASCII/Latin-1; `(`, `)` and `\` are escaped.
  */
 export function createTextPdf(lines: string[], fontSize = 24): Uint8Array {
-  const escape = (s: string) => s.replace(/[\\()]/g, (c) => `\\${c}`);
+  const escapePdf = (s: string) => s.replace(/[\\()]/g, (c) => `\\${c}`);
   const content = [
     "BT",
     `/F1 ${fontSize} Tf`,
     `${Math.round(fontSize * 1.4)} TL`,
     "72 720 Td",
-    ...lines.map((line, i) => `${i === 0 ? "" : "T* "}(${escape(line)}) Tj`),
+    ...lines.map((line, i) => `${i === 0 ? "" : "T* "}(${escapePdf(line)}) Tj`),
     "ET",
   ].join("\n");
 

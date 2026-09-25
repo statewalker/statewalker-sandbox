@@ -2,8 +2,9 @@
 
 An Eclipse Theia 1.76 application that runs **only in the browser**. It has a
 file explorer over a `@statewalker/webrun-files` `FilesApi`, a Monaco editor
-that saves back to it, and a Markdown extension contributing commands, menus,
-keybindings and views. It is the first rung toward the HTTPeers shell: a Theia
+that saves back to it, a Markdown extension contributing commands, menus,
+keybindings and views, and separate image and PDF viewer extensions (the PDF
+viewer uses EmbedPDF). It is the first rung toward the HTTPeers shell: a Theia
 host for mesh apps and components installed at runtime.
 
 **Start with [`app/README.md`](app/README.md)** for running it and for how to
@@ -28,9 +29,11 @@ PLAN.md                     the plan: questions, prototypes, the app
 tools/serve.mjs             a plain static file server (all a browser-only app needs)
 tools/playwright.base.mjs   shared e2e config: serve <app>/lib/frontend, drive Chromium
 tools/probe.mjs             debugging aid: load a served app, print console errors and DOM ids, screenshot
-protos/p1…p6                one question each; README = question, answer, red/green log
+protos/p1…p7                one question each; README = question, answer, red/green log
 packages/theia-files-api    FilesApi → Theia file system (extension)
 packages/theia-markdown     the Markdown extension
+packages/theia-image-viewer the image viewer extension
+packages/theia-pdf-viewer   the PDF viewer extension (EmbedPDF)
 app/                        the application, app/files (its FilesApi), e2e tests
 ```
 
@@ -44,6 +47,8 @@ app/                        the application, app/files (its FilesApi), e2e tests
 | [P4](protos/p4-editor-save) | Monaco + Save through the adapter? | Works with no extra code. |
 | [P5](protos/p5-contributions) | Commands, keybindings, menus and views, browser-only? | Standard APIs, all work. |
 | [P6](protos/p6-vscode-extension) | VS Code web extensions, and **runtime deploy**? | Static web extensions run once `activationEvents` are explicit (a 1.76 gap). A 20-line `HostedPluginServer` subclass deploys plugins at runtime with no reload (browser-only never calls `setClient`). `@theia/plugin-ext` roughly doubles the frontend modules, and several of them fail without a backend. |
+
+| [P7](protos/p7-embedpdf) | Can EmbedPDF run inside Theia's bundle, offline, on `FilesApi` bytes? | Yes. PDFium's wasm is embedded through Theia's `dataurl` loader for `.wasm`; jsDelivr fonts, Google Fonts and the stamp manifest are switched off. The bundle grows by about 13 MB in development mode. |
 
 ## Next, toward the HTTPeers shell
 

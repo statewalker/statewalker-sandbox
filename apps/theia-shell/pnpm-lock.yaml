@@ -29,9 +29,15 @@ importers:
       '@theia-shell/theia-files-api':
         specifier: workspace:*
         version: link:../packages/theia-files-api
+      '@theia-shell/theia-image-viewer':
+        specifier: workspace:*
+        version: link:../packages/theia-image-viewer
       '@theia-shell/theia-markdown':
         specifier: workspace:*
         version: link:../packages/theia-markdown
+      '@theia-shell/theia-pdf-viewer':
+        specifier: workspace:*
+        version: link:../packages/theia-pdf-viewer
       '@theia/core':
         specifier: 1.76.0
         version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -75,6 +81,9 @@ importers:
       '@theia-shell/theia-files-api':
         specifier: workspace:*
         version: link:../../packages/theia-files-api
+      '@theia-shell/theia-pdf-viewer':
+        specifier: workspace:*
+        version: link:../../packages/theia-pdf-viewer
       '@theia/core':
         specifier: 1.76.0
         version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -97,6 +106,15 @@ importers:
         specifier: 1.76.0
         version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
       '@theia/workspace':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+
+  packages/theia-image-viewer:
+    dependencies:
+      '@theia/core':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@theia/filesystem':
         specifier: 1.76.0
         version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
 
