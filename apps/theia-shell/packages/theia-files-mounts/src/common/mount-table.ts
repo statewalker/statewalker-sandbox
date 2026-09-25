@@ -25,6 +25,13 @@ export interface ApplyOptions {
   recreate?: (key: string, status: MountStatus) => boolean;
 }
 
+export interface MountTableOptions {
+  /** How long a mount may take to be created before it counts as failed (ms). Default 15 s. */
+  createTimeout?: number;
+}
+
+const DEFAULT_CREATE_TIMEOUT = 15_000;
+
 const empty = () => readOnly(new MemFilesApi());
 
 /**
@@ -42,6 +49,7 @@ export class MountTable {
     protected readonly types: (id: string) => MountType | undefined,
     protected readonly secrets: (mount: MountConfig, field: string) => Promise<string | undefined>,
     protected readonly isLocked: () => boolean = () => false,
+    protected readonly options: MountTableOptions = {},
   ) {}
 
   composite(): FilesApi {
@@ -132,11 +140,17 @@ export class MountTable {
         status: { state: "failed", message: `Unknown mount type "${config.type}"` },
       };
     try {
-      const api = await type.create(config, {
-        interactive,
-        locked: this.isLocked(),
-        secret: (field) => this.secrets(config, field),
-      });
+      const timeout = this.options.createTimeout ?? DEFAULT_CREATE_TIMEOUT;
+      // A mount that never answers (a host dropping packets) must not hold up the others.
+      const api = await withTimeout(
+        type.create(config, {
+          interactive,
+          locked: this.isLocked(),
+          secret: (field) => this.secrets(config, field),
+        }),
+        timeout,
+        `No answer after ${timeout / 1000} s`,
+      );
       return { config, api, status: { state: "mounted" } };
     } catch (error) {
       const status: MountStatus =
@@ -148,6 +162,14 @@ export class MountTable {
       return { config, api: empty(), status };
     }
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
 }
 
 function sameMount(a: MountConfig, b: MountConfig): boolean {

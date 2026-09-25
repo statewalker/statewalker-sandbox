@@ -59,6 +59,8 @@ export class SecretVault {
   protected keyFile: VaultKeyFile | undefined;
   protected sessionId: string | undefined;
   protected secrets = new Map<string, string>();
+  /** Serializes read-modify-write cycles within this instance. */
+  protected writes: Promise<unknown> = Promise.resolve();
   protected readonly lockEmitter = new Emitter<boolean>();
   /** Fires `true` when the vault unlocks, `false` when it locks. */
   readonly onDidChangeLock: Event<boolean> = this.lockEmitter.event;
@@ -179,7 +181,17 @@ export class SecretVault {
     return removed;
   }
 
-  protected async update(change: (secrets: Map<string, string>) => boolean): Promise<void> {
+  /**
+   * One read-modify-write at a time: queued within this instance, and across
+   * tabs by the Web Locks API when the browser has it.
+   */
+  protected update(change: (secrets: Map<string, string>) => boolean): Promise<void> {
+    const run = this.writes.then(() => withVaultLock(() => this.updateNow(change)));
+    this.writes = run.catch(() => undefined);
+    return run;
+  }
+
+  protected async updateNow(change: (secrets: Map<string, string>) => boolean): Promise<void> {
     const dataKey = this.dataKey;
     if (!dataKey) throw new VaultLockedError();
     const id = (await this.id()) as string;
@@ -249,7 +261,12 @@ export class SecretVault {
 
   protected async readKeyFile(): Promise<VaultKeyFile | undefined> {
     const text = await tryReadText(this.files, this.path(VAULT_KEY_FILE));
-    return text === undefined ? undefined : (JSON.parse(text) as VaultKeyFile);
+    if (text === undefined) return undefined;
+    try {
+      return JSON.parse(text) as VaultKeyFile;
+    } catch {
+      throw new VaultCorruptError(`${VAULT_KEY_FILE} is not valid JSON`);
+    }
   }
 
   protected async requireKeyFile(): Promise<VaultKeyFile> {
@@ -261,6 +278,14 @@ export class SecretVault {
   protected path(name: string): string {
     return joinPath(this.dir, name);
   }
+}
+
+type LockManager = { request<T>(name: string, callback: () => Promise<T>): Promise<T> };
+
+/** Runs `fn` under a cross-tab lock when `navigator.locks` exists (browsers), else directly (Node). */
+function withVaultLock<T>(fn: () => Promise<T>): Promise<T> {
+  const locks = (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks;
+  return locks ? locks.request("theia-shell-vault", fn) : fn();
 }
 
 async function derivePasswordKey(

@@ -24,8 +24,10 @@ The vault lives in a folder of a `FilesApi` (the app's main storage, `/.shell`):
 `secrets.json` — `{ "version": 1, "iv": "<b64>", "data": "<b64>" }`: the whole
 map of secrets, names and values, as one AES-GCM ciphertext bound to the vault
 `id`. A fresh IV on every write; a tampered or swapped file fails to decrypt and
-is reported, never silently emptied. Writes re-read the file first, so two tabs
-do not erase each other's secrets.
+is reported, never silently emptied. Writes re-read the file first and run one
+at a time — queued within a tab, and across tabs by the Web Locks API — so
+neither two tabs nor two overlapping saves erase each other's secrets. A
+corrupt vault file leaves the vault locked and says so in a notification.
 
 ## Keys and unlocking
 
@@ -66,3 +68,8 @@ protection on this device for no prompt.
   Green: 4 of 4; the package's 17 of 17.
 - The dialog, commands and `KeyStoreService` rebind are covered end to end in
   `app/tests/vault.spec.ts` (Task 9).
+- **After the final review**, each seen red first: two overlapping saves kept
+  only one secret (now queued); an unparsable `vault.key.json` crashed with a
+  `SyntaxError` (now `VaultCorruptError`); end to end, a corrupt `secrets.json`
+  opened with a remembered key gave no message (now a notification). The
+  package's 19 of 19.

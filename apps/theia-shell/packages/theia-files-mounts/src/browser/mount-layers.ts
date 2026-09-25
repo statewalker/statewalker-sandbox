@@ -1,4 +1,5 @@
 import type { FilesApi } from "@statewalker/webrun-files";
+import { MessageService } from "@theia/core/lib/common/message-service";
 import { PreferenceService } from "@theia/core/lib/common/preferences";
 import { inject, injectable } from "@theia/core/shared/inversify";
 import { type FilesApiLayer, hiddenPathsFilter, systemFolderFilter } from "../common/layers";
@@ -26,9 +27,19 @@ export class HiddenPathsLayer implements FilesApiLayer {
   readonly priority = 10;
   @inject(PreferenceService) protected readonly preferences!: PreferenceService;
   @inject(MountDefaults) protected readonly defaults!: MountDefaults;
+  @inject(MessageService) protected readonly messages!: MessageService;
+  protected readonly reported = new Set<string>();
 
   wrap(root: FilesApi): FilesApi {
-    const set = this.preferences.inspect<string[]>(HIDDEN_PREFERENCE)?.globalValue;
-    return hiddenPathsFilter(Array.isArray(set) ? set : this.defaults.hidden)(root);
+    const set: unknown = this.preferences.inspect(HIDDEN_PREFERENCE)?.globalValue;
+    const globs: unknown[] = Array.isArray(set) ? set : this.defaults.hidden;
+    return hiddenPathsFilter(globs, (glob) => this.warnOnce(glob))(root);
+  }
+
+  protected warnOnce(glob: unknown): void {
+    const text = JSON.stringify(glob);
+    if (this.reported.has(text)) return;
+    this.reported.add(text);
+    this.messages.warn(`files.hidden: ${text} is not a valid glob pattern; it is ignored.`);
   }
 }

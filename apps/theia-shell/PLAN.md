@@ -1,7 +1,7 @@
 # theia-shell — plan
 
 > **Status (2026-09-25): done.** P1–P7 answered (see each `protos/pN-*/README.md`
-> and the summary in `README.md`); the app is in `app/` with 105 unit and 37 e2e tests
+> and the summary in `README.md`); the app is in `app/` with 113 unit and 40 e2e tests
 > (the prototypes add 12 more e2e). P7, the image/PDF viewers, and the mounts and
 > vault came after the plan below was written; they are recorded here, not planned.
 > The mounts and vault have their own

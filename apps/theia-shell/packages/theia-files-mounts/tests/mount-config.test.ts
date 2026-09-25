@@ -1,6 +1,6 @@
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { describe, expect, it } from "vitest";
-import { validateMountConfigs } from "../src/common/mount-config";
+import { mountsSetting, validateMountConfigs } from "../src/common/mount-config";
 import type { MountType } from "../src/common/mount-types";
 
 const s3: MountType = {
@@ -51,5 +51,20 @@ describe("validateMountConfigs", () => {
     expect(result.valid).toEqual([good]);
     expect(result.errors).toHaveLength(7);
     expect(result.errors.join("\n")).toMatch(/secret/i);
+  });
+});
+
+describe("mountsSetting", () => {
+  const defaults = [{ key: "temp", name: "Temporary", type: "memory", config: {} }];
+
+  it("uses the defaults only when the setting is unset", () => {
+    expect(mountsSetting(undefined, defaults)).toBe(defaults);
+    expect(mountsSetting([], defaults)).toEqual([]);
+  });
+
+  it("passes a malformed value on, so it is reported instead of silently replaced", () => {
+    const raw = { key: "x" };
+    expect(mountsSetting(raw, defaults)).toBe(raw);
+    expect(validateMountConfigs(mountsSetting(raw, defaults), types, []).errors).toHaveLength(1);
   });
 });

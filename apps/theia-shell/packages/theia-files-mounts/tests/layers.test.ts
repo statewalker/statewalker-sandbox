@@ -44,6 +44,18 @@ describe("layers", () => {
     expect(hiddenPathsFilter([])(files)).toBe(files);
   });
 
+  it("skips globs that cannot be compiled, reports them, and still applies the rest", async () => {
+    const files = new MemFilesApi();
+    await writeText(files, "/m/a.log", "log");
+    await writeText(files, "/m/a.md", "# a");
+    const invalid: unknown[] = [];
+    const view = hiddenPathsFilter(["[abc", "a{b", 1 as unknown as string, "**/*.log"], (glob) =>
+      invalid.push(glob),
+    )(files);
+    expect(await names(view, "/m")).toEqual(["a.md"]);
+    expect(invalid).toEqual(["[abc", "a{b", 1]);
+  });
+
   it("hides the main storage's system folder", async () => {
     const files = new MemFilesApi();
     await writeText(files, "/browser/.shell/settings/settings.json", "{}");

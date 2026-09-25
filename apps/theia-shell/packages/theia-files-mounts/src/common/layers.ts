@@ -23,9 +23,27 @@ export function applyLayers(root: FilesApi, layers: readonly FilesApiLayer[]): F
     .reduce((api, layer) => layer.wrap(api), root);
 }
 
-/** Hides every path matching one of `globs`; no globs → the api itself. */
-export function hiddenPathsFilter(globs: readonly string[]): (api: FilesApi) => FilesApi {
-  return (api) => (globs.length ? new FilteredFilesApi(api, newGlobPathFilter(...globs)) : api);
+/**
+ * Hides every path matching one of `globs`; no globs → the api itself. A glob
+ * that is not a string or does not compile is skipped and passed to `onInvalid`,
+ * so one typo in settings never breaks the whole tree.
+ */
+export function hiddenPathsFilter(
+  globs: readonly unknown[],
+  onInvalid: (glob: unknown) => void = () => {},
+): (api: FilesApi) => FilesApi {
+  const valid = globs.filter((glob): glob is string => {
+    try {
+      if (typeof glob !== "string") throw new Error("not a string");
+      // Compile it the way the filter will, and use it once.
+      void newGlobPathFilter(glob)("/");
+      return true;
+    } catch {
+      onInvalid(glob);
+      return false;
+    }
+  });
+  return (api) => (valid.length ? new FilteredFilesApi(api, newGlobPathFilter(...valid)) : api);
 }
 
 /** Hides one folder and everything in it; no path → the api itself. */

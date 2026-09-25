@@ -11,10 +11,11 @@ import { inject, injectable, named } from "@theia/core/shared/inversify";
 import type { FilesApiChange } from "@theia-shell/theia-files-api";
 import { VaultService } from "@theia-shell/theia-secret-vault/lib/browser/vault-service";
 import { applyLayers, FilesApiLayer } from "../common/layers";
-import { validateMountConfigs } from "../common/mount-config";
+import { mountsSetting, validateMountConfigs } from "../common/mount-config";
 import { type ApplyOptions, MountTable } from "../common/mount-table";
 import { type MountConfig, type MountStatus, MountType } from "../common/mount-types";
 import { MountedFilesApi } from "../common/mounted-files-api";
+import { SerialQueue } from "../common/serial-queue";
 import { MainStorageService } from "./main-storage";
 import {
   HIDDEN_PREFERENCE,
@@ -53,7 +54,8 @@ export class MountService {
   protected mainMount: { config: MountConfig; api: FilesApi } | undefined;
   protected started: Promise<FilesApi> | undefined;
   protected readonly reported = new Set<string>();
-  protected queue: Promise<void> = Promise.resolve();
+  /** Every change to the tree, one at a time; a failed step is reported and the next still runs. */
+  protected readonly queue = new SerialQueue();
 
   protected readonly changeEmitter = new Emitter<readonly FilesApiChange[]>();
   readonly onDidChange: Event<readonly FilesApiChange[]> = this.changeEmitter.event;
@@ -70,17 +72,19 @@ export class MountService {
     const { key, name } = opened.storage;
     this.mainMount = { config: { key, name, type: "main", config: {} }, api: opened.files };
     await this.apply([]);
-    void this.preferences.ready.then(() => this.applyPreferences());
+    this.preferences.ready.then(() => this.applyPreferences()).catch((e) => this.report(e));
     this.preferences.onPreferenceChanged((event) => {
-      if (event.preferenceName === MOUNTS_PREFERENCE) void this.applyPreferences();
-      if (event.preferenceName === HIDDEN_PREFERENCE)
-        this.rebuild([{ type: "updated", path: "/" }]);
+      if (event.preferenceName === MOUNTS_PREFERENCE)
+        this.applyPreferences().catch((e) => this.report(e));
+      if (event.preferenceName === HIDDEN_PREFERENCE) this.rebuildQueued();
     });
-    this.vaults.onDidUnlock(
-      () => void this.applyPreferences({ recreate: (_key, s) => s.state === "locked" }),
+    this.vaults.onDidUnlock(() =>
+      this.applyPreferences({ recreate: (_key, s) => s.state === "locked" }).catch((e) =>
+        this.report(e),
+      ),
     );
     for (const layer of this.layerProvider.getContributions()) {
-      layer.onDidChange?.(() => this.rebuild([{ type: "updated", path: "/" }]));
+      layer.onDidChange?.(() => this.rebuildQueued());
     }
     return this.root;
   }
@@ -162,7 +166,12 @@ export class MountService {
 
   protected applyPreferences(options: ApplyOptions = {}): Promise<void> {
     const reserved = this.mainKey() ? [this.mainKey() as string] : [];
-    const { valid, errors } = validateMountConfigs(this.configuredMounts(), this.types(), reserved);
+    const raw: unknown = this.preferences.inspect(MOUNTS_PREFERENCE)?.globalValue;
+    const { valid, errors } = validateMountConfigs(
+      mountsSetting(raw, this.defaults.mounts),
+      this.types(),
+      reserved,
+    );
     for (const error of errors) {
       if (this.reported.has(error)) continue;
       this.reported.add(error);
@@ -173,11 +182,20 @@ export class MountService {
 
   /** Serialized: a slow S3 mount must not let an older apply overwrite a newer one. */
   protected apply(configs: MountConfig[], options: ApplyOptions = {}): Promise<void> {
-    this.queue = this.queue.then(async () => {
+    return this.queue.run(async () => {
       const fixed = this.mainMount ? [this.mainMount] : [];
       this.rebuild(await this.table.apply(configs, { ...options, fixed }));
     });
-    return this.queue;
+  }
+
+  protected rebuildQueued(): void {
+    this.queue
+      .run(async () => this.rebuild([{ type: "updated", path: "/" }]))
+      .catch((e) => this.report(e));
+  }
+
+  protected report(error: unknown): void {
+    this.messages.error(`Mounts: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   protected rebuild(changes: FilesApiChange[]): void {

@@ -140,6 +140,20 @@ describe("SecretVault", () => {
     expect(check.get("b")).toBe("2");
   });
 
+  it("keeps both secrets when two saves overlap on one instance", async () => {
+    const a = vault();
+    await a.create("pw");
+    await Promise.all([a.set("a", "1"), a.set("b", "2"), a.delete("none")]);
+    const check = vault();
+    await check.unlock("pw");
+    expect(check.names().sort()).toEqual(["a", "b"]);
+  });
+
+  it("reports an unreadable vault.key.json as corrupt, not as a crash", async () => {
+    await writeText(files, `/.shell/${VAULT_KEY_FILE}`, "{ not json");
+    await expect(vault().unlock("pw")).rejects.toBeInstanceOf(VaultCorruptError);
+  });
+
   it("opens an unpersisted session vault without a password", async () => {
     const a = vault();
     await a.openSession();

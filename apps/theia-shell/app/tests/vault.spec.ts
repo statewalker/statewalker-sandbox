@@ -96,3 +96,26 @@ test("the boot gate: a denied click stays, the fallback resolves", async ({ page
   expect(result.text).toContain("not granted");
   expect(result.choice).toBe("fallback");
 });
+
+test("an undecryptable secrets.json is reported, even when a remembered key unlocks silently", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await unlockVault(page, "pw", true);
+  await openMain(page);
+  await page.evaluate(async () => {
+    const main = await (await navigator.storage.getDirectory()).getDirectoryHandle("main");
+    const shell = await main.getDirectoryHandle(".shell");
+    const file = await shell.getFileHandle("secrets.json");
+    const parsed = JSON.parse(await (await file.getFile()).text());
+    parsed.data = `${parsed.data.slice(0, -4)}AAAA`;
+    const writable = await file.createWritable();
+    await writable.write(JSON.stringify(parsed));
+    await writable.close();
+  });
+  await page.reload();
+  await openMain(page);
+  await expect(
+    page.locator(".theia-notification-message").filter({ hasText: "cannot be decrypted" }).first(),
+  ).toBeVisible();
+});

@@ -159,6 +159,28 @@ describe("MountTable", () => {
     expect(table.status("b")).toBeUndefined();
   });
 
+  it("gives up on a mount that never answers, as failed, and mounts the rest", async () => {
+    const hanging: MountType = {
+      id: "hang",
+      label: "Hangs",
+      fields: [],
+      isAvailable: () => true,
+      create: () => new Promise(() => {}),
+    };
+    const { type } = fakeTypes();
+    const table = new MountTable(
+      (id) => (id === "hang" ? hanging : type),
+      async () => undefined,
+      () => false,
+      {
+        createTimeout: 50,
+      },
+    );
+    await table.apply([{ ...mount("slow"), type: "hang" }, mount("ok")]);
+    expect(table.status("slow")).toEqual({ state: "failed", message: "No answer after 0.05 s" });
+    expect(table.status("ok")).toEqual({ state: "mounted" });
+  });
+
   it("fails an unknown type without throwing", async () => {
     const table = new MountTable(
       () => undefined,

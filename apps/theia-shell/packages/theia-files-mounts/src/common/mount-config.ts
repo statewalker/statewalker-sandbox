@@ -53,3 +53,12 @@ function checkEntry(
   }
   return undefined;
 }
+
+/**
+ * The `files.mounts` value to validate: the app's defaults only when the
+ * setting is unset. A value that is set but malformed is passed on, so it is
+ * reported, not silently replaced.
+ */
+export function mountsSetting(raw: unknown, defaults: MountConfig[]): unknown {
+  return raw === undefined ? defaults : raw;
+}

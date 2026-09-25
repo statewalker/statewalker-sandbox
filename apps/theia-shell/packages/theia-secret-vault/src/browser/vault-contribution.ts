@@ -1,6 +1,7 @@
 import { ConfirmDialog } from "@theia/core/lib/browser/dialogs";
 import type { FrontendApplicationContribution } from "@theia/core/lib/browser/frontend-application-contribution";
 import type { Command, CommandContribution, CommandRegistry } from "@theia/core/lib/common/command";
+import { MessageService } from "@theia/core/lib/common/message-service";
 import { inject, injectable } from "@theia/core/shared/inversify";
 import { WrongPasswordError } from "../common/secret-vault";
 import { type VaultDialogMode, VaultPasswordDialog } from "./vault-dialog";
@@ -27,6 +28,7 @@ export namespace VaultCommands {
 @injectable()
 export class VaultUi implements FrontendApplicationContribution, CommandContribution {
   @inject(VaultService) protected readonly vaults!: VaultService;
+  @inject(MessageService) protected readonly messages!: MessageService;
 
   onDidInitializeLayout(): void {
     void this.ensureUnlocked();
@@ -34,9 +36,17 @@ export class VaultUi implements FrontendApplicationContribution, CommandContribu
 
   /** Unlocks, asking when it must. Resolves false if the user skipped. */
   async ensureUnlocked(): Promise<boolean> {
-    const state = await this.vaults.unlockSilently();
-    if (state === "unlocked") return true;
-    return this.prompt(state === "needs-new-password" ? "create" : "unlock");
+    try {
+      const state = await this.vaults.unlockSilently();
+      if (state === "unlocked") return true;
+      return await this.prompt(state === "needs-new-password" ? "create" : "unlock");
+    } catch (error) {
+      // A corrupt vault file (tampered, or from another vault): say so; nothing is overwritten.
+      this.messages.error(
+        `Secrets: ${(error as Error).message}. The vault stays locked; “Secrets: Reset Vault” starts a new one.`,
+      );
+      return false;
+    }
   }
 
   protected async prompt(mode: VaultDialogMode): Promise<boolean> {

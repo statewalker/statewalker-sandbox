@@ -35,7 +35,9 @@ interface MountContext {
 
 `create` throws `NeedsUserGesture` when it can only proceed from a click, and
 `SecretsLocked` when a secret is missing because the vault is locked. Any other
-error makes the mount a placeholder with that message. `secret` fields are
+error makes the mount a placeholder with that message, and so does a `create`
+that has not answered after 15 s, so one unreachable host never holds up the
+other mounts. `secret` fields are
 stored in the vault (`CredentialsService`, service `theia-shell.mounts`,
 account `<key>/<field>`), never in settings.
 
@@ -99,7 +101,10 @@ reported changes once preferences are ready.
 
 Unset, both fall back to the app's `MountDefaults`. A bad `files.mounts` entry
 (no key, a duplicate or unknown type, a secret in `config`) is skipped with one
-warning; the rest mount.
+warning; the rest mount. A `files.mounts` that is not an array is reported, not
+replaced by the defaults. A `files.hidden` glob that does not compile is
+ignored with one warning; the others apply. Changes to the tree run one at a
+time, and a failed one is reported without blocking the next.
 
 ## Commands
 
@@ -128,3 +133,9 @@ Main Storage…*.
   Green: 2 of 2; the package's 24 of 24.
 - The Theia wiring is covered end to end in `app/tests/mounts.spec.ts` and
   `vault.spec.ts`.
+- **After the final review**, each seen red first: a failed step no longer
+  blocks later mount changes (`SerialQueue`, 2 tests); a glob that does not
+  compile is skipped and reported (1); a mount that never answers is failed
+  after a timeout (1); a malformed `files.mounts` is reported, not replaced
+  (`mountsSetting`, 2); end to end, a bad glob and a non-array `files.mounts`
+  (2). The package's 30 of 30.

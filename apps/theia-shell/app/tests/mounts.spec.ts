@@ -161,3 +161,39 @@ test("a local folder mounts through the picker and reconnects after a reload", a
   await openMain(page);
   await expect(explorer(page).getByText(/^Local Computer/)).toBeVisible();
 });
+
+async function writeSettings(page: import("@playwright/test").Page, json: string) {
+  await runFromPalette(page, "Preferences: Open Settings (JSON)");
+  const editor = page.locator(".theia-editor .monaco-editor").last();
+  await editor.click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.insertText(json);
+  await page.keyboard.press("Control+s");
+}
+
+test("a glob that does not compile is reported; the others apply and mounts keep working", async ({
+  page,
+}) => {
+  await start(page, "?storage=memory");
+  await writeSettings(page, '{ "files.hidden": ["[abc", "**/welcome.md"] }');
+  await expect(explorer(page).getByText("welcome.md", { exact: true })).toHaveCount(0);
+  await expect(
+    page.locator(".theia-notification-message").filter({ hasText: "[abc" }).first(),
+  ).toBeVisible();
+  await writeSettings(
+    page,
+    '{ "files.hidden": ["[abc"], "files.mounts": [ { "key": "later", "name": "Later", "type": "memory", "config": {} } ] }',
+  );
+  await expect(explorer(page).getByText("Later", { exact: true })).toBeVisible();
+});
+
+test("a files.mounts that is not an array is reported, not replaced by the defaults", async ({
+  page,
+}) => {
+  await start(page, "?storage=memory");
+  await writeSettings(page, '{ "files.mounts": { "key": "x" } }');
+  await expect(
+    page.locator(".theia-notification-message").filter({ hasText: "must be an array" }).first(),
+  ).toBeVisible();
+  await expect(explorer(page).getByText("Temporary", { exact: true })).toHaveCount(0);
+});
