@@ -511,7 +511,10 @@ async function stopSession(session: Session | undefined): Promise<void> {
  * carry.
  */
 function assertStreamed(streamed: StreamedBody, expectedBytes: Uint8Array): void {
-  expect(streamed.status).toBe(200);
+  // On a refusal the body is the reason (`{"error": ...}`); without it a 403
+  // says only that something said no.
+  const body = new TextDecoder().decode(new Uint8Array(streamed.bytes)).slice(0, 300);
+  expect(streamed.status, `response body: ${body}`).toBe(200);
   expect(new Uint8Array(streamed.bytes)).toEqual(expectedBytes);
 
   // More than one chunk, and the sizes are the provider's own windowed
