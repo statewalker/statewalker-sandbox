@@ -194,7 +194,7 @@ Path-style addressing, so S3-compatible servers (RustFS, MinIO) work.
 ## Follow-up in webrun-files: `CompositeFilesApi.unmount`
 
 `CompositeFilesApi` has `mount` but no `unmount`, so `MountService` rebuilds the
-composite on every change. The task (tracked on the umbrella tracker) adds
+composite on every change. The task ([statewalker/umbrella#44](https://github.com/statewalker/umbrella/issues/44)) adds
 `unmount(path): boolean` to `webrun-files-composite`: it removes the mount at
 exactly that prefix (normalized), returns whether one was removed, refuses `/`,
 and leaves nested mounts of other prefixes alone; ships with tests in
