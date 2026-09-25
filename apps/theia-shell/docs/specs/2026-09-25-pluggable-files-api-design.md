@@ -70,8 +70,11 @@ Access API) and **S3**. More types ("…") are added by binding one contribution
 - `/.shell/settings/` is served under its own scheme, `shell-system:`, by a
   second `FilesApiFileSystemProvider`, and Theia's config directory is moved
   there by rebinding `EnvVariablesServer.getConfigDirUri()` to
-  `shell-system:///` (browser-only Theia hard-codes `file:///.theia`; its user
-  storage delegates to whatever provider serves that URI).
+  `shell-system:///` (browser-only Theia hard-codes `file:///.theia`). Theia's
+  `UserStorageContribution.getDelegate()` hard-codes the `file` provider, so it
+  is rebound to a subclass whose `getDelegate()` activates `shell-system`
+  (the class is bound `toSelf()` and exposed via `toService`, so the rebind is
+  picked up).
 - In the `file:` tree, `/<main key>/.shell` is hidden by a built-in layer that
   cannot be switched off (see *Layers*), so no user filter change can expose or
   break it.
@@ -377,10 +380,11 @@ mounts and unmounts in place on one composite. Until then the rebuild is behind
 
 **e2e against S3 (RustFS in Docker)**
 - A fixture starts `rustfs/rustfs:1.0.0-beta.8` on a free port, creates a bucket
-  and allows the test origin. Probed: with default settings its preflight
-  answers without `Access-Control-*` headers, so CORS must be configured —
-  first try `PutBucketCors` on the bucket, else RustFS's server-side CORS
-  settings. This is the plan's first task.
+  and allows the test origin with `PutBucketCors`. Probed: without it the
+  preflight has no `Access-Control-*` headers; with it, RustFS answers with the
+  configured origin and methods, and echoes `AllowedHeaders` literally — so the
+  rule lists the headers (`authorization`, `x-amz-*`, `amz-sdk-*`, …)
+  explicitly, because a `*` never covers `Authorization` in the Fetch spec.
 - Mount it through the wizard, save a file from the editor, read the object
   back from Node with the S3 SDK; the raw `settings.json` and `secrets.json`
   contain neither key; reload, unlock: mount and file are still there.
