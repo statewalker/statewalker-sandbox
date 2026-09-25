@@ -94,7 +94,8 @@ export function createTodoListModel(): TodoListModel {
       s();
   // `untracked(queue)` would infer against a Signal's LAST call signature (the
   // setter, returning void), not the getter — an explicit thunk keeps the read.
-  const append = <T>(queue: Signal<T[]>, item: T): void => queue([...untracked(() => queue()), item]);
+  const append = <T>(queue: Signal<T[]>, item: T): void =>
+    queue([...untracked(() => queue()), item]);
   const bump = (counter: Signal<number>): void => counter(untracked(() => counter()) + 1);
   /** Drains by replacement and hands the batch back. Silent when already empty. */
   const drain =

@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { type SecretStore, type StorageConfig, StorageRegistry } from "@fm/core";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { StorageRegistry, type StorageConfig, type SecretStore } from "@fm/core";
+import { describe, expect, it } from "vitest";
 
 /** P2 — storageURI identity, shared refcounted instances, secrets by reference. */
 
@@ -19,7 +19,12 @@ function config(): StorageConfig[] {
       options: { token: { $secret: "s3.token" } },
       caps: { stat: { size: true, mtime: false } },
     },
-    { uri: "zip://out", adapter: "sink", options: {}, caps: { read: false, list: false, write: true } },
+    {
+      uri: "zip://out",
+      adapter: "sink",
+      options: {},
+      caps: { read: false, list: false, write: true },
+    },
   ];
 }
 
@@ -61,7 +66,8 @@ describe("P2 · storage registry", () => {
 
   it("authenticates a remote backend once no matter how many panels use it", async () => {
     const reg = make();
-    for (const holder of ["p1", "p2", "p3", "p4"]) await reg.acquire("s3://bucket", `panel:${holder}`);
+    for (const holder of ["p1", "p2", "p3", "p4"])
+      await reg.acquire("s3://bucket", `panel:${holder}`);
     expect(auths["s3://bucket"]).toBe(1);
   });
 
@@ -107,15 +113,26 @@ describe("P2 · storage registry", () => {
     });
 
     it("registers a storage whose credential is missing in a failed state", async () => {
-      const reg = new StorageRegistry(config(), factories, { async get() { return undefined; } });
-      const result = await reg.acquire("s3://bucket", "panel:p1").then(() => null, (e) => e);
+      const reg = new StorageRegistry(config(), factories, {
+        async get() {
+          return undefined;
+        },
+      });
+      const result = await reg.acquire("s3://bucket", "panel:p1").then(
+        () => null,
+        (e) => e,
+      );
       expect(result).toBeInstanceOf(Error);
       expect(reg.status("s3://bucket")).toBe("failed");
       expect(reg.failure("s3://bucket")).toMatch(/credential/i);
     });
 
     it("a failed storage does not take the others down", async () => {
-      const reg = new StorageRegistry(config(), factories, { async get() { return undefined; } });
+      const reg = new StorageRegistry(config(), factories, {
+        async get() {
+          return undefined;
+        },
+      });
       await reg.acquire("s3://bucket", "panel:p1").catch(() => undefined);
       const left = await reg.acquire("mem://left", "panel:p2");
       expect(left.api).toBeDefined();
@@ -127,7 +144,12 @@ describe("P2 · storage registry", () => {
     it("defaults to full capability and never calls the adapter to find out", () => {
       const reg = make();
       expect(reg.caps("mem://right")).toEqual({
-        read: true, write: true, list: true, move: true, copy: true, remove: true,
+        read: true,
+        write: true,
+        list: true,
+        move: true,
+        copy: true,
+        remove: true,
         stat: { size: true, mtime: true },
       });
       expect(constructions["mem://right"]).toBeUndefined(); // nothing was constructed

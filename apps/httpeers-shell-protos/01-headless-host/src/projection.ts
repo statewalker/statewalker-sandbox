@@ -118,9 +118,7 @@ export async function projectToOpenApi(
       post: {
         operationId: decl.key,
         ...(decl.label !== undefined ? { summary: decl.label } : {}),
-        ...(decl.description !== undefined
-          ? { description: decl.description }
-          : {}),
+        ...(decl.description !== undefined ? { description: decl.description } : {}),
         "x-httpeers-projection": mode,
         requestBody: {
           required: true,

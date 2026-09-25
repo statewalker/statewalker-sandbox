@@ -1,8 +1,15 @@
-import { CommandError, Commands } from "@statewalker/shared-commands";
-import { beforeEach, describe, expect, it } from "vitest";
+import { type CommandError, Commands } from "@statewalker/shared-commands";
 // The view layer's suite takes what the view layer may take: models and declarations.
-import { ConfirmModel, createTodoListModel, NotifyModel, uiConfirm, uiNotify, uiShowList } from "@todo/app/models";
+import {
+  ConfirmModel,
+  createTodoListModel,
+  NotifyModel,
+  uiConfirm,
+  uiNotify,
+  uiShowList,
+} from "@todo/app/models";
 import { ViewAdapter, viewLayer } from "@todo/ui/adapter";
+import { beforeEach, describe, expect, it } from "vitest";
 
 describe("B4 · view protocol", () => {
   let commands: Commands;
@@ -63,12 +70,15 @@ describe("B4 · view protocol", () => {
       expect(view.model.question).toBe("Delete 2 todos?");
       view.settle({ confirmed: true });
     });
-    const { confirmed } = await commands.call(uiConfirm, new ConfirmModel("Delete 2 todos?")).promise;
+    const { confirmed } = await commands.call(uiConfirm, new ConfirmModel("Delete 2 todos?"))
+      .promise;
     expect(confirmed).toBe(true);
   });
 
   it("settles a fire-and-forget view itself", async () => {
-    adapter.on(uiNotify, (view) => { view.settle(undefined as never); });
+    adapter.on(uiNotify, (view) => {
+      view.settle(undefined as never);
+    });
     await commands.call(uiNotify, new NotifyModel("3 items cleared")).promise;
     expect(adapter.openViews()).toEqual([]);
   });
@@ -102,9 +112,12 @@ describe("B4 · view protocol", () => {
     adapter.on(uiConfirm, () => () => {});
     commands.call(uiShowList, createTodoListModel().view);
     commands.call(uiConfirm, new ConfirmModel("?"));
-    expect(adapter.openViews().map((v) => v.key).sort()).toEqual(
-      [uiConfirm.key, uiShowList.key].sort(),
-    );
+    expect(
+      adapter
+        .openViews()
+        .map((v) => v.key)
+        .sort(),
+    ).toEqual([uiConfirm.key, uiShowList.key].sort());
     // and those keys are the declared command keys, not a renderer alias
     expect(uiShowList.key).toBe("ui:show-list");
   });
@@ -136,7 +149,9 @@ describe("B4 · view protocol", () => {
         a.on(uiShowList, () => () => {});
       })(commands);
       await dispose();
-      await expect(commands.call(uiShowList, createTodoListModel().view).promise).rejects.toMatchObject({
+      await expect(
+        commands.call(uiShowList, createTodoListModel().view).promise,
+      ).rejects.toMatchObject({
         kind: "no-handlers",
       });
     });
@@ -151,7 +166,9 @@ describe("B4 · view protocol", () => {
       });
       expect(() => install(commands)).toThrow("second renderer failed to build");
       await new Promise((resolve) => setTimeout(resolve, 0)); // the async dispose's unwinding
-      await expect(commands.call(uiShowList, createTodoListModel().view).promise).rejects.toMatchObject({
+      await expect(
+        commands.call(uiShowList, createTodoListModel().view).promise,
+      ).rejects.toMatchObject({
         kind: "no-handlers",
       });
     });

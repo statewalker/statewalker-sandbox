@@ -1,9 +1,9 @@
-import { z } from "zod";
-import { Command } from "@statewalker/shared-commands";
-import type { PanelModel } from "./panel-model.js";
 import type { JobModel } from "@fm/core";
+import { Command } from "@statewalker/shared-commands";
+import { z } from "zod";
+import type { PanelModel } from "./panel-model.js";
 
-export { filesCopy, fileRef, type FileRef } from "@fm/core";
+export { type FileRef, fileRef, filesCopy } from "@fm/core";
 
 /** `ui:*` is app vocabulary. fm-core must never name it. */
 export const uiShowJob = Command.required("ui:show-job")

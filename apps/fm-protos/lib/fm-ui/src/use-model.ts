@@ -1,5 +1,5 @@
-import { useCallback, useSyncExternalStore } from "react";
 import type { BaseClass } from "@statewalker/shared-baseclass";
+import { useCallback, useSyncExternalStore } from "react";
 
 /**
  * The whole React binding: fifteen lines over `useSyncExternalStore`.

@@ -1,5 +1,5 @@
-import type { Catalog, ComponentDef } from "./catalog.js";
 import { classesFor, dataVariantFor, partClass } from "./basecoat.js";
+import type { Catalog, ComponentDef } from "./catalog.js";
 
 /**
  * The A2UI renderer. Consolidated from prototypes 2, 3, 6b and 7 — those
@@ -139,9 +139,7 @@ export function createRenderer(
   function validate(c: Component): ComponentDef {
     const def = catalog.components[c.component];
     if (!def) {
-      throw new Error(
-        `Component "${c.component}" is not in catalogue ${catalog.catalogId}`,
-      );
+      throw new Error(`Component "${c.component}" is not in catalogue ${catalog.catalogId}`);
     }
     for (const [name, prop] of Object.entries(def.props)) {
       const value = c[name];
@@ -159,9 +157,7 @@ export function createRenderer(
       // catalogue forbids.
       if (isBinding(value)) continue;
       if (prop.type === "enum" && prop.values && !prop.values.includes(String(value))) {
-        throw new Error(
-          `Property "${name}" on "${c.id}" must be one of ${prop.values.join(", ")}`,
-        );
+        throw new Error(`Property "${name}" on "${c.id}" must be one of ${prop.values.join(", ")}`);
       }
       if (prop.type === "id[]" && !Array.isArray(value)) {
         throw new Error(`Property "${name}" on "${c.id}" must be a list of ids`);
@@ -195,17 +191,9 @@ export function createRenderer(
   function build(surface: Surface, c: Component): HTMLElement {
     switch (c.component) {
       case "Text": {
-        const variant = isBinding(c["variant"])
-          ? "body"
-          : ((c["variant"] as string) ?? "body");
+        const variant = isBinding(c["variant"]) ? "body" : ((c["variant"] as string) ?? "body");
         const tag =
-          variant === "h1"
-            ? "h1"
-            : variant === "h2"
-              ? "h2"
-              : variant === "caption"
-                ? "small"
-                : "p";
+          variant === "h1" ? "h1" : variant === "h2" ? "h2" : variant === "caption" ? "small" : "p";
         const el = document.createElement(tag);
         // Classes come from the MAPPING, never from the message.
         const cls = classesFor("Text", variant);

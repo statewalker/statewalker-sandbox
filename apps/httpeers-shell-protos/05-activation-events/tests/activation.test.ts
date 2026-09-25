@@ -174,7 +174,12 @@ describe("rendering happens before, and without, the import", () => {
       order: 2,
     });
     // A command with no icon renders without one rather than with `undefined`.
-    expect(entries).toContainEqual({ command: "mesh:connect", label: "Connect", group: "edit", order: 1 });
+    expect(entries).toContainEqual({
+      command: "mesh:connect",
+      label: "Connect",
+      group: "edit",
+      order: 1,
+    });
 
     // The whole rung, in one line.
     expect(imported).toEqual([]);
@@ -194,7 +199,9 @@ describe("rendering happens before, and without, the import", () => {
       "mesh:connect", // group "zzz"
     ]);
     // An ungrouped entry in another location still renders.
-    expect(host.menu("explorer:context")).toEqual([{ command: "notes:delete", label: "Delete Note", icon: "trash" }]);
+    expect(host.menu("explorer:context")).toEqual([
+      { command: "notes:delete", label: "Delete Note", icon: "trash" },
+    ]);
     expect(imported).toEqual([]);
   });
 
@@ -203,11 +210,7 @@ describe("rendering happens before, and without, the import", () => {
     host.register(notesManifest);
     host.register(meshManifest);
 
-    expect(host.palette().map((c) => c.key)).toEqual([
-      "notes:new",
-      "notes:delete",
-      "mesh:connect",
-    ]);
+    expect(host.palette().map((c) => c.key)).toEqual(["notes:new", "notes:delete", "mesh:connect"]);
     // The palette carries UX metadata and the export name, straight from the
     // manifest — nothing here required executing the application.
     expect(host.palette()[0]).toMatchObject({ label: "New Note", export: "NewNoteCommand" });

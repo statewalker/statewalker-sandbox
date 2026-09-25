@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { STOCK_IMAGE_COUNT, loadStockImages } from "../src/pages/image-peer/stock.js";
+import { loadStockImages, STOCK_IMAGE_COUNT } from "../src/pages/image-peer/stock.js";
 import { imagePath } from "../src/services/images.js";
 
 function jpeg(bytes = 32): Response {
@@ -57,7 +57,8 @@ describe("loadStockImages", () => {
 
   it("rejects a response that is not an image, rather than serving HTML as a picture", async () => {
     const fetchMock = vi.fn(
-      async () => new Response("<html>rate limited</html>", { headers: { "content-type": "text/html" } }),
+      async () =>
+        new Response("<html>rate limited</html>", { headers: { "content-type": "text/html" } }),
     );
     const { images } = await loadStockImages({ fetch: fetchMock as never, count: 2 });
     expect(images).toEqual([]);

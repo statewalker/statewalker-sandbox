@@ -23,6 +23,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint:check
       - run: pnpm run format:check
-      - run: pnpm run typecheck
+      # httpeers-lib-protos links to packages in the sibling webrun-wire repository
+      # (`link:../../../webrun-wire/...`). They exist only in an umbrella assembly,
+      # so this package cannot be type-checked or tested from a standalone checkout.
+      - run: pnpm -r --filter '!@statewalker/httpeers-lib-protos' run typecheck
       - run: pnpm run build
-      - run: pnpm run test
+      - run: pnpm -r --filter '!@statewalker/httpeers-lib-protos' run test

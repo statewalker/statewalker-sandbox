@@ -1,7 +1,7 @@
-import { createRoot } from "react-dom/client";
 import type { FilesApi } from "@statewalker/webrun-files";
 import { readText, writeText } from "@statewalker/webrun-files";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
+import { createRoot } from "react-dom/client";
 import { App } from "./app.js";
 import { makeStore } from "./store.js";
 // The Tailwind entry (/~/styles.js <style> injector). Its `@import "./tokens.css"`

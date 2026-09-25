@@ -1,8 +1,7 @@
 import { Commands } from "@statewalker/shared-commands";
-import { beforeEach, describe, expect, it } from "vitest";
-import { MemTodoApi, TODO_COMMANDS, registerTodoCommands, todosResolveActions } from "@todo/core";
 import { MenuController, type MenuModel, uiShowMenu } from "@todo/app";
-
+import { MemTodoApi, registerTodoCommands, TODO_COMMANDS, todosResolveActions } from "@todo/core";
+import { beforeEach, describe, expect, it } from "vitest";
 
 describe("B3 · the menu is built from the declarations", () => {
   let commands: Commands;
@@ -31,7 +30,10 @@ describe("B3 · the menu is built from the declarations", () => {
     expect(shown?.items.map((i) => i.label)).toEqual(TODO_COMMANDS.map((c) => c.label));
     // Guard first: were no declaration to set an icon, the next line would
     // compare undefined to undefined and pass for a controller copying nothing.
-    expect(TODO_COMMANDS.every((c) => c.icon), "every declaration carries an icon").toBe(true);
+    expect(
+      TODO_COMMANDS.every((c) => c.icon),
+      "every declaration carries an icon",
+    ).toBe(true);
     expect(shown?.items.map((i) => i.icon)).toEqual(TODO_COMMANDS.map((c) => c.icon));
   });
 

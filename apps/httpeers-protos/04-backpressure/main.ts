@@ -78,7 +78,9 @@ const produceMs = lastPullAt - started;
 const totalMs = finishedAt - started;
 
 console.log(`streamed          : ${CHUNKS} x ${CHUNK_BYTES / 1024} KiB = ${mib(totalBytes)} MiB`);
-console.log(`server received   : ${mib(out.received)} MiB  ${complete ? "\x1b[32mcomplete\x1b[0m" : "\x1b[31mTRUNCATED\x1b[0m"}`);
+console.log(
+  `server received   : ${mib(out.received)} MiB  ${complete ? "\x1b[32mcomplete\x1b[0m" : "\x1b[31mTRUNCATED\x1b[0m"}`,
+);
 console.log(`producer finished : ${produceMs} ms after start`);
 console.log(`response arrived  : ${totalMs} ms after start`);
 

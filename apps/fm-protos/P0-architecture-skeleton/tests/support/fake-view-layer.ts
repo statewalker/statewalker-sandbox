@@ -1,7 +1,7 @@
-import type { Command, Commands } from "@statewalker/shared-commands";
+import type { PanelModel } from "@fm/app";
 import { uiShowJob, uiShowPanel } from "@fm/app";
 import type { JobModel } from "@fm/core";
-import type { PanelModel } from "@fm/app";
+import type { Command, Commands } from "@statewalker/shared-commands";
 
 /**
  * Stands in for `fm-ui`. It knows only models and the bus — exactly what the

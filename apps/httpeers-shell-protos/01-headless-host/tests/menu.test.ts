@@ -115,9 +115,7 @@ describe("render-time `when`", () => {
 
     expect(resolveMenu(shell, "explorer:context")).toEqual([]);
     enablement.assert(fact("selection", "file"));
-    expect(keys(resolveMenu(shell, "explorer:context"))).toEqual([
-      "files:delete",
-    ]);
+    expect(keys(resolveMenu(shell, "explorer:context"))).toEqual(["files:delete"]);
     enablement.retract(fact("selection", "file"));
     expect(resolveMenu(shell, "explorer:context")).toEqual([]);
   });

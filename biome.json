@@ -18,6 +18,14 @@
       "recommended": true,
       "correctness": {
         "noUnusedVariables": "error"
+      },
+      "a11y": {
+        "noLabelWithoutControl": {
+          "level": "error",
+          "options": {
+            "inputComponents": ["Checkbox"]
+          }
+        }
       }
     }
   },
@@ -32,6 +40,11 @@
     "formatter": {
       "enabled": true,
       "indentWidth": 2
+    }
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
     }
   }
 }

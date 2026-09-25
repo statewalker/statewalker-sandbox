@@ -7,13 +7,13 @@
 //
 // RECONSTRUCTED, NOT RECOVERED.
 
+import { newAdapter } from "@statewalker/shared-adapters";
 import {
   Commands,
   CommandsRegistry,
   type MutableCommandsRegistry,
 } from "@statewalker/shared-commands";
 import { Slots } from "@statewalker/shared-slots";
-import { newAdapter } from "@statewalker/shared-adapters";
 import { shellCommands } from "./commands.js";
 import { type Enablement, factSetEnablement } from "./enablement.js";
 
@@ -47,16 +47,10 @@ export interface AppIdentity {
 // Getters throw `Adapter not found: {key}` when unset. `undefined` counts as
 // unset — store `null` for "present but empty".
 
-const [getCommands, setCommands] = newAdapter<Commands, HostContext>(
-  "shell:commands",
-);
-const [getRegistry, setRegistry] = newAdapter<CommandsRegistry, HostContext>(
-  "shell:registry",
-);
+const [getCommands, setCommands] = newAdapter<Commands, HostContext>("shell:commands");
+const [getRegistry, setRegistry] = newAdapter<CommandsRegistry, HostContext>("shell:registry");
 const [getSlots, setSlots] = newAdapter<Slots, HostContext>("shell:slots");
-const [getEnablement, setEnablement] = newAdapter<Enablement, HostContext>(
-  "shell:enablement",
-);
+const [getEnablement, setEnablement] = newAdapter<Enablement, HostContext>("shell:enablement");
 
 // App identity is app-local: `getParent` returns undefined, so a lookup never
 // climbs the chain. Reading `shell:app` from the shell context throws.
@@ -67,16 +61,16 @@ const [getApp, setApp] = newAdapter<AppIdentity, HostContext>(
 );
 
 export {
-  getCommands,
-  setCommands,
-  getRegistry,
-  setRegistry,
-  getSlots,
-  setSlots,
-  getEnablement,
-  setEnablement,
   getApp,
+  getCommands,
+  getEnablement,
+  getRegistry,
+  getSlots,
   setApp,
+  setCommands,
+  setEnablement,
+  setRegistry,
+  setSlots,
 };
 
 /**
@@ -89,9 +83,7 @@ export function newShellContext(): HostContext {
   setCommands(ctx, Commands.create());
   setSlots(ctx, new Slots());
   setEnablement(ctx, factSetEnablement());
-  const registry: MutableCommandsRegistry = CommandsRegistry.create(
-    ...shellCommands,
-  );
+  const registry: MutableCommandsRegistry = CommandsRegistry.create(...shellCommands);
   setRegistry(ctx, registry);
   return ctx;
 }
@@ -102,10 +94,7 @@ export function newShellContext(): HostContext {
  * reading `shell:commands` receives the *same bus instance* as the shell.
  * Identity does not leak upward.
  */
-export function newAppContext(
-  parent: HostContext,
-  app: AppIdentity,
-): HostContext {
+export function newAppContext(parent: HostContext, app: AppIdentity): HostContext {
   const ctx: HostContext = { parent };
   setApp(ctx, app);
   return ctx;

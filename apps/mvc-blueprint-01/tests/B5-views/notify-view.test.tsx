@@ -1,7 +1,7 @@
 import { Commands } from "@statewalker/shared-commands";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { NotifyModel, uiNotify } from "@todo/app/models";
 import { NotifyView, registerViews } from "@todo/ui";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHost, render, waitFor } from "../support/react.js";
 
 /** B5 · the toast. It settles itself; the timeout is injected so this suite waits milliseconds, not seconds. */
@@ -15,7 +15,13 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 describe("NotifyView", () => {
   it("shows the model's text as a status message", async () => {
-    const view = render(<NotifyView model={new NotifyModel("Removed 2 todos")} settle={() => {}} timeoutMs={10_000} />);
+    const view = render(
+      <NotifyView
+        model={new NotifyModel("Removed 2 todos")}
+        settle={() => {}}
+        timeoutMs={10_000}
+      />,
+    );
     teardown.push(view.unmount);
     await waitFor(() => view.host.querySelector('[role="status"]') !== null);
     expect(view.host.querySelector('[role="status"]')?.textContent).toContain("Removed 2 todos");
@@ -27,7 +33,9 @@ describe("NotifyView", () => {
     // render runs before the effect even commits, and would pass for a toast
     // that settles at once.
     const settle = vi.fn<() => void>();
-    const view = render(<NotifyView model={new NotifyModel("hi")} settle={settle} timeoutMs={400} />);
+    const view = render(
+      <NotifyView model={new NotifyModel("hi")} settle={settle} timeoutMs={400} />,
+    );
     teardown.push(view.unmount);
     await waitFor(() => view.host.querySelector('[role="status"]') !== null);
     await sleep(150);
@@ -38,7 +46,9 @@ describe("NotifyView", () => {
 
   it("an unmount before the timeout cancels it — a closed toast settles nothing", async () => {
     const settle = vi.fn<() => void>();
-    const view = render(<NotifyView model={new NotifyModel("hi")} settle={settle} timeoutMs={30} />);
+    const view = render(
+      <NotifyView model={new NotifyModel("hi")} settle={settle} timeoutMs={30} />,
+    );
     await waitFor(() => view.host.querySelector('[role="status"]') !== null);
     view.unmount();
     await sleep(60);
@@ -53,7 +63,9 @@ describe("NotifyView", () => {
 
     const cmd = commands.call(uiNotify, new NotifyModel("Removed 2 todos"));
     await waitFor(() => mount.querySelector('[role="status"]') !== null);
-    expect(mount.querySelector('[data-view="ui:notify"]')?.textContent).toContain("Removed 2 todos");
+    expect(mount.querySelector('[data-view="ui:notify"]')?.textContent).toContain(
+      "Removed 2 todos",
+    );
 
     // Raced, so the injected 30 ms is what is under test: the 4 s default
     // would still resolve inside the test's own timeout, and prove nothing.

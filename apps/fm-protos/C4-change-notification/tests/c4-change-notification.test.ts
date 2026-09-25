@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { PanelController, PanelModel } from "@fm/app";
+import { ChangeNotifier, isUnder, StorageRegistry } from "@fm/core";
 import { Commands } from "@statewalker/shared-commands";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { ChangeNotifier, StorageRegistry, isUnder } from "@fm/core";
-import { PanelController, PanelModel } from "@fm/app";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /** C4 — operation-sourced invalidation, prefix fan-out, batched delivery. */
 
@@ -22,15 +22,25 @@ describe("C4 · prefix matching", () => {
 describe("C4 · batching", () => {
   let notifier: ChangeNotifier;
 
-  beforeEach(() => { notifier = new ChangeNotifier(); });
+  beforeEach(() => {
+    notifier = new ChangeNotifier();
+  });
 
   it("coalesces a 500-entry job into ONE delivery", async () => {
     let deliveries = 0;
     let events = 0;
-    notifier.onChange((batch) => { deliveries++; events += batch.length; });
+    notifier.onChange((batch) => {
+      deliveries++;
+      events += batch.length;
+    });
 
     for (let i = 0; i < 500; i++) {
-      notifier.changed({ storageUri: "mem://b", path: `/dst/f${i}.txt`, kind: "created", jobId: "j1" });
+      notifier.changed({
+        storageUri: "mem://b",
+        path: `/dst/f${i}.txt`,
+        kind: "created",
+        jobId: "j1",
+      });
     }
     await tick();
 
@@ -50,7 +60,9 @@ describe("C4 · batching", () => {
 
   it("carries the originating job id through to the listener", async () => {
     let seen: string | undefined;
-    notifier.onChange((batch) => { seen = batch[0].jobId; });
+    notifier.onChange((batch) => {
+      seen = batch[0].jobId;
+    });
     notifier.changed({ storageUri: "mem://b", path: "/x", kind: "created", jobId: "job-7" });
     await tick();
     expect(seen).toBe("job-7");
@@ -90,7 +102,9 @@ describe("C4 · fan-out across panels", () => {
     // Counted, not timed: two listings inside one millisecond leave
     // `lastListedAt` unchanged, which would hide the bug entirely.
     let listings = 0;
-    panels[2].controller.onListed(() => { listings++; });
+    panels[2].controller.onListed(() => {
+      listings++;
+    });
     notifier.changed({ storageUri: "mem://b", path: "/dst/new.txt", kind: "created" });
     await tick();
     await panels[2].controller.settled();
@@ -99,9 +113,16 @@ describe("C4 · fan-out across panels", () => {
 
   it("re-lists once for a batch of 500 changes in the same directory", async () => {
     let listings = 0;
-    panels[0].controller.onListed(() => { listings++; });
+    panels[0].controller.onListed(() => {
+      listings++;
+    });
     for (let i = 0; i < 500; i++) {
-      notifier.changed({ storageUri: "mem://b", path: `/dst/f${i}.txt`, kind: "created", jobId: "j1" });
+      notifier.changed({
+        storageUri: "mem://b",
+        path: `/dst/f${i}.txt`,
+        kind: "created",
+        jobId: "j1",
+      });
     }
     await tick();
     await panels[0].controller.settled();
@@ -115,7 +136,12 @@ describe("C4 · fan-out across panels", () => {
     const snapshots: Record<string, { jobId?: string; kind: string }>[] = [];
     panels[0].model.onUpdate(() => snapshots.push(panels[0].model.marks));
 
-    notifier.changed({ storageUri: "mem://b", path: "/dst/keep.txt", kind: "pending-delete", jobId: "j9" });
+    notifier.changed({
+      storageUri: "mem://b",
+      path: "/dst/keep.txt",
+      kind: "pending-delete",
+      jobId: "j9",
+    });
     await tick();
     await panels[0].controller.settled();
 
@@ -124,7 +150,12 @@ describe("C4 · fan-out across panels", () => {
   });
 
   it("clears marks once the listing that reflects them arrives", async () => {
-    notifier.changed({ storageUri: "mem://b", path: "/dst/keep.txt", kind: "pending-delete", jobId: "j9" });
+    notifier.changed({
+      storageUri: "mem://b",
+      path: "/dst/keep.txt",
+      kind: "pending-delete",
+      jobId: "j9",
+    });
     await tick();
     await panels[0].controller.settled();
     expect(panels[0].model.marks).toEqual({});
@@ -132,7 +163,9 @@ describe("C4 · fan-out across panels", () => {
 
   it("stops re-listing after the panel unsubscribes", async () => {
     let listings = 0;
-    panels[0].controller.onListed(() => { listings++; });
+    panels[0].controller.onListed(() => {
+      listings++;
+    });
     panels[0].controller.dispose();
     notifier.changed({ storageUri: "mem://b", path: "/dst/x", kind: "created" });
     await tick();
@@ -146,7 +179,11 @@ describe("C4 · polling is opt-in and observer-bound", () => {
     new StorageRegistry(
       [{ uri: "s3://b", adapter: "mem", options: {}, ...(pollMs ? { pollMs } : {}) }],
       { mem: () => new MemFilesApi() },
-      { async get() { return undefined; } },
+      {
+        async get() {
+          return undefined;
+        },
+      },
     );
 
   it("does not poll by default", () => {

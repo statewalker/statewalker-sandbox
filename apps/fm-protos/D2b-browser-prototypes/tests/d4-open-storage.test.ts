@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { registerStorageOpener } from "@fm/app";
+import { StorageRegistry, storagesOpen } from "@fm/core";
 import { Commands } from "@statewalker/shared-commands";
 import { getOPFSFilesApi } from "@statewalker/webrun-files-browser";
-import { StorageRegistry, storagesOpen } from "@fm/core";
-import { registerStorageOpener } from "@fm/app";
+import { describe, expect, it } from "vitest";
 
 /**
  * D4 (browser) — the same command, answered by a real browser filesystem.
@@ -15,7 +15,15 @@ import { registerStorageOpener } from "@fm/app";
 describe("D4 · opening a real browser filesystem by command", () => {
   it("adopts an OPFS filesystem returned by the handler", async () => {
     const commands = new Commands();
-    const registry = new StorageRegistry([], {}, { async get() { return undefined; } });
+    const registry = new StorageRegistry(
+      [],
+      {},
+      {
+        async get() {
+          return undefined;
+        },
+      },
+    );
 
     registerStorageOpener(commands, registry, async () => ({
       api: await getOPFSFilesApi(),
@@ -34,7 +42,15 @@ describe("D4 · opening a real browser filesystem by command", () => {
 
   it("reports a dismissed picker as cancelled, exactly as in Node", async () => {
     const commands = new Commands();
-    const registry = new StorageRegistry([], {}, { async get() { return undefined; } });
+    const registry = new StorageRegistry(
+      [],
+      {},
+      {
+        async get() {
+          return undefined;
+        },
+      },
+    );
     // What `showDirectoryPicker()` does when the user presses Escape: it
     // rejects with AbortError, which the handler reports as a dismissal.
     registerStorageOpener(commands, registry, async () => {
@@ -46,6 +62,8 @@ describe("D4 · opening a real browser filesystem by command", () => {
       }
     });
 
-    expect(await commands.call(storagesOpen, { mode: "read" }).promise).toEqual({ cancelled: true });
+    expect(await commands.call(storagesOpen, { mode: "read" }).promise).toEqual({
+      cancelled: true,
+    });
   });
 });

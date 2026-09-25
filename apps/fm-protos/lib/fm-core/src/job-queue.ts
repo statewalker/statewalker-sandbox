@@ -1,6 +1,6 @@
-import { runCopyJob, type ConflictResolution } from "./copy-job.js";
-import { JobModel } from "./job-model.js";
 import type { CheckpointStore } from "./checkpoints.js";
+import { type ConflictResolution, runCopyJob } from "./copy-job.js";
+import { JobModel } from "./job-model.js";
 import type { StorageRegistry } from "./storage-registry.js";
 
 export interface JobRequest {
@@ -9,7 +9,10 @@ export interface JobRequest {
   targetUri: string;
   targetPath: string;
   roots: string[];
-  onConflict?(entry: { path: string; target: string }, signal: AbortSignal): Promise<ConflictResolution>;
+  onConflict?(
+    entry: { path: string; target: string },
+    signal: AbortSignal,
+  ): Promise<ConflictResolution>;
   hooks?: { onStart?(): void; onEnd?(): void };
 }
 

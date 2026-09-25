@@ -26,7 +26,7 @@
 import type { FetchHandler, RuleSet } from "@statewalker/httpeers.core";
 import { Hono } from "hono";
 import { appRules } from "../policy.js";
-import { type ProxyRoute, matchRoute, upstreamUrl } from "./proxy-routes.js";
+import { matchRoute, type ProxyRoute, upstreamUrl } from "./proxy-routes.js";
 
 export interface ProxyEndpointInit {
   /** Read per request, never snapshotted, so the page can edit routes without rebuilding the endpoint. */

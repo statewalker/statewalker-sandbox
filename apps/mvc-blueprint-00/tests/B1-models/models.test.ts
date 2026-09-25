@@ -1,5 +1,5 @@
+import { expectReplacedNotMutated, TodoListModel } from "@todo/app";
 import { describe, expect, it } from "vitest";
-import { TodoListModel, expectReplacedNotMutated } from "@todo/app";
 
 describe("B1 · todo models", () => {
   it("derives the visible set from level fields, without storing it", () => {
@@ -26,17 +26,25 @@ describe("B1 · todo models", () => {
 
   it("replaces the todo list rather than mutating it", async () => {
     const m = new TodoListModel();
-    await expectReplacedNotMutated(m, () => m.todos, () => {
-      m.replaceTodos([...m.todos, { id: "1", title: "x", done: false }]);
-    });
+    await expectReplacedNotMutated(
+      m,
+      () => m.todos,
+      () => {
+        m.replaceTodos([...m.todos, { id: "1", title: "x", done: false }]);
+      },
+    );
   });
 
   it("keeps the event-edge queue replaced, so a drain is observable", async () => {
     const m = new TodoListModel();
     m.input.queueSubmit("a");
-    await expectReplacedNotMutated(m.input, () => m.input.pending, () => {
-      m.input.takePending();
-    });
+    await expectReplacedNotMutated(
+      m.input,
+      () => m.input.pending,
+      () => {
+        m.input.takePending();
+      },
+    );
   });
 
   it("raises no notify when a mutator is handed the value it already holds", () => {
@@ -45,7 +53,9 @@ describe("B1 · todo models", () => {
     // mutator's guard, and would pass with the guard deleted.
     const m = new TodoListModel();
     let notifies = 0;
-    m.input.onUpdate(() => { notifies++; });
+    m.input.onUpdate(() => {
+      notifies++;
+    });
     m.input.setFilter("abc");
     m.input.setFilter("abc");
     m.input.setFilter("abc");
@@ -58,7 +68,9 @@ describe("B1 · todo models", () => {
     // outer model, and nothing counted the input's raw channel for it.
     const m = new TodoListModel();
     let notifies = 0;
-    m.input.onUpdate(() => { notifies++; });
+    m.input.onUpdate(() => {
+      notifies++;
+    });
     m.input.setShowDone(false);
     m.input.setShowDone(false);
     m.input.setShowDone(false);
@@ -71,7 +83,9 @@ describe("B1 · todo models", () => {
     expect(m.input.takePending()).toEqual([{ title: "a" }]);
 
     let notifies = 0;
-    m.input.onUpdate(() => { notifies++; });
+    m.input.onUpdate(() => {
+      notifies++;
+    });
     expect(m.input.takePending()).toEqual([]);
     expect(notifies, "draining an empty queue is not a field change").toBe(0);
   });
@@ -79,7 +93,9 @@ describe("B1 · todo models", () => {
   it("wakes onPendingChange when a submission is queued", () => {
     const m = new TodoListModel();
     let changes = 0;
-    m.input.onPendingChange(() => { changes++; });
+    m.input.onPendingChange(() => {
+      changes++;
+    });
     m.input.queueSubmit("a");
     expect(changes).toBe(1);
   });
@@ -91,7 +107,9 @@ describe("B1 · todo models", () => {
     // (which it did).
     const m = new TodoListModel();
     let notifies = 0;
-    m.onUpdate(() => { notifies++; });
+    m.onUpdate(() => {
+      notifies++;
+    });
     m.reportOutcome("x");
     m.reportOutcome("x");
     m.reportOutcome("x");
@@ -104,7 +122,9 @@ describe("B1 · todo models", () => {
   it("wakes onOutcomeChange when the outcome changes", () => {
     const m = new TodoListModel();
     let changes = 0;
-    m.onOutcomeChange(() => { changes++; });
+    m.onOutcomeChange(() => {
+      changes++;
+    });
     m.reportOutcome("x");
     m.reportOutcome("y");
     expect(changes).toBe(2);
@@ -113,7 +133,9 @@ describe("B1 · todo models", () => {
   it("wakes onQueryChange from either half of the composite selector", () => {
     const m = new TodoListModel();
     let queries = 0;
-    m.input.onQueryChange(() => { queries++; });
+    m.input.onQueryChange(() => {
+      queries++;
+    });
     m.input.setShowDone(false);
     expect(queries, "showDone is half of the composite query").toBe(1);
     m.input.setFilter("abc");
@@ -128,7 +150,9 @@ describe("B1 · todo models", () => {
     // channel, each half of the query separately, each in its own tick.
     const m = new TodoListModel();
     let outer = 0;
-    m.onUpdate(() => { outer++; });
+    m.onUpdate(() => {
+      outer++;
+    });
 
     m.input.setShowDone(false);
     expect(outer, "showDone alone must reach the outer model").toBe(1);
@@ -141,7 +165,9 @@ describe("B1 · todo models", () => {
   it("forwards QUERY changes only — the add form and row queues derive nothing on the outer model", () => {
     const m = new TodoListModel();
     let outer = 0;
-    m.onUpdate(() => { outer++; });
+    m.onUpdate(() => {
+      outer++;
+    });
 
     m.input.queueSubmit("a");
     m.input.takePending();
@@ -157,8 +183,12 @@ describe("B1 · todo models", () => {
     const m = new TodoListModel();
     let refreshes = 0;
     let queries = 0;
-    m.input.onRefresh(() => { refreshes++; });
-    m.input.onQueryChange(() => { queries++; });
+    m.input.onRefresh(() => {
+      refreshes++;
+    });
+    m.input.onQueryChange(() => {
+      queries++;
+    });
 
     m.input.setFilter("abc");
     expect([refreshes, queries], "a filter change must not wake onRefresh").toEqual([0, 1]);
@@ -170,7 +200,9 @@ describe("B1 · todo models", () => {
   it("keeps a channel alive across replacement, which is why arrays are replaced", () => {
     const m = new TodoListModel();
     let changes = 0;
-    m.onTodosChange(() => { changes++; });
+    m.onTodosChange(() => {
+      changes++;
+    });
     m.replaceTodos([{ id: "1", title: "x", done: false }]);
     expect(changes).toBe(1);
     // Same contents, new array identity: the channel fires, because a selector
@@ -258,9 +290,13 @@ describe("B1 · row intents on the input sub-model", () => {
 
       it("is replaced on request, never mutated — so its channel can see it", async () => {
         const m = new TodoListModel();
-        await expectReplacedNotMutated(m.input, () => q.read(m), () => {
-          q.raise(m, "1");
-        });
+        await expectReplacedNotMutated(
+          m.input,
+          () => q.read(m),
+          () => {
+            q.raise(m, "1");
+          },
+        );
       });
 
       it("drains by replacement and hands the batch back", async () => {
@@ -269,9 +305,13 @@ describe("B1 · row intents on the input sub-model", () => {
         q.raise(m, "2");
         const before = q.read(m);
         let batch: readonly { id: string }[] = [];
-        await expectReplacedNotMutated(m.input, () => q.read(m), () => {
-          batch = q.take(m);
-        });
+        await expectReplacedNotMutated(
+          m.input,
+          () => q.read(m),
+          () => {
+            batch = q.take(m);
+          },
+        );
         expect(batch).toEqual([{ id: "1" }, { id: "2" }]);
         expect(q.read(m)).toEqual([]);
         expect(before, "the drained batch was handed back, not emptied in place").toEqual([
@@ -299,7 +339,10 @@ describe("B1 · row intents on the input sub-model", () => {
       expect(m.input.clearCompletedCount).toBe(0);
       m.input.requestClearCompleted();
       m.input.requestClearCompleted();
-      expect(m.input.clearCompletedCount, "every press is counted; coalescing is the controller's job").toBe(2);
+      expect(
+        m.input.clearCompletedCount,
+        "every press is counted; coalescing is the controller's job",
+      ).toBe(2);
       expect(raw.n).toBe(2);
     });
   });
@@ -324,7 +367,9 @@ describe("B1 · row intents on the input sub-model", () => {
       });
     }
     const expectOnly = (owner: string, label: string) => {
-      const expected = Object.fromEntries(Object.keys(channels).map((k) => [k, k === owner ? 1 : 0]));
+      const expected = Object.fromEntries(
+        Object.keys(channels).map((k) => [k, k === owner ? 1 : 0]),
+      );
       expect(woken, label).toEqual(expected);
       for (const k of Object.keys(woken)) woken[k] = 0;
     };

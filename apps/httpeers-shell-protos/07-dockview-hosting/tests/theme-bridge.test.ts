@@ -24,6 +24,7 @@ import {
   UNBRIDGED_BY_DESIGN,
 } from "../../lib/theme-bridge.js";
 import {
+  COLOUR_VALUE,
   colourBearingVariables,
   consumedSemanticVariables,
   consumedVariables,
@@ -32,7 +33,6 @@ import {
   isPaletteVariable,
   parseDeclarations,
   referencedTokens,
-  COLOUR_VALUE,
 } from "../src/dockview-css.js";
 
 const DOCKVIEW_CSS = extractDockviewStylesheet();

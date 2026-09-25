@@ -9,9 +9,7 @@ import type { FileStats } from "@statewalker/webrun-files";
  * forces S3 to decide whether a common prefix is a directory and whether a
  * zero-byte marker object is a file with `size: 0`.
  */
-export type Stats =
-  | { kind: "file"; size: number; lastModified: number }
-  | { kind: "directory" };
+export type Stats = { kind: "file"; size: number; lastModified: number } | { kind: "directory" };
 
 /**
  * Migration shim standing in for the type flip. Once the union lands upstream

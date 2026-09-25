@@ -44,7 +44,9 @@ const body = (await res.json()) as { proven: string; claimedByCaller: string; ma
 console.log(`client's real peer id : ${short(client.peerId.toString())}`);
 console.log(`caller claimed to be  : ${body.claimedByCaller}`);
 console.log(`server proved         : ${short(body.proven)}`);
-console.log(`\nHTTP ${res.status} · proven id matches the real client: ${body.match ? "YES" : "NO"}`);
+console.log(
+  `\nHTTP ${res.status} · proven id matches the real client: ${body.match ? "YES" : "NO"}`,
+);
 console.log(
   body.match
     ? "\n\x1b[32m✓ the forged claim was ignored; identity came from the handshake\x1b[0m"

@@ -31,10 +31,7 @@ import { deriveJsonSchema, UnresolvableSchemaError } from "../src/derive.js";
 let probe = 0;
 async function runtimeSchema(source: string): Promise<Record<string, unknown>> {
   const schema = new Function("z", `return (${source});`)(z) as z.ZodType;
-  const declaration = Command.async(`oracle:${probe++}`)
-    .input(schema)
-    .output(z.object({}))
-    .build();
+  const declaration = Command.async(`oracle:${probe++}`).input(schema).output(z.object({})).build();
   return await declaration.inputJsonSchema;
 }
 

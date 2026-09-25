@@ -1,6 +1,6 @@
 import type { Commands } from "@statewalker/shared-commands";
 import { newRegistry } from "@statewalker/shared-registry";
-import { type TodoApi, registerTodoCommands } from "@todo/core";
+import { registerTodoCommands, type TodoApi } from "@todo/core";
 import { ListController } from "./list-controller.js";
 import type { TodoListModel } from "./todo-model.js";
 import { ViewsReady } from "./views-ready.js";

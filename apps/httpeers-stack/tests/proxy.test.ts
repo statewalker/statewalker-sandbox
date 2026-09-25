@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { createProxyEndpoint, PROXY_POLICIES, PROXY_RULES } from "../src/services/proxy.js";
 import type { ProxyRoute } from "../src/services/proxy-routes.js";
-import { PROXY_POLICIES, PROXY_RULES, createProxyEndpoint } from "../src/services/proxy.js";
 
 const ROUTES: ProxyRoute[] = [
-  { prefix: "/openai", upstream: "https://api.openai.com/v1", headers: { authorization: "Bearer sk-cfg" } },
+  {
+    prefix: "/openai",
+    upstream: "https://api.openai.com/v1",
+    headers: { authorization: "Bearer sk-cfg" },
+  },
 ];
 
 function endpoint(fetchImpl: typeof fetch, routes: ProxyRoute[] = ROUTES) {
@@ -19,7 +23,9 @@ describe("createProxyEndpoint", () => {
       return new Response("ok", { status: 200 });
     }) as unknown as typeof fetch;
 
-    const res = await endpoint(spy)(new Request("http://mesh/proxy/openai/models", { method: "GET" }));
+    const res = await endpoint(spy)(
+      new Request("http://mesh/proxy/openai/models", { method: "GET" }),
+    );
     expect(res.status).toBe(200);
     expect(seen[0]?.url).toBe("https://api.openai.com/v1/models");
     expect(seen[0]?.method).toBe("GET");
@@ -28,9 +34,14 @@ describe("createProxyEndpoint", () => {
   // Spec §7: nothing is stripped by this code.
   it("passes a caller's headers through untouched", async () => {
     const seen: Request[] = [];
-    const spy = vi.fn(async (i: Request) => { seen.push(i); return new Response("ok"); }) as unknown as typeof fetch;
+    const spy = vi.fn(async (i: Request) => {
+      seen.push(i);
+      return new Response("ok");
+    }) as unknown as typeof fetch;
     await endpoint(spy)(
-      new Request("http://mesh/proxy/openai/models", { headers: { "x-trace": "abc", accept: "application/json" } }),
+      new Request("http://mesh/proxy/openai/models", {
+        headers: { "x-trace": "abc", accept: "application/json" },
+      }),
     );
     expect(seen[0]?.headers.get("x-trace")).toBe("abc");
     expect(seen[0]?.headers.get("accept")).toBe("application/json");
@@ -39,9 +50,14 @@ describe("createProxyEndpoint", () => {
   // Spec §7.2: configured headers are applied last.
   it("lets the route's headers win over the caller's", async () => {
     const seen: Request[] = [];
-    const spy = vi.fn(async (i: Request) => { seen.push(i); return new Response("ok"); }) as unknown as typeof fetch;
+    const spy = vi.fn(async (i: Request) => {
+      seen.push(i);
+      return new Response("ok");
+    }) as unknown as typeof fetch;
     await endpoint(spy)(
-      new Request("http://mesh/proxy/openai/models", { headers: { authorization: "Bearer caller" } }),
+      new Request("http://mesh/proxy/openai/models", {
+        headers: { authorization: "Bearer caller" },
+      }),
     );
     expect(seen[0]?.headers.get("authorization")).toBe("Bearer sk-cfg");
   });
@@ -55,10 +71,18 @@ describe("createProxyEndpoint", () => {
   // at all, and `allow-headers: *` does not cover it under the Fetch spec.
   it("does not forward the mesh's own credential to the upstream", async () => {
     const seen: Request[] = [];
-    const spy = vi.fn(async (i: Request) => { seen.push(i); return new Response("ok"); }) as unknown as typeof fetch;
+    const spy = vi.fn(async (i: Request) => {
+      seen.push(i);
+      return new Response("ok");
+    }) as unknown as typeof fetch;
     const open: ProxyRoute[] = [{ prefix: "/open", upstream: "https://o.example", headers: {} }];
-    await endpoint(spy, open)(
-      new Request("http://mesh/proxy/open/x", { headers: { authorization: "Bearer EpkECq4DmeshToken" } }),
+    await endpoint(
+      spy,
+      open,
+    )(
+      new Request("http://mesh/proxy/open/x", {
+        headers: { authorization: "Bearer EpkECq4DmeshToken" },
+      }),
     );
     expect(seen[0]?.headers.has("authorization")).toBe(false);
   });
@@ -67,9 +91,15 @@ describe("createProxyEndpoint", () => {
   // unjudged, or this would quietly become the strip list the spec rejected.
   it("still forwards every other caller header", async () => {
     const seen: Request[] = [];
-    const spy = vi.fn(async (i: Request) => { seen.push(i); return new Response("ok"); }) as unknown as typeof fetch;
+    const spy = vi.fn(async (i: Request) => {
+      seen.push(i);
+      return new Response("ok");
+    }) as unknown as typeof fetch;
     const open: ProxyRoute[] = [{ prefix: "/open", upstream: "https://o.example", headers: {} }];
-    await endpoint(spy, open)(
+    await endpoint(
+      spy,
+      open,
+    )(
       new Request("http://mesh/proxy/open/x", {
         headers: { authorization: "Bearer mesh", "x-trace": "abc", "x-api-version": "2" },
       }),
@@ -79,9 +109,13 @@ describe("createProxyEndpoint", () => {
   });
 
   it("returns the upstream status and body verbatim", async () => {
-    const spy = vi.fn(async () => new Response('{"error":"no key"}', {
-      status: 401, headers: { "content-type": "application/json", "x-request-id": "req_1" },
-    })) as unknown as typeof fetch;
+    const spy = vi.fn(
+      async () =>
+        new Response('{"error":"no key"}', {
+          status: 401,
+          headers: { "content-type": "application/json", "x-request-id": "req_1" },
+        }),
+    ) as unknown as typeof fetch;
     const res = await endpoint(spy)(new Request("http://mesh/proxy/openai/models"));
     expect(res.status).toBe(401);
     expect(res.headers.get("x-request-id")).toBe("req_1");
@@ -98,7 +132,9 @@ describe("createProxyEndpoint", () => {
   });
 
   it("502s an unreachable upstream, distinguishably", async () => {
-    const spy = vi.fn(async () => { throw new TypeError("Failed to fetch"); }) as unknown as typeof fetch;
+    const spy = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }) as unknown as typeof fetch;
     const res = await endpoint(spy)(new Request("http://mesh/proxy/openai/models"));
     expect(res.status).toBe(502);
     expect(res.headers.get("x-httpeers-proxy")).toBe("upstream-unreachable");
@@ -109,7 +145,9 @@ describe("createProxyEndpoint", () => {
   // still yield a readable first chunk -- if the proxy buffered, this hangs.
   it("does not buffer the response body", async () => {
     const upstream = new ReadableStream<Uint8Array>({
-      start(c) { c.enqueue(new TextEncoder().encode("first")); /* never closed */ },
+      start(c) {
+        c.enqueue(new TextEncoder().encode("first")); /* never closed */
+      },
     });
     const spy = vi.fn(async () => new Response(upstream)) as unknown as typeof fetch;
     const res = await endpoint(spy)(new Request("http://mesh/proxy/openai/models"));
@@ -121,10 +159,16 @@ describe("createProxyEndpoint", () => {
 
   it("forwards a request body as a stream", async () => {
     const seen: Request[] = [];
-    const spy = vi.fn(async (i: Request) => { seen.push(i); return new Response("ok"); }) as unknown as typeof fetch;
+    const spy = vi.fn(async (i: Request) => {
+      seen.push(i);
+      return new Response("ok");
+    }) as unknown as typeof fetch;
     await endpoint(spy)(
-      new Request("http://mesh/proxy/openai/chat", { method: "POST", body: '{"a":1}',
-        headers: { "content-type": "application/json" } }),
+      new Request("http://mesh/proxy/openai/chat", {
+        method: "POST",
+        body: '{"a":1}',
+        headers: { "content-type": "application/json" },
+      }),
     );
     expect(seen[0]?.method).toBe("POST");
     expect(await seen[0]!.text()).toBe('{"a":1}');
@@ -184,8 +228,11 @@ describe("PROXY_POLICIES (spec §10)", () => {
 describe("the route listing at the mount root", () => {
   const LISTED: ProxyRoute[] = [
     { prefix: "/swapi", upstream: "https://swapi.dev/api", headers: {} },
-    { prefix: "/openai", upstream: "https://api.openai.com/v1",
-      headers: { authorization: "Bearer sk-SECRET", "x-org": "org-SECRET" } },
+    {
+      prefix: "/openai",
+      upstream: "https://api.openai.com/v1",
+      headers: { authorization: "Bearer sk-SECRET", "x-org": "org-SECRET" },
+    },
   ];
   const never = vi.fn(async () => new Response("must not be called")) as unknown as typeof fetch;
 
@@ -219,7 +266,10 @@ describe("the route listing at the mount root", () => {
 
   it("does not shadow a real route beside it", async () => {
     const seen: Request[] = [];
-    const spy = vi.fn(async (i: Request) => { seen.push(i); return new Response("ok"); }) as unknown as typeof fetch;
+    const spy = vi.fn(async (i: Request) => {
+      seen.push(i);
+      return new Response("ok");
+    }) as unknown as typeof fetch;
     await endpoint(spy, LISTED)(new Request("http://mesh/proxy/swapi/people/1/"));
     expect(seen[0]?.url).toBe("https://swapi.dev/api/people/1/");
   });
@@ -227,7 +277,10 @@ describe("the route listing at the mount root", () => {
   // Only a read is a listing. Anything else at the root is a request for a
   // route that does not exist, and says so the same way every other miss does.
   it("lists only for GET", async () => {
-    const res = await endpoint(never, LISTED)(new Request("http://mesh/proxy/", { method: "POST", body: "x" }));
+    const res = await endpoint(
+      never,
+      LISTED,
+    )(new Request("http://mesh/proxy/", { method: "POST", body: "x" }));
     expect(res.status).toBe(404);
     expect(res.headers.get("x-httpeers-proxy")).toBe("no-route");
   });

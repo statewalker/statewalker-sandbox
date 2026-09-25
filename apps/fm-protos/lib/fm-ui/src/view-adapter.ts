@@ -1,7 +1,13 @@
-import type { Command, Commands } from "@statewalker/shared-commands";
 import {
-  uiNotify, uiShowConfirm, uiShowConflict, uiShowJob, uiShowMenu, uiShowPanel, uiShowPrompt,
+  uiNotify,
+  uiShowConfirm,
+  uiShowConflict,
+  uiShowJob,
+  uiShowMenu,
+  uiShowPanel,
+  uiShowPrompt,
 } from "@fm/app";
+import type { Command, Commands } from "@statewalker/shared-commands";
 
 /**
  * A rendered view. The renderer receives the model and a `settle` callback —
@@ -41,10 +47,16 @@ export interface OpenView {
  */
 export class ViewAdapter {
   private readonly _offs: (() => void)[] = [];
-  private readonly _open = new Map<Command<unknown, unknown>, { kind: keyof Renderers; model: unknown; cleanup?: () => void }>();
+  private readonly _open = new Map<
+    Command<unknown, unknown>,
+    { kind: keyof Renderers; model: unknown; cleanup?: () => void }
+  >();
   private _disposed = false;
 
-  constructor(private readonly _commands: Commands, private readonly _renderers: Renderers) {
+  constructor(
+    private readonly _commands: Commands,
+    private readonly _renderers: Renderers,
+  ) {
     this._bind("panel", uiShowPanel);
     this._bind("job", uiShowJob);
     this._bind("notify", uiNotify);
@@ -60,37 +72,40 @@ export class ViewAdapter {
 
   private _bind(kind: keyof Renderers, declaration: unknown): void {
     this._offs.push(
-      this._commands.listen(declaration as never, ((cmd: Command<unknown, unknown>) => {
-        const renderer = this._renderers[kind] as Renderer<unknown, unknown> | undefined;
-        // No renderer for this kind: DON'T claim. An unhandled view kind is a
-        // view-layer decision, reported to the caller as `not-claimed` rather
-        // than thrown at a controller that cannot do anything about it.
-        if (renderer || this._disposed) {
-          if (this._disposed) return;
-        } else {
-          return;
-        }
+      this._commands.listen(
+        declaration as never,
+        ((cmd: Command<unknown, unknown>) => {
+          const renderer = this._renderers[kind] as Renderer<unknown, unknown> | undefined;
+          // No renderer for this kind: DON'T claim. An unhandled view kind is a
+          // view-layer decision, reported to the caller as `not-claimed` rather
+          // than thrown at a controller that cannot do anything about it.
+          if (renderer || this._disposed) {
+            if (this._disposed) return;
+          } else {
+            return;
+          }
 
-        const entry: { kind: keyof Renderers; model: unknown; cleanup?: () => void } = {
-          kind,
-          model: cmd.payload,
-        };
-        this._open.set(cmd, entry);
-        entry.cleanup =
-          renderer!({
+          const entry: { kind: keyof Renderers; model: unknown; cleanup?: () => void } = {
+            kind,
             model: cmd.payload,
-            settle: (result: unknown) => cmd.resolve(result as never),
-          }) ?? undefined;
+          };
+          this._open.set(cmd, entry);
+          entry.cleanup =
+            renderer!({
+              model: cmd.payload,
+              settle: (result: unknown) => cmd.resolve(result as never),
+            }) ?? undefined;
 
-        // Removal on settle, whoever settles. This is a MICROTASK, not
-        // synchronous — the bus settles through async output validation — so a
-        // host writing teardown assertions must await a tick.
-        cmd.promise.then(
-          () => this._close(cmd),
-          () => this._close(cmd),
-        );
-        return true;
-      }) as never),
+          // Removal on settle, whoever settles. This is a MICROTASK, not
+          // synchronous — the bus settles through async output validation — so a
+          // host writing teardown assertions must await a tick.
+          cmd.promise.then(
+            () => this._close(cmd),
+            () => this._close(cmd),
+          );
+          return true;
+        }) as never,
+      ),
     );
   }
 

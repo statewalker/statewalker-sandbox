@@ -1,12 +1,17 @@
-import { chmod, mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NodeFilesApi } from "@statewalker/webrun-files-node";
-import type { FilesApi } from "@statewalker/webrun-files";
 import {
-  CheckpointStore, JobModel, JobQueue, StorageRegistry, narrowStats, runCopyJob,
+  CheckpointStore,
+  JobModel,
+  JobQueue,
+  narrowStats,
+  runCopyJob,
+  StorageRegistry,
 } from "@fm/core";
+import type { FilesApi } from "@statewalker/webrun-files";
+import { NodeFilesApi } from "@statewalker/webrun-files-node";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 /**
  * C0.5 — everything above ran on MemFilesApi, which never denies permission,
@@ -80,7 +85,9 @@ describe("C0.5 · what mem could not tell us", () => {
       operation: "copy",
       source: { uri: "node://a", api: failing },
       target: { uri: "node://a", api: target, path: "/dst" },
-      roots: ["/src"], batchSize: 1, job,
+      roots: ["/src"],
+      batchSize: 1,
+      job,
     });
 
     expect(job.status).toBe("failed");
@@ -102,7 +109,9 @@ describe("C0.5 · what mem could not tell us", () => {
       operation: "copy",
       source: { uri: "node://a", api },
       target: { uri: "node://a", api, path: "/blocker/dst" },
-      roots: ["/src"], batchSize: 2, job,
+      roots: ["/src"],
+      batchSize: 2,
+      job,
     });
 
     expect(job.status).toBe("failed");
@@ -119,7 +128,9 @@ describe("C0.5 · what mem could not tell us", () => {
       operation: "copy",
       source: { uri: "node://a", api },
       target: { uri: "node://a", api, path: "/locked/dst" },
-      roots: ["/src"], batchSize: 2, job,
+      roots: ["/src"],
+      batchSize: 2,
+      job,
     });
 
     expect(job.status).toBe("failed");
@@ -135,7 +146,10 @@ describe("C0.5 · what mem could not tell us", () => {
       operation: "copy",
       source: { uri: "node://a", api },
       target: { uri: "node://a", api, path: "/dst" },
-      roots: ["/src"], batchSize: 2, job: first, checkpoints,
+      roots: ["/src"],
+      batchSize: 2,
+      job: first,
+      checkpoints,
     });
     await new Promise((r) => setTimeout(r, 1));
     first.cancel();
@@ -148,7 +162,10 @@ describe("C0.5 · what mem could not tell us", () => {
       operation: "copy",
       source: { uri: "node://a", api },
       target: { uri: "node://a", api, path: "/dst" },
-      roots: ["/src"], batchSize: 2, job: second, checkpoints,
+      roots: ["/src"],
+      batchSize: 2,
+      job: second,
+      checkpoints,
       resumeFrom: "real-1",
       onWritten: (path) => written.push(path),
     });
@@ -172,22 +189,32 @@ describe("C0.5 · what mem could not tell us", () => {
           return api;
         },
       },
-      { async get() { return undefined; } },
+      {
+        async get() {
+          return undefined;
+        },
+      },
     );
     const queue = new JobQueue(registry, { batchSize: 2 });
     await seed(4);
 
     const bad = queue.enqueue({
-      operation: "copy", sourceUri: "node://a", targetUri: "node://gone",
-      roots: ["/src"], targetPath: "/dst",
+      operation: "copy",
+      sourceUri: "node://a",
+      targetUri: "node://gone",
+      roots: ["/src"],
+      targetPath: "/dst",
     });
     await bad.done;
     expect(bad.status).toBe("failed");
     expect(bad.error).toMatch(/permission revoked/);
 
     const good = queue.enqueue({
-      operation: "copy", sourceUri: "node://a", targetUri: "node://a",
-      roots: ["/src"], targetPath: "/dst",
+      operation: "copy",
+      sourceUri: "node://a",
+      targetUri: "node://a",
+      roots: ["/src"],
+      targetPath: "/dst",
     });
     await good.done;
     expect(good.status).toBe("done"); // the lane survived
@@ -198,15 +225,25 @@ describe("C0.5 · what mem could not tell us", () => {
     const registry = new StorageRegistry(
       [{ uri: "node://a", adapter: "node", options: {} }],
       { node: () => api },
-      { async get() { return undefined; } },
+      {
+        async get() {
+          return undefined;
+        },
+      },
     );
     const timeline: string[] = [];
     const queue = new JobQueue(registry, { batchSize: 2 });
     const enqueue = (label: string, targetPath: string) =>
       queue.enqueue({
-        operation: "copy", sourceUri: "node://a", targetUri: "node://a",
-        roots: ["/src"], targetPath,
-        hooks: { onStart: () => timeline.push(`start:${label}`), onEnd: () => timeline.push(`end:${label}`) },
+        operation: "copy",
+        sourceUri: "node://a",
+        targetUri: "node://a",
+        roots: ["/src"],
+        targetPath,
+        hooks: {
+          onStart: () => timeline.push(`start:${label}`),
+          onEnd: () => timeline.push(`end:${label}`),
+        },
       });
 
     const one = enqueue("one", "/dst1");
@@ -222,7 +259,9 @@ describe("C0.5 · what mem could not tell us", () => {
       operation: "move",
       source: { uri: "node://a", api },
       target: { uri: "node://b", api, path: "/dst" }, // different URI: no native move
-      roots: ["/src"], batchSize: 2, job,
+      roots: ["/src"],
+      batchSize: 2,
+      job,
     });
     expect(job.status).toBe("done");
     for (let i = 0; i < 5; i++) {
@@ -237,7 +276,11 @@ describe("C0.5 · adapter parity", () => {
     const registry = new StorageRegistry(
       [{ uri: "node://a", adapter: "node", options: {} }],
       { node: () => api },
-      { async get() { return undefined; } },
+      {
+        async get() {
+          return undefined;
+        },
+      },
     );
     expect(registry.caps("node://a").stat).toEqual({ size: true, mtime: true });
     expect(registry.sortColumns("node://a")).toEqual(["name", "size", "date"]);
@@ -260,7 +303,9 @@ describe("C0.5 · adapter parity", () => {
         operation: "copy",
         source: { uri: "node://a", api },
         target: { uri: "node://a", api, path: `/out${run}` },
-        roots: ["/src"], batchSize: 1, job,
+        roots: ["/src"],
+        batchSize: 1,
+        job,
         onBatch: (batch) => seen.push(...batch),
       });
       orders.push(seen);

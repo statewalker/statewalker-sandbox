@@ -209,8 +209,18 @@ for (const s of IMPLEMENTATIONS) {
  */
 describe("B1 · signals — left open, and recorded", () => {
   const recorded: Record<SignalsImplementation, Record<string, unknown>> = {
-    alien: { selfWriteReruns: false, nonConverging: "stops", throwingFlush: "skips-the-rest", nestedWriteOrder: "during" },
-    preact: { selfWriteReruns: true, nonConverging: "throws", throwingFlush: "runs-the-rest", nestedWriteOrder: "after" },
+    alien: {
+      selfWriteReruns: false,
+      nonConverging: "stops",
+      throwingFlush: "skips-the-rest",
+      nestedWriteOrder: "during",
+    },
+    preact: {
+      selfWriteReruns: true,
+      nonConverging: "throws",
+      throwingFlush: "runs-the-rest",
+      nestedWriteOrder: "after",
+    },
   };
 
   for (const s of IMPLEMENTATIONS) {

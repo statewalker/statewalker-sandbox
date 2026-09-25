@@ -22,10 +22,7 @@ describe("the supported grammar", () => {
   });
 
   it("treats the comma as AND", () => {
-    const e = factSetEnablement([
-      fact("mesh", "connected"),
-      fact("focus", "explorer"),
-    ]);
+    const e = factSetEnablement([fact("mesh", "connected"), fact("focus", "explorer")]);
     expect(e.evaluate('mesh("connected"), focus("explorer")')).toBe(true);
     e.retract(fact("focus", "explorer"));
     expect(e.evaluate('mesh("connected"), focus("explorer")')).toBe(false);
@@ -43,9 +40,7 @@ describe("the supported grammar", () => {
     expect(e.evaluate('right("peer1", "read")')).toBe(true);
     expect(e.evaluate('right("peer1", "write")')).toBe(false);
     // The comma inside the argument list is not a conjunction separator.
-    expect(e.evaluate('right("peer1", "read"), right("peer1", "read")')).toBe(
-      true,
-    );
+    expect(e.evaluate('right("peer1", "read"), right("peer1", "read")')).toBe(true);
   });
 
   it("accepts number and boolean terms", () => {
@@ -56,7 +51,7 @@ describe("the supported grammar", () => {
     expect(e.evaluate("dirty(false)")).toBe(false);
   });
 
-  it("does not confuse the number 3 with the string \"3\"", () => {
+  it('does not confuse the number 3 with the string "3"', () => {
     const e = factSetEnablement([fact("tabs", 3)]);
     expect(e.evaluate("tabs(3)")).toBe(true);
     expect(e.evaluate('tabs("3")')).toBe(false);
@@ -80,17 +75,13 @@ describe("what the stub refuses — needing it is the signal to bring in the rea
 
   it("comparison operators throw", () => {
     const e = factSetEnablement();
-    expect(() => e.evaluate("resourceScheme == 'peer'")).toThrow(
-      /Malformed when clause/,
-    );
+    expect(() => e.evaluate("resourceScheme == 'peer'")).toThrow(/Malformed when clause/);
     expect(() => e.evaluate("tabs > 3")).toThrow(/Malformed when clause/);
   });
 
   it("variables throw", () => {
     const e = factSetEnablement();
-    expect(() => e.evaluate("right($peer, \"read\")")).toThrow(
-      /Malformed when clause/,
-    );
+    expect(() => e.evaluate('right($peer, "read")')).toThrow(/Malformed when clause/);
   });
 
   it("a VS Code-style bare context key throws", () => {
@@ -101,9 +92,7 @@ describe("what the stub refuses — needing it is the signal to bring in the rea
   it("a malformed clause throws rather than quietly evaluating false", () => {
     const e = factSetEnablement();
     expect(() => e.evaluate("selection(")).toThrow(/Malformed when clause/);
-    expect(() => e.evaluate('selection("file"),')).toThrow(
-      /Malformed when clause/,
-    );
+    expect(() => e.evaluate('selection("file"),')).toThrow(/Malformed when clause/);
   });
 });
 

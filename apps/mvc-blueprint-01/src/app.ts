@@ -1,5 +1,10 @@
 import { Commands } from "@statewalker/shared-commands";
-import { type BootstrapOptions, bootstrap, createTodoListModel, type PanelOutcome } from "@todo/app";
+import {
+  type BootstrapOptions,
+  bootstrap,
+  createTodoListModel,
+  type PanelOutcome,
+} from "@todo/app";
 import { MemTodoApi, type Todo, type TodoApi } from "@todo/core";
 import { registerViews } from "@todo/ui";
 

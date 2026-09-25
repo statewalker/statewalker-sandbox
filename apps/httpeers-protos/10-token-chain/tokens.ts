@@ -10,14 +10,14 @@
  * mechanically by `main.ts`, not merely intended.
  */
 import {
-  biscuit,
-  block,
   AuthorizerBuilder,
   Biscuit,
   BlockBuilder,
+  biscuit,
+  block,
   KeyPair,
-  PrivateKey,
-  PublicKey,
+  type PrivateKey,
+  type PublicKey,
   SignatureAlgorithm,
 } from "@biscuit-auth/biscuit-wasm";
 
@@ -54,7 +54,9 @@ export const newKeyPair = (): KeyPair => new KeyPair(SignatureAlgorithm.Ed25519)
  */
 export function warmUp(attempts = 3): void {
   const k = newKeyPair();
-  const t = biscuit`w(true); check if time($t), $t < 2100-01-01T00:00:00Z;`.build(k.getPrivateKey());
+  const t = biscuit`w(true); check if time($t), $t < 2100-01-01T00:00:00Z;`.build(
+    k.getPrivateKey(),
+  );
   const parsed = Biscuit.fromBase64(t.toBase64(), k.getPublicKey());
   for (let i = 0; i < attempts; i++) {
     const a = new AuthorizerBuilder();
@@ -195,7 +197,9 @@ export function verify(tokenB64: string, ctx: VerifyContext): VerifyResult {
 
   const a = new AuthorizerBuilder();
   const iso = ctx.now.toISOString().replace(/\.\d{3}Z$/, "Z");
-  a.addCode(`connection_peer("${ctx.connectionPeer}"); self_peer("${ctx.selfPeer}"); time(${iso});`);
+  a.addCode(
+    `connection_peer("${ctx.connectionPeer}"); self_peer("${ctx.selfPeer}"); time(${iso});`,
+  );
   a.addCode(`operation("${ctx.operation}"); resource("${ctx.resource}");`);
   for (const [t, v] of ctx.selfFacts ?? []) a.addCode(`self_fact("${t}", "${v}");`);
   for (const f of ctx.extraFacts ?? []) a.addCode(f);
@@ -209,7 +213,10 @@ export function verify(tokenB64: string, ctx: VerifyContext): VerifyResult {
   for (const p of ctx.policies ?? []) a.addCode(p);
 
   try {
-    return { allowed: true, policy: a.buildAuthenticated(token).authorizeWithLimits(ctx.limits ?? LIMITS) };
+    return {
+      allowed: true,
+      policy: a.buildAuthenticated(token).authorizeWithLimits(ctx.limits ?? LIMITS),
+    };
   } catch (e) {
     const budget = isRunLimit(e);
     return { allowed: false, failed: failedChecks(e), budgetExceeded: budget };

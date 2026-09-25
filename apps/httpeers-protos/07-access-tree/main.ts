@@ -1,14 +1,15 @@
 /**
  * 07 — `.access` as a walked tree: deny by default, explainable decisions.
  */
-import { heading } from "../lib/nodes.ts";
+
 import { type AccessNode, withAccessTree } from "../lib/access-tree.ts";
+import { heading } from "../lib/nodes.ts";
 
 heading("07 — .access walked root → leaf, deny by default");
 
 const tree: AccessNode[] = [
-  { path: "" },                                                   // root: no grants = deny
-  { path: "/pub", allow: [{ mesh: "H", roles: [] }] },             // any member of H
+  { path: "" }, // root: no grants = deny
+  { path: "/pub", allow: [{ mesh: "H", roles: [] }] }, // any member of H
   { path: "/reports", allow: [{ mesh: "H", roles: ["std:reader"] }] },
   { path: "/reports/private", deny: [{ mesh: "H", roles: ["std:reader"] }] },
   { path: "/reports/private/board", allow: [{ mesh: "H", roles: ["std:admin"] }] },
@@ -41,7 +42,9 @@ for (const [path, caller, who, expected] of cases) {
   );
 }
 
-console.log("\nWhy a refusal can be traced — the walk for alice on /reports/private/board/minutes:");
+console.log(
+  "\nWhy a refusal can be traced — the walk for alice on /reports/private/board/minutes:",
+);
 for (const line of resolve("/reports/private/board/minutes", alice).trace) {
   console.log(`  ${line}`);
 }
@@ -56,7 +59,10 @@ try {
 console.log("\nA malformed tree refuses to start rather than denying everyone silently:");
 console.log(
   threw
-    ? threw.split("\n").map((l) => `  ${l}`).join("\n")
+    ? threw
+        .split("\n")
+        .map((l) => `  ${l}`)
+        .join("\n")
     : "  \x1b[31m✗ it started anyway\x1b[0m",
 );
 

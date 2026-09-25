@@ -1,4 +1,4 @@
-import type { FilesApi, FileInfo, FileStats } from "@statewalker/webrun-files";
+import type { FileInfo, FileStats, FilesApi } from "@statewalker/webrun-files";
 
 /**
  * Ephemeral storages: built for the duration of ONE job and never entered in
@@ -28,7 +28,10 @@ export function readOnly(api: FilesApi): FilesApi {
   } as unknown as FilesApi;
 }
 
-export interface ArchiveEntry { path: string; bytes: number }
+export interface ArchiveEntry {
+  path: string;
+  bytes: number;
+}
 
 /**
  * A streaming archive sink: genuinely WRITE-ONLY.
@@ -51,8 +54,12 @@ export function archiveSink(): FilesApi & { resumable: false; entries: ArchiveEn
       entries.push({ path, bytes });
       return true;
     },
-    async mkdir() { return true; },
-    async exists() { return false; },
+    async mkdir() {
+      return true;
+    },
+    async exists() {
+      return false;
+    },
     read: refuse("read"),
     list: refuse("list"),
     stats: refuse("stats"),

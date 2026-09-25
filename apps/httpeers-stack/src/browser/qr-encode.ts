@@ -31,7 +31,9 @@ const QUIET_ZONE = 4;
 
 function build(text: string) {
   if (text === "") {
-    throw new Error("qr: refusing to encode an empty payload -- the result would not be scannable.");
+    throw new Error(
+      "qr: refusing to encode an empty payload -- the result would not be scannable.",
+    );
   }
   const qr = qrcode(AUTO_VERSION, ERROR_CORRECTION);
   qr.addData(text);
@@ -43,9 +45,7 @@ function build(text: string) {
 export function qrModules(text: string): boolean[][] {
   const qr = build(text);
   const n = qr.getModuleCount();
-  return Array.from({ length: n }, (_, y) =>
-    Array.from({ length: n }, (_, x) => qr.isDark(y, x)),
-  );
+  return Array.from({ length: n }, (_, y) => Array.from({ length: n }, (_, x) => qr.isDark(y, x)));
 }
 
 /**

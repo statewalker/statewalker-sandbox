@@ -6,9 +6,16 @@
  * be swapped under in-flight traffic. Each carries the reason rather than a silent
  * omission — a criterion with no outcome is how a suite quietly stops testing.
  */
-import { NotImplemented, type Check, type Implementation } from "../types.js";
+import { type Check, type Implementation, NotImplemented } from "../types.js";
 
-const HOP_BY_HOP = ["connection", "keep-alive", "te", "transfer-encoding", "upgrade", "proxy-authorization"];
+const HOP_BY_HOP = [
+  "connection",
+  "keep-alive",
+  "te",
+  "transfer-encoding",
+  "upgrade",
+  "proxy-authorization",
+];
 const assert = (cond: unknown, msg: string): void => {
   if (!cond) throw new Error(msg);
 };
@@ -39,7 +46,9 @@ export const OTHER_CHECKS: Record<string, Check | { skip: string }> = {
 
   // ---------------------------------------------------------------- block E
   "E-01": { skip: "block E is DESIGNED — no edge adapter exists to register against" },
-  "E-02": { skip: "block E is DESIGNED — the isomorphism criterion needs all three edges to exist" },
+  "E-02": {
+    skip: "block E is DESIGNED — the isomorphism criterion needs all three edges to exist",
+  },
   "E-03": { skip: "block E is DESIGNED — needs a ServiceWorker edge and a third-party client" },
   "E-04": { skip: "block E is DESIGNED — needs an edge to perform the error-to-status mapping" },
   "E-05": { skip: "block E is DESIGNED — needs an edge and a live remote handler" },
@@ -58,10 +67,16 @@ export const OTHER_CHECKS: Record<string, Check | { skip: string }> = {
   "M-09": { skip: "block M is DESIGNED — needs a hub to kill and peers to keep talking" },
 
   // ------------------------------------------------- block X: peer & intermediary
-  "X-01": { skip: "needs a live peer built from a transport; this harness models capabilities, not peers" },
-  "X-02": { skip: "a compile-time claim about the init type; asserted by typecheck, not at runtime" },
+  "X-01": {
+    skip: "needs a live peer built from a transport; this harness models capabilities, not peers",
+  },
+  "X-02": {
+    skip: "a compile-time claim about the init type; asserted by typecheck, not at runtime",
+  },
   "X-03": { skip: "needs a live peer whose configuration can be swapped under in-flight requests" },
-  "X-04": { skip: "needs a live peer to observe that a rejected configuration left the previous one in force" },
+  "X-04": {
+    skip: "needs a live peer to observe that a rejected configuration left the previous one in force",
+  },
 
   "X-05": (impl) => {
     const req = new Request("http://upstream.local/x", {
@@ -79,8 +94,10 @@ export const OTHER_CHECKS: Record<string, Check | { skip: string }> = {
     for (const h of HOP_BY_HOP) {
       assert(!out.headers.has(h), `hop-by-hop header \`${h}\` was forwarded to an upstream`);
     }
-    assert(!out.headers.has("x-custom-hop"),
-      "a header named by `Connection` survived — RFC 9110 requires those to be dropped too");
+    assert(
+      !out.headers.has("x-custom-hop"),
+      "a header named by `Connection` survived — RFC 9110 requires those to be dropped too",
+    );
   },
 
   "X-06": (impl) => {
@@ -89,8 +106,10 @@ export const OTHER_CHECKS: Record<string, Check | { skip: string }> = {
     });
     const out = inter(impl).asIntermediary(req, { via: "httpeers/1.0" });
     const got = out.headers.get("authorization") ?? "";
-    assert(!got.includes("MESH-MEMBERSHIP-TOKEN"),
-      "the caller's mesh membership token was delivered to the upstream service");
+    assert(
+      !got.includes("MESH-MEMBERSHIP-TOKEN"),
+      "the caller's mesh membership token was delivered to the upstream service",
+    );
   },
 
   "X-07": (impl) => {
@@ -98,7 +117,11 @@ export const OTHER_CHECKS: Record<string, Check | { skip: string }> = {
       headers: { "x-app": "keep me", accept: "application/json", "x-trace": "abc123" },
     });
     const out = inter(impl).asIntermediary(req, { via: "httpeers/1.0" });
-    for (const [k, v] of [["x-app", "keep me"], ["accept", "application/json"], ["x-trace", "abc123"]] as const) {
+    for (const [k, v] of [
+      ["x-app", "keep me"],
+      ["accept", "application/json"],
+      ["x-trace", "abc123"],
+    ] as const) {
       assert(out.headers.get(k) === v, `application header \`${k}\` was dropped or rewritten (P2)`);
     }
   },
@@ -110,12 +133,22 @@ export const OTHER_CHECKS: Record<string, Check | { skip: string }> = {
   "X-09": (impl) => {
     const i = inter(impl);
     const creds = { "upstream.local": "Bearer UPSTREAM-KEY" };
-    const registered = i.asIntermediary(new Request("http://upstream.local/x"), { via: "v", credentials: creds });
-    assert(registered.headers.get("authorization") === "Bearer UPSTREAM-KEY",
-      "the credential registered for this host was not injected");
-    const other = i.asIntermediary(new Request("http://elsewhere.local/x"), { via: "v", credentials: creds });
-    assert(!(other.headers.get("authorization") ?? "").includes("UPSTREAM-KEY"),
-      "a credential registered for one host was sent to another");
+    const registered = i.asIntermediary(new Request("http://upstream.local/x"), {
+      via: "v",
+      credentials: creds,
+    });
+    assert(
+      registered.headers.get("authorization") === "Bearer UPSTREAM-KEY",
+      "the credential registered for this host was not injected",
+    );
+    const other = i.asIntermediary(new Request("http://elsewhere.local/x"), {
+      via: "v",
+      credentials: creds,
+    });
+    assert(
+      !(other.headers.get("authorization") ?? "").includes("UPSTREAM-KEY"),
+      "a credential registered for one host was sent to another",
+    );
   },
 
   "X-10": {

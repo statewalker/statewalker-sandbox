@@ -2,9 +2,10 @@ import type { Command, Commands } from "@statewalker/shared-commands";
 
 /** See fm-core/file-commands: `claimed` is set by the bus, typed internally. */
 type Claimable<P, R> = Command<P, R> & { readonly claimed: boolean };
-import type { FilesApi } from "@statewalker/webrun-files";
+
 import type { StorageRegistry } from "@fm/core";
 import { storagesOpen } from "@fm/core";
+import type { FilesApi } from "@statewalker/webrun-files";
 
 export interface PickedStorage {
   api: FilesApi;
@@ -13,8 +14,10 @@ export interface PickedStorage {
   uri?: string;
 }
 
-export type Picker = (request: { mode: "read" | "readwrite"; suggestedName?: string }) =>
-  Promise<PickedStorage | undefined>;
+export type Picker = (request: {
+  mode: "read" | "readwrite";
+  suggestedName?: string;
+}) => Promise<PickedStorage | undefined>;
 
 let seq = 0;
 

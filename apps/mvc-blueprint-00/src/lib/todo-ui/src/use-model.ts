@@ -1,5 +1,5 @@
-import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { BaseClass } from "@statewalker/shared-baseclass";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 
 /**
  * The whole React binding — spec §4.3.
@@ -63,7 +63,10 @@ export function useModel<M extends BaseClass, T>(
   // Only `model` in the dependency list: `onUpdate` is a bound arrow field
   // (base-class.ts), stable for the model's lifetime, so this need not — and
   // per spec §4.10 must not — be recreated for every inline selector.
-  const subscribe = useCallback((onStoreChange: () => void) => model.onUpdate(onStoreChange), [model]);
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => model.onUpdate(onStoreChange),
+    [model],
+  );
 
   const getSnapshot = useCallback((): T => {
     const next = selector(model);
@@ -108,7 +111,7 @@ export function shallowEqual<T>(a: T, b: T): boolean {
   const bKeys = Object.keys(bRecord);
   if (aKeys.length !== bKeys.length) return false;
   for (const key of aKeys) {
-    if (!Object.prototype.hasOwnProperty.call(bRecord, key) || !Object.is(aRecord[key], bRecord[key])) {
+    if (!Object.hasOwn(bRecord, key) || !Object.is(aRecord[key], bRecord[key])) {
       return false;
     }
   }

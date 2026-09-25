@@ -30,10 +30,10 @@ import type {
 } from "@statewalker/httpeers.core";
 import {
   ANONYMOUS,
+  capabilityNames,
   createAdvertisementStore,
   createMounts,
   createPresenceStore,
-  capabilityNames,
   deriveCapabilities,
   json,
   lookupClaims,

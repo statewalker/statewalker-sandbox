@@ -135,8 +135,9 @@ export class FilesApiAdapter implements IFileSystem {
       isDirectory: s.kind === "directory",
       isSymbolicLink: false,
       mode: 0o644,
-      size: s.size ?? 0,
-      mtime: s.lastModified != null ? new Date(s.lastModified) : new Date(0),
+      // FileStats is a union on `kind`: only files carry a size and a timestamp.
+      size: s.kind === "file" ? s.size : 0,
+      mtime: new Date(s.kind === "file" ? s.lastModified : 0),
     };
   }
 
