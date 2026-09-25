@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { explorer, openMain, runFromPalette, start, unlockVault } from "./helpers";
+import { explorer, openMain, runFromPalette, start, unlockVault, waitForSettings } from "./helpers";
 
 test("the first OPFS run creates the vault; the next asks for the password", async ({ page }) => {
   await start(page, "", { password: "first-password" });
@@ -42,14 +42,8 @@ test("settings.json lives in the main storage's .shell, not in the file tree", a
   await page.keyboard.press("Control+a");
   await page.keyboard.insertText('{ "files.hidden": ["**/*.tmp"] }');
   await page.keyboard.press("Control+s");
-  const raw = await page.evaluate(async () => {
-    const root = await navigator.storage.getDirectory();
-    const main = await root.getDirectoryHandle("main");
-    const shell = await main.getDirectoryHandle(".shell");
-    const settings = await shell.getDirectoryHandle("settings");
-    return (await (await settings.getFileHandle("settings.json")).getFile()).text();
-  });
-  expect(raw).toContain("**/*.tmp");
+  // Theia writes settings.json shortly after the change: poll the file in OPFS.
+  await waitForSettings(page, "**/*.tmp");
 });
 
 test("a local-folder main needs a click after a reload; the fallback opens browser storage", async ({

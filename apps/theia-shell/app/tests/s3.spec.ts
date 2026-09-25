@@ -58,6 +58,8 @@ test("an S3 bucket mounts, stores files, and keeps its keys out of settings", as
   const object = await s3.client.send(new GetObjectCommand({ Bucket: s3.bucket, Key: "hello.md" }));
   expect(await object.Body?.transformToString()).toBe("# from the browser");
 
+  // Read the files only once the mount is written, so "no key in them" means something.
+  await waitForSettings(page, '"cloud"');
   const raw = await page.evaluate(async () => {
     const main = await (await navigator.storage.getDirectory()).getDirectoryHandle("main");
     const shell = await main.getDirectoryHandle(".shell");
@@ -70,8 +72,8 @@ test("an S3 bucket mounts, stores files, and keeps its keys out of settings", as
   });
   expect(raw).not.toContain(s3.secretAccessKey);
   expect(raw).not.toContain(s3.accessKeyId);
+  expect(raw).toContain('"cloud"');
 
-  await waitForSettings(page, '"cloud"');
   await page.reload();
   await unlockVault(page, "pw");
   await openMain(page);
