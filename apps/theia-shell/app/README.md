@@ -87,10 +87,10 @@ own `package.json`.
 ```bash
 pnpm --filter @theia-shell/theia-files-api test   # 21 unit tests: the FileSystemProvider contract
 pnpm --filter @theia-shell/theia-markdown test    # 15 unit tests: outline, rendering, edits
-pnpm --filter @theia-shell/theia-image-viewer test # 8 unit tests: MIME types, fit, zoom steps
+pnpm --filter @theia-shell/theia-image-viewer test # 9 unit tests: MIME types, fit, zoom steps
 pnpm --filter @theia-shell/theia-pdf-viewer test  # 5 unit tests: the generated PDF
 pnpm --filter @theia-shell/app-files test         # 7 unit tests: seeding, the PNG encoder
-pnpm --filter @theia-shell/app test:e2e           # 14 Playwright tests against the static build
+pnpm --filter @theia-shell/app test:e2e           # 18 Playwright tests against the static build
 ```
 
 The e2e tests serve `lib/frontend` with a plain static server and drive
@@ -128,3 +128,10 @@ Every test also asserts that the page raised no errors.
     was a load failure.
   - End to end: 4 of 4 red before the viewers were added to the app, then 4 of
     4 green. The full suite is 14 of 14.
+- **Viewers, after review.**
+  - Unit: `stepZoom` zoomed *in* when zooming out from below the smallest preset
+    (a huge image fitted to the view); 1 red, then 9 of 9 green.
+  - End to end, reload and delete: 3 of 4 red. Deleting an open image left it
+    on screen unchanged; the PDF viewer never reloaded. The SVG reload test was
+    already green. The PDF delete test was written after the fix and was never
+    seen red. The full suite is 18 of 18.

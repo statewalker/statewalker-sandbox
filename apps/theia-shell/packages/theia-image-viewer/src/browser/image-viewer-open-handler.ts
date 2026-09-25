@@ -4,7 +4,7 @@ import { injectable } from "@theia/core/shared/inversify";
 import { imageMimeType } from "../common/image-view";
 import { ImageViewerWidget } from "./image-viewer-widget";
 
-/** Opens image files in the viewer instead of the text editor (priority 100). */
+/** Opens image files in the viewer instead of the text editor (priority 500; the text editor has 100). */
 @injectable()
 export class ImageViewerOpenHandler extends WidgetOpenHandler<ImageViewerWidget> {
   readonly id = ImageViewerWidget.FACTORY_ID;

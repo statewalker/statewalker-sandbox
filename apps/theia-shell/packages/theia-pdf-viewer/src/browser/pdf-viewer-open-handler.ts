@@ -4,7 +4,7 @@ import { injectable } from "@theia/core/shared/inversify";
 import { isPdfPath } from "../common/pdf-files";
 import { PdfViewerWidget } from "./pdf-viewer-widget";
 
-/** Opens .pdf files in the PDF viewer instead of the text editor (priority 100). */
+/** Opens .pdf files in the PDF viewer instead of the text editor (priority 500; the text editor has 100). */
 @injectable()
 export class PdfViewerOpenHandler extends WidgetOpenHandler<PdfViewerWidget> {
   readonly id = PdfViewerWidget.FACTORY_ID;

@@ -17,7 +17,7 @@ export type ImageZoom = "fit" | number;
 /**
  * Shows an image file read through Theia's FileService (so: the FilesApi) as a
  * blob: URL in an <img>. SVG is shown the same way, so scripts in it never run.
- * Reloads when the file changes.
+ * Reloads when the file changes, and says so when it can no longer be read.
  */
 @injectable()
 export class ImageViewerWidget extends BaseWidget {
@@ -31,6 +31,10 @@ export class ImageViewerWidget extends BaseWidget {
   protected readonly status = document.createElement("div");
   protected objectUrl: string | undefined;
   protected byteSize = 0;
+  /** Set while the file cannot be read (deleted, moved); shown instead of the image. */
+  protected readError: string | undefined;
+  /** Bumped by every load, so a slower, older read never overwrites a newer one. */
+  protected loads = 0;
   protected zoomMode: ImageZoom = "fit";
 
   protected readonly onDidChangeZoomEmitter = new Emitter<void>();
@@ -75,15 +79,27 @@ export class ImageViewerWidget extends BaseWidget {
     this.toDispose.push(Disposable.create(() => this.revoke()));
     this.toDispose.push(
       this.files.onDidFilesChange((event) => {
-        if (event.contains(uri)) this.load();
+        if (event.contains(uri)) void this.load();
       }),
     );
     await this.load();
   }
 
   async load(): Promise<void> {
-    const content = await this.files.readFile(this.uri);
-    const bytes = content.value.buffer;
+    const ticket = ++this.loads;
+    let bytes: Uint8Array;
+    try {
+      bytes = (await this.files.readFile(this.uri)).value.buffer;
+    } catch {
+      if (ticket !== this.loads || this.isDisposed) return;
+      this.revoke();
+      this.image.removeAttribute("src");
+      this.readError = `${this.uri.path.base} cannot be read (deleted or moved?)`;
+      this.applyZoom();
+      return;
+    }
+    if (ticket !== this.loads || this.isDisposed) return;
+    this.readError = undefined;
     this.byteSize = bytes.byteLength;
     const type = imageMimeType(this.uri.path.toString()) ?? "application/octet-stream";
     this.revoke();
@@ -119,6 +135,10 @@ export class ImageViewerWidget extends BaseWidget {
   }
 
   protected applyZoom(): void {
+    if (this.readError) {
+      this.status.textContent = this.readError;
+      return;
+    }
     const { naturalWidth: width, naturalHeight: height } = this.image;
     if (!width || !height) {
       this.status.textContent = "";

@@ -1,7 +1,9 @@
 # theia-shell — plan
 
-> **Status (2026-09-25): done.** P1–P6 answered (see each `protos/pN-*/README.md`
-> and the summary in `README.md`); the app is in `app/` with 38 unit and 10 e2e tests.
+> **Status (2026-09-25): done.** P1–P7 answered (see each `protos/pN-*/README.md`
+> and the summary in `README.md`); the app is in `app/` with 57 unit and 18 e2e tests
+> (the prototypes add 12 more e2e). P7 and the image/PDF viewers came after the
+> plan below was written; they are recorded here, not planned.
 
 Goal: an **in-browser-only** Eclipse Theia application (no backend process) that
 
@@ -43,6 +45,10 @@ prototype's `README.md` next to the green one.
 P1–P5 are required by the app. P6 does not block the app; it is there because
 runtime installation of components is what the HTTPeers shell needs next.
 
+| # | Question | Evidence (test) |
+|---|---|---|
+| **P7** EmbedPDF | Can EmbedPDF (PDFium wasm) be bundled by Theia's esbuild and render a PDF from the `FilesApi` with no request leaving the app? | e2e: a PDF renders; every request stays on the app's origin or `blob:`/`data:`. |
+
 ## The app
 
 `apps/theia-shell` is a self-contained pnpm workspace (Theia's dependency tree is
@@ -55,13 +61,16 @@ apps/theia-shell/
   protos/pN-*/                 one folder per prototype: README (question, answer, red/green log), app, tests
   packages/theia-files-api/    Theia extension: FilesApi → FileSystemProvider, `FilesApiSource` binding, workspace root
   packages/theia-markdown/     Theia extension: Markdown commands, menus, preview + outline views
-  app/                         the browser-only application assembling both, with a seeded demo FilesApi
+  packages/theia-image-viewer/ Theia extension: image viewer (open handler, zoom commands)
+  packages/theia-pdf-viewer/   Theia extension: PDF viewer over EmbedPDF (after P7)
+  app/                         the browser-only application assembling them
+  app/files/                   its FilesApi (OPFS, or memory) and the demo seed
 ```
 
 **How the `FilesApi` is provided.** `theia-files-api` exports a DI symbol
 `FilesApiSource` (`() => FilesApi | Promise<FilesApi>`). The app binds it in its
 own frontend module; the default demo binding is an in-memory `MemFilesApi` seeded
-with sample Markdown. Any other implementation (browser/OPFS, HTTP, composite, one
+with sample Markdown, images and a PDF. Any other implementation (browser/OPFS, HTTP, composite, one
 served by a mesh peer) is a one-line rebinding.
 
 **Markdown extension contributions.**

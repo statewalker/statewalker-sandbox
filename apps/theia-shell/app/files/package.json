@@ -2,7 +2,7 @@
   "name": "@theia-shell/app-files",
   "version": "0.0.0",
   "private": true,
-  "description": "The app's FilesApi: OPFS (persistent) by default, or in-memory with ?storage=memory; seeded with sample Markdown.",
+  "description": "The app's FilesApi: OPFS (persistent) by default, or in-memory with ?storage=memory; seeded with sample Markdown, images and a PDF.",
   "main": "lib/app-files-frontend-module.js",
   "theiaExtensions": [
     {

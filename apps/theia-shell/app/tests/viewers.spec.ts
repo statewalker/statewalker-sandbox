@@ -6,6 +6,32 @@ async function open(page: Page, folder: string, file: string) {
   await explorer(page).getByText(file, { exact: true }).dblclick();
 }
 
+/** Opens an (already revealed) file in the text editor, replaces the first `find` and saves. */
+async function editAsText(page: Page, file: string, find: string, replace: string) {
+  await explorer(page).getByText(file, { exact: true }).click({ button: "right" });
+  await page.locator(".lm-Menu-itemLabel", { hasText: "Open With" }).click();
+  await page.locator(".quick-input-list .monaco-list-row", { hasText: "Text Editor" }).click();
+  const editor = page.locator(".theia-editor .monaco-editor").last();
+  await expect(editor).toContainText(find);
+  await editor.click();
+  // Find selects the first match; closing the find widget keeps the selection.
+  await page.keyboard.press("Control+f");
+  await page.keyboard.type(find);
+  await page.keyboard.press("Escape");
+  await page.keyboard.insertText(replace);
+  await expect(editor).toContainText(replace);
+  await page.keyboard.press("Control+s");
+}
+
+async function deleteFromExplorer(page: Page, file: string) {
+  await explorer(page).getByText(file, { exact: true }).click({ button: "right" });
+  await page.locator(".lm-Menu-itemLabel", { hasText: /^Delete$/ }).click();
+  await page.locator(".dialogBlock .theia-button.main").click();
+  await expect(explorer(page).getByText(file, { exact: true })).toHaveCount(0);
+}
+
+const tab = (page: Page, label: string) => page.locator(".lm-TabBar-tab", { hasText: label });
+
 test.describe("image viewer", () => {
   test("an image opens in the viewer, not in the text editor", async ({ page }) => {
     const errors = await start(page);
@@ -48,6 +74,29 @@ test.describe("image viewer", () => {
     await expect(page.locator(".image-viewer-status")).toContainText("240 × 120");
     expect(errors).toEqual([]);
   });
+
+  test("the viewer reloads when the image is saved from the text editor", async ({ page }) => {
+    const errors = await start(page, "?storage=memory");
+    await open(page, "media", "logo.svg");
+    const status = page.locator(".image-viewer-status");
+    await expect(status).toContainText("240 × 120");
+
+    await editAsText(page, "logo.svg", "240", "480");
+    await tab(page, "logo.svg").first().click();
+    await expect(status).toContainText("480 × 120");
+    expect(errors).toEqual([]);
+  });
+
+  test("deleting an open image leaves the viewer saying so, without errors", async ({ page }) => {
+    const errors = await start(page, "?storage=memory");
+    await open(page, "media", "gradient.png");
+    const status = page.locator(".image-viewer-status");
+    await expect(status).toContainText("320 × 200");
+
+    await deleteFromExplorer(page, "gradient.png");
+    await expect(status).toContainText("cannot be read");
+    expect(errors).toEqual([]);
+  });
 });
 
 test.describe("PDF viewer", () => {
@@ -64,6 +113,33 @@ test.describe("PDF viewer", () => {
     await expect(page.locator(".lm-TabBar-tab", { hasText: "sample.pdf" })).toBeVisible();
     await expect(viewer.locator("img[src^='blob:']").first()).toBeVisible({ timeout: 30_000 });
     expect(foreign).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test("the viewer reloads when the PDF is saved from the text editor", async ({ page }) => {
+    const errors = await start(page, "?storage=memory");
+    await open(page, "docs", "sample.pdf");
+    const pageImage = page.locator(".pdf-viewer-widget img[src^='blob:']").first();
+    await expect(pageImage).toBeVisible({ timeout: 30_000 });
+    const before = await pageImage.getAttribute("src");
+
+    // The sample PDF is plain ASCII; a same-length edit keeps its xref offsets valid.
+    await editAsText(page, "sample.pdf", "A sample PDF", "An edit PDF!");
+    await tab(page, "sample.pdf").first().click();
+    await expect(pageImage).toBeVisible({ timeout: 30_000 });
+    await expect(pageImage).not.toHaveAttribute("src", before as string);
+    expect(errors).toEqual([]);
+  });
+
+  test("deleting an open PDF leaves the viewer saying so, without errors", async ({ page }) => {
+    const errors = await start(page, "?storage=memory");
+    await open(page, "docs", "sample.pdf");
+    const viewer = page.locator(".pdf-viewer-widget");
+    await expect(viewer.locator("img[src^='blob:']").first()).toBeVisible({ timeout: 30_000 });
+
+    await deleteFromExplorer(page, "sample.pdf");
+    await expect(viewer.locator(".pdf-viewer-message")).toContainText("cannot be read");
+    await expect(viewer.locator(".pdf-viewer")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 });

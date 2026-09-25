@@ -47,7 +47,6 @@ app/                        the application, app/files (its FilesApi), e2e tests
 | [P4](protos/p4-editor-save) | Monaco + Save through the adapter? | Works with no extra code. |
 | [P5](protos/p5-contributions) | Commands, keybindings, menus and views, browser-only? | Standard APIs, all work. |
 | [P6](protos/p6-vscode-extension) | VS Code web extensions, and **runtime deploy**? | Static web extensions run once `activationEvents` are explicit (a 1.76 gap). A 20-line `HostedPluginServer` subclass deploys plugins at runtime with no reload (browser-only never calls `setClient`). `@theia/plugin-ext` roughly doubles the frontend modules, and several of them fail without a backend. |
-
 | [P7](protos/p7-embedpdf) | Can EmbedPDF run inside Theia's bundle, offline, on `FilesApi` bytes? | Yes. PDFium's wasm is embedded through Theia's `dataurl` loader for `.wasm`; jsDelivr fonts, Google Fonts and the stamp manifest are switched off. The bundle grows by about 13 MB in development mode. |
 
 ## Next, toward the HTTPeers shell

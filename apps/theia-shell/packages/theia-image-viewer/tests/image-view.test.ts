@@ -49,6 +49,13 @@ describe("stepZoom", () => {
     expect(stepZoom(16, 1)).toBe(16);
     expect(stepZoom(0.05, -1)).toBe(0.05);
   });
+
+  it("never moves against the direction, even outside the presets", () => {
+    // A huge image fitted to the view is shown below the smallest preset.
+    expect(stepZoom(0.02, -1)).toBe(0.02);
+    expect(stepZoom(20, 1)).toBe(20);
+    expect(stepZoom(0.02, 1)).toBe(0.05);
+  });
 });
 
 describe("formatZoom", () => {

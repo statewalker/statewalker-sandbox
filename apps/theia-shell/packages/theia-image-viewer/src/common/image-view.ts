@@ -29,11 +29,14 @@ export function fitScale(image: Size, box: Size): number {
 
 export const ZOOM_LEVELS = [0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 8, 16];
 
-/** The next preset zoom level above (`1`) or below (`-1`) `current`. */
+/**
+ * The next preset zoom level above (`1`) or below (`-1`) `current`; past the
+ * last preset in that direction, `current` itself (it never steps backwards).
+ */
 export function stepZoom(current: number, direction: 1 | -1): number {
   const levels = direction > 0 ? ZOOM_LEVELS : [...ZOOM_LEVELS].reverse();
   const next = levels.find((z) => (direction > 0 ? z > current + 1e-9 : z < current - 1e-9));
-  return next ?? levels[levels.length - 1];
+  return next ?? current;
 }
 
 export function formatZoom(scale: number): string {

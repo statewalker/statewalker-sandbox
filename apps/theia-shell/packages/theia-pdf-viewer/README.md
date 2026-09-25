@@ -18,6 +18,8 @@ independent of the other packages; add it to a Theia app's dependencies.
 Other behaviour:
 
 - Priority 500 for `.pdf` (the text editor has 100).
+- It reloads when the file changes (a new EmbedPDF instance; page and zoom
+  reset). If the file can no longer be read (deleted, moved), it says so.
 - The viewer's theme follows Theia's light/dark theme.
 - Annotation and redaction are off, because this is a viewer. Writing edits back
   to the file is a later step: EmbedPDF can export the modified document, which

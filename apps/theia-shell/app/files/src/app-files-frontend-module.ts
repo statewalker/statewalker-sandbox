@@ -9,7 +9,7 @@ import { seedIfEmpty } from "./seed-if-empty";
 /**
  * The app's FilesApi. `?storage=memory` gives a fresh in-memory tree on every
  * load; otherwise the browser's Origin Private File System keeps the files
- * across reloads. Either way an empty tree is seeded with sample Markdown.
+ * across reloads. Either way an empty tree is seeded with sample Markdown, images and a PDF.
  *
  * Swapping in any other FilesApi (a local folder, HTTP, a mesh peer) is this
  * one function.
