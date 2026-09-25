@@ -1,0 +1,5 @@
+{
+  "extends": "../../../tsconfig.theia.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "lib", "jsx": "react" },
+  "include": ["src"]
+}

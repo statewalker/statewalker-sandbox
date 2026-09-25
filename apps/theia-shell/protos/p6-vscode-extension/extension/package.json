@@ -1,0 +1,18 @@
+{
+  "name": "@theia-shell/p6-extension",
+  "version": "0.0.0",
+  "private": true,
+  "description": "P6: a hosted-plugin server that can deploy plugins at runtime, in a browser-only app.",
+  "theiaExtensions": [
+    {
+      "frontendOnly": "lib/p6-frontend-module"
+    }
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@theia/core": "1.76.0",
+    "@theia/plugin-ext": "1.76.0"
+  }
+}
