@@ -44,8 +44,8 @@ The explorer's top-level folders are **mount points**. By default there are
 two: **Browser Storage** (the main storage, key `browser`) and **Temporary**
 (in memory, key `temp`).
 
-- **Mount a file system**: *Files: Mount File System…* (command palette, or the
-  explorer's context menu). Pick a type — *In Memory*, *Browser Storage (OPFS)*,
+- **Mount a file system**: *File → Mount File System…* (also in the command
+  palette and the explorer's context menu). Pick a type — *In Memory*, *Browser Storage (OPFS)*,
   *Folder on this Computer*, *S3 Bucket* — then a name ("Local Computer") and a
   key (the folder name, derived from the name, editable, unique), then the
   type's own fields. S3 keys are typed as passwords and go to the vault.
@@ -60,7 +60,7 @@ two: **Browser Storage** (the main storage, key `browser`) and **Temporary**
 - **Hidden paths**: the `files.hidden` setting (globs; this app defaults to
   `**/.git`, `**/.git/**`, `**/.DS_Store`) hides paths from the explorer,
   editors and search, live.
-- **Main storage**: *Files: Choose Main Storage…* moves your settings and vault
+- **Main storage**: *File → Choose Main Storage…* moves your settings and vault
   to a folder on your computer (or back to browser storage). A local-folder main
   storage asks for one click after each reload, as browsers require.
 - **Secrets**: *Secrets: Unlock / Lock / Change Password / Forget Remembered

@@ -197,3 +197,13 @@ test("a files.mounts that is not an array is reported, not replaced by the defau
   ).toBeVisible();
   await expect(explorer(page).getByText("Temporary", { exact: true })).toHaveCount(0);
 });
+
+test("the File menu offers Mount File System… and Choose Main Storage…", async ({ page }) => {
+  await start(page, "?storage=memory");
+  await page.locator("#theia-top-panel").getByText("File", { exact: true }).click();
+  await expect(page.locator(".lm-Menu-item", { hasText: "Choose Main Storage…" })).toBeVisible();
+  await page.locator(".lm-Menu-item", { hasText: "Mount File System…" }).click();
+  await expect(
+    page.locator(".quick-input-list .monaco-list-row", { hasText: "In Memory" }),
+  ).toBeVisible();
+});

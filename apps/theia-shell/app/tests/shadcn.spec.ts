@@ -1,5 +1,13 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { explorer, openFile, openMain, runFromPalette, start, unlockVault, waitForSettings } from "./helpers";
+import {
+  explorer,
+  openFile,
+  openMain,
+  runFromPalette,
+  start,
+  unlockVault,
+  waitForSettings,
+} from "./helpers";
 
 /** The computed colour a shadcn token resolves to on <body>, in the form getComputedStyle reports. */
 async function token(page: Page, name: string): Promise<string> {

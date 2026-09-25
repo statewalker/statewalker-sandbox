@@ -1,4 +1,5 @@
 import { BrowserFilesApi } from "@statewalker/webrun-files-browser";
+import { CommonMenus } from "@theia/core/lib/browser/common-frontend-contribution";
 import { ConfirmDialog } from "@theia/core/lib/browser/dialogs";
 import type { Command, CommandContribution, CommandRegistry } from "@theia/core/lib/common/command";
 import type { MenuContribution, MenuModelRegistry } from "@theia/core/lib/common/menu";
@@ -81,6 +82,15 @@ export class MountCommandContribution implements CommandContribution, MenuContri
     menus.registerMenuAction(NavigatorContextMenu.NAVIGATION, {
       commandId: MountCommands.MOUNT.id,
       order: "z",
+    });
+    // File menu, next to Open…: where people look for "open another place".
+    menus.registerMenuAction(CommonMenus.FILE_OPEN, {
+      commandId: MountCommands.MOUNT.id,
+      order: "z1",
+    });
+    menus.registerMenuAction(CommonMenus.FILE_OPEN, {
+      commandId: MountCommands.CHOOSE_MAIN.id,
+      order: "z2",
     });
   }
 
