@@ -18,6 +18,25 @@ importers:
         specifier: 4.1.11
         version: 4.1.11(@types/node@26.6.2)(vite@8.3.1(@types/node@26.6.2)(esbuild@0.28.2)(yaml@2.9.1))
 
+  packages/theia-files-api:
+    dependencies:
+      '@statewalker/webrun-files':
+        specifier: 0.10.0
+        version: 0.10.0
+      '@theia/core':
+        specifier: 1.76.0
+        version: 1.76.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@theia/filesystem':
+        specifier: 1.76.0
+        version: 1.76.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/workspace':
+        specifier: 1.76.0
+        version: 1.76.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+    devDependencies:
+      '@statewalker/webrun-files-mem':
+        specifier: 0.10.0
+        version: 0.10.0
+
   protos/p1-browser-only:
     dependencies:
       '@theia/core':
@@ -538,6 +557,12 @@ packages:
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
+  '@statewalker/webrun-files-mem@0.10.0':
+    resolution: {integrity: sha512-6e37MJhbl5JB4AZwyeRi0hmDLMODKKG2RICCIA3RuATH5n4U8d/FIEdWJNm+DeYwlTLivY0BOvzKLkOWn3hqww==}
+
+  '@statewalker/webrun-files@0.10.0':
+    resolution: {integrity: sha512-ekVDzOdRcH2aQi2NCdB7Nk/xpAL4vS+ZkN5PZqgDeiMDEi7usG3MEz4c+VpSNfTlC+sFSzKnud0DNPbv9R/AtQ==}
 
   '@stroncium/procfs@1.2.1':
     resolution: {integrity: sha512-X1Iui3FUNZP18EUvysTHxt+Avu2nlVzyf90YM8OYgP6SGzTzzX/0JgObfO1AQQDzuZtNNz29bVh8h5R97JrjxA==}
@@ -3675,6 +3700,12 @@ snapshots:
   '@socket.io/component-emitter@3.1.2': {}
 
   '@standard-schema/spec@1.1.0': {}
+
+  '@statewalker/webrun-files-mem@0.10.0':
+    dependencies:
+      '@statewalker/webrun-files': 0.10.0
+
+  '@statewalker/webrun-files@0.10.0': {}
 
   '@stroncium/procfs@1.2.1': {}
 
