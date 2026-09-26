@@ -13,9 +13,11 @@ more can sit side by side.
 - Open, rename, delete, create files and folders from a panel, exactly as from the explorer.
 - **Copy / move** between panels and the explorer, in every direction, by drag and drop and by
   context-menu commands.
-- Every drop — into a panel *or* into the explorer — asks, in a dialog, whether to **copy** or
-  **move/rename**. When the target folder is the source folder, only **copy** or **rename** is
-  offered.
+- Every drop **into a panel** (from a panel or from the explorer) asks, in a dialog, whether to
+  **copy** or **move/rename**. When the target folder is the source folder, only **copy** or
+  **rename** is offered.
+- Drops **into the explorer keep Theia's default behaviour** — Ctrl (⌥ on macOS) copies, a plain
+  drop moves, no dialog. A drag coming from a panel follows that same rule.
 - Columns (name, size, modified) with sorting; files dropped from the operating system are
   uploaded; open panels come back after a reload.
 - **Internationalized from the start**: no user-visible string, number, date or sort order is
@@ -31,6 +33,14 @@ more can sit side by side.
   as its own issue; this feature only guarantees every string is localizable.
 - No undo, no background transfer queue, no rollback of a partly failed batch.
 - No storage code: every operation is `FileService` over whatever the app mounts.
+- No change to the explorer's existing behaviour (see *Explorer extension*).
+
+## Extension rule
+
+Theia is extended, never patched: subclassing exported classes, implementing exported interfaces
+and (re)binding exported DI symbols is fine, as long as only their **public or protected**
+members are used — protected members being Theia's intended extension points. No private
+members, no symbols a module does not export, no copies of Theia internals.
 
 ## Findings this rests on (Theia 1.76, this app)
 
@@ -42,10 +52,16 @@ more can sit side by side.
   `ApplicationShell.setDraggedEditorUris`). A foreign widget can read the second. On drop, the
   explorer resolves only its own node ids; anything else falls through to
   `FileUploadService.upload` — so today a drop from a panel does nothing.
-- The explorer's own drops never ask: Ctrl (⌥ on macOS) copies, a plain drop moves.
+- The explorer's own drops never ask: Ctrl (⌥ on macOS) copies, a plain drop moves. Its node ids
+  are `<root id>:<path>` and resolve only for nodes loaded in its model (expanded folders), so a
+  foreign widget cannot reliably impersonate an explorer drag.
 - `FileNavigatorWidget` is bound `toDynamicValue(createFileNavigatorWidget)` and its
-  `WidgetFactory` calls `container.get(FileNavigatorWidget)`, so rebinding that one symbol
-  replaces the explorer's widget class and nothing else.
+  `WidgetFactory` calls `container.get(FileNavigatorWidget)`. `createFileNavigatorContainer`
+  (exported from `@theia/navigator/lib/browser/navigator-container`) returns the child container
+  in which the widget class is bound, so the widget class can be swapped inside Theia's own
+  container without re-creating it.
+- `handleDropEvent`, `getDropTargetDirNode` and `getDropEffect` are `protected` members of the
+  exported `FileTreeWidget`.
 - Theia's file dialog is already a **one-level `FileTreeWidget`** (root = current folder,
   folders do not expand) — the shape a panel needs.
 - The editor breadcrumbs' popup is a file tree that *opens files*; a panel's dropdown must list
@@ -91,12 +107,16 @@ src/browser/
 | `TransferPlanner` | Pure: decides steps, free names, skips. | none |
 | `TransferDialog` | Collects the choice. | nls |
 | `TransferService` | Executes steps; progress; aggregated failures; selects results. | `FileService`, `ProgressService`, `MessageService` |
-| `FileDropHandler` | Reads a drop, validates, resolves, opens the dialog, runs the plan; routes OS files to upload. | the three above, `FileUploadService` |
-| `PanelAwareNavigatorWidget` | Overrides only `handleDropEvent` → `FileDropHandler`. | `FileNavigatorWidget` |
+| `FileDropHandler` | Reads a drop into a panel, validates, resolves, opens the dialog, runs the plan; routes OS files to upload. | the three above, `FileUploadService` |
+| `PanelAwareNavigatorWidget` | Adds one case to the explorer's drop: a panel drag, handled by the explorer model's own copy/move. Every other drop goes to Theia's handler unchanged. | `FileNavigatorWidget` |
 
-**One drop path.** Panels and the explorer both put the dragged URIs in `theia-editor-dnd`, and
-both hand every drop to `FileDropHandler`. Panel→panel, panel→explorer, explorer→panel and
-explorer→explorer are one code path with one dialog.
+**Drag payload.** A panel drag carries the URIs twice: in `theia-editor-dnd` (so editors, the
+shell and panels understand it, exactly as for an explorer drag) and in a panel-only marker type,
+`theia-file-panels/uris`, by which the explorer recognises a panel drag.
+
+**Two drop behaviours.** Into a panel: `FileDropHandler` and its dialog, whatever the source
+(panel or explorer, both read from `theia-editor-dnd`). Into the explorer: Theia's rule, no
+dialog — natively for explorer drags, through `PanelAwareNavigatorWidget` for panel drags.
 
 ## Panel
 
@@ -134,9 +154,8 @@ explorer→explorer are one code path with one dialog.
 
 1. Read URIs from `theia-editor-dnd`. If there are none but `dataTransfer.files` is non-empty,
    **upload** into the target with `FileUploadService` (no dialog) and stop.
-2. Target folder: the dropped-on folder; a dropped-on file's parent; empty space → the panel's
-   current folder (the explorer keeps Theia's `getDropTargetDirNode`, which for a multi-root
-   background drop picks the last root).
+2. Target folder: the dropped-on folder (a row or a breadcrumb segment); a dropped-on file's
+   parent; empty space → the panel's current folder.
 3. **Reject** — localized warning, no dialog — a folder dropped into itself or its own descendant.
 4. `fileService.resolveAll(sources)` for names and kinds; list the target's children for clashes.
 5. Open `TransferDialog`; on OK, plan and run.
@@ -183,19 +202,30 @@ the skipped sources with a reason.
   with the reasons.
 - A cross-mount move is copy-then-remove inside the composite and not atomic: after a partial
   failure a copy may exist while the original remains. Stated, not hidden.
-- On completion the new items are selected in the target panel (or the explorer).
+- On completion the new items are selected in the target panel.
 
-## Explorer change
+## Explorer extension
 
-`PanelAwareNavigatorWidget` extends `FileNavigatorWidget` and overrides `handleDropEvent` only: it
-computes the target with the inherited `getDropTargetDirNode` and delegates to `FileDropHandler`.
-The module **rebinds `FileNavigatorWidget`** to a `toDynamicValue` that builds the same child
-container as `createFileNavigatorContainer` (`FileNavigatorTree`, `FileNavigatorModel`,
-`NavigatorDecoratorService`, `FILE_NAVIGATOR_PROPS`) with `widget: PanelAwareNavigatorWidget`.
-Tree, model, decorations and toolbar remain Theia's.
+The explorer's existing behaviour does not change; it gains one case — accepting a panel drag.
 
-Consequence (agreed): **every** drop onto the explorer, including explorer→explorer, now shows the
-dialog; Ctrl/⌥ only preselects Copy. OS-file uploads onto the explorer are unchanged.
+- `PanelAwareNavigatorWidget extends FileNavigatorWidget` and overrides the protected
+  `handleDropEvent(node, event)`:
+  - **no `theia-file-panels/uris` in the drop** → `super.handleDropEvent(node, event)`, untouched:
+    explorer→explorer drags, OS-file uploads and everything else behave exactly as today;
+  - **a panel drag** → the target is the inherited `getDropTargetDirNode(node)`, the operation the
+    inherited `getDropEffect(event)` (Ctrl/⌥ → copy, else move), with **no dialog**. Each URI goes
+    through the explorer model's own **public** methods, exactly as an explorer drag does:
+    `model.copy(uri, target)`, and `model.move(sourceNode, target)` with a detached
+    `FileStatNode` built from the resolved `FileStat` (a public interface). So clashes behave as
+    Theia's: a move asks Theia's replace confirmation, a copy takes a free name, a move onto the
+    source's own folder is a no-op. `FileDropHandler` and `TransferService` are not involved.
+- Binding: the module rebinds `FileNavigatorWidget` to
+  `toDynamicValue(ctx => { const child = createFileNavigatorContainer(ctx.container);
+  child.rebind(FileNavigatorWidget).to(PanelAwareNavigatorWidget); return child.get(FileNavigatorWidget); })`.
+  Theia's own container is used as is — tree, model, decorators, props and toolbar remain Theia's.
+
+Other standard file trees (the file dialog, the breadcrumb popup) are not extended; a panel drag
+onto them does nothing, as today.
 
 ## Commands and menus
 
@@ -260,7 +290,8 @@ the explorer's menu layout.
 4. Two panels side by side: drag a file across, choose Copy — both folders hold it.
 5. Same with Move — the source no longer has it.
 6. Drop into the same folder: only Copy and Rename offered; Copy creates `… copy.ext`.
-7. Panel → explorer and explorer → panel: the dialog appears both ways.
+7. Explorer → panel shows the dialog. Panel → explorer shows **no** dialog: a plain drop moves,
+   Ctrl copies. Explorer → explorer still moves without a dialog (unchanged behaviour).
 8. Several items with a clash: Keep both, Skip, Overwrite each behave.
 9. An OS file dropped into a panel is uploaded (synthetic `DataTransfer` with a `File`).
 10. Reload: panels return at their folders with their sort.
@@ -270,11 +301,11 @@ Red and green runs are recorded, as in earlier work.
 
 ## Risks
 
-- **Theia internals.** The explorer rebinding mirrors `createFileNavigatorContainer` and overrides
-  `handleDropEvent`; a Theia upgrade that changes either breaks panel→explorer drops. E2E 7 catches
-  it.
-- **Changed explorer habit.** Every explorer drop now asks. Agreed deliberately; if it grates, a
-  preference can restore direct drops for explorer→explorer later.
+- **Protected extension points.** The explorer extension overrides the protected
+  `handleDropEvent` and calls the protected `getDropTargetDirNode` / `getDropEffect`; a Theia
+  upgrade that renames or re-signs them breaks panel→explorer drops. E2E 7 catches it, and the
+  override falls through to `super` for every drop that is not a panel drag, so the explorer's own
+  behaviour cannot regress through it.
 - **Columns over a tree.** `FileTreeWidget` rows are not a table; the header and grid rows need
   careful CSS (widths, RTL, virtualized scrolling). Kept in one stylesheet and covered by e2e.
 - **Non-atomic cross-mount moves** (above).
