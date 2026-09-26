@@ -40,20 +40,25 @@ An empty main storage ("Browser Storage") is seeded with `welcome.md`, `notes/id
 
 ## Mounts, the main storage and secrets
 
-The explorer's top-level folders are **mount points**. By default there are
-two: **Browser Storage** (the main storage, key `browser`) and **Temporary**
-(in memory, key `temp`).
+The explorer's top-level folders are **mount points**: each one is a
+workspace folder. By default there are two: **Browser Storage** (the main
+storage, key `browser`) and **Temporary** (in memory, key `temp`).
 
-- **Mount a file system**: *File → Mount File System…* (also in the command
-  palette and the explorer's context menu). Pick a type — *In Memory*, *Browser Storage (OPFS)*,
-  *Folder on this Computer*, *S3 Bucket* — then a name ("Local Computer") and a
-  key (the folder name, derived from the name, editable, unique), then the
-  type's own fields. S3 keys are typed as passwords and go to the vault.
-- **Edit Mount… / Unmount / Reconnect**: on a mount's folder in the explorer.
-  A mount that cannot be reached stays listed with its reason — "Cloud
-  (unavailable: …)", "Cloud (locked)" while the vault is locked, "Local
-  Computer (click Reconnect)" when the browser needs a click to grant access
-  again.
+- **Add a folder**: *File → Mount File System…* or *Add Folder to Workspace…*
+  opens the folder list — remembered folders, browser-storage folders not yet
+  mounted, and *New Folder on this Computer…*, *New S3 Bucket…*, *New
+  Browser-Storage Folder…*, *New In-Memory Folder…*.
+  - *New Folder on this Computer…* opens the browser's folder picker first;
+    the form then suggests the folder's name as the workspace folder's name.
+  - *New S3 Bucket…* opens one form with the name, the mount path, and the
+    endpoint, region, bucket, prefix and keys (the keys go to the vault).
+- **Remove a folder**: *Remove Folder from Workspace* on its root. It is
+  remembered and listed under *Add Folder to Workspace…*, where one click
+  brings it back and the trash button forgets it. The main storage stays.
+- **Edit Mount… / Reconnect**: on a mount's root in the explorer. A mount that
+  cannot be reached stays listed with its reason — "Cloud (unavailable: …)",
+  "Cloud (locked)" while the vault is locked, "Local Computer (click
+  Reconnect)" when the browser needs a click to grant access again.
 - **Settings**: mounts are the `files.mounts` setting, so they come back after
   a reload and can be edited in *Preferences: Open Settings (JSON)*. Secrets
   never appear there.
@@ -132,11 +137,11 @@ pnpm --filter @theia-shell/theia-image-viewer test # 9 unit tests: MIME types, f
 pnpm --filter @theia-shell/theia-pdf-viewer test   # 5 unit tests: the generated PDF
 pnpm --filter @theia-shell/theia-shadcn test       # 6 unit tests: cn, the button variants, data-slots
 pnpm --filter @theia-shell/theia-secret-vault test # 19 unit tests: the vault, the KeyStoreService contract
-pnpm --filter @theia-shell/theia-files-mounts test # 30 unit tests: keys, configs, layers, mount table, folder access, queue
+pnpm --filter @theia-shell/theia-files-mounts test # 45 unit tests: keys, configs, layers, mount table, workspace file, folder list, form
 pnpm --filter @theia-shell/theia-files-s3 test     # 4 unit tests: client options, the RustFS fixture's CORS
 pnpm --filter @theia-shell/app-files test          # 8 unit tests: seeding, the PNG encoder
 pnpm --filter @theia-shell/app-style test          # 6 unit tests on the compiled CSS (build first)
-pnpm --filter @theia-shell/app test:e2e            # 50 Playwright tests against the static build
+pnpm --filter @theia-shell/app test:e2e            # 58 Playwright tests against the static build
 ```
 
 The 4 S3 e2e tests and one unit test run against RustFS in Docker

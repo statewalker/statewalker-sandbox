@@ -7,6 +7,7 @@ import type { MountField, MountType } from "../../common/mount-types";
 export class MemoryMountType implements MountType {
   readonly id = "memory";
   readonly label = "In Memory (lost on reload)";
+  readonly newLabel = "New In-Memory Folder…";
   readonly fields: MountField[] = [];
 
   isAvailable(): boolean {

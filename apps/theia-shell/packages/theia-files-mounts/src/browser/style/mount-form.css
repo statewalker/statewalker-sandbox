@@ -1,0 +1,18 @@
+.mount-form-dialog .dialogContent {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 380px;
+}
+
+.mount-form-dialog .mount-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mount-form-dialog .mount-form-error {
+  min-height: 1em;
+  color: var(--theia-errorForeground);
+  font-size: var(--theia-ui-font-size0);
+}

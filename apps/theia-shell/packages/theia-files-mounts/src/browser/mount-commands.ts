@@ -4,7 +4,12 @@ import { ConfirmDialog } from "@theia/core/lib/browser/dialogs";
 import type { Command, CommandContribution, CommandRegistry } from "@theia/core/lib/common/command";
 import type { MenuContribution, MenuModelRegistry } from "@theia/core/lib/common/menu";
 import { MessageService } from "@theia/core/lib/common/message-service";
-import { QuickInputService } from "@theia/core/lib/common/quick-pick-service";
+import {
+  type QuickInputButton,
+  QuickInputService,
+  type QuickPickItem,
+  type QuickPickSeparator,
+} from "@theia/core/lib/common/quick-pick-service";
 import { SelectionService } from "@theia/core/lib/common/selection-service";
 import type URI from "@theia/core/lib/common/uri";
 import { UriAwareCommandHandler } from "@theia/core/lib/common/uri-command-handler";
@@ -13,12 +18,20 @@ import {
   NAVIGATOR_CONTEXT_MENU,
   NavigatorContextMenu,
 } from "@theia/navigator/lib/browser/navigator-contribution";
+import { WorkspaceCommands } from "@theia/workspace/lib/browser/workspace-commands";
 import { VaultUi } from "@theia-shell/theia-secret-vault/lib/browser/vault-contribution";
-import { suggestKey, validateKey } from "../common/mount-keys";
+import { buildFolderList, type FolderListItem } from "../common/folder-list";
+import { suggestKey } from "../common/mount-keys";
 import type { MountConfig, MountType } from "../common/mount-types";
 import { copySystemFolder, hasSystemFolder } from "../common/system-folder";
 import { DEFAULT_MAIN, MainStorageService } from "./main-storage";
+import { MountFormDialog, type MountFormResult } from "./mount-form-dialog";
 import { MountService } from "./mount-service";
+import type { OpfsMountType } from "./mount-types/opfs-mount-type";
+
+interface FolderPick extends QuickPickItem {
+  item: FolderListItem;
+}
 
 export namespace MountCommands {
   const category = "Files";
@@ -43,7 +56,18 @@ export class MountCommandContribution implements CommandContribution, MenuContri
   @inject(VaultUi) protected readonly vaultUi!: VaultUi;
 
   registerCommands(commands: CommandRegistry): void {
-    commands.registerCommand(MountCommands.MOUNT, { execute: () => this.wizard() });
+    commands.registerCommand(MountCommands.MOUNT, { execute: () => this.folderList() });
+    // Theia's workspace commands mean mounting and unmounting here.
+    commands.unregisterCommand(WorkspaceCommands.ADD_FOLDER.id);
+    commands.registerCommand(WorkspaceCommands.ADD_FOLDER, { execute: () => this.folderList() });
+    commands.unregisterCommand(WorkspaceCommands.REMOVE_FOLDER.id);
+    commands.registerCommand(
+      WorkspaceCommands.REMOVE_FOLDER,
+      UriAwareCommandHandler.MultiSelect(this.selection, {
+        execute: (uris: URI[]) => this.removeFolders(uris),
+        isVisible: (uris: URI[]) => uris.length > 0 && uris.every((u) => !!this.mounts.mountAt(u)),
+      }),
+    );
     const onMount = (run: (mount: MountConfig) => unknown, show: (mount: MountConfig) => boolean) =>
       UriAwareCommandHandler.MonoSelect(this.selection, {
         execute: (uri: URI) => {
@@ -58,7 +82,7 @@ export class MountCommandContribution implements CommandContribution, MenuContri
     const notMain = (m: MountConfig) => m.key !== this.mounts.mainKey();
     commands.registerCommand(
       MountCommands.EDIT,
-      onMount((m) => this.wizard(m), notMain),
+      onMount((m) => this.editMount(m), notMain),
     );
     commands.registerCommand(
       MountCommands.UNMOUNT,
@@ -94,89 +118,172 @@ export class MountCommandContribution implements CommandContribution, MenuContri
     });
   }
 
-  /** New mount, or `existing` edited (its type fixed). */
-  protected async wizard(existing?: MountConfig): Promise<void> {
-    const types = [...this.mounts.types().values()].filter((t) => t.isAvailable());
-    const picked = existing
-      ? undefined
-      : await this.quick.pick(
-          types.map((t) => ({ label: t.label, id: t.id })),
-          { placeHolder: "Type of file system to mount" },
-        );
-    const type: MountType | undefined = existing
-      ? this.mounts.types().get(existing.type)
-      : types.find((t) => t.id === picked?.id);
-    if (!type) return;
-    const taken = [
+  /** Keys a new or edited mount may not take: every other entry's (mounted or remembered) and the reserved ones. */
+  protected takenKeys(except?: string): string[] {
+    return [
       ...this.mounts.reservedKeys(),
       ...this.mounts
         .configuredMounts()
         .map((m) => m.key)
-        .filter((k) => k !== existing?.key),
+        .filter((k) => k !== except),
     ];
-    const name = await this.quick.input({
-      prompt: "Name shown in the explorer",
-      value: existing?.name ?? "",
-      validateInput: async (v) => (v.trim() ? undefined : "A name is required."),
+  }
+
+  /** *Add Folder to Workspace…*: remembered folders, unreferenced browser-storage folders, and new ones. */
+  protected async folderList(): Promise<void> {
+    const opfs = [...this.mounts.types().values()].find((t) => t.id === "opfs") as
+      | OpfsMountType
+      | undefined;
+    const directories = opfs?.isAvailable() ? await opfs.listDirectories() : [];
+    const quickPick = this.quick.createQuickPick<FolderPick>();
+    const forget: QuickInputButton = {
+      iconClass: "codicon codicon-trash",
+      tooltip: "Forget this folder",
+    };
+    const refresh = () => {
+      const items = buildFolderList(
+        this.mounts.configuredMounts(),
+        this.mounts.types(),
+        directories,
+      );
+      const section = (
+        kind: FolderListItem["kind"],
+        label: string,
+      ): (FolderPick | QuickPickSeparator)[] => {
+        const picks = items.filter((i) => i.kind === kind).map((item) => this.toPick(item, forget));
+        return picks.length ? [{ type: "separator", label }, ...picks] : [];
+      };
+      quickPick.items = [
+        ...section("remembered", "Remembered"),
+        ...section("opfs", "In browser storage"),
+        ...section("new", "New"),
+      ];
+    };
+    refresh();
+    quickPick.placeholder = "Add a folder to the workspace";
+    quickPick.onDidTriggerItemButton(async (event) => {
+      const row = (event.item as FolderPick).item;
+      if (row.kind !== "remembered") return;
+      const mount = row.mount;
+      quickPick.hide();
+      const ok = await new ConfirmDialog({
+        title: `Forget “${mount.name}”?`,
+        msg: "Its settings, keys and folder access are deleted. The files themselves stay where they are.",
+        ok: "Forget",
+      }).open();
+      if (ok) await this.mounts.forget(mount.key);
     });
-    if (name === undefined) return;
-    const keyInput = await this.quick.input({
-      prompt: "Key: the folder name at the root",
-      value: existing?.key ?? suggestKey(name.trim(), taken),
-      validateInput: async (v) => validateKey(v.trim(), taken),
+    quickPick.onDidAccept(() => {
+      const picked = quickPick.selectedItems[0];
+      quickPick.hide();
+      if (picked) void this.addFromList(picked.item);
     });
-    if (keyInput === undefined) return;
-    const key = keyInput.trim();
-    const config: Record<string, string> = { ...(existing?.config ?? {}) };
-    const secrets: Record<string, string> = {};
-    for (const field of type.fields) {
-      const secret = field.kind === "secret";
-      const fallback =
-        typeof field.default === "function" ? field.default({ key, name }) : (field.default ?? "");
-      const keepSecret = secret && !!existing;
-      const value = await this.quick.input({
-        prompt: field.label,
-        password: secret,
-        value: secret ? "" : (config[field.name] ?? fallback),
-        placeHolder: keepSecret ? "Leave empty to keep the current value" : undefined,
-        validateInput: async (v) => {
-          if (field.required && !v.trim() && !keepSecret) return `${field.label} is required.`;
-          if (field.kind === "url" && v.trim() && !/^https?:\/\/[^/]/.test(v.trim()))
-            return "Enter an http:// or https:// URL.";
-          return undefined;
-        },
-      });
-      if (value === undefined) return;
-      if (secret) {
-        if (value) secrets[field.name] = value;
-      } else if (value.trim()) config[field.name] = value.trim();
-      else delete config[field.name];
+    quickPick.onDidHide(() => quickPick.dispose());
+    quickPick.show();
+  }
+
+  protected toPick(item: FolderListItem, forget: QuickInputButton): FolderPick {
+    if (item.kind === "new") return { label: item.label, item };
+    return {
+      label: item.label,
+      description: item.description,
+      item,
+      buttons: item.kind === "remembered" ? [forget] : [],
+    };
+  }
+
+  protected async addFromList(item: FolderListItem): Promise<void> {
+    if (item.kind === "remembered") return this.mounts.remount(item.mount.key);
+    if (item.kind === "opfs") {
+      // One click: a browser-storage folder mounts under its own name.
+      const key = suggestKey(item.directory, this.takenKeys());
+      return this.mounts.saveMount(
+        { key, name: item.directory, type: "opfs", config: { directory: item.directory } },
+        {},
+      );
     }
+    return this.newMount(item.typeId);
+  }
+
+  /** A new mount: the type's interactive step first (a folder picker), then one form. */
+  protected async newMount(
+    typeId: string,
+    preset: { name?: string; config?: Record<string, string> } = {},
+  ): Promise<void> {
+    const type = this.mounts.types().get(typeId);
+    if (!type) return;
+    let name = preset.name;
+    let config = { ...(preset.config ?? {}) };
     if (type.configure) {
-      const extra = await type.configure({ key, name: name.trim(), type: type.id, config });
-      if (!extra) return;
-      Object.assign(config, extra);
+      const picked = await type.configure({ key: "", name: "", type: type.id, config });
+      if (!picked) return;
+      config = { ...config, ...picked.config };
+      name = picked.name ?? name;
     }
-    if (type.fields.some((f) => f.kind === "secret") && !(await this.vaultUi.ensureUnlocked())) {
+    const result = await new MountFormDialog({
+      title: type.newLabel?.replace(/…$/, "") ?? `New ${type.label}`,
+      type,
+      taken: this.takenKeys(),
+      editing: false,
+      initial: { name, config },
+    }).open();
+    if (result) await this.save(type, result);
+  }
+
+  /** *Edit Mount…*: the same form, prefilled; the type is fixed. */
+  protected async editMount(mount: MountConfig): Promise<void> {
+    const type = this.mounts.types().get(mount.type);
+    if (!type) return;
+    const result = await new MountFormDialog({
+      title: `Edit “${mount.name}”`,
+      type,
+      taken: this.takenKeys(mount.key),
+      editing: true,
+      initial: { name: mount.name, key: mount.key, config: mount.config },
+      chooseAgain: type.configure
+        ? () => (type.configure as NonNullable<MountType["configure"]>)(mount)
+        : undefined,
+    }).open();
+    if (result) await this.save(type, result, mount.key);
+  }
+
+  protected async save(
+    type: MountType,
+    result: MountFormResult,
+    previousKey?: string,
+  ): Promise<void> {
+    const hasSecrets =
+      Object.keys(result.secrets).length > 0 || type.fields.some((f) => f.kind === "secret");
+    if (hasSecrets && !(await this.vaultUi.ensureUnlocked())) {
       this.messages.warn(
         "Secrets are locked, so the mount was not saved. Run “Secrets: Unlock” and try again.",
       );
       return;
     }
     await this.mounts.saveMount(
-      { key, name: name.trim(), type: type.id, config },
-      secrets,
-      existing?.key,
+      { key: result.key, name: result.name, type: type.id, config: result.config },
+      result.secrets,
+      previousKey,
     );
   }
 
+  protected async removeFolders(uris: URI[]): Promise<void> {
+    for (const uri of uris) {
+      const mount = this.mounts.mountAt(uri);
+      if (!mount) continue;
+      if (mount.key === this.mounts.mainKey()) {
+        this.messages.warn(
+          `“${mount.name}” is the main storage and cannot be removed; “Choose Main Storage…” replaces it.`,
+        );
+        continue;
+      }
+      await this.unmount(mount);
+    }
+  }
+
+  /** *Remove Folder from Workspace* / *Unmount*: out of the workspace, remembered in the list. */
   protected async unmount(mount: MountConfig): Promise<void> {
-    const ok = await new ConfirmDialog({
-      title: `Unmount “${mount.name}”?`,
-      msg: "The files stay where they are; only the mount point is removed.",
-      ok: "Unmount",
-    }).open();
-    if (ok) await this.mounts.unmount(mount.key);
+    await this.mounts.unmount(mount.key);
   }
 
   protected async chooseMain(): Promise<void> {

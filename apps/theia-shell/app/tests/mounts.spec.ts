@@ -1,22 +1,21 @@
 import { expect, test } from "@playwright/test";
 import {
   explorer,
+  fillMountForm,
+  folderRow,
+  mountNew,
+  openFolderList,
   openMain,
   readFile,
   runFromPalette,
   start,
+  submitMountForm,
   unlockVault,
   waitForSettings,
 } from "./helpers";
 
 async function mountMemory(page: import("@playwright/test").Page, name: string, key?: string) {
-  await runFromPalette(page, "Files: Mount File System…");
-  await page.locator(".quick-input-list .monaco-list-row", { hasText: "In Memory" }).click();
-  const input = page.locator(".quick-input-widget .quick-input-box input");
-  await input.fill(name);
-  await page.keyboard.press("Enter");
-  if (key !== undefined) await input.fill(key);
-  await page.keyboard.press("Enter");
+  await mountNew(page, "New In-Memory Folder…", { name, key });
 }
 
 test("the main storage and the default Temporary mount show by name", async ({ page }) => {
@@ -52,13 +51,14 @@ test("a name in another script gets the key 'mount' and keeps its name", async (
 
 test("a duplicate key is refused", async ({ page }) => {
   await start(page, "?storage=memory");
-  await runFromPalette(page, "Files: Mount File System…");
-  await page.locator(".quick-input-list .monaco-list-row", { hasText: "In Memory" }).click();
-  const input = page.locator(".quick-input-widget .quick-input-box input");
-  await input.fill("Anything");
-  await page.keyboard.press("Enter");
-  await input.fill("temp");
-  await expect(page.locator(".quick-input-message")).toContainText("already used");
+  await openFolderList(page);
+  await folderRow(page, "New In-Memory Folder…").click();
+  await fillMountForm(page, { name: "Anything", key: "temp" });
+  const dialog = page.locator(".mount-form-dialog");
+  await expect(
+    dialog.locator(".mount-form-error").filter({ hasText: "already used" }),
+  ).toBeVisible();
+  await expect(dialog.locator(".theia-button.main")).toBeDisabled();
 });
 
 test("Edit renames, Unmount removes", async ({ page }) => {
@@ -67,14 +67,12 @@ test("Edit renames, Unmount removes", async ({ page }) => {
   const folder = explorer(page).getByText("Scratch Pad", { exact: true });
   await folder.click({ button: "right" });
   await page.locator(".lm-Menu-itemLabel", { hasText: "Edit Mount…" }).click();
-  const input = page.locator(".quick-input-widget .quick-input-box input");
-  await input.fill("Renamed");
-  await page.keyboard.press("Enter");
-  await page.keyboard.press("Enter");
+  await fillMountForm(page, { name: "Renamed" });
+  await expect(page.locator(".mount-form-dialog .mount-form-key")).toHaveValue("scratch-pad");
+  await submitMountForm(page);
   await expect(explorer(page).getByText("Renamed", { exact: true })).toBeVisible();
   await explorer(page).getByText("Renamed", { exact: true }).click({ button: "right" });
-  await page.locator(".lm-Menu-itemLabel", { hasText: "Unmount" }).click();
-  await page.locator(".dialogBlock .theia-button.main").click();
+  await page.locator(".lm-Menu-itemLabel", { hasText: /^Unmount$/ }).click();
   await expect(explorer(page).getByText("Renamed", { exact: true })).toHaveCount(0);
 });
 
@@ -111,15 +109,8 @@ test("a malformed files.mounts entry is skipped with a warning; the others mount
 
 test("an OPFS mount and its files survive a reload", async ({ page }) => {
   await start(page, "", { password: "test-password" });
-  await runFromPalette(page, "Files: Mount File System…");
-  await page
-    .locator(".quick-input-list .monaco-list-row", { hasText: "Browser Storage (OPFS)" })
-    .click();
-  const input = page.locator(".quick-input-widget .quick-input-box input");
-  await input.fill("Drafts");
-  await page.keyboard.press("Enter");
-  await page.keyboard.press("Enter"); // key: drafts
-  await page.keyboard.press("Enter"); // directory: drafts
+  await mountNew(page, "New Browser-Storage Folder…", { name: "Drafts" });
+  await expect(page.locator(".mount-form-dialog")).toHaveCount(0);
   await expect(explorer(page).getByText("Drafts", { exact: true })).toBeVisible();
   await waitForSettings(page, '"drafts"');
   await page.evaluate(async () => {
@@ -146,14 +137,14 @@ test("a local folder mounts through the picker and reconnects after a reload", a
       (await navigator.storage.getDirectory()).getDirectoryHandle("picked", { create: true });
   });
   await start(page, "", { password: "test-password" });
-  await runFromPalette(page, "Files: Mount File System…");
-  await page
-    .locator(".quick-input-list .monaco-list-row", { hasText: "Folder on this Computer" })
-    .click();
-  const input = page.locator(".quick-input-widget .quick-input-box input");
-  await input.fill("Local Computer");
-  await page.keyboard.press("Enter");
-  await page.keyboard.press("Enter");
+  // The folder is picked first; the form then offers its name.
+  await openFolderList(page);
+  await folderRow(page, "New Folder on this Computer…").click();
+  const dialog = page.locator(".mount-form-dialog");
+  await expect(dialog.locator(".mount-form-name")).toHaveValue("picked");
+  await expect(dialog.locator(".mount-form-key")).toHaveValue("picked");
+  await fillMountForm(page, { name: "Local Computer" });
+  await submitMountForm(page);
   await expect(explorer(page).getByText("Local Computer", { exact: true })).toBeVisible();
   await waitForSettings(page, '"local-computer"');
   await page.reload();
@@ -203,7 +194,5 @@ test("the File menu offers Mount File System… and Choose Main Storage…", asy
   await page.locator("#theia-top-panel").getByText("File", { exact: true }).click();
   await expect(page.locator(".lm-Menu-item", { hasText: "Choose Main Storage…" })).toBeVisible();
   await page.locator(".lm-Menu-item", { hasText: "Mount File System…" }).click();
-  await expect(
-    page.locator(".quick-input-list .monaco-list-row", { hasText: "In Memory" }),
-  ).toBeVisible();
+  await expect(folderRow(page, "New In-Memory Folder…")).toBeVisible();
 });

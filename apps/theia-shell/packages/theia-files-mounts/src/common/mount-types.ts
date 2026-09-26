@@ -32,11 +32,18 @@ export const MountType = Symbol("MountType");
 export interface MountType {
   readonly id: string;
   readonly label: string;
+  /** The folder list's row for a new mount of this type; default "New <label>…". */
+  readonly newLabel?: string;
   readonly fields: MountField[];
   isAvailable(): boolean;
   create(mount: MountConfig, ctx: MountContext): Promise<FilesApi>;
-  /** An interactive step after the fields (e.g. a folder picker); returns config to merge, or undefined to cancel. */
-  configure?(mount: MountConfig): Promise<Record<string, string> | undefined>;
+  /**
+   * An interactive step before the form (e.g. a folder picker): config to merge
+   * and an optional suggested name, or undefined to cancel.
+   */
+  configure?(
+    mount: MountConfig,
+  ): Promise<{ config: Record<string, string>; name?: string } | undefined>;
   /** Cleans up what the type stored outside `config` when the mount is removed. */
   forget?(mount: MountConfig): Promise<void>;
 }
