@@ -6,18 +6,25 @@ Builds on [`2026-09-25-pluggable-files-api-design.md`](2026-09-25-pluggable-file
 ## Goal
 
 1. **Mounts are workspace roots.** The explorer shows every mount ("Browser
-   Storage", "Temporary", "Cloud", …) as a top-level entry of the workspace, not
-   nested under one "Files" folder.
-2. **One form per mount.** The path alias (the mount key) is entered in the same
-   dialog as the file system's own configuration (endpoint, bucket, keys, …).
-3. **Local folders: pick first.** For *Folder on this Computer*, the folder is
-   chosen first; the form then opens with the mount path defaulting to the
-   folder's name.
+   Storage", "Temporary", "Cloud", …) as a top-level workspace folder, not
+   nested under one "Files" folder; a newly mounted folder appears there at once.
+2. **Add / Remove Folder is mount / unmount.** *Add Folder to Workspace…* lists
+   every known file system not in the workspace — including ones removed
+   earlier — to re-add in one click, plus entries to mount a new one.
+   *Remove Folder from Workspace* unmounts a folder but **remembers** it
+   (configuration, S3 keys, local folder handle); *Forget* deletes it for good.
+3. **One form per mount.** The mount path (the name of the workspace folder) is
+   entered in the same dialog as the file system's own configuration — for S3,
+   endpoint, region, bucket, prefix and keys.
+4. **Local folders: pick first.** For a local folder, the browser's folder picker
+   opens first; the form then opens with the name and mount path defaulting to
+   the selected folder's name.
 
 ## Non-goals
 
-- No change to `files.mounts`, the mount types, the vault or the main storage.
-  Existing settings keep working.
+- No change to the mount types' backends, the vault or the main storage.
+  Existing `files.mounts` settings keep working (every entry without the new
+  `mounted` flag counts as mounted).
 - No per-root settings UI.
 
 ## 1. Mounts as workspace roots
@@ -46,12 +53,34 @@ Builds on [`2026-09-25-pluggable-files-api-design.md`](2026-09-25-pluggable-file
   the same URI.
 - Labels: roots are `file:///<key>`, already labelled by `MountLabelContribution`
   with the mount's name and status.
-- Theia's workspace commands stay:
-  - *Add Folder to Workspace…* opens the mount form (below);
-  - *Remove Folder from Workspace* on a mount root does *Unmount* (with its
-    confirmation); on the main storage it is refused with a message;
+- Theia's workspace commands stay, with new meanings:
+  - *Add Folder to Workspace…* (and *File → Mount File System…*, the same
+    command) opens the **folder list** (below);
+  - *Remove Folder from Workspace* on a mount unmounts it and remembers it; on
+    the main storage it is refused with a message. *Unmount* in the explorer's
+    context menu is the same action;
   - *Open Workspace…*, *Save Workspace As…*, *Close Workspace* keep Theia's
     behaviour. (After *Close Workspace*, a reload reopens the mounts workspace.)
+
+**Remembered folders.**
+- A `files.mounts` entry gains an optional `"mounted": false`. Removing a folder
+  sets it; nothing else about the entry, its vault secrets or its local folder
+  handle changes. Adding it back clears it. Absent means mounted.
+- *Forget* (in the folder list, per remembered entry, with a confirmation)
+  deletes the entry, its secrets and its local handle — what *Unmount* did before.
+- Keys stay unique across all entries, mounted or remembered, so a remembered
+  folder's secrets and handle never collide with another's.
+
+**The folder list** (a quick pick, *Add Folder to Workspace…*):
+- **Remembered file systems**, each with its type — "Cloud (S3 bucket)",
+  "Photos (folder on this computer)", "Drafts (browser storage)" — one click
+  re-adds it (a local folder may ask for access: that click is the gesture);
+- **Browser-storage folders** that exist under OPFS `mounts/` but no entry
+  refers to — "archive (browser storage)" — one click mounts it with that name;
+- then, per available type: **"New folder on this computer…"**, **"New S3
+  bucket…"**, **"New browser-storage folder…"**, **"New in-memory folder…"**,
+  each opening the form flow below;
+- each remembered entry has a *Forget* button in its row.
 - `FilesApiRootLabel` ("Files") is no longer shown in the app: there is no
   single root.
 
@@ -63,9 +92,9 @@ only (so Theia can still read and write it), and report the change in the plan.
 
 ## 2. One form per mount
 
-- **Flow:** *Mount File System…* (or *Add Folder to Workspace…*) → pick the type
-  (quick pick, as now) → for a type with an interactive step (`configure`, the
-  local folder's picker) that step runs **first** → one **form dialog**.
+- **Flow:** a "New …" entry of the folder list → for a type with an interactive
+  step (`configure`, the local folder's picker) that step runs **first** → one
+  **form dialog**.
 - **The form** (`MountFormDialog`, a Theia `AbstractDialog`):
   - **Name** — for a local folder, prefilled with the folder's name;
   - **Mount path** — the key; prefilled with `suggestKey(name)` and following the
@@ -91,12 +120,17 @@ only (so Theia can still read and write it), and report the change in the plan.
   after a reload. If it cannot, take the fallback above.
 - **Unit:** building the workspace file from the mounted set (order, main first,
   other content kept, no rewrite when nothing changed); `validateMountForm`
-  (required fields, unique key, URL fields, secret "keep" rule, key following
-  the name until edited).
+  (required fields, unique key across mounted and remembered entries, URL
+  fields, secret "keep" rule, key following the name until edited);
+  `mounted: false` entries are validated but not mounted; building the folder
+  list (remembered entries, unreferenced browser-storage folders, "New …" per
+  available type).
 - **e2e:**
   - the explorer shows the mounts as roots, with no "Files" entry;
-  - mounting adds a root live, *Unmount* and *Remove Folder from Workspace*
-    remove it, *Add Folder to Workspace…* opens the form;
+  - mounting adds a root live; *Remove Folder from Workspace* removes it and
+    *Add Folder to Workspace…* lists it as remembered — re-adding brings back
+    its files (memory aside: an in-memory folder comes back empty); *Forget*
+    removes it from the list;
   - local folder: the picker comes first, the mount path defaults to the
     folder's name;
   - S3: endpoint, bucket and keys in one form; a bad URL disables *Mount*;
