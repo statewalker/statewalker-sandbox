@@ -312,3 +312,16 @@ Red and green runs are recorded, as in earlier work.
 - **Mount-roots interplay.** Anchoring on workspace roots keeps panels correct whether or not
   `feat/theia-shell-mount-roots` lands first; whichever lands second re-runs the other's e2e.
 - **No visible translation** until the app gets a translation provider (separate issue).
+
+## Decisions made while planning
+
+1. Clashes between dropped sources never overwrite: under *Overwrite* the later source gets a free
+   name; *Skip* skips it; *Keep both* gives it a free name.
+2. Plural messages have one literal key per CLDR category; the English default of every category
+   other than `one` is the `other` text.
+3. Size units are formatted by `Intl.NumberFormat` (`style: "unit"`), not by message keys.
+4. Go Up and Refresh are tab-bar toolbar items of the active panel.
+5. The panel's "Open" is its own command; the other context-menu entries are Theia's commands on
+   the global selection.
+6. A new panel opens split to the right of the current panel, else as a main-area tab.
+7. Drop handlers read the `DataTransfer` synchronously, before their first `await`.
