@@ -16,6 +16,7 @@ copy/move by drag and drop and by menu commands. Design:
 | 5 transfer runner | 3 | 3 |
 | 6 the panel (e2e `file-panels.spec.ts`) | 3 failed | 4 passed |
 | 7 breadcrumb sibling dropdowns (e2e `file-panels.spec.ts`) | 3 failed, 4 passed | 7 passed |
+| 8 context menu, Open in Files Panel (e2e `file-panels.spec.ts`) | 2 failed, 7 passed | 9 passed |
 
 ## Notes
 

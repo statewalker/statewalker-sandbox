@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { runFromPalette, start } from "./helpers";
+import { explorer, runFromPalette, start } from "./helpers";
 
 export const panels = (page: Page) => page.locator(".file-panel");
 export const row = (panel: Locator, name: string) =>
@@ -98,4 +98,42 @@ test("the first crumb's dropdown lists the workspace roots", async ({ page }) =>
   await expect(page.locator(".file-panel-siblings .file-panel-sibling")).toHaveText(["Files"]);
   await page.keyboard.press("Escape");
   await expect(page.locator(".file-panel-siblings")).toHaveCount(0);
+});
+
+async function contextMenu(panel: Locator, name: string, item: string) {
+  await row(panel, name).click({ button: "right" });
+  await panel.page().locator(".lm-Menu-item", { hasText: item }).first().click();
+}
+
+test("rename and delete from the panel's context menu reach the explorer", async ({ page }) => {
+  await start(page, "?storage=memory");
+  const panel = await openPanel(page);
+  await row(panel, "Browser Storage").dblclick();
+  await row(panel, "notes").dblclick();
+  await contextMenu(panel, "ideas.md", "Rename");
+  const input = page.locator(".dialogContent input");
+  await input.fill("plans.md");
+  await page.keyboard.press("Enter");
+  await expect(row(panel, "plans.md")).toBeVisible();
+  await explorer(page).getByText("notes", { exact: true }).click();
+  await expect(explorer(page).getByText("plans.md", { exact: true })).toBeVisible();
+
+  await contextMenu(panel, "plans.md", "Delete");
+  await page.locator(".dialogBlock .theia-button.main").click();
+  await expect(row(panel, "plans.md")).toHaveCount(0);
+  await expect(explorer(page).getByText("plans.md", { exact: true })).toHaveCount(0);
+});
+
+test("the panel's Open opens a file; the explorer's Open in Files Panel opens a folder", async ({
+  page,
+}) => {
+  await start(page, "?storage=memory");
+  const panel = await openPanel(page);
+  await row(panel, "Browser Storage").dblclick();
+  await contextMenu(panel, "welcome.md", "Open");
+  await expect(page.locator(".theia-editor .monaco-editor").last()).toBeVisible();
+
+  await explorer(page).getByText("docs", { exact: true }).click({ button: "right" });
+  await page.locator(".lm-Menu-item", { hasText: "Open in Files Panel" }).click();
+  await expect(row(panels(page).last(), "cheatsheet.md")).toBeVisible();
 });
