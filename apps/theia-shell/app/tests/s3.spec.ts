@@ -16,7 +16,9 @@ test.skip(!hasDocker(), "Docker is not available: the S3 tests need RustFS");
 
 let s3: Awaited<ReturnType<typeof startRustFs>>;
 test.beforeAll(async () => {
-  s3 = await startRustFs({ port: 19101, origin: "http://127.0.0.1:3100" });
+  // The bucket's CORS must allow the app's own origin, which follows E2E_PORT.
+  const origin = new URL(test.info().project.use.baseURL as string).origin;
+  s3 = await startRustFs({ port: 19101, origin });
 });
 test.afterAll(() => s3?.stop());
 
