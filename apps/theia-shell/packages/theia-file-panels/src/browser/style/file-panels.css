@@ -1,1 +1,71 @@
 /* File panels. Logical properties only, so right-to-left layouts mirror. */
+.file-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--theia-editor-background);
+}
+.file-panel > .file-panel-tree {
+  flex: 1 1 auto;
+  min-block-size: 0;
+}
+.file-panel-header {
+  flex: none;
+  border-block-end: 1px solid var(--theia-panel-border);
+}
+.file-panel-columns,
+.file-panel-tree .theia-TreeNodeContent {
+  display: flex;
+  align-items: center;
+}
+.file-panel-columns {
+  padding-inline: 4px;
+  font-size: var(--theia-ui-font-size0);
+  color: var(--theia-descriptionForeground);
+}
+.file-panel-column {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: start;
+  padding-block: 2px;
+  padding-inline: 4px;
+}
+.file-panel-column.file-panel-name {
+  flex: 1 1 auto;
+}
+.file-panel-size,
+.file-panel-modified {
+  flex: none;
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+.file-panel-size {
+  inline-size: 7em;
+}
+.file-panel-modified {
+  inline-size: 11em;
+  padding-inline-start: 8px;
+}
+.file-panel-cell {
+  color: var(--theia-descriptionForeground);
+}
+.file-panel-sort-mark::after {
+  content: "";
+  display: inline-block;
+  margin-inline-start: 4px;
+  border-inline: 4px solid transparent;
+}
+.file-panel-sort-mark.asc::after {
+  border-block-end: 5px solid currentColor;
+}
+.file-panel-sort-mark.desc::after {
+  border-block-start: 5px solid currentColor;
+}
+.file-panel-status {
+  padding-block: 4px;
+  padding-inline: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}

@@ -1,0 +1,147 @@
+import { LabelProvider } from "@theia/core/lib/browser/label-provider";
+import { BaseWidget, type Message } from "@theia/core/lib/browser/widgets/widget";
+import URI from "@theia/core/lib/common/uri";
+import { PanelLayout, type Widget } from "@theia/core/shared/@lumino/widgets";
+import { inject, injectable, type interfaces } from "@theia/core/shared/inversify";
+import { createFileTreeContainer } from "@theia/filesystem/lib/browser/file-tree";
+import { WorkspaceService } from "@theia/workspace/lib/browser/workspace-service";
+import { Messages } from "../common/file-panels-nls";
+import { type SortState, toggleSort } from "../common/panel-sorting";
+import { FilePanelHeader } from "./file-panel-header";
+import { FilePanelModel, FilePanelTree } from "./file-panel-tree";
+import { FilePanelTreeWidget } from "./file-panel-tree-widget";
+
+export const FILE_PANEL_CONTEXT_MENU = ["file-panel-context-menu"];
+
+export const FilePanelOptions = Symbol("FilePanelOptions");
+export interface FilePanelOptions {
+  id: string;
+  folder?: string;
+}
+
+/** One file panel: header (breadcrumb, column headings, status) over a flat file tree. */
+@injectable()
+export class FilePanelWidget extends BaseWidget {
+  static readonly FACTORY_ID = "file-panel";
+
+  @inject(FilePanelOptions) protected readonly options!: FilePanelOptions;
+  @inject(FilePanelTreeWidget) readonly tree!: FilePanelTreeWidget;
+  @inject(FilePanelTree) protected readonly fileTree!: FilePanelTree;
+  @inject(WorkspaceService) protected readonly workspace!: WorkspaceService;
+  @inject(LabelProvider) protected readonly labels!: LabelProvider;
+
+  protected header!: FilePanelHeader;
+
+  get model(): FilePanelModel {
+    return this.tree.model;
+  }
+
+  get folder(): URI | undefined {
+    return this.model.location;
+  }
+
+  get sort(): SortState {
+    return this.fileTree.sort;
+  }
+
+  async initialize(): Promise<void> {
+    this.id = this.options.id;
+    this.title.closable = true;
+    this.title.iconClass = "codicon codicon-folder";
+    this.addClass("file-panel");
+    this.header = new FilePanelHeader({ sort: this.sort }, (column) =>
+      this.setSort(toggleSort(this.sort, column)),
+    );
+    const layout = new PanelLayout();
+    layout.addWidget(this.header);
+    layout.addWidget(this.tree);
+    this.layout = layout;
+
+    this.toDispose.pushAll([
+      this.header,
+      this.tree,
+      this.tree.onGoUp.event(() => void this.goUp()),
+      this.model.onDidNavigate((uri) => this.onNavigated(uri)),
+      this.model.onChanged(() => this.updateEmptyState()),
+      this.fileTree.onDidChangeListingError(() => this.updateEmptyState()),
+    ]);
+    const start = this.options.folder ? new URI(this.options.folder) : await this.defaultFolder();
+    await this.navigateTo(start);
+  }
+
+  async navigateTo(uri: URI): Promise<void> {
+    await this.model.navigateToFolder(uri);
+  }
+
+  async goUp(): Promise<void> {
+    const folder = this.folder;
+    if (folder && !folder.path.isRoot) await this.navigateTo(folder.parent);
+  }
+
+  async refresh(): Promise<void> {
+    await this.model.refresh();
+  }
+
+  setSort(state: SortState): void {
+    this.fileTree.sort = state;
+    this.header.setState({ sort: state });
+    void this.model.refresh();
+  }
+
+  protected async defaultFolder(): Promise<URI> {
+    const [first] = await this.workspace.roots;
+    return first ? first.resource : new URI("file:///");
+  }
+
+  protected onNavigated(uri: URI): void {
+    this.title.label = this.labels.getName(uri);
+    this.title.caption = this.labels.getLongName(uri);
+    this.updateEmptyState();
+  }
+
+  protected updateEmptyState(): void {
+    const error = this.fileTree.listingError;
+    const root = this.model.root;
+    const empty = !error && root && "children" in root && (root.children as unknown[]).length === 0;
+    this.header.setState({
+      status: error
+        ? { text: Messages.notAvailable(this.title.label, error), retry: () => void this.refresh() }
+        : empty
+          ? { text: Messages.emptyFolder() }
+          : undefined,
+    });
+  }
+
+  protected override onActivateRequest(msg: Message): void {
+    super.onActivateRequest(msg);
+    this.tree.activate();
+  }
+
+  protected override onResize(msg: Widget.ResizeMessage): void {
+    super.onResize(msg);
+    this.tree.update();
+  }
+}
+
+/** A child container per panel: Theia's file-tree container with the panel's classes. */
+export function createFilePanelWidget(
+  parent: interfaces.Container,
+  options: FilePanelOptions,
+): FilePanelWidget {
+  const child = createFileTreeContainer(parent, {
+    tree: FilePanelTree,
+    model: FilePanelModel,
+    widget: FilePanelTreeWidget,
+    props: {
+      contextMenuPath: FILE_PANEL_CONTEXT_MENU,
+      multiSelect: true,
+      search: true,
+      globalSelection: true,
+      expandOnlyOnExpansionToggleClick: true,
+      virtualized: true,
+    },
+  });
+  child.bind(FilePanelOptions).toConstantValue(options);
+  child.bind(FilePanelWidget).toSelf();
+  return child.get(FilePanelWidget);
+}

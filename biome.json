@@ -26,6 +26,9 @@
       "quoteStyle": "double",
       "trailingCommas": "all",
       "semicolons": "always"
+    },
+    "parser": {
+      "unsafeParameterDecoratorsEnabled": true
     }
   },
   "json": {
