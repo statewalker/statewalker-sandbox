@@ -29,6 +29,9 @@ importers:
       '@theia-shell/app-style':
         specifier: workspace:*
         version: link:style
+      '@theia-shell/theia-file-panels':
+        specifier: workspace:*
+        version: link:../packages/theia-file-panels
       '@theia-shell/theia-files-api':
         specifier: workspace:*
         version: link:../packages/theia-files-api
@@ -124,6 +127,21 @@ importers:
       tailwindcss:
         specifier: 4.3.3
         version: 4.3.3
+
+  packages/theia-file-panels:
+    dependencies:
+      '@theia/core':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@theia/filesystem':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/navigator':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/workspace':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
 
   packages/theia-files-api:
     dependencies:
