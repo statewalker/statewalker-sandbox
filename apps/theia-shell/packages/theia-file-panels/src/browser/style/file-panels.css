@@ -129,3 +129,22 @@
 .file-panel-sibling.current {
   font-weight: 600;
 }
+.file-panels-transfer-dialog .dialogContent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-inline-size: 360px;
+}
+.file-panels-radios {
+  display: flex;
+  gap: 16px;
+}
+.file-panels-name-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.file-panels-warning {
+  color: var(--theia-editorWarning-foreground);
+  min-block-size: 1.2em;
+}

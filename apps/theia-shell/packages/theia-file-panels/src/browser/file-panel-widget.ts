@@ -1,5 +1,6 @@
 import { BreadcrumbPopupContainerFactory } from "@theia/core/lib/browser/breadcrumbs/breadcrumb-popup-container";
 import { LabelProvider } from "@theia/core/lib/browser/label-provider";
+import { SelectableTreeNode } from "@theia/core/lib/browser/tree/tree-selection";
 import { BaseWidget, type Message } from "@theia/core/lib/browser/widgets/widget";
 import URI from "@theia/core/lib/common/uri";
 import { PanelLayout, type Widget } from "@theia/core/shared/@lumino/widgets";
@@ -74,6 +75,17 @@ export class FilePanelWidget extends BaseWidget {
       this.model.onChanged(() => this.updateEmptyState()),
       this.fileTree.onDidChangeListingError(() => this.updateEmptyState()),
       this.workspace.onWorkspaceChanged(() => this.renderBreadcrumb()),
+      this.tree.onDidDrop.event(async (uris) => {
+        await this.model.refresh();
+        const nodes = uris
+          .filter((uri) => this.folder && uri.parent.isEqual(this.folder))
+          .map((uri) => this.model.getNode(uri.path.toString()))
+          .filter((node): node is SelectableTreeNode => SelectableTreeNode.is(node));
+        nodes.forEach((node, i) => {
+          if (i === 0) this.model.selectNode(node);
+          else this.model.addSelection(node);
+        });
+      }),
     ]);
     const start = this.options.folder ? new URI(this.options.folder) : await this.defaultFolder();
     await this.navigateTo(start);
@@ -130,6 +142,10 @@ export class FilePanelWidget extends BaseWidget {
             undefined,
             anchor,
           ),
+        onDropOnCrumb: (uri, event) => {
+          event.preventDefault();
+          void this.tree.dropOnFolder(uri, event);
+        },
       }),
     });
   }

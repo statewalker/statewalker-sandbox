@@ -17,6 +17,7 @@ copy/move by drag and drop and by menu commands. Design:
 | 6 the panel (e2e `file-panels.spec.ts`) | 3 failed | 4 passed |
 | 7 breadcrumb sibling dropdowns (e2e `file-panels.spec.ts`) | 3 failed, 4 passed | 7 passed |
 | 8 context menu, Open in Files Panel (e2e `file-panels.spec.ts`) | 2 failed, 7 passed | 9 passed |
+| 9 drops into panels: dialog, service, drag source, uploads (e2e `file-panels.spec.ts`) | 8 failed, 9 passed | 17 passed |
 
 ## Notes
 
@@ -50,3 +51,39 @@ copy/move by drag and drop and by menu commands. Design:
     element or ARIA role that fits — `role="group"` triggered a further `useSemanticElements`
     nudge toward `<fieldset>`, which is wrong here. Kept the plain `<span>` and added one
     `biome-ignore lint/a11y/noStaticElementInteractions` comment explaining why.
+- **Task 9 signature/selector adaptations** (feature design unchanged from the brief):
+  - `FileUploadService.UploadResult.uploaded` is `string[]` (URI strings), not path segments, per
+    the `.d.ts` — mapped with `new URI(s)` as the brief's own note anticipated.
+  - `FileDropHandler`'s OS-upload branch checks `webkitGetAsEntry()` before handing the raw
+    `DataTransfer` to `FileUploadService`: a `File` added to a `DataTransfer` via script (as any
+    synthetic drop test must) never has a WebKit entry, and the browser-only
+    `FileUploadServiceImpl.enumerateFiles` has no fallback for that case — it silently uploads
+    zero files. Falling back to a hand-built `CustomDataTransfer` (an exported, documented Theia
+    upload-service type) when no item resolves a real entry fixes the test and is arguably more
+    robust; a genuine OS drag still uses the native `DataTransfer` path (and its folder support)
+    unchanged.
+  - The OS-file-upload e2e test dispatches its synthetic `DragEvent`s on
+    `.file-panel-tree .theia-TreeContainer`, not `.file-panel-tree` itself: Theia's `TreeWidget`
+    wires `onDragOver`/`onDrop` onto the inner `.theia-TreeContainer` div
+    (`createContainerAttributes()`), not onto the widget's own outer node — a `dispatchEvent` on
+    the outer node never reaches that descendant listener, since native events bubble up, not down.
+    (`.file-panel-tree` is still correct as the drop-zone target for the drag-and-drop tests, which
+    drive real mouse-based `dragTo()`; the browser resolves those to the actual element under the
+    cursor regardless of which ancestor node Playwright's locator names.)
+  - Two-panel tests (`twoPanels`) pin each panel to `panels(page).nth(0)`/`nth(1)` rather than
+    reusing `openPanel`'s returned `panels(page).last()` locator: `.last()` is evaluated lazily at
+    every use, so once a second panel opens, a `const a = await openPanel(page)` captured *before*
+    it existed silently starts resolving to the *new* (second) panel instead. `openPanel` itself is
+    fine for every single-panel test in this file; only Task 9's cross-panel scenarios exposed it.
+  - Two toast assertions (`"Cannot put ... inside itself"`, `"1 of 1 items failed"`) are scoped
+    through the existing `toast()` helper instead of a bare `page.getByText(...)`: Theia mirrors
+    every notification into the (hidden but present) notification center in addition to the toast,
+    so an unscoped `getByText` matches twice and Playwright's strict mode refuses to pick one.
+  - **Environment discovery, not a bug in this package:** Theia's own (pre-existing, global)
+    `FilesystemFrontendContribution` subscribes to `FileUploadService.onDidUpload` and automatically
+    opens a single freshly-uploaded file in an editor, which — like opening any file from a panel
+    (see the note above and ruling R8) — covers the panel. This fires for *any* single-file upload
+    through `FileUploadService`, not just ours, and isn't something an extension can opt out of.
+    The OS-upload e2e test therefore asserts the write against the filesystem
+    (`theiaShell.filesApi.exists`), the same technique the "dropping a folder into itself" test
+    already uses, rather than asserting the panel still shows the new row.
