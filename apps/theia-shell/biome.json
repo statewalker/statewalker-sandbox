@@ -3,7 +3,10 @@
   "root": false,
   "extends": "//",
   "javascript": {
-    "jsxRuntime": "reactClassic"
+    "jsxRuntime": "reactClassic",
+    "parser": {
+      "unsafeParameterDecoratorsEnabled": true
+    }
   },
   "css": {
     "parser": {
