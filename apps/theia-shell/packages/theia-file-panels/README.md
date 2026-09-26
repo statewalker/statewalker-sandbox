@@ -9,8 +9,8 @@ copy/move by drag and drop and by menu commands. Design:
 
 | Task | Red | Green |
 |---|---|---|
-| 1 messages, formatting | 0 | 8 |
+| 1 messages, formatting | 0 | 9 |
 | 2 sorting | 6 | 6 |
-| 3 transfer planning | 14 | 14 |
-| 4 breadcrumb model | 6 | 6 |
+| 3 transfer planning | 18 | 18 |
+| 4 breadcrumb model | 7 | 7 |
 | 5 transfer runner | 3 | 3 |
