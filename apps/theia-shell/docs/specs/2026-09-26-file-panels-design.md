@@ -1,0 +1,283 @@
+# File panels — design
+
+Status: agreed in conversation 2026-09-26; awaiting review of this written form.
+
+## Goal
+
+**File panels**: any number of file-manager widgets, each showing **one folder** as a flat list —
+in the spirit of Midnight Commander or Google Drive — opened as tabs in the main area so two or
+more can sit side by side.
+
+- Navigate by opening folders, going up, or through a **breadcrumb** whose every segment has a
+  **▾ dropdown listing the sibling folders** at that level.
+- Open, rename, delete, create files and folders from a panel, exactly as from the explorer.
+- **Copy / move** between panels and the explorer, in every direction, by drag and drop and by
+  context-menu commands.
+- Every drop — into a panel *or* into the explorer — asks, in a dialog, whether to **copy** or
+  **move/rename**. When the target folder is the source folder, only **copy** or **rename** is
+  offered.
+- Columns (name, size, modified) with sorting; files dropped from the operating system are
+  uploaded; open panels come back after a reload.
+- **Internationalized from the start**: no user-visible string, number, date or sort order is
+  hard-coded to English.
+
+## Non-goals
+
+- **No keybindings.** No F5/F6/Tab-style bindings; actions are menu commands and drag and drop.
+  Keys *inside* a focused list (arrows, Enter, Backspace) are the tree's own handling, not
+  registered keybindings.
+- **No translation provider.** Browser-only Theia binds a stub `AsyncLocalizationProvider`
+  (always `en`, no translations). Making the app load real translations is app-wide work, filed
+  as its own issue; this feature only guarantees every string is localizable.
+- No undo, no background transfer queue, no rollback of a partly failed batch.
+- No storage code: every operation is `FileService` over whatever the app mounts.
+
+## Findings this rests on (Theia 1.76, this app)
+
+- **All files are `file:` URIs** through the `FilesApi` provider; mounts are folders of a
+  `CompositeFilesApi`, which already copies and moves **across mounts** (move = copy + remove,
+  not atomic). `FileService.copy` / `move` therefore work between any two folders.
+- **The explorer's drag payload** is two entries: `selected-tree-nodes` (node ids, meaningful
+  only in its own tree model) and `theia-editor-dnd` (the URIs, newline-separated, via
+  `ApplicationShell.setDraggedEditorUris`). A foreign widget can read the second. On drop, the
+  explorer resolves only its own node ids; anything else falls through to
+  `FileUploadService.upload` — so today a drop from a panel does nothing.
+- The explorer's own drops never ask: Ctrl (⌥ on macOS) copies, a plain drop moves.
+- `FileNavigatorWidget` is bound `toDynamicValue(createFileNavigatorWidget)` and its
+  `WidgetFactory` calls `container.get(FileNavigatorWidget)`, so rebinding that one symbol
+  replaces the explorer's widget class and nothing else.
+- Theia's file dialog is already a **one-level `FileTreeWidget`** (root = current folder,
+  folders do not expand) — the shape a panel needs.
+- The editor breadcrumbs' popup is a file tree that *opens files*; a panel's dropdown must list
+  *folders* and *navigate*, so only core's `BreadcrumbPopupContainer` (positioning, dismissal)
+  is reusable.
+- `WorkspaceCommands` (rename, delete, new file/folder, …) act on the selection published to
+  `SelectionService`; a panel that publishes file-stat selections reuses them unchanged.
+- The branch `feat/theia-shell-mount-roots` makes each mount a **workspace root**. Panels are
+  therefore anchored on `WorkspaceService.tryGetRoots()`, not on `/`, and work the same before and
+  after that lands.
+
+## Architecture
+
+New package **`packages/theia-file-panels`** (`@theia-shell/theia-file-panels`), a frontend-only
+Theia extension depending on `@theia/core`, `@theia/filesystem`, `@theia/navigator`,
+`@theia/workspace`. It knows nothing about mounts. The app adds it as a dependency and to its
+build `--filter` list, like every other extension.
+
+```
+src/common/            pure, unit-tested, no DOM
+  file-panels-nls.ts     every message key + English default; plural helper
+  transfer-planner.ts    sources + target + choices → steps; free names; clash resolution
+  panel-sorting.ts       comparator: folders first, Intl.Collator, column + direction
+  breadcrumb-model.ts    URI + workspace roots → segments; sibling selection
+src/browser/
+  file-panel-widget.ts          one panel: breadcrumb + column header + tree; StatefulWidget
+  file-panel-tree.ts            FileTreeWidget subclass: flat list, columns, drag source/target
+  folder-breadcrumb.tsx         segments, ▾ sibling popup, drop targets
+  transfer-dialog.ts            AbstractDialog: copy / move / rename, name field, clash choice
+  transfer-service.ts           runs a plan via FileService, with progress and failure report
+  file-drop-handler.ts          one entry point for every drop (panels and explorer)
+  panel-aware-navigator.ts      FileNavigatorWidget subclass; rebinding
+  file-panels-contribution.ts   commands, menus, widget factory
+  file-panels-frontend-module.ts
+  style/file-panels.css
+```
+
+| Unit | Responsibility | Depends on |
+|---|---|---|
+| `FilePanelWidget` | Holds the current folder URI; `navigateTo(uri)` swaps the tree root; composes breadcrumb, header, tree; stores/restores state. Title = folder label, tooltip = full path. | `FilePanelTree`, `FolderBreadcrumb`, `WorkspaceService`, `LabelProvider` |
+| `FilePanelTree` | One-level file tree: folders never expand, opening a folder asks the widget to navigate, opening a file uses Theia's open handler. Renders name / size / modified as a grid row; publishes selection; sets `theia-editor-dnd` on drag; delegates drops to `FileDropHandler`. | `FileTreeWidget`, `FileDropHandler` |
+| `FolderBreadcrumb` | Segments from `breadcrumb-model`; click navigates; ▾ opens the sibling list; each segment is a drop target. | `BreadcrumbPopupContainer`, `FileService` |
+| `TransferPlanner` | Pure: decides steps, free names, skips. | none |
+| `TransferDialog` | Collects the choice. | nls |
+| `TransferService` | Executes steps; progress; aggregated failures; selects results. | `FileService`, `ProgressService`, `MessageService` |
+| `FileDropHandler` | Reads a drop, validates, resolves, opens the dialog, runs the plan; routes OS files to upload. | the three above, `FileUploadService` |
+| `PanelAwareNavigatorWidget` | Overrides only `handleDropEvent` → `FileDropHandler`. | `FileNavigatorWidget` |
+
+**One drop path.** Panels and the explorer both put the dragged URIs in `theia-editor-dnd`, and
+both hand every drop to `FileDropHandler`. Panel→panel, panel→explorer, explorer→panel and
+explorer→explorer are one code path with one dialog.
+
+## Panel
+
+- **Listing.** Folders first, then files; sorted by the active column (name by default), with an
+  `Intl.Collator(locale, { numeric: true, sensitivity: "base" })` for names (`file2` before
+  `file10`). Size via `Intl.NumberFormat` with localized unit keys; modified via
+  `Intl.DateTimeFormat`. Folders show no size. Clicking a column header sorts by it; clicking
+  again reverses.
+- **Keys inside the focused list** (tree-local, not keybindings): arrows move, Shift/Ctrl
+  extend the selection, Enter opens (folder → navigate, file → open), Backspace goes up.
+- **Toolbar**: Go Up, Refresh.
+- **Starting folder**: the folder given to *Open in Files Panel*, else the first workspace root.
+- **Freshness**: the tree refreshes on `fileService.onDidFilesChange` for its folder, which covers
+  writes from the explorer, other panels and editors. If the current folder is deleted or
+  renamed, the panel moves to the nearest existing ancestor and shows a short localized notice
+  in its status line. Refresh covers backends that emit no changes.
+
+## Breadcrumb
+
+- **Segments.** The first segment is the workspace root that contains the current folder,
+  labelled through the `LabelProvider` (a mount shows its display name, not its key); then one
+  segment per folder down to the current one. Clicking a segment navigates to it. When the path
+  overflows, middle segments collapse into **…**, which opens a list of the hidden ones.
+- **▾ Siblings.** Each segment has a ▾ that opens a popup listing its **sibling folders** —
+  folders of its parent, read on open with `fileService.resolve(parent)` so never stale — sorted
+  with the collator, the current one marked. For the first segment, the siblings are **the other
+  workspace roots** (one today; one per mount after mount-roots). Choosing one navigates the panel.
+  Arrows, Enter and Esc work in the list; click-outside and focus loss close it
+  (`BreadcrumbPopupContainer`). The list is a small React component, not a tree.
+- **Drop targets.** Dropping onto a segment targets that folder.
+
+## Drops and transfers
+
+### `FileDropHandler`
+
+1. Read URIs from `theia-editor-dnd`. If there are none but `dataTransfer.files` is non-empty,
+   **upload** into the target with `FileUploadService` (no dialog) and stop.
+2. Target folder: the dropped-on folder; a dropped-on file's parent; empty space → the panel's
+   current folder (the explorer keeps Theia's `getDropTargetDirNode`, which for a multi-root
+   background drop picks the last root).
+3. **Reject** — localized warning, no dialog — a folder dropped into itself or its own descendant.
+4. `fileService.resolveAll(sources)` for names and kinds; list the target's children for clashes.
+5. Open `TransferDialog`; on OK, plan and run.
+
+### `TransferDialog`
+
+| Situation | Offered | Preselected |
+|---|---|---|
+| All sources already in the target, one item | **Copy** · **Rename** | Copy |
+| All sources already in the target, several items | **Copy** only (each gets a free name) | Copy |
+| Another folder, one or several items | **Copy** · **Move** | Move; Copy if Ctrl (⌥ on macOS) was held |
+
+- **One item**: an editable **name** field — prefilled with the current name (Rename), a free
+  name such as `notes copy.md` (same-folder Copy), or the source name (other folder). An existing
+  name shows an inline "already exists — it will be replaced". Validated like Theia's rename: not
+  empty, not `.` / `..`, no `/`. Rename with an unchanged name disables OK.
+- **Several items with clashes**: one choice for all — **Overwrite**, **Keep both** (free names),
+  **Skip** — with the count of clashing items.
+- **Mixed selections** (some sources already in the target): the copy-or-rename restriction
+  applies only when *all* sources are in the target; otherwise, under Move those already there
+  are skipped, under Copy they get free names.
+- Enter confirms, Esc cancels. Title and labels are localized with plural forms.
+
+### `TransferPlanner` (pure)
+
+Input: sources `{ uri, name, isDirectory }[]`, target folder, the target's existing names, the
+operation (`copy | move | rename`), an optional single name, a clash policy
+(`overwrite | keepBoth | skip`), and a `freeName(base, n)` function supplied by the caller (so the
+suffix is localized). Output: ordered steps `{ op: "copy" | "move", from, to, overwrite }` and
+the skipped sources with a reason.
+
+- Free names insert the suffix before the **first** extension dot (`a.tar.gz` → `a copy.tar.gz`);
+  dotfiles and folders take it at the end (`.env copy`); repeats count on (`copy 2`, `copy 3`).
+- Clashes **between sources** (two `README.md` from different folders) are resolved like clashes
+  with the target.
+- A step whose source equals its destination is dropped.
+
+### `TransferService`
+
+- Runs steps in order through `fileService.copy` / `fileService.move` with each step's
+  `overwrite` — the same calls the explorer makes, so change events reach every view.
+- Progress through `ProgressService`; cancellable between steps (no rollback).
+- A failing step does not stop the batch; one notification at the end: "{0} of {1} items failed"
+  with the reasons.
+- A cross-mount move is copy-then-remove inside the composite and not atomic: after a partial
+  failure a copy may exist while the original remains. Stated, not hidden.
+- On completion the new items are selected in the target panel (or the explorer).
+
+## Explorer change
+
+`PanelAwareNavigatorWidget` extends `FileNavigatorWidget` and overrides `handleDropEvent` only: it
+computes the target with the inherited `getDropTargetDirNode` and delegates to `FileDropHandler`.
+The module **rebinds `FileNavigatorWidget`** to a `toDynamicValue` that builds the same child
+container as `createFileNavigatorContainer` (`FileNavigatorTree`, `FileNavigatorModel`,
+`NavigatorDecoratorService`, `FILE_NAVIGATOR_PROPS`) with `widget: PanelAwareNavigatorWidget`.
+Tree, model, decorations and toolbar remain Theia's.
+
+Consequence (agreed): **every** drop onto the explorer, including explorer→explorer, now shows the
+dialog; Ctrl/⌥ only preselects Copy. OS-file uploads onto the explorer are unchanged.
+
+## Commands and menus
+
+All labels localized; **no keybindings**.
+
+| Command | Where |
+|---|---|
+| Open Files Panel | View menu; command palette. Opens at the first workspace root. |
+| Open in Files Panel | Explorer context menu on a folder (or a file → its folder). |
+| Copy to Other Panel… / Move to Other Panel… | Panel context menu; enabled when another panel exists; with several others, a quick pick chooses one. Target = that panel's current folder; opens `TransferDialog` preset to the choice. |
+| Go Up, Refresh | Panel toolbar. |
+| Open, Open With…, New File, New Folder, Rename, Delete, Copy Path, Reveal in Explorer | Panel context menu, reusing Theia's `WorkspaceCommands` / navigator commands through the published selection — their dialogs, confirmations and localization included. |
+
+The panel context menu has its own menu path (`FILE_PANEL_CONTEXT_MENU`), so it does not depend on
+the explorer's menu layout.
+
+## Persistence and errors
+
+- `FilePanelWidget` is a `StatefulWidget` created by its `WidgetFactory` with a unique `{ id }`,
+  so Theia's layout restore reopens every panel. Stored: folder URI, sort column and direction,
+  selected names.
+- On restore, a vanished folder falls back to its nearest existing ancestor, then to the first
+  workspace root. A folder on a mount not yet available (vault locked, local folder awaiting
+  permission) shows **Not available** with **Retry** — the panel is not closed, so the layout
+  survives an unlock.
+- A listing failure shows in the panel with Retry, not as a toast. Transfer failures are
+  aggregated (above). Reused commands keep Theia's error handling. All messages are localized.
+
+## Internationalization
+
+- Every user-visible string goes through
+  `nls.localize("theia-shell/file-panels/<key>", "<English default>")`. Keys and defaults live in
+  one module, `common/file-panels-nls.ts`; no message is concatenated; placeholders are `{0}`.
+- Plurals: `Intl.PluralRules(locale)` selects the key (`copyItems.one` / `copyItems.other`),
+  never "item(s)".
+- Locale: `nls.locale ?? "en"` for `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator`,
+  `Intl.PluralRules`.
+- Free-name suffixes (" copy", " copy {0}") are localized and injected into the planner.
+- RTL: CSS logical properties (`margin-inline-start`, `text-align: start`); breadcrumb separator
+  and ▾ are CSS-drawn and mirror under `dir="rtl"`.
+- Theia's own reused commands and dialogs are already localized by Theia.
+
+## Testing (red → green, as in PLAN.md)
+
+**Unit (vitest, no Theia DOM)**
+
+- `TransferPlanner`: same-folder rules (one → copy/rename; several → copy only); free names
+  (extensions, multi-dot, dotfiles, folders, counting on); overwrite / keep both / skip;
+  clashes between sources; mixed selections; source = destination dropped; a non-English suffix.
+- Drop validation: folder into itself / descendant rejected.
+- `panel-sorting`: folders first; numeric order; accented names under a `de` collator; direction;
+  size and date columns.
+- `breadcrumb-model`: segments from a URI and workspace roots (single and multi-root); siblings
+  of the first segment are the other roots.
+- `file-panels-nls`: keys unique; every entry's placeholders consistent; plural pairs complete.
+
+**E2E (Playwright, static build, seeded files)**
+
+1. View → Open Files Panel; open a folder; return via the breadcrumb.
+2. A breadcrumb ▾ jumps to a sibling folder.
+3. From a panel: open a file, rename it, delete it — the explorer reflects each step.
+4. Two panels side by side: drag a file across, choose Copy — both folders hold it.
+5. Same with Move — the source no longer has it.
+6. Drop into the same folder: only Copy and Rename offered; Copy creates `… copy.ext`.
+7. Panel → explorer and explorer → panel: the dialog appears both ways.
+8. Several items with a clash: Keep both, Skip, Overwrite each behave.
+9. An OS file dropped into a panel is uploaded (synthetic `DataTransfer` with a `File`).
+10. Reload: panels return at their folders with their sort.
+11. Copy to Other Panel… from the context menu.
+
+Red and green runs are recorded, as in earlier work.
+
+## Risks
+
+- **Theia internals.** The explorer rebinding mirrors `createFileNavigatorContainer` and overrides
+  `handleDropEvent`; a Theia upgrade that changes either breaks panel→explorer drops. E2E 7 catches
+  it.
+- **Changed explorer habit.** Every explorer drop now asks. Agreed deliberately; if it grates, a
+  preference can restore direct drops for explorer→explorer later.
+- **Columns over a tree.** `FileTreeWidget` rows are not a table; the header and grid rows need
+  careful CSS (widths, RTL, virtualized scrolling). Kept in one stylesheet and covered by e2e.
+- **Non-atomic cross-mount moves** (above).
+- **Mount-roots interplay.** Anchoring on workspace roots keeps panels correct whether or not
+  `feat/theia-shell-mount-roots` lands first; whichever lands second re-runs the other's e2e.
+- **No visible translation** until the app gets a translation provider (separate issue).
