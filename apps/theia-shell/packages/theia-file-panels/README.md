@@ -10,3 +10,4 @@ copy/move by drag and drop and by menu commands. Design:
 | Task | Red | Green |
 |---|---|---|
 | 1 messages, formatting | 0 | 8 |
+| 2 sorting | 6 | 6 |
