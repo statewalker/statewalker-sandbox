@@ -289,3 +289,31 @@ test("an operating-system file dropped on a panel is uploaded", async ({ page })
   await expect.poll(() => readText(page, "/browser/dropped.txt")).toBe(true);
   await expect(dialog(page)).toHaveCount(0);
 });
+
+test("panel → explorer: a plain drop moves, Ctrl copies, no dialog", async ({ page }) => {
+  await start(page, "?storage=memory");
+  const panel = await openPanel(page);
+  await row(panel, "Browser Storage").dblclick();
+  const notes = explorer(page).getByText("notes", { exact: true });
+
+  await row(panel, "welcome.md").dragTo(notes);
+  await expect(dialog(page)).toHaveCount(0);
+  await expect.poll(() => readText(page, "/browser/notes/welcome.md")).toBe(true);
+  await expect.poll(() => readText(page, "/browser/welcome.md")).toBe(false);
+
+  await row(panel, "notes").dblclick();
+  await page.keyboard.down("Control");
+  await row(panel, "ideas.md").dragTo(explorer(page).getByText("docs", { exact: true }));
+  await page.keyboard.up("Control");
+  await expect.poll(() => readText(page, "/browser/docs/ideas.md")).toBe(true);
+  await expect.poll(() => readText(page, "/browser/notes/ideas.md")).toBe(true);
+});
+
+test("explorer → explorer still moves without a dialog", async ({ page }) => {
+  await start(page, "?storage=memory");
+  await explorer(page)
+    .getByText("welcome.md", { exact: true })
+    .dragTo(explorer(page).getByText("docs", { exact: true }));
+  await expect(dialog(page)).toHaveCount(0);
+  await expect.poll(() => readText(page, "/browser/docs/welcome.md")).toBe(true);
+});

@@ -18,6 +18,7 @@ copy/move by drag and drop and by menu commands. Design:
 | 7 breadcrumb sibling dropdowns (e2e `file-panels.spec.ts`) | 3 failed, 4 passed | 7 passed |
 | 8 context menu, Open in Files Panel (e2e `file-panels.spec.ts`) | 2 failed, 7 passed | 9 passed |
 | 9 drops into panels: dialog, service, drag source, uploads (e2e `file-panels.spec.ts`) | 8 failed, 9 passed | 17 passed |
+| 10 the explorer accepts panel drags (e2e `file-panels.spec.ts`) | 1 failed, 17 passed | 19 passed |
 
 ## Notes
 
@@ -87,3 +88,21 @@ copy/move by drag and drop and by menu commands. Design:
     The OS-upload e2e test therefore asserts the write against the filesystem
     (`theiaShell.filesApi.exists`), the same technique the "dropping a folder into itself" test
     already uses, rather than asserting the panel still shows the new row.
+- **Task 10:** `PanelAwareNavigatorWidget` (`panel-aware-navigator-widget.ts`) subclasses Theia's
+  `FileNavigatorWidget` and overrides only `handleDropEvent`: it reads the `theia-file-panels/uris`
+  payload synchronously (per the drag-payload-timing note above), and when empty defers to
+  `super.handleDropEvent` unchanged — every explorer-native drop (explorer → explorer, an OS-file
+  upload) never enters the new branch. When the payload is present, it applies the explorer's own
+  drop-effect rule (`getDropEffect`: Ctrl/⌥ copies, otherwise moves) through the model's public
+  `copy`/`move`, with no dialog, matching the spec's "explorer's own copy/move rule" requirement.
+  `file-panels-frontend-module.ts` now takes `rebind` and rebinds `FileNavigatorWidget` inside a
+  *child* of Theia's own navigator container (`createFileNavigatorContainer`), so the
+  `WidgetFactory`'s `container.get(FileNavigatorWidget)` resolves to the subclass while the tree,
+  model, decorators and props all stay exactly Theia's.
+  - Playwright's `dragTo()` from a panel row onto an explorer node carried a real `DataTransfer`
+    end to end, including the synthetic `keyboard.down("Control")` reaching the drop event's
+    `ctrlKey` (and therefore `getDropEffect`) correctly — the brief's fallback dispatchEvent/
+    `ctrlKey: true` technique was not needed for either new test.
+  - No signature or behavioural divergence from the brief: the 1.76 `FileNavigatorWidget`
+    constructor is exactly `(props, model, contextMenuRenderer)`, matching the brief's three
+    parameters with nothing extra to mirror.
