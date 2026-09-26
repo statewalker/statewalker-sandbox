@@ -317,3 +317,13 @@ test("explorer → explorer still moves without a dialog", async ({ page }) => {
   await expect(dialog(page)).toHaveCount(0);
   await expect.poll(() => readText(page, "/browser/docs/welcome.md")).toBe(true);
 });
+
+test("Copy to Other Panel copies the selection into the other panel's folder", async ({ page }) => {
+  await start(page, "?storage=memory");
+  const [a, b] = await twoPanels(page, ["Browser Storage"], ["Browser Storage", "media"]);
+  await row(a, "welcome.md").click({ button: "right" });
+  await page.locator(".lm-Menu-item", { hasText: "Copy to Other Panel…" }).click();
+  await expect(dialog(page).locator("input[name=file-panels-op][value=copy]")).toBeChecked();
+  await dialog(page).locator(".theia-button.main").click();
+  await expect(row(b, "welcome.md")).toBeVisible();
+});

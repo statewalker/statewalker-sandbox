@@ -19,6 +19,7 @@ copy/move by drag and drop and by menu commands. Design:
 | 8 context menu, Open in Files Panel (e2e `file-panels.spec.ts`) | 2 failed, 7 passed | 9 passed |
 | 9 drops into panels: dialog, service, drag source, uploads (e2e `file-panels.spec.ts`) | 8 failed, 9 passed | 17 passed |
 | 10 the explorer accepts panel drags (e2e `file-panels.spec.ts`) | 1 failed, 17 passed | 19 passed |
+| 11 Copy / Move to Other Panel (e2e `file-panels.spec.ts`) | 1 failed, 19 passed | 20 passed |
 
 ## Notes
 

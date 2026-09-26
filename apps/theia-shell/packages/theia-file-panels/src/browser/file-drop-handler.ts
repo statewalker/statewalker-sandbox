@@ -59,6 +59,15 @@ export class FileDropHandler {
       return result.uploaded.map((uri) => new URI(uri));
     }
 
+    return this.transfer(uris, target, { preferCopy });
+  }
+
+  /** Ask Copy / Move / Rename for `uris` into `target`, then run the plan. */
+  async transfer(
+    uris: URI[],
+    target: URI,
+    preset: { preferCopy: boolean; op?: "copy" | "move" },
+  ): Promise<URI[]> {
     const stats = await this.files.resolveAll(uris.map((resource) => ({ resource })));
     const sources: TransferSource[] = stats.flatMap((result) =>
       result.success && result.stat
@@ -85,7 +94,7 @@ export class FileDropHandler {
       target,
       targetName: this.labels.getName(target),
       existing,
-      preferCopy,
+      preferCopy: preset.op ? preset.op === "copy" : preset.preferCopy,
     });
     const choice = await dialog.open();
     if (!choice) return [];

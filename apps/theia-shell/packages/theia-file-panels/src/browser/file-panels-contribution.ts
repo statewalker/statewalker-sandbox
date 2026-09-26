@@ -7,6 +7,7 @@ import type {
 import { WidgetManager } from "@theia/core/lib/browser/widget-manager";
 import type { Command, CommandContribution, CommandRegistry } from "@theia/core/lib/common/command";
 import type { MenuContribution, MenuModelRegistry } from "@theia/core/lib/common/menu";
+import { QuickInputService } from "@theia/core/lib/common/quick-pick-service";
 import { SelectionService } from "@theia/core/lib/common/selection-service";
 import type URI from "@theia/core/lib/common/uri";
 import { UriAwareCommandHandler } from "@theia/core/lib/common/uri-command-handler";
@@ -18,6 +19,7 @@ import { FileNavigatorCommands } from "@theia/navigator/lib/browser/file-navigat
 import { NavigatorContextMenu } from "@theia/navigator/lib/browser/navigator-contribution";
 import { WorkspaceCommands } from "@theia/workspace/lib/browser/workspace-commands";
 import { Messages } from "../common/file-panels-nls";
+import { FileDropHandler } from "./file-drop-handler";
 import {
   FILE_PANEL_CONTEXT_MENU,
   type FilePanelOptions,
@@ -30,6 +32,8 @@ export namespace FilePanelsCommands {
   export const REFRESH: Command = { id: "file-panels.refresh" };
   export const OPEN_SELECTION: Command = { id: "file-panels.openSelection" };
   export const OPEN_AT: Command = { id: "file-panels.openAt" };
+  export const COPY_TO_OTHER: Command = { id: "file-panels.copyToOther" };
+  export const MOVE_TO_OTHER: Command = { id: "file-panels.moveToOther" };
 }
 
 export namespace FilePanelMenus {
@@ -48,6 +52,8 @@ export class FilePanelsContribution
   @inject(WidgetManager) protected readonly widgets!: WidgetManager;
   @inject(SelectionService) protected readonly selection!: SelectionService;
   @inject(FileService) protected readonly files!: FileService;
+  @inject(FileDropHandler) protected readonly drops!: FileDropHandler;
+  @inject(QuickInputService) protected readonly quickInput!: QuickInputService;
 
   get panels(): FilePanelWidget[] {
     return this.widgets.getWidgets(FilePanelWidget.FACTORY_ID) as FilePanelWidget[];
@@ -75,6 +81,29 @@ export class FilePanelsContribution
     );
     await this.shell.activateWidget(panel.id);
     return panel;
+  }
+
+  protected async otherPanel(from: FilePanelWidget): Promise<FilePanelWidget | undefined> {
+    const others = this.panels.filter((p) => p !== from && p.folder);
+    if (others.length <= 1) return others[0];
+    const picked = await this.quickInput.showQuickPick(
+      others.map((panel) => ({
+        label: panel.title.label,
+        description: panel.title.caption,
+        panel,
+      })),
+      { placeholder: Messages.pickOtherPanel() },
+    );
+    return picked?.panel;
+  }
+
+  protected async toOther(op: "copy" | "move"): Promise<void> {
+    const from = this.currentPanel;
+    if (!from) return;
+    const uris = from.model.selectedNodes.filter(FileStatNode.is).map((node) => node.uri);
+    const to = await this.otherPanel(from);
+    if (!to?.folder || uris.length === 0) return;
+    await this.drops.transfer(uris, to.folder, { preferCopy: op === "copy", op });
   }
 
   registerCommands(registry: CommandRegistry): void {
@@ -130,6 +159,15 @@ export class FilePanelsContribution
         },
       }),
     );
+    const enabled = () => !!this.currentPanel?.model.selectedNodes.length && this.panels.length > 1;
+    registry.registerCommand(
+      { ...FilePanelsCommands.COPY_TO_OTHER, label: Messages.copyToOtherPanel() },
+      { execute: () => this.toOther("copy"), isEnabled: enabled },
+    );
+    registry.registerCommand(
+      { ...FilePanelsCommands.MOVE_TO_OTHER, label: Messages.moveToOtherPanel() },
+      { execute: () => this.toOther("move"), isEnabled: enabled },
+    );
   }
 
   registerMenus(menus: MenuModelRegistry): void {
@@ -171,6 +209,14 @@ export class FilePanelsContribution
     });
     menus.registerMenuAction(FilePanelMenus.PATH, {
       commandId: FileNavigatorCommands.REVEAL_IN_NAVIGATOR.id,
+      order: "b",
+    });
+    menus.registerMenuAction(FilePanelMenus.TRANSFER, {
+      commandId: FilePanelsCommands.COPY_TO_OTHER.id,
+      order: "a",
+    });
+    menus.registerMenuAction(FilePanelMenus.TRANSFER, {
+      commandId: FilePanelsCommands.MOVE_TO_OTHER.id,
       order: "b",
     });
     menus.registerMenuAction(NavigatorContextMenu.NAVIGATION, {
