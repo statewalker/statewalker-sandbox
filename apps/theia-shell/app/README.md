@@ -152,7 +152,7 @@ pnpm --filter @theia-shell/theia-files-mounts test # 48 unit tests: keys, config
 pnpm --filter @theia-shell/theia-files-s3 test     # 4 unit tests: client options, the RustFS fixture's CORS
 pnpm --filter @theia-shell/app-files test          # 8 unit tests: seeding, the PNG encoder
 pnpm --filter @theia-shell/app-style test          # 6 unit tests on the compiled CSS (build first)
-pnpm --filter @theia-shell/app test:e2e            # 65 Playwright tests against the static build
+pnpm --filter @theia-shell/app test:e2e            # 64 Playwright tests against the static build
 E2E_PORT=3110 pnpm --filter @theia-shell/app test:e2e  # the same, on another port
 ```
 

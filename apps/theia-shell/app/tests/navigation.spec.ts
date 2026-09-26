@@ -86,7 +86,8 @@ test.describe("search", () => {
       await page.keyboard.press("Control+Shift+F");
       await expect(input).toBeFocused({ timeout: 1000 });
     }).toPass();
-    const results = page.locator("#search-in-workspace .result-head .file-name");
+    // File rows only: in the multi-root workspace each root also gets a header row.
+    const results = page.locator("#search-in-workspace .result-head-info[title] .file-name");
 
     await input.fill("FilesApi");
     await page.keyboard.press("Enter");
