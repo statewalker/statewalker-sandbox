@@ -13,3 +13,4 @@ copy/move by drag and drop and by menu commands. Design:
 | 2 sorting | 6 | 6 |
 | 3 transfer planning | 14 | 14 |
 | 4 breadcrumb model | 6 | 6 |
+| 5 transfer runner | 3 | 3 |
