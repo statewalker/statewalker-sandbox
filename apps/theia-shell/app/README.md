@@ -85,7 +85,7 @@ The design is in
 | [`packages/theia-files-s3`](../packages/theia-files-s3) | **The S3 mount type** (`webrun-files-s3`); separate because the AWS SDK is large. |
 | [`app/files`](files) | **The app's defaults**: the Temporary mount, the hidden paths, the demo files seeded into the main storage, and *New Markdown File* writing there. |
 | [`app/style`](style) | **The app's stylesheet**: Tailwind v4 without preflight over the extensions' sources, plus the shadcn theme. The extensions are styled with Tailwind classes, so an app that uses them must compile those classes too. |
-| `app` | The browser-only Theia application (`"theia": { "target": "browser-only" }`). |
+| `app` | The browser-only Theia application (`"theia": { "target": "browser-only" }`). It also includes `@theia/search-in-workspace` (*Find in Files*, `Ctrl+Shift+F`) and `@theia/file-search` (*Quick Open*, `Ctrl+P`). Both use their browser-only modules, which walk the workspace through Theia's `FileService`, and so the `FilesApi`. |
 
 ### Markdown extension contributions
 
@@ -100,6 +100,17 @@ The design is in
 Loading and saving are Theia's own editor flow, which goes through the
 `FilesApi` provider. The extension never touches storage, apart from *New
 Markdown File*, which creates the file through Theia's `FileService`.
+
+### Search
+
+*Find in Files* reads every file through the `FileService` and skips the ones
+it detects as binary, as ripgrep does on the desktop. So a search for `IHDR`
+finds nothing, although every PNG contains it. The check reads the start of the
+file, so a PDF that begins as plain ASCII, like the sample, is searched as text.
+Its matches are raw PDF syntax, and opening one opens the PDF viewer. Searching
+the text a PDF displays would need the PDF viewer to extract it with PDFium;
+that is not done yet. `search.exclude` is no help here, because *Quick Open*
+applies it too and would hide the images and PDFs.
 
 The preview treats file content as **data, never code**. markdown-it runs with
 `html: false`, so raw HTML is escaped and `javascript:` links are refused, and
@@ -136,7 +147,8 @@ pnpm --filter @theia-shell/theia-files-mounts test # 30 unit tests: keys, config
 pnpm --filter @theia-shell/theia-files-s3 test     # 4 unit tests: client options, the RustFS fixture's CORS
 pnpm --filter @theia-shell/app-files test          # 8 unit tests: seeding, the PNG encoder
 pnpm --filter @theia-shell/app-style test          # 6 unit tests on the compiled CSS (build first)
-pnpm --filter @theia-shell/app test:e2e            # 50 Playwright tests against the static build
+pnpm --filter @theia-shell/app test:e2e            # 56 Playwright tests against the static build
+E2E_PORT=3110 pnpm --filter @theia-shell/app test:e2e  # the same, on another port
 ```
 
 The 4 S3 e2e tests and one unit test run against RustFS in Docker
@@ -154,6 +166,13 @@ Chromium:
 - images: the viewer opens instead of the editor, zoom works from the tab
   toolbar, the keyboard and the palette, and SVG is shown as an image;
 - a PDF renders in EmbedPDF with no request to any host other than the app;
+- the viewers are navigatable:
+  - *Open Editors* lists open images and PDFs, and activates one when clicked;
+  - the explorer follows the active viewer;
+  - a rename moves the viewer;
+  - deleting the file closes it;
+- *Find in Files* lists text matches, skips binary files, and opens a result
+  at the match; *Quick Open* finds an image by name and opens it in its viewer;
 - the default style is stock Theia: menus and dialogs keep Theia's shape, and
   the shadcn components take the theme's colours;
 - *Toggle shadcn/ui Style* switches the look live on a dark theme, the choice
@@ -237,3 +256,15 @@ Every test also asserts that the page raised no errors.
   - S3: 4 of 4 red (no S3 type), then 2 of 4 (a CORS header, a reload before
     Theia wrote `settings.json`), then 4 of 4. With the S3 tests the suite is
     37 of 37.
+- **Navigatable viewers and search.**
+  - End to end: 5 of 5 red, then 5 of 5 green.
+    - Extending `search.exclude` with the binary types hid the images and PDFs
+      from *Quick Open*, which applies that preference too. The browser-only
+      search already skips binary files, so the exclusion came out.
+    - One wrong expectation: opening a result selects the match, so the cursor
+      is at its end (column 23), not its start.
+  - Deleting an open image or PDF from the explorer now closes its viewer, as it
+    does a text editor, because Theia's delete command closes every
+    navigatable widget on the deleted file. The two delete tests were changed
+    from "the viewer says the file cannot be read" to "the viewer closes".
+  - The full suite is 56 of 56 (with the mounts work).
