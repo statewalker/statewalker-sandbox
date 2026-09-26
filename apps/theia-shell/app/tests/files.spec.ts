@@ -1,12 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { explorer, openFile, openMain, readFile, start, unlockVault } from "./helpers";
 
-test("the explorer shows the seeded FilesApi under its root label", async ({ page }) => {
+test("the explorer shows the seeded main storage as a workspace root", async ({ page }) => {
   const errors = await start(page);
-  // The single root is shown as the explorer section's header, not as a tree node.
+  // Multi-root: every mount is a root; there is no single "Files" root any more.
   await expect(
     page.locator("#explorer-view-container--files").getByText("Files", { exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(explorer(page).getByText("Browser Storage", { exact: true })).toBeVisible();
   await expect(explorer(page).getByText("notes", { exact: true })).toBeVisible();
   await explorer(page).getByText("notes", { exact: true }).click();

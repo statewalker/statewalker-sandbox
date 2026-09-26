@@ -12,6 +12,7 @@ type Picker = (options: { mode: "readwrite" }) => Promise<FileSystemDirectoryHan
 export class LocalFolderMountType implements MountType {
   readonly id = "local-folder";
   readonly label = "Folder on this Computer";
+  readonly newLabel = "New Folder on this Computer…";
   readonly fields: MountField[] = [];
   protected readonly handles = new IdbStore<FileSystemDirectoryHandle>("theia-shell-handles");
 
@@ -19,7 +20,7 @@ export class LocalFolderMountType implements MountType {
     return typeof window !== "undefined" && "showDirectoryPicker" in window;
   }
 
-  async configure(): Promise<Record<string, string> | undefined> {
+  async configure(): Promise<{ config: Record<string, string>; name?: string } | undefined> {
     const pick = (window as unknown as { showDirectoryPicker: Picker }).showDirectoryPicker;
     let handle: FileSystemDirectoryHandle;
     try {
@@ -29,7 +30,7 @@ export class LocalFolderMountType implements MountType {
     }
     const handleId = crypto.randomUUID();
     await this.handles.set(handleId, handle);
-    return { directory: handle.name, handleId };
+    return { config: { directory: handle.name, handleId }, name: handle.name };
   }
 
   async create(mount: MountConfig, ctx: MountContext): Promise<FilesApi> {

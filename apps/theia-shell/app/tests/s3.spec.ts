@@ -4,6 +4,10 @@ import { expect, type Page, test } from "@playwright/test";
 import { hasDocker, startRustFs } from "../../tools/rustfs.mjs";
 import {
   explorer,
+  fillMountForm,
+  folderRow,
+  mountNew,
+  openFolderList,
   openMain,
   readFile,
   runFromPalette,
@@ -27,22 +31,18 @@ async function mountS3(
   endpoint: string,
   keys = { id: s3.accessKeyId, secret: s3.secretAccessKey },
 ) {
-  await runFromPalette(page, "Files: Mount File System…");
-  await page.locator(".quick-input-list .monaco-list-row", { hasText: "S3 Bucket" }).click();
-  const input = page.locator(".quick-input-widget .quick-input-box input");
-  for (const value of [
-    "Cloud",
-    "cloud",
-    endpoint,
-    "us-east-1",
-    s3.bucket,
-    "",
-    keys.id,
-    keys.secret,
-  ]) {
-    await input.fill(value);
-    await page.keyboard.press("Enter");
-  }
+  // One form: the mount's name and path, and everything needed to reach the bucket.
+  await mountNew(page, "New S3 Bucket…", {
+    name: "Cloud",
+    fields: {
+      endpoint,
+      region: "us-east-1",
+      bucket: s3.bucket,
+      prefix: "",
+      accessKeyId: keys.id,
+      secretAccessKey: keys.secret,
+    },
+  });
 }
 
 test("an S3 bucket mounts, stores files, and keeps its keys out of settings", async ({ page }) => {
@@ -104,15 +104,15 @@ test("an unreachable endpoint shows as unavailable; other mounts work", async ({
   await expect(explorer(page).getByText("Temporary", { exact: true })).toBeVisible();
 });
 
-test("a malformed endpoint is refused in the wizard", async ({ page }) => {
+test("a malformed endpoint is refused in the form", async ({ page }) => {
   await start(page, "?storage=memory");
-  await runFromPalette(page, "Files: Mount File System…");
-  await page.locator(".quick-input-list .monaco-list-row", { hasText: "S3 Bucket" }).click();
-  const input = page.locator(".quick-input-widget .quick-input-box input");
-  for (const value of ["Cloud", "cloud"]) {
-    await input.fill(value);
-    await page.keyboard.press("Enter");
-  }
-  await input.fill("localhost:9000");
-  await expect(page.locator(".quick-input-message")).toContainText("http://");
+  await openFolderList(page);
+  await folderRow(page, "New S3 Bucket…").click();
+  await fillMountForm(page, {
+    name: "Cloud",
+    fields: { endpoint: "localhost:9000", bucket: "b", accessKeyId: "a", secretAccessKey: "s" },
+  });
+  const dialog = page.locator(".mount-form-dialog");
+  await expect(dialog.locator(".mount-form-error").filter({ hasText: "http://" })).toBeVisible();
+  await expect(dialog.locator(".theia-button.main")).toBeDisabled();
 });

@@ -184,6 +184,12 @@ importers:
       '@theia/userstorage':
         specifier: 1.76.0
         version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      '@theia/workspace':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+      jsonc-parser:
+        specifier: 3.3.1
+        version: 3.3.1
 
   packages/theia-files-s3:
     dependencies:
