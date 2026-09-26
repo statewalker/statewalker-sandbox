@@ -11,14 +11,13 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { shellCatalog } from "../../lib/catalog.js";
-import type { A2uiMessage } from "../../lib/renderer.js";
 import { createPeerTransport, mountPeerApp } from "../../lib/peer.js";
+import type { A2uiMessage } from "../../lib/renderer.js";
 
 // Resolved from the vitest root (this app) rather than from `import.meta.url`:
 // under happy-dom `import.meta.url` is not a file: URL, and fileURLToPath
 // silently yields a path relative to the DOM's origin instead of failing.
-const read = (file: string): string =>
-  readFileSync(resolve(process.cwd(), "lib", file), "utf8");
+const read = (file: string): string => readFileSync(resolve(process.cwd(), "lib", file), "utf8");
 
 /** Source with comments and string literals removed — executable code only. */
 const codeOf = (file: string): string =>
@@ -41,8 +40,9 @@ describe("nothing in the render path branches on provenance", () => {
     "lib/%s names no peer, remote, provenance or sandbox concept in code",
     (file) => {
       const code = codeOf(file);
-      const hits = [...code.matchAll(/\b(peer|peerId|provenance|remote|untrusted|sandbox|isLocal)\b/gi)]
-        .map((m) => m[0]);
+      const hits = [
+        ...code.matchAll(/\b(peer|peerId|provenance|remote|untrusted|sandbox|isLocal)\b/gi),
+      ].map((m) => m[0]);
       expect(hits).toEqual([]);
       // Guard against the stripper silently eating the file: comments are
       // gone, code is not.
@@ -56,7 +56,10 @@ describe("nothing in the render path branches on provenance", () => {
     // Mutation 2 in §4 added a pre-filter inside this loop; a filter, a
     // conditional or a rewrite here would all show up as extra statements.
     const code = codeOf("peer.ts");
-    const loop = /for\s+await\s*\(const\s+message\s+of\s+transport\.messages\(\)\)\s*\{([\s\S]*?)\n\s{2}\}/.exec(code);
+    const loop =
+      /for\s+await\s*\(const\s+message\s+of\s+transport\.messages\(\)\)\s*\{([\s\S]*?)\n\s{2}\}/.exec(
+        code,
+      );
     expect(loop, "the message loop was not found — the shape of peer.ts changed").not.toBeNull();
     expect((loop?.[1] ?? "").trim()).toBe("renderer.handle(message);");
   });
@@ -97,7 +100,10 @@ describe("the transport's own origin is opaque", () => {
     const transport = createPeerTransport({
       peerId: "12D3KooWabc",
       async *messages(): AsyncGenerator<A2uiMessage> {
-        yield { version: "v0.9.1", createSurface: { surfaceId: "s", catalogId: shellCatalog.catalogId } };
+        yield {
+          version: "v0.9.1",
+          createSurface: { surfaceId: "s", catalogId: shellCatalog.catalogId },
+        };
       },
     });
     const mount = await mountPeerApp(root, transport, shellCatalog);
@@ -134,10 +140,17 @@ describe("the gaps this rung leaves open", () => {
       createPeerTransport({
         peerId: "an-entirely-unknown-peer",
         async *messages(): AsyncGenerator<A2uiMessage> {
-          yield { version: "v0.9.1", createSurface: { surfaceId: "s", catalogId: shellCatalog.catalogId } };
-          yield { version: "v0.9.1", updateComponents: { surfaceId: "s", components: [
-            { id: "root", component: "Text", text: "I am here uninvited" },
-          ] } };
+          yield {
+            version: "v0.9.1",
+            createSurface: { surfaceId: "s", catalogId: shellCatalog.catalogId },
+          };
+          yield {
+            version: "v0.9.1",
+            updateComponents: {
+              surfaceId: "s",
+              components: [{ id: "root", component: "Text", text: "I am here uninvited" }],
+            },
+          };
         },
       }),
       shellCatalog,
@@ -170,21 +183,39 @@ describe("the gaps this rung leaves open", () => {
     const root = document.createElement("div");
     document.body.appendChild(root);
     let delivered = 0;
+    // The last message waits on a gate this test opens, not on a timer: "5 ms
+    // outlasts two setTimeout(0) ticks" does not hold on a loaded machine, and
+    // this test failed on CI when it did not.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
     const mount = mountPeerApp(
       root,
       createPeerTransport({
         peerId: "chatty",
         async *messages(): AsyncGenerator<A2uiMessage> {
-          yield { version: "v0.9.1", createSurface: { surfaceId: "s", catalogId: shellCatalog.catalogId } };
+          yield {
+            version: "v0.9.1",
+            createSurface: { surfaceId: "s", catalogId: shellCatalog.catalogId },
+          };
           delivered++;
-          yield { version: "v0.9.1", updateComponents: { surfaceId: "s", components: [
-            { id: "root", component: "Text", text: "first" },
-          ] } };
+          yield {
+            version: "v0.9.1",
+            updateComponents: {
+              surfaceId: "s",
+              components: [{ id: "root", component: "Text", text: "first" }],
+            },
+          };
           delivered++;
-          await new Promise((r) => setTimeout(r, 5));
-          yield { version: "v0.9.1", updateComponents: { surfaceId: "s", components: [
-            { id: "root", component: "Text", text: "second" },
-          ] } };
+          await gate;
+          yield {
+            version: "v0.9.1",
+            updateComponents: {
+              surfaceId: "s",
+              components: [{ id: "root", component: "Text", text: "second" }],
+            },
+          };
           delivered++;
         },
       }),
@@ -198,10 +229,13 @@ describe("the gaps this rung leaves open", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(delivered).toBeGreaterThan(0);
     let settled = false;
-    void mount.then(() => { settled = true; });
+    void mount.then(() => {
+      settled = true;
+    });
     await new Promise((r) => setTimeout(r, 0));
     expect(settled).toBe(false);
 
+    release();
     await mount;
     expect(delivered).toBe(3);
     expect(root.textContent).toBe("second");

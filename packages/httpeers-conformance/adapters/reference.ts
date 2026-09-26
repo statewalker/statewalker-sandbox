@@ -17,11 +17,11 @@ import {
   AuthorizerBuilder,
   Biscuit,
   BlockBuilder,
-  KeyPair,
-  PublicKey,
-  SignatureAlgorithm,
   biscuit,
   block,
+  KeyPair,
+  type PublicKey,
+  SignatureAlgorithm,
 } from "@biscuit-auth/biscuit-wasm";
 import type {
   FetchHandler,
@@ -82,7 +82,9 @@ function warmUp(): void {
   // Prototype 10, finding F2: the first authorization in a process throws a
   // spurious Timeout regardless of max_time_micro. Absorb it on a disposable key.
   const k = new KeyPair(SignatureAlgorithm.Ed25519);
-  const t = biscuit`w(true); check if time($t), $t < 2100-01-01T00:00:00Z;`.build(k.getPrivateKey());
+  const t = biscuit`w(true); check if time($t), $t < 2100-01-01T00:00:00Z;`.build(
+    k.getPrivateKey(),
+  );
   const parsed = Biscuit.fromBase64(t.toBase64(), k.getPublicKey());
   for (let i = 0; i < 3; i++) {
     const a = new AuthorizerBuilder();
@@ -133,8 +135,14 @@ function mint(init: MintInit, meshKey: KeyPair): string {
  * A-04 already required.
  */
 const RESERVED = [
-  "connection_peer", "self_peer", "self_fact", "time",
-  "operation", "resource", "revoked_subject", "revoked_binding",
+  "connection_peer",
+  "self_peer",
+  "self_fact",
+  "time",
+  "operation",
+  "resource",
+  "revoked_subject",
+  "revoked_binding",
 ];
 
 function declaresReserved(token: Biscuit): string[] {
@@ -169,7 +177,9 @@ function verify(
     };
   }
   const a = new AuthorizerBuilder();
-  a.addCode(`connection_peer("${ctx.connectionPeer}"); self_peer("${ctx.selfPeer}"); time(${iso(ctx.now)});`);
+  a.addCode(
+    `connection_peer("${ctx.connectionPeer}"); self_peer("${ctx.selfPeer}"); time(${iso(ctx.now)});`,
+  );
   a.addCode(`operation("${ctx.operation}"); resource("${ctx.resource}");`);
   for (const [t, v] of ctx.selfFacts ?? []) a.addCode(`self_fact("${t}", "${v}");`);
   for (const f of ctx.extraFacts ?? []) a.addCode(f);
@@ -181,7 +191,11 @@ function verify(
   for (const p of rules.policies) a.addCode(p);
 
   const limits = ctx.budget
-    ? { max_facts: ctx.budget.maxFacts, max_iterations: ctx.budget.maxIterations, max_time_micro: ctx.budget.maxTimeMicro }
+    ? {
+        max_facts: ctx.budget.maxFacts,
+        max_iterations: ctx.budget.maxIterations,
+        max_time_micro: ctx.budget.maxTimeMicro,
+      }
     : LIMITS;
   try {
     a.buildAuthenticated(parsed).authorizeWithLimits(limits);
@@ -193,7 +207,8 @@ function verify(
 }
 
 function failedChecks(e: unknown): string[] {
-  const checks = (e as { FailedLogic?: { Unauthorized?: { checks?: unknown[] } } })?.FailedLogic?.Unauthorized?.checks;
+  const checks = (e as { FailedLogic?: { Unauthorized?: { checks?: unknown[] } } })?.FailedLogic
+    ?.Unauthorized?.checks;
   if (!Array.isArray(checks)) return [JSON.stringify(e)];
   return checks.map((c) => {
     const b = (c as { Block?: { block_id: number; check_id: number; rule: string } }).Block;
@@ -204,11 +219,20 @@ function failedChecks(e: unknown): string[] {
 // ------------------------------------------------------------------ block X
 
 const HOP_BY_HOP = new Set([
-  "connection", "keep-alive", "te", "transfer-encoding", "upgrade",
-  "proxy-authenticate", "proxy-authorization", "trailer",
+  "connection",
+  "keep-alive",
+  "te",
+  "transfer-encoding",
+  "upgrade",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "trailer",
 ]);
 
-function asIntermediary(req: Request, opts: { via: string; credentials?: Record<string, string> }): Request {
+function asIntermediary(
+  req: Request,
+  opts: { via: string; credentials?: Record<string, string> },
+): Request {
   const headers = new Headers(req.headers);
   // RFC 9110: everything the Connection header names is hop-by-hop too.
   for (const named of (headers.get("connection") ?? "").split(",")) {
@@ -229,7 +253,8 @@ function asIntermediary(req: Request, opts: { via: string; credentials?: Record<
 
 export const referenceImplementation: Implementation = {
   name: "reference (spec-conformant)",
-  notes: "Biscuit tokens + Datalog policy, per ADR-0019. The seed for @statewalker/httpeers.biscuit.",
+  notes:
+    "Biscuit tokens + Datalog policy, per ADR-0019. The seed for @statewalker/httpeers.biscuit.",
   mounts: { build: buildMounts },
   policy: {
     build(source) {
@@ -256,11 +281,21 @@ export const referenceImplementation: Implementation = {
   intermediary: { asIntermediary },
   tokens: {
     warmUp,
-    async newMeshKey() { return new KeyPair(SignatureAlgorithm.Ed25519); },
-    async newDeviceKey() { return new KeyPair(SignatureAlgorithm.Ed25519); },
-    publicOf(key) { return (key as KeyPair).getPublicKey(); },
-    async mint(init, meshKey) { return mint(init, meshKey as KeyPair); },
-    async verify(token, meshPublic, ctx, rules) { return verify(token, meshPublic as PublicKey, ctx, rules); },
+    async newMeshKey() {
+      return new KeyPair(SignatureAlgorithm.Ed25519);
+    },
+    async newDeviceKey() {
+      return new KeyPair(SignatureAlgorithm.Ed25519);
+    },
+    publicOf(key) {
+      return (key as KeyPair).getPublicKey();
+    },
+    async mint(init, meshKey) {
+      return mint(init, meshKey as KeyPair);
+    },
+    async verify(token, meshPublic, ctx, rules) {
+      return verify(token, meshPublic as PublicKey, ctx, rules);
+    },
     async attenuate(token, meshPublic, constraints) {
       const t = Biscuit.fromBase64(token, meshPublic as PublicKey);
       const bb = new BlockBuilder();
@@ -277,7 +312,9 @@ export const referenceImplementation: Implementation = {
     },
     async forgeDelegation(token, meshPublic, to) {
       // The attack: a plain block anyone holding the token can append.
-      return Biscuit.fromBase64(token, meshPublic as PublicKey).appendBlock(block`delegate(${to});`).toBase64();
+      return Biscuit.fromBase64(token, meshPublic as PublicKey)
+        .appendBlock(block`delegate(${to});`)
+        .toBase64();
     },
   },
 };

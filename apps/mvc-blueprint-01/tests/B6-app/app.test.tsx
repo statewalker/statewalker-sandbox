@@ -38,7 +38,8 @@ afterEach(async () => {
 
 const titles = () => all(host, "li").map((li) => li.querySelector("label")?.textContent?.trim());
 const row = (title: string) => all(host, "li").find((li) => li.textContent?.includes(title));
-const checkbox = (title: string) => row(title)?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+const checkbox = (title: string) =>
+  row(title)?.querySelector<HTMLInputElement>('input[type="checkbox"]');
 const newTodo = () => {
   const el = host.querySelector<HTMLInputElement>('input[aria-label="New todo"]');
   if (!el) throw new Error('no "New todo" input');
@@ -69,7 +70,9 @@ describe("B6 · the application, end to end", () => {
     // Toggle: the tick is the controller's answer, not the view's guess.
     await userEvent.click(checkbox("Water the plants")!);
     await waitFor(() => checkbox("Water the plants")?.checked === true);
-    expect(row("Water the plants")?.querySelector(".line-through")?.textContent).toBe("Water the plants");
+    expect(row("Water the plants")?.querySelector(".line-through")?.textContent).toBe(
+      "Water the plants",
+    );
 
     // Clear completed: a confirm dialog asks, counting what is completed.
     const cleared = seededDone + 1;
@@ -93,7 +96,10 @@ describe("B6 · the application, end to end", () => {
     await app.dispose();
     app = undefined;
     expect(host.childNodes, "the app's root is empty").toHaveLength(0);
-    expect([...document.body.children], "no portal or container outlives the app").toEqual([...bodyBefore, host]);
+    expect([...document.body.children], "no portal or container outlives the app").toEqual([
+      ...bodyBefore,
+      host,
+    ]);
     expect(toast()).toBeNull();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(rejections).toEqual([]);
@@ -136,7 +142,10 @@ describe("B6 · a list panel that fails to show is loud", () => {
     await running.dispose(); // same turn: the failure is still pending
 
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(errors, "nothing reports for an app the caller already tore down").not.toHaveBeenCalled();
+    expect(
+      errors,
+      "nothing reports for an app the caller already tore down",
+    ).not.toHaveBeenCalled();
     expect(host.childNodes, "nothing was rendered into the returned root").toHaveLength(0);
     expect(rejections).toEqual([]);
   });

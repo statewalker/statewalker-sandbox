@@ -499,7 +499,9 @@ export async function createPeer(init: CreatePeerInit): Promise<Peer> {
         usesTransportIdentity,
         getClaims,
         isRevoked,
-        handleEndpoints: withPolicy({ rules, usesTransportIdentity, selfPeer: selfPeerId, now })(local),
+        handleEndpoints: withPolicy({ rules, usesTransportIdentity, selfPeer: selfPeerId, now })(
+          local,
+        ),
       }),
     allowForward: async (req) => {
       // `undefined` (no binding at all) means this request never passed

@@ -1,11 +1,17 @@
 import type { FilesApi } from "@statewalker/webrun-files";
 
 /** A reference to a variable in the secret store. Never a value. */
-export interface SecretRef { $secret: string }
+export interface SecretRef {
+  $secret: string;
+}
 
 export interface StorageCaps {
-  read: boolean; write: boolean; list: boolean;
-  move: boolean; copy: boolean; remove: boolean;
+  read: boolean;
+  write: boolean;
+  list: boolean;
+  move: boolean;
+  copy: boolean;
+  remove: boolean;
   stat: { size: boolean; mtime: boolean };
 }
 
@@ -30,16 +36,26 @@ export interface StorageConfig {
   caps?: Partial<Omit<StorageCaps, "stat">> & { stat?: Partial<StorageCaps["stat"]> };
 }
 
-export interface SecretStore { get(key: string): Promise<unknown | undefined> }
+export interface SecretStore {
+  get(key: string): Promise<unknown | undefined>;
+}
 
 export type StorageStatus = "idle" | "ready" | "failed";
 
 export type AdapterFactory = (uri: string, options: Record<string, unknown>) => FilesApi;
 
-export interface StorageHandle { uri: string; api: FilesApi }
+export interface StorageHandle {
+  uri: string;
+  api: FilesApi;
+}
 
 const FULL: StorageCaps = {
-  read: true, write: true, list: true, move: true, copy: true, remove: true,
+  read: true,
+  write: true,
+  list: true,
+  move: true,
+  copy: true,
+  remove: true,
   stat: { size: true, mtime: true },
 };
 
@@ -103,7 +119,11 @@ export class StorageRegistry {
    * GONE — re-acquiring must fail loudly rather than silently constructing
    * something else under a familiar name.
    */
-  adopt(uri: string, api: FilesApi, options: { name?: string; caps?: StorageConfig["caps"] } = {}): void {
+  adopt(
+    uri: string,
+    api: FilesApi,
+    options: { name?: string; caps?: StorageConfig["caps"] } = {},
+  ): void {
     if (this._configs.has(uri)) throw new Error(`Storage already registered: ${uri}`);
     this._configs.set(uri, { uri, adapter: "adopted", options: {}, caps: options.caps });
     this._adopted.set(uri, { api, name: options.name });
@@ -208,7 +228,9 @@ export class StorageRegistry {
   }
 
   /** Credentials enter here by reference and are never written back to config. */
-  private async _resolveOptions(options: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async _resolveOptions(
+    options: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     const resolved: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(options)) {
       if (value && typeof value === "object" && "$secret" in (value as object)) {

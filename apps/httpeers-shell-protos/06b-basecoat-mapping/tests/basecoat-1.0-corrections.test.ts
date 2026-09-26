@@ -14,9 +14,9 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { beforeEach, describe, expect, it } from "vitest";
-import { shellCatalog } from "../../lib/catalog.js";
-import { createRenderer, type A2uiMessage } from "../../lib/renderer.js";
 import { BASECOAT_CLASSES, classesFor, dataVariantFor } from "../../lib/basecoat.js";
+import { shellCatalog } from "../../lib/catalog.js";
+import { type A2uiMessage, createRenderer } from "../../lib/renderer.js";
 
 const require = createRequire(import.meta.url);
 const bcDir = require.resolve("basecoat-css/package.json").replace(/package\.json$/, "dist/");

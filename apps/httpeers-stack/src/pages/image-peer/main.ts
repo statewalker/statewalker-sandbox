@@ -66,16 +66,16 @@
 import { createMounts } from "@statewalker/httpeers.core";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import type { AdvertisementInput } from "../../browser/join.js";
+import { wireQrJoin } from "../../browser/qr-join.js";
+import { createQrJoinUi } from "../../browser/qr-join-ui.js";
 import type { PeerSession, SessionState } from "../../browser/session.js";
 import { createPeerSession } from "../../browser/session.js";
 import type { ImageInfo } from "../../services/images.js";
 import { createImagesEndpoint, IMAGES_POLICIES, imagePath } from "../../services/images.js";
 import { loadFixtureImages } from "./fixtures.js";
 import { fileToImage } from "./local-image.js";
-import { loadStockImages } from "./stock.js";
 import { pacedFiles, readStreamPacing } from "./pacing.js";
-import { wireQrJoin } from "../../browser/qr-join.js";
-import { createQrJoinUi } from "../../browser/qr-join-ui.js";
+import { loadStockImages } from "./stock.js";
 
 const el = <T extends HTMLElement>(id: string): T => document.querySelector<T>(`#${id}`)!;
 
@@ -202,8 +202,7 @@ function wirePicker(id: string): void {
         }
       }
       if (added > 0) {
-        addStatusEl.textContent =
-          `Added ${added} picture(s). They are being served to the mesh now.`;
+        addStatusEl.textContent = `Added ${added} picture(s). They are being served to the mesh now.`;
       }
       // Reset, so choosing the same file again fires `change` a second time.
       input.value = "";

@@ -1,6 +1,6 @@
 import { DockviewComponent, themeLight } from "dockview-core";
 import { shellCatalog } from "./catalog.js";
-import { createRenderer, type A2uiMessage, type Renderer } from "./renderer.js";
+import { type A2uiMessage, createRenderer, type Renderer } from "./renderer.js";
 
 /**
  * The shell's dock: Dockview hosting one A2UI surface per pane.
@@ -94,8 +94,7 @@ export function createShellDock(host: HTMLElement): ShellDock {
           if (spec?.messages) {
             for (const m of spec.messages) renderer.handle(m);
           }
-          const origin =
-            spec?.origin ?? (params?.params?.["origin"] as string | undefined);
+          const origin = spec?.origin ?? (params?.params?.["origin"] as string | undefined);
           if (origin) origins.set(options.id, origin);
         },
       };

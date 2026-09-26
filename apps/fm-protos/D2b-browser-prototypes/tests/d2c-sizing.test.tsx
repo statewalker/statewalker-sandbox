@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import HighTable from "hightable";
 import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import HighTable from "hightable";
+import { afterEach, describe, expect, it } from "vitest";
 import "hightable/src/HighTable.css";
 import { TableModel } from "@fm/app";
 import { toDataFrame } from "@fm/ui";

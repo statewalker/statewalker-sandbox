@@ -70,9 +70,21 @@ describe("B1 · todo model", () => {
   });
 
   for (const [name, write, read] of [
-    ["setFilter", (m: TodoListModel) => m.view.setFilter("abc"), (m: TodoListModel) => m.view.filterDraft],
-    ["setShowDone", (m: TodoListModel) => m.view.setShowDone(false), (m: TodoListModel) => m.view.showDone],
-    ["reportOutcome", (m: TodoListModel) => m.control.reportOutcome("x"), (m: TodoListModel) => m.view.lastOutcome],
+    [
+      "setFilter",
+      (m: TodoListModel) => m.view.setFilter("abc"),
+      (m: TodoListModel) => m.view.filterDraft,
+    ],
+    [
+      "setShowDone",
+      (m: TodoListModel) => m.view.setShowDone(false),
+      (m: TodoListModel) => m.view.showDone,
+    ],
+    [
+      "reportOutcome",
+      (m: TodoListModel) => m.control.reportOutcome("x"),
+      (m: TodoListModel) => m.view.lastOutcome,
+    ],
   ] as const) {
     it(`${name}: a write of the value already held wakes nobody`, () => {
       const m = createTodoListModel();
@@ -139,7 +151,15 @@ describe("B1 · the two facets", () => {
     "showDone",
     "visible",
   ];
-  const CONTROL_KEYS = ["edges", "replaceTodos", "reportOutcome", "takePending", "takeRemovals", "takeToggles", "todos"];
+  const CONTROL_KEYS = [
+    "edges",
+    "replaceTodos",
+    "reportOutcome",
+    "takePending",
+    "takeRemovals",
+    "takeToggles",
+    "todos",
+  ];
   const EDGE_KEYS = ["clearCompletedCount", "pending", "refreshCount", "removals", "toggles"];
 
   it("carry exactly the members the spec lists — adding one is a deliberate edit here", () => {
@@ -241,7 +261,10 @@ describe("B1 · row intents", () => {
         });
         expect(batch).toEqual([{ id: "1" }, { id: "2" }]);
         expect(q.read(m)()).toEqual([]);
-        expect(before, "the batch was handed back, not emptied in place").toEqual([{ id: "1" }, { id: "2" }]);
+        expect(before, "the batch was handed back, not emptied in place").toEqual([
+          { id: "1" },
+          { id: "2" },
+        ]);
       });
 
       it("is silent when drained empty", () => {
@@ -281,7 +304,9 @@ describe("B1 · row intents", () => {
     const expectOnly = (owner: string, label: string) => {
       const now = counts();
       const delta = Object.fromEntries(Object.keys(now).map((k) => [k, now[k] - last[k]]));
-      expect(delta, label).toEqual(Object.fromEntries(Object.keys(now).map((k) => [k, k === owner ? 1 : 0])));
+      expect(delta, label).toEqual(
+        Object.fromEntries(Object.keys(now).map((k) => [k, k === owner ? 1 : 0])),
+      );
       last = now;
     };
     m.view.requestToggle("1");

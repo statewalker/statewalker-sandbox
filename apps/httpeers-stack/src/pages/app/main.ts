@@ -60,7 +60,11 @@
  * that policy and reports it as a typed `kind`; see `./outcome.ts`.
  */
 import { createMounts } from "@statewalker/httpeers.core";
+import { type ConnectionKind, describeConnection } from "../../browser/connection-kind.js";
 import type { BrowserPeerHandle } from "../../browser/peer-runtime.js";
+import { wireQrJoin } from "../../browser/qr-join.js";
+import { createQrJoinUi } from "../../browser/qr-join-ui.js";
+import { describeStatus, parseHeaders, streamInto } from "../../browser/request-console.js";
 import type { PeerSession, SessionState } from "../../browser/session.js";
 import { createPeerSession } from "../../browser/session.js";
 import type { MeshView } from "../../hub/mesh-view.js";
@@ -74,13 +78,15 @@ import type { ImageInfo } from "../../services/images.js";
 // has no such constraint.)
 import type { SearchResult } from "../../services/search.js";
 import type { ProviderState } from "./discovery.js";
-import { createProviderResolver, describeProvider, IMAGES_KIND, PROXY_KIND, SEARCH_KIND } from "./discovery.js";
-import { describeStatus, parseHeaders, streamInto } from "../../browser/request-console.js";
+import {
+  createProviderResolver,
+  describeProvider,
+  IMAGES_KIND,
+  PROXY_KIND,
+  SEARCH_KIND,
+} from "./discovery.js";
 import type { CallOutcome } from "./outcome.js";
 import { describeOutcome, readOutcome } from "./outcome.js";
-import { type ConnectionKind, describeConnection } from "../../browser/connection-kind.js";
-import { wireQrJoin } from "../../browser/qr-join.js";
-import { createQrJoinUi } from "../../browser/qr-join-ui.js";
 
 /**
  * This peer's ServiceWorker adapter key, and therefore the first segment of
@@ -607,9 +613,11 @@ async function loadRoutes(): Promise<void> {
   }
   const peerId = proxyState.peerId;
   const outcome = await callMesh(`${handle.baseUrl}${peerId}/proxy/`);
-  if (outcome.status !== "ok") return setStatus(proxyStatusEl, outcome.status, describeOutcome(outcome));
+  if (outcome.status !== "ok")
+    return setStatus(proxyStatusEl, outcome.status, describeOutcome(outcome));
 
-  const routes = (outcome.body as { routes?: { prefix: string; upstream: string }[] } | null)?.routes ?? [];
+  const routes =
+    (outcome.body as { routes?: { prefix: string; upstream: string }[] } | null)?.routes ?? [];
   proxyRouteEl.replaceChildren(
     ...routes.map((r) => {
       const option = document.createElement("option");
@@ -635,7 +643,8 @@ async function sendProxied(): Promise<void> {
     return setStatus(proxyStatusEl, "neutral", describeProvider("proxy", proxyState));
   }
   const prefix = proxyRouteEl.value;
-  if (prefix === "") return setStatus(proxyStatusEl, "neutral", "load the routes and pick one first.");
+  if (prefix === "")
+    return setStatus(proxyStatusEl, "neutral", "load the routes and pick one first.");
   const typed = proxyPathEl.value.trim();
   const rest = typed === "" ? "" : typed.startsWith("/") ? typed : `/${typed}`;
   const url = `${handle.baseUrl}${proxyState.peerId}/proxy${prefix}${rest}`;
@@ -644,17 +653,23 @@ async function sendProxied(): Promise<void> {
   setStatus(proxyStatusEl, "neutral", `${proxyMethodEl.value} ${prefix}${rest}…`);
   proxySendEl.disabled = true;
   try {
-    const res = await fetch(url, { method: proxyMethodEl.value, headers: parseHeaders(proxyHeadersEl.value) });
+    const res = await fetch(url, {
+      method: proxyMethodEl.value,
+      headers: parseHeaders(proxyHeadersEl.value),
+    });
     setStatus(proxyStatusEl, res.ok ? "ok" : "failed", describeStatus(res));
     const stats = await streamInto(res, (text) => {
       proxyOutputEl.textContent += text;
     });
     if (stats.firstChunkMs !== null) {
-      proxyStatusEl.textContent +=
-        ` · ${stats.chunks} chunk(s), first at ${Math.round(stats.firstChunkMs)} ms of ${Math.round(stats.totalMs)} ms`;
+      proxyStatusEl.textContent += ` · ${stats.chunks} chunk(s), first at ${Math.round(stats.firstChunkMs)} ms of ${Math.round(stats.totalMs)} ms`;
     }
   } catch (err) {
-    setStatus(proxyStatusEl, "unreachable", `the request never completed: ${err instanceof Error ? err.message : String(err)}`);
+    setStatus(
+      proxyStatusEl,
+      "unreachable",
+      `the request never completed: ${err instanceof Error ? err.message : String(err)}`,
+    );
   } finally {
     proxySendEl.disabled = false;
   }

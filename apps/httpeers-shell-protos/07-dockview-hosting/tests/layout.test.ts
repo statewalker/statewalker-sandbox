@@ -11,8 +11,8 @@
 // served it?
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { createShellDock, type PaneSpec, type ShellDock } from "../../lib/dock.js";
 import { shellCatalog } from "../../lib/catalog.js";
+import { createShellDock, type PaneSpec, type ShellDock } from "../../lib/dock.js";
 import type { A2uiMessage } from "../../lib/renderer.js";
 
 const NOTES_TEXT = "MINUTES-OF-THE-MEETING";

@@ -63,7 +63,8 @@ export function useValue<T>(read: () => T, isEqual: (a: T, b: T) => boolean = Ob
   const getSnapshot = useCallback((): T => {
     const next = untracked(read);
     const cached = cache.current;
-    if (cached !== undefined && cached.read === read && isEqual(cached.value, next)) return cached.value;
+    if (cached !== undefined && cached.read === read && isEqual(cached.value, next))
+      return cached.value;
     cache.current = { read, value: next };
     return next;
   }, [read, isEqual]);
@@ -90,7 +91,7 @@ export function shallowEqual<T>(a: T, b: T): boolean {
   const aKeys = Object.keys(aRecord);
   if (aKeys.length !== Object.keys(bRecord).length) return false;
   for (const key of aKeys) {
-    if (!Object.prototype.hasOwnProperty.call(bRecord, key) || !Object.is(aRecord[key], bRecord[key])) return false;
+    if (!Object.hasOwn(bRecord, key) || !Object.is(aRecord[key], bRecord[key])) return false;
   }
   return true;
 }

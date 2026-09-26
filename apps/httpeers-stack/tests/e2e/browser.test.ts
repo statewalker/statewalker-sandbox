@@ -223,8 +223,10 @@ async function peerIdOfPage(page: Page): Promise<string> {
  */
 async function renderedProviderPeerId(page: Page, kind: "search" | "images"): Promise<string> {
   const text = (await page.textContent(`#${kind}-provider`))!;
-  const [, peerId] = text.split("—");
-  return (peerId ?? "").trim();
+  // `label: title — <peerId>`, and since `main.ts` says how the provider is
+  // reached, ` · <transport>` after it (which contains a "—" of its own). A
+  // peer id has no whitespace, so it is the first token after the first "—".
+  return /—\s*(\S+)/.exec(text)?.[1] ?? "";
 }
 
 interface StreamedBody {
@@ -393,6 +395,11 @@ async function buildSession(
   const browser = await launcher.launch({ headless: true });
   unwind.push(async () => await browser.close());
   const context = await browser.newContext();
+  // The image peer fills its library from a public image stock and falls back
+  // to its bundled fixtures only when the stock cannot be reached
+  // (`src/pages/image-peer/main.ts`). Blocking the stock keeps this suite off
+  // the internet and serving the fixtures it asserts on, `relay-node` among them.
+  await context.route("https://picsum.photos/**", (route) => route.abort());
 
   const faults: string[] = [];
   const imagePage = await context.newPage();
@@ -504,7 +511,10 @@ async function stopSession(session: Session | undefined): Promise<void> {
  * carry.
  */
 function assertStreamed(streamed: StreamedBody, expectedBytes: Uint8Array): void {
-  expect(streamed.status).toBe(200);
+  // On a refusal the body is the reason (`{"error": ...}`); without it a 403
+  // says only that something said no.
+  const body = new TextDecoder().decode(new Uint8Array(streamed.bytes)).slice(0, 300);
+  expect(streamed.status, `response body: ${body}`).toBe(200);
   expect(new Uint8Array(streamed.bytes)).toEqual(expectedBytes);
 
   // More than one chunk, and the sizes are the provider's own windowed

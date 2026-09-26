@@ -25,7 +25,7 @@
  * `REFUSAL_STATUS` below. The reason itself is not decided here; it is
  * `verifyToken`'s, carried through unaltered.
  */
-import { ANONYMOUS, json } from "./types.js";
+
 import type {
   FetchHandler,
   GetClaims,
@@ -35,6 +35,7 @@ import type {
   TokenRejectionReason,
   UsesTransportIdentity,
 } from "./types.js";
+import { ANONYMOUS, json } from "./types.js";
 
 /**
  * WHAT SHOULD THE CLIENT DO NEXT — the only question this table answers.
@@ -185,7 +186,8 @@ export function newPeerHandlers(init: PeerHandlersInit): FetchHandler {
     // peer: a supplier that is not enforcing the binding at all. That is a
     // deployment bug, not a stale credential, and no token this client can
     // fetch changes it — so "stop" is the honest answer.
-    if (claims.sub !== peer) return json({ error: "token subject does not match connected peer" }, 403);
+    if (claims.sub !== peer)
+      return json({ error: "token subject does not match connected peer" }, 403);
 
     const revoked = await isRevoked(claims);
     if (revoked != null) return json({ error: revoked }, 403);

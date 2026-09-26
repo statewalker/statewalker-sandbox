@@ -41,10 +41,7 @@ export interface Enablement {
 }
 
 /** Construct a `Fact`. Terms are ground: strings, numbers or booleans. */
-export function fact(
-  predicate: string,
-  ...terms: readonly (string | number | boolean)[]
-): Fact {
+export function fact(predicate: string, ...terms: readonly (string | number | boolean)[]): Fact {
   return Object.freeze({ predicate, terms: Object.freeze([...terms]) });
 }
 
@@ -178,17 +175,11 @@ function parseWhen(clause: string): Atom[] {
     }
     const match = PREDICATE.exec(text);
     if (!match) {
-      throw new MalformedWhenClause(
-        clause,
-        `${JSON.stringify(text)} is not a ground fact`,
-      );
+      throw new MalformedWhenClause(clause, `${JSON.stringify(text)} is not a ground fact`);
     }
     const predicate = match[1] as string;
     const args = (match[2] as string).trim();
-    const terms =
-      args === ""
-        ? []
-        : splitTopLevel(args).map((term) => parseTerm(term, clause));
+    const terms = args === "" ? [] : splitTopLevel(args).map((term) => parseTerm(term, clause));
     atoms.push({ negated, canonical: canonicalFact({ predicate, terms }) });
   }
   return atoms;

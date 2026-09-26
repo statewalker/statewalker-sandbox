@@ -1,12 +1,19 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import {
+  ConfigStore,
+  FileManager,
+  type MenuModel,
+  type NotificationModel,
+  type PanelModel,
+  registerStorageOpener,
+  uiShowConflict,
+  uiShowMenu,
+  uiShowPanel,
+} from "@fm/app";
+import { StorageRegistry, storagesOpen } from "@fm/core";
+import { ViewAdapter } from "@fm/ui";
 import { Commands } from "@statewalker/shared-commands";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { StorageRegistry, storagesOpen } from "@fm/core";
-import {
-  ConfigStore, FileManager, MenuModel, NotificationModel, PanelModel,
-  registerStorageOpener, uiShowConflict, uiShowMenu, uiShowPanel,
-} from "@fm/app";
-import { ViewAdapter } from "@fm/ui";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /**
  * D5 — the whole thing, driven the way a user drives it.
@@ -46,7 +53,15 @@ describe("D5 · end to end", () => {
 
   beforeEach(() => {
     commands = new Commands();
-    registry = new StorageRegistry([], {}, { async get() { return undefined; } });
+    registry = new StorageRegistry(
+      [],
+      {},
+      {
+        async get() {
+          return undefined;
+        },
+      },
+    );
     disk = new MemFilesApi();
     config = new ConfigStore(disk, "/config", 10);
     views = { panels: [], menus: [], notes: [] };
@@ -72,7 +87,9 @@ describe("D5 · end to end", () => {
     pending = [];
     registerStorageOpener(commands, registry, async () => {
       const next = pending.shift();
-      return next ? { api: new MemFilesApi({ initialFiles: next.files }), name: next.name } : undefined;
+      return next
+        ? { api: new MemFilesApi({ initialFiles: next.files }), name: next.name }
+        : undefined;
     });
 
     fm = new FileManager({ commands, registry, config, slots: ["left", "right"] });
@@ -109,7 +126,10 @@ describe("D5 · end to end", () => {
     await target.controller.settled();
 
     expect(target.table.rowCount).toBe(2);
-    expect(target.controller.model.entries.map((e) => e.name).sort()).toEqual(["a.txt", "keep.txt"]);
+    expect(target.controller.model.entries.map((e) => e.name).sort()).toEqual([
+      "a.txt",
+      "keep.txt",
+    ]);
   });
 
   it("needs no picker with two panels: the target is the other one", async () => {
@@ -130,7 +150,11 @@ describe("D5 · end to end", () => {
     const result = await fm.menuFor([{ storage: left, path: "/a.txt", kind: "file" }]);
     expect(views.menus).toHaveLength(1);
     expect(views.menus[0].items.map((i) => i.key)).toEqual([
-      "files:copy", "files:move", "files:delete", "files:mkdir", "files:rename",
+      "files:copy",
+      "files:move",
+      "files:delete",
+      "files:mkdir",
+      "files:rename",
     ]);
     expect(result.selectedKey).toBe("files:copy");
   });
@@ -189,9 +213,7 @@ describe("D5 · end to end", () => {
       ],
     };
 
-    const unavailable = await fm.restore(session, [
-      { uri: left, adapter: "adopted", options: {} },
-    ]);
+    const unavailable = await fm.restore(session, [{ uri: left, adapter: "adopted", options: {} }]);
 
     expect(unavailable).toEqual(["Photos"]);
     // Both panels exist — the unavailable one keeps its name rather than

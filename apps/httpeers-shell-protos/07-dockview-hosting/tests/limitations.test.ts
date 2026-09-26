@@ -105,9 +105,7 @@ describe("LIMITATION: happy-dom cannot see whether the styling works", () => {
     const element = document.createElement("div");
     element.classList.add(SHADCN_THEME_CLASS);
     document.body.appendChild(element);
-    const value = getComputedStyle(element).getPropertyValue(
-      "--dv-group-view-background-color",
-    );
+    const value = getComputedStyle(element).getPropertyValue("--dv-group-view-background-color");
     expect(value).toBe("");
   });
 

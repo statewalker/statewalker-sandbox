@@ -8,12 +8,12 @@
  * scope here.
  */
 import { describe, expect, it } from "vitest";
-import { RevocationCache, RevocationRegistry } from "../src/revocation.js";
 import type { ChangeEntry } from "../src/revocation.js";
+import { RevocationCache, RevocationRegistry } from "../src/revocation.js";
 
 describe("A-2 unit: registry", () => {
   it("revocation is a role change to the empty set", () => {
-    let now = 1000;
+    const now = 1000;
     const r = new RevocationRegistry({ maxTokenTtlMs: 10_000, now: () => now });
     r.revoke("peerA");
     expect(r.list()).toEqual([{ peerId: "peerA", changedAt: 1000, roles: [] }]);
@@ -89,7 +89,10 @@ describe("A-2 unit: registry.check — the hub checking itself, no cache", () =>
 });
 
 describe("A-2 unit: cache", () => {
-  const cache = (entries: ChangeEntry[], opts: { maxStalenessMs?: number; now?: () => number } = {}) => {
+  const cache = (
+    entries: ChangeEntry[],
+    opts: { maxStalenessMs?: number; now?: () => number } = {},
+  ) => {
     const c = new RevocationCache(opts);
     c.update(1, entries);
     return c;

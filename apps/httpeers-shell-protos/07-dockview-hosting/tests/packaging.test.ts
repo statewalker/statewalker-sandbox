@@ -14,8 +14,8 @@
 // limitations.test.ts.
 
 import { readFileSync } from "node:fs";
-import { beforeEach, describe, expect, it } from "vitest";
 import { DockviewComponent, themeLight } from "dockview-core";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createShellDock } from "../../lib/dock.js";
 import { SHADCN_THEME_CLASS } from "../../lib/theme-bridge.js";
 import {
@@ -56,7 +56,7 @@ describe("Dockview ships no stylesheet", () => {
     expect(stylesheet.length).toBeGreaterThan(140_000);
   });
 
-  it("does not carry it in the entry `import \"dockview-core\"` resolves to", () => {
+  it('does not carry it in the entry `import "dockview-core"` resolves to', () => {
     // This is the file the shell actually loads. It contains none of the
     // stylesheet, so an app importing the package gets zero styling and no
     // error — the failure mode note 31 §3.1 describes.

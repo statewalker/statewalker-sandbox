@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { createElement, useLayoutEffect } from "react";
-import { TodoListModel, type Todo } from "@todo/app/models";
+import { type Todo, TodoListModel } from "@todo/app/models";
 import { shallowEqual, useModel } from "@todo/ui";
+import { createElement, useLayoutEffect } from "react";
+import { afterEach, describe, expect, it } from "vitest";
 import { flush, render, waitFor } from "../support/react.js";
 
 /**
@@ -132,14 +132,19 @@ describe("useModel", () => {
     const selector = (m: TodoListModel) => m.visible();
 
     const values: Todo[][] = [];
-    await mount(createElement(Probe, { model: modelA, selector, isEqual: shallowEqual, values }), values);
+    await mount(
+      createElement(Probe, { model: modelA, selector, isEqual: shallowEqual, values }),
+      values,
+    );
     expect(values).toHaveLength(1);
     const cachedFromA = values[0];
 
     // Re-render the SAME component instance — same hook state, same
     // `cache` ref — but pointed at modelB. This is the dock-shell case: a
     // panel is re-pointed at a different model without unmounting.
-    view!.root.render(createElement(Probe, { model: modelB, selector, isEqual: shallowEqual, values }));
+    view!.root.render(
+      createElement(Probe, { model: modelB, selector, isEqual: shallowEqual, values }),
+    );
     await waitFor(() => values.length >= 2);
 
     // The value used for THIS render must be a fresh sample of modelB, not
@@ -198,11 +203,7 @@ describe("useModel", () => {
       window.removeEventListener("unhandledrejection", onRejection);
     }
 
-    const haystack = [
-      thrown,
-      ...windowErrors,
-      ...consoleErrors.flat(),
-    ]
+    const haystack = [thrown, ...windowErrors, ...consoleErrors.flat()]
       .map((v) => (v instanceof Error ? `${v.message}\n${v.stack ?? ""}` : String(v)))
       .join("\n");
 
@@ -225,7 +226,11 @@ describe("useModel", () => {
     model.replaceTodos([todo("1", "buy milk"), todo("2", "walk dog")]);
     const values: (string | undefined)[] = [];
     const titleOf = (id: string) =>
-      createElement(Probe, { model, selector: (m) => m.todos.find((t) => t.id === id)?.title, values });
+      createElement(Probe, {
+        model,
+        selector: (m) => m.todos.find((t) => t.id === id)?.title,
+        values,
+      });
 
     await mount(titleOf("1"), values);
     view!.root.render(titleOf("2"));

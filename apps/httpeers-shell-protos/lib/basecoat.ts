@@ -73,7 +73,7 @@ export const BASECOAT_CLASSES: Readonly<Record<string, ComponentClasses>> = {
   Button: {
     base: "btn",
     dataVariants: {
-      primary: undefined,          // omit the attribute for primary
+      primary: undefined, // omit the attribute for primary
       secondary: "secondary",
       danger: "destructive",
     },
@@ -94,9 +94,7 @@ export const BASECOAT_CLASSES: Readonly<Record<string, ComponentClasses>> = {
  * A non-empty result is the rejection signal for this rung.
  */
 export function unmappedComponents(catalog: Catalog): string[] {
-  return Object.keys(catalog.components).filter(
-    (name) => BASECOAT_CLASSES[name] === undefined,
-  );
+  return Object.keys(catalog.components).filter((name) => BASECOAT_CLASSES[name] === undefined);
 }
 
 /** Resolve the class list for a component, given its variant. */
@@ -115,10 +113,7 @@ export function partClass(component: string, part: string): string {
 }
 
 /** Basecoat `data-variant` value for a catalogue variant, if any. */
-export function dataVariantFor(
-  component: string,
-  variant?: string,
-): string | undefined {
+export function dataVariantFor(component: string, variant?: string): string | undefined {
   const dv = BASECOAT_CLASSES[component]?.dataVariants;
   if (!dv || variant === undefined) return undefined;
   return dv[variant];

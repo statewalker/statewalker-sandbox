@@ -4,13 +4,9 @@
 // (the two substrate defects — recorded as passing tests so they cannot rot
 // into a stale comment)
 
-import { describe, expect, it, vi } from "vitest";
-import type {
-  CommandDeclaration,
-  CommandListener,
-} from "@statewalker/shared-commands";
+import type { CommandDeclaration, CommandListener } from "@statewalker/shared-commands";
 import { CommandError } from "@statewalker/shared-commands";
-import { getCommands, getRegistry, newAppContext, newShellContext } from "../src/context.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   NotifyCommand,
   OpenDialogCommand,
@@ -18,6 +14,7 @@ import {
   ShowPaletteCommand,
   shellCommands,
 } from "../src/commands.js";
+import { getCommands, getRegistry, newAppContext, newShellContext } from "../src/context.js";
 
 /** Settle a promise or report that it is still pending after a macrotask. */
 async function settledOrPending<T>(
@@ -32,9 +29,7 @@ async function settledOrPending<T>(
   return { pending: false, value: raced as T };
 }
 
-type ListenerOf<D> = D extends CommandDeclaration<infer P, infer R>
-  ? CommandListener<P, R>
-  : never;
+type ListenerOf<D> = D extends CommandDeclaration<infer P, infer R> ? CommandListener<P, R> : never;
 
 describe("declaration and registration", () => {
   it("declares the four shell keys with the stated policies", () => {
@@ -62,9 +57,7 @@ describe("declaration and registration", () => {
 
   it("exports the four together as `shellCommands`", () => {
     expect(shellCommands).toHaveLength(4);
-    expect(getRegistry(newShellContext()).get("shell:notify")).toBe(
-      NotifyCommand,
-    );
+    expect(getRegistry(newShellContext()).get("shell:notify")).toBe(NotifyCommand);
   });
 
   it("registration executes no application code — the registry is a catalogue", () => {
@@ -73,9 +66,9 @@ describe("declaration and registration", () => {
     // any of them right now fails for want of a handler.
     expect(registry.list()).toHaveLength(4);
     const commands = getCommands(newShellContext());
-    return expect(
-      commands.call(NotifyCommand, { message: "x" }).promise,
-    ).rejects.toMatchObject({ kind: "no-handlers" });
+    return expect(commands.call(NotifyCommand, { message: "x" }).promise).rejects.toMatchObject({
+      kind: "no-handlers",
+    });
   });
 });
 
@@ -87,8 +80,7 @@ describe("dispatch", () => {
       expect(cmd.payload.message).toBe("saved");
       return { id: "n-1" };
     });
-    const result = await commands.call(NotifyCommand, { message: "saved" })
-      .promise;
+    const result = await commands.call(NotifyCommand, { message: "saved" }).promise;
     expect(result).toEqual({ id: "n-1" });
   });
 
@@ -146,10 +138,9 @@ describe("dispatch", () => {
     const a = newAppContext(shell, { id: "a", origin: "https://a.example/" });
     const b = newAppContext(shell, { id: "b", origin: "https://b.example/" });
     getCommands(b).listen(OpenViewCommand, async () => ({ opened: true }));
-    expect(
-      await getCommands(a).call(OpenViewCommand, { viewId: "b.outline" })
-        .promise,
-    ).toEqual({ opened: true });
+    expect(await getCommands(a).call(OpenViewCommand, { viewId: "b.outline" }).promise).toEqual({
+      opened: true,
+    });
   });
 });
 
@@ -172,8 +163,7 @@ describe("substrate defect 1 — a plain synchronous return does not claim", () 
   it("making the same listener async fixes it", async () => {
     const commands = getCommands(newShellContext());
     commands.listen(NotifyCommand, async () => ({ id: "n-1" }));
-    expect(await commands.call(NotifyCommand, { message: "hello" }).promise)
-      .toEqual({ id: "n-1" });
+    expect(await commands.call(NotifyCommand, { message: "hello" }).promise).toEqual({ id: "n-1" });
   });
 });
 
@@ -211,7 +201,8 @@ describe("`silent` policy with no handler stays pending by design", () => {
   it("settles once something claims it", async () => {
     const commands = getCommands(newShellContext());
     commands.listen(ShowPaletteCommand, async () => ({ invoked: null }));
-    expect(await commands.call(ShowPaletteCommand, { filter: "op" }).promise)
-      .toEqual({ invoked: null });
+    expect(await commands.call(ShowPaletteCommand, { filter: "op" }).promise).toEqual({
+      invoked: null,
+    });
   });
 });

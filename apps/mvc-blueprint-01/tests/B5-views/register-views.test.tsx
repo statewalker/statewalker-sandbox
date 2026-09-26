@@ -1,8 +1,15 @@
 import { CommandError, Commands } from "@statewalker/shared-commands";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BootstrapOptions } from "@todo/app";
-import { ConfirmModel, createTodoListModel, MenuModel, uiConfirm, uiShowList, uiShowMenu } from "@todo/app/models";
+import {
+  ConfirmModel,
+  createTodoListModel,
+  MenuModel,
+  uiConfirm,
+  uiShowList,
+  uiShowMenu,
+} from "@todo/app/models";
 import { registerViews } from "@todo/ui";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHost, waitFor } from "../support/react.js";
 
 /**
@@ -84,7 +91,9 @@ describe("registerViews", () => {
     const menu = commands.call(uiShowMenu, new MenuModel([{ key: "todos:remove" }]));
     // Observed before dispose, so the rejections below are handled.
     const outcomes = Promise.allSettled([list.promise, confirm.promise, menu.promise]);
-    await waitFor(() => mount.children.length === 3 && document.querySelector('[role="alertdialog"]') !== null);
+    await waitFor(
+      () => mount.children.length === 3 && document.querySelector('[role="alertdialog"]') !== null,
+    );
     expect(containers()).toEqual(["ui:show-list", "ui:show-dialog:confirm", "ui:show-menu"]);
 
     await dispose();
@@ -94,7 +103,9 @@ describe("registerViews", () => {
     const settled = await outcomes;
     for (const outcome of settled) {
       expect(outcome.status).toBe("rejected");
-      expect(String((outcome as PromiseRejectedResult).reason)).toMatch(/view layer disposed while the view was open/);
+      expect(String((outcome as PromiseRejectedResult).reason)).toMatch(
+        /view layer disposed while the view was open/,
+      );
     }
     // The command that had already settled keeps its answer.
     await expect(done.promise).resolves.toEqual({ closed: true });
@@ -139,9 +150,9 @@ describe("registerViews", () => {
       const cmd = commands.call(uiConfirm, new ConfirmModel("Clear 1 completed todo?"));
       await waitFor(() => document.querySelector('[role="alertdialog"]') !== null);
       await waitFor(() => document.activeElement !== opener); // the dialog took focus
-      const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(
-        (b) => b.textContent === "Confirm",
-      );
+      const confirm = [
+        ...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button'),
+      ].find((b) => b.textContent === "Confirm");
       confirm!.click();
       await expect(cmd.promise).resolves.toEqual({ confirmed: true });
       await waitFor(() => document.querySelector('[role="alertdialog"]') === null);
@@ -161,7 +172,10 @@ describe("registerViews", () => {
       cmd.resolve({ closed: true });
       await waitFor(() => mount.children.length === 0);
       await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(document.activeElement, "closing a view must not yank focus back to where it opened").toBe(second);
+      expect(
+        document.activeElement,
+        "closing a view must not yank focus back to where it opened",
+      ).toBe(second);
     });
   });
 });

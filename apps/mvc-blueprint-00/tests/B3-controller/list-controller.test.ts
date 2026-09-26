@@ -450,7 +450,10 @@ describe("B3 · list controller — row intents", () => {
       model.input.requestToggle("1");
       model.input.requestToggle("2");
       await settle();
-      expect(model.todos.map((t) => t.done), "neither toggle was lost").toEqual([true, true]);
+      expect(
+        model.todos.map((t) => t.done),
+        "neither toggle was lost",
+      ).toEqual([true, true]);
       expect(api.calls.filter((c) => c === "toggle")).toHaveLength(2);
       expect(model.input.toggles, "the queue is drained by replacement").toEqual([]);
       expect(model.lastOutcome).toBeUndefined();
@@ -528,7 +531,10 @@ describe("B3 · list controller — row intents", () => {
         if (c.busy) model.input.requestRefresh(); // a run is now in flight
         c.press(model);
         await settle();
-        expect(model.todos.map((t) => t.id), `${c.name}: the deleted row is gone`).toEqual(["2"]);
+        expect(
+          model.todos.map((t) => t.id),
+          `${c.name}: the deleted row is gone`,
+        ).toEqual(["2"]);
         expect(model.lastOutcome, `${c.name}: nothing failed`).toBeUndefined();
         expect(
           api.calls.filter((call) => call === "toggle" || call === "remove"),
@@ -540,14 +546,21 @@ describe("B3 · list controller — row intents", () => {
 
     it("a failing todos:remove is reported via lastOutcome — no unhandled rejection, and the controller lives on", async () => {
       await collectingUnhandled(async (unhandled) => {
-        const { app, model } = boot([row("1"), row("2")], true, new RefusingRemoveApi([row("1"), row("2")]));
+        const { app, model } = boot(
+          [row("1"), row("2")],
+          true,
+          new RefusingRemoveApi([row("1"), row("2")]),
+        );
         await settle();
         model.input.requestRemove("2");
         await settle();
         expect(model.lastOutcome, "the refusal must reach the user").toMatch(
           /^remove "2" failed: listener-threw: todos:remove/,
         );
-        expect(model.todos.map((t) => t.id), "nothing was removed").toEqual(["1", "2"]);
+        expect(
+          model.todos.map((t) => t.id),
+          "nothing was removed",
+        ).toEqual(["1", "2"]);
         expect(model.input.removals, "taken off the queue, not wedged in it").toEqual([]);
         expect(unhandled, "a `void`ed reconcile must not leak its rejection").toEqual([]);
 
@@ -592,7 +605,10 @@ describe("B3 · list controller — row intents", () => {
       expect(dialogs.notifies, "the count comes from the command's result").toEqual([
         "Cleared 2 completed todos",
       ]);
-      expect(model.todos.map((t) => t.id), "and the list was reloaded").toEqual(["2"]);
+      expect(
+        model.todos.map((t) => t.id),
+        "and the list was reloaded",
+      ).toEqual(["2"]);
       expect(model.lastOutcome).toBeUndefined();
       await app.dispose();
     });
@@ -692,7 +708,9 @@ describe("B3 · list controller — row intents", () => {
       model.input.requestToggle("1");
       await settle();
       expect(model.todos[0]?.done).toBe(true);
-      expect(dialogs.confirms, "the skipped press is not replayed by an unrelated edge").toEqual([]);
+      expect(dialogs.confirms, "the skipped press is not replayed by an unrelated edge").toEqual(
+        [],
+      );
       model.input.requestClearCompleted();
       await settle();
       expect(dialogs.confirms, "a real press now has something to ask").toEqual([
@@ -720,7 +738,9 @@ describe("B3 · list controller — row intents", () => {
         model.input.requestToggle("2");
         await settle();
         expect(model.todos[1]?.done, "the toggle itself was handled").toBe(true);
-        expect(dialogs.confirms, "an answered question is never re-asked unprompted").toHaveLength(1);
+        expect(dialogs.confirms, "an answered question is never re-asked unprompted").toHaveLength(
+          1,
+        );
 
         model.input.requestClearCompleted(); // the explicit retry
         await settle();
@@ -753,7 +773,10 @@ describe("B3 · list controller — row intents", () => {
         await settle();
         model.input.requestClearCompleted();
         await settle();
-        expect(model.todos.map((t) => t.id), "the clear landed and the list reloaded").toEqual(["2"]);
+        expect(
+          model.todos.map((t) => t.id),
+          "the clear landed and the list reloaded",
+        ).toEqual(["2"]);
         expect(model.lastOutcome).toMatch(/^notify failed: .*no-handlers/);
         expect(unhandled).toEqual([]);
         await app.dispose();

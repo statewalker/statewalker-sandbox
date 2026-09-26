@@ -158,7 +158,9 @@ describe("B1 · model kit", () => {
       // The parent also rejected "a replacement that forgot to notify". Under
       // signals that mistake cannot be made: writing a new value IS the notify.
       const m = standIn();
-      await expect(expectReplacedNotMutated(m.items, () => m.mutateInPlace("x"))).rejects.toThrow(/replaced/);
+      await expect(expectReplacedNotMutated(m.items, () => m.mutateInPlace("x"))).rejects.toThrow(
+        /replaced/,
+      );
     });
   });
 });

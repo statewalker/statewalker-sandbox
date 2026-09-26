@@ -23,7 +23,10 @@ export default defineConfig({
      * every windowing assertion bounds the row count from BOTH sides.
      */
     onUnhandledError: (error) => !/attempted to render too many rows/.test(String(error?.message)),
-    include: ["D2b-browser-prototypes/tests/**/*.test.ts", "D2b-browser-prototypes/tests/**/*.test.tsx"],
+    include: [
+      "D2b-browser-prototypes/tests/**/*.test.ts",
+      "D2b-browser-prototypes/tests/**/*.test.tsx",
+    ],
     browser: {
       enabled: true,
       headless: true,

@@ -65,13 +65,13 @@ import { startBrowserHub } from "../../browser/hub-runtime.js";
 import { clearIdentity, loadOrCreateIdentity, peerIdOf } from "../../browser/identity.js";
 import type { JoinBlob } from "../../browser/join-blob.js";
 import { encodeJoinBlob } from "../../browser/join-blob.js";
+import { qrSvg } from "../../browser/qr-encode.js";
 import type { BrowserSnapshotStore } from "../../browser/snapshot-store.js";
 import { createIdbSnapshotStore } from "../../browser/snapshot-store.js";
 // `../../ports.js`, NOT `../../static-server/main.js`: that module's
 // run-as-a-process guard evaluates `process.argv` at top level, which is a
 // ReferenceError in a tab before any page code runs. See `ports.ts`.
 import { HUB_PAGE_PORT } from "../../ports.js";
-import { qrSvg } from "../../browser/qr-encode.js";
 
 /**
  * This peer's ServiceWorker adapter key, and therefore the first segment of

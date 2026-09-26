@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { type ProxyRoute, matchRoute, upstreamUrl } from "../src/services/proxy-routes.js";
+import { matchRoute, type ProxyRoute, upstreamUrl } from "../src/services/proxy-routes.js";
 
-const OPENAI: ProxyRoute = { prefix: "/openai", upstream: "https://api.openai.com/v1", headers: {} };
-const ADMIN: ProxyRoute = { prefix: "/openai/admin", upstream: "https://admin.example/v2", headers: {} };
+const OPENAI: ProxyRoute = {
+  prefix: "/openai",
+  upstream: "https://api.openai.com/v1",
+  headers: {},
+};
+const ADMIN: ProxyRoute = {
+  prefix: "/openai/admin",
+  upstream: "https://admin.example/v2",
+  headers: {},
+};
 
 describe("matchRoute", () => {
   it("matches a prefix and returns the remainder", () => {

@@ -8,21 +8,21 @@
 import type { Criterion } from "./types.js";
 
 export const BLOCKS: Record<string, string> = {
-  "T": "Transport & wire",
-  "R": "Router",
-  "A": "Access & trust",
-  "E": "Edges",
-  "M": "Mesh services",
-  "X": "Peer & intermediary",
-  "C": "Cross-cutting",
-  "CORE": "httpeers-core",
-  "ACC": "httpeers-access",
-  "P2P": "httpeers-libp2p",
-  "QR": "httpeers-qr",
-  "MEM": "httpeers-member",
-  "HUB": "httpeers-hub",
-  "EXP": "httpeers-expose",
-  "GHOST": "httpeers-ghost"
+  T: "Transport & wire",
+  R: "Router",
+  A: "Access & trust",
+  E: "Edges",
+  M: "Mesh services",
+  X: "Peer & intermediary",
+  C: "Cross-cutting",
+  CORE: "httpeers-core",
+  ACC: "httpeers-access",
+  P2P: "httpeers-libp2p",
+  QR: "httpeers-qr",
+  MEM: "httpeers-member",
+  HUB: "httpeers-hub",
+  EXP: "httpeers-expose",
+  GHOST: "httpeers-ghost",
 };
 
 export const CRITERIA: readonly Criterion[] = [
@@ -37,7 +37,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "T-02",
     block: "T",
-    claim: "A forged identity claim in the payload or headers is received and ignored; the proven identity is used.",
+    claim:
+      "A forged identity claim in the payload or headers is received and ignored; the proven identity is used.",
     falsifiedBy: "any path where a claimed id displaces a proven one",
     evidence: "protos 01, 03",
     designed: false,
@@ -61,7 +62,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "T-05",
     block: "T",
-    claim: "A streamed request body arrives complete and in order, in the number of chunks it was sent.",
+    claim:
+      "A streamed request body arrives complete and in order, in the number of chunks it was sent.",
     falsifiedBy: "an empty or reordered body",
     evidence: "proto 02, 3 chunks",
     designed: false,
@@ -71,21 +73,24 @@ export const CRITERIA: readonly Criterion[] = [
     block: "T",
     claim: "A slow consumer throttles the producer rather than the stream buffering without bound.",
     falsifiedBy: "write-buffer growth under a stalled reader",
-    evidence: "proto 04 (87 % measured); regression test samples `writeBufferLength` — 0 B with the fix, ~36 KB without",
+    evidence:
+      "proto 04 (87 % measured); regression test samples `writeBufferLength` — 0 B with the fix, ~36 KB without",
     designed: false,
   },
   {
     id: "T-07",
     block: "T",
     claim: "Backpressure survives repeated episodes.",
-    falsifiedBy: "a deadlock on the second episode — the `onDrain()` memoisation defect in `@libp2p/utils@7.3.2`, where the promise resolves exactly once and is never cleared",
+    falsifiedBy:
+      "a deadlock on the second episode — the `onDrain()` memoisation defect in `@libp2p/utils@7.3.2`, where the promise resolves exactly once and is never cleared",
     evidence: null,
     designed: false,
   },
   {
     id: "T-08",
     block: "T",
-    claim: "One inbound stream failing does not terminate the process or affect other peers' streams.",
+    claim:
+      "One inbound stream failing does not terminate the process or affect other peers' streams.",
     falsifiedBy: "an unhandled rejection from a broken stream",
     evidence: null,
     designed: false,
@@ -93,7 +98,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "T-09",
     block: "T",
-    claim: "An inbound message exceeding the configured cap is refused during the read, not after buffering it.",
+    claim:
+      "An inbound message exceeding the configured cap is refused during the read, not after buffering it.",
     falsifiedBy: "memory growth proportional to a hostile message",
     evidence: null,
     designed: false,
@@ -101,8 +107,10 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "T-10",
     block: "T",
-    claim: "Message equivalence: the serialized request a peer receives is equivalent under RFC 9110 to the one sent, and likewise for the response.",
-    falsifiedBy: "any header dropped, added or reordered within a field-name group by the transport itself",
+    claim:
+      "Message equivalence: the serialized request a peer receives is equivalent under RFC 9110 to the one sent, and likewise for the response.",
+    falsifiedBy:
+      "any header dropped, added or reordered within a field-name group by the transport itself",
     evidence: null,
     designed: false,
   },
@@ -118,7 +126,8 @@ export const CRITERIA: readonly Criterion[] = [
     id: "R-01",
     block: "R",
     claim: "Longest prefix wins, independent of registration order.",
-    falsifiedBy: "a result that changes when the same definitions are supplied in a different order",
+    falsifiedBy:
+      "a result that changes when the same definitions are supplied in a different order",
     evidence: "proto 05",
     designed: false,
   },
@@ -173,7 +182,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "R-08",
     block: "R",
-    claim: "A forward request from a caller lacking the forwarding capability is refused **before any dial**.",
+    claim:
+      "A forward request from a caller lacking the forwarding capability is refused **before any dial**.",
     falsifiedBy: "a dial counter greater than zero on a refused forward",
     evidence: "proto 06",
     designed: false,
@@ -181,7 +191,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "R-09",
     block: "R",
-    claim: "With `forwarding` absent, every forward request refuses with the defined error class, never a hang and never a 404.",
+    claim:
+      "With `forwarding` absent, every forward request refuses with the defined error class, never a hang and never a 404.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -189,7 +200,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "R-10",
     block: "R",
-    claim: "A request whose hop count would exceed `maxHops` is refused with the defined error class before dialing.",
+    claim:
+      "A request whose hop count would exceed `maxHops` is refused with the defined error class before dialing.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -197,7 +209,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "R-11",
     block: "R",
-    claim: "A locally-originated request (proven peer `ANONYMOUS`) may always be routed outward; that is the ordinary client path and is not forwarding.",
+    claim:
+      "A locally-originated request (proven peer `ANONYMOUS`) may always be routed outward; that is the ordinary client path and is not forwarding.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -237,7 +250,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "A-02",
     block: "A",
-    claim: "No privilege creep: derived capabilities are exactly what the token's roles support through the node's rules.",
+    claim:
+      "No privilege creep: derived capabilities are exactly what the token's roles support through the node's rules.",
     falsifiedBy: null,
     evidence: "proto 03, 6-request matrix over 2 callers × 3 resources",
     designed: false,
@@ -253,7 +267,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "A-04",
     block: "A",
-    claim: "Facts the node asserts — `connection_peer`, `self_peer`, `time`, `operation`, `resource` — are never taken from the token.",
+    claim:
+      "Facts the node asserts — `connection_peer`, `self_peer`, `time`, `operation`, `resource` — are never taken from the token.",
     falsifiedBy: "a token asserting its own `connection_peer` and being believed",
     evidence: null,
     designed: false,
@@ -269,7 +284,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "A-06",
     block: "A",
-    claim: "A denial names the checks that failed, and an allow names the policy that matched (P8).",
+    claim:
+      "A denial names the checks that failed, and an allow names the policy that matched (P8).",
     falsifiedBy: "a bare boolean",
     evidence: null,
     designed: false,
@@ -301,7 +317,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "A-10",
     block: "A",
-    claim: "`ruleSet()` throws when a policy names a capability no rule can derive, listing every such capability.",
+    claim:
+      "`ruleSet()` throws when a policy names a capability no rule can derive, listing every such capability.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -325,7 +342,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "A-13",
     block: "A",
-    claim: "While delegation enforcement is deferred, no authority block carries a delegation scope, so every attenuated token fails its binding check.",
+    claim:
+      "While delegation enforcement is deferred, no authority block carries a delegation scope, so every attenuated token fails its binding check.",
     falsifiedBy: "a delegated token being accepted",
     evidence: "proto 10, T10-07",
     designed: false,
@@ -333,7 +351,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "A-13b",
     block: "A",
-    claim: "A **plain** appended block naming a delegate never yields authority, even when the authority block permits delegation — only a third-party block signed by the named key does.",
+    claim:
+      "A **plain** appended block naming a delegate never yields authority, even when the authority block permits delegation — only a third-party block signed by the named key does.",
     falsifiedBy: "T10-08 passing while T10-09 also passes; both outcomes are required",
     evidence: "proto 10, T10-08 / T10-09",
     designed: false,
@@ -365,7 +384,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "A-17",
     block: "A",
-    claim: "A rotation publishing new and old keys together accepts tokens signed by either during the overlap.",
+    claim:
+      "A rotation publishing new and old keys together accepts tokens signed by either during the overlap.",
     falsifiedBy: null,
     evidence: null,
     designed: true,
@@ -373,7 +393,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "A-18",
     block: "A",
-    claim: "Revocation closes the window within the cache interval, and issue time permits re-admission.",
+    claim:
+      "Revocation closes the window within the cache interval, and issue time permits re-admission.",
     falsifiedBy: null,
     evidence: "proto 08, latency measured and printed",
     designed: false,
@@ -389,7 +410,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "A-20",
     block: "A",
-    claim: "A check naming a predicate the verifier never supplies causes rejection, not indifference.",
+    claim:
+      "A check naming a predicate the verifier never supplies causes rejection, not indifference.",
     falsifiedBy: "an unrecognised constraint being skipped",
     evidence: null,
     designed: true,
@@ -397,7 +419,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "A-21",
     block: "A",
-    claim: "Revoking a binding withdraws exactly one device and leaves that subject's other tokens valid; revoking a subject withdraws all.",
+    claim:
+      "Revoking a binding withdraws exactly one device and leaves that subject's other tokens valid; revoking a subject withdraws all.",
     falsifiedBy: null,
     evidence: null,
     designed: true,
@@ -413,7 +436,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "A-23",
     block: "A",
-    claim: "An attenuation block can only narrow: a block attempting to grant anything its parent lacked yields a token that is rejected, not one that is honoured in part.",
+    claim:
+      "An attenuation block can only narrow: a block attempting to grant anything its parent lacked yields a token that is rejected, not one that is honoured in part.",
     falsifiedBy: null,
     evidence: null,
     designed: true,
@@ -421,7 +445,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "A-24",
     block: "A",
-    claim: "A token whose audience excludes this peer is refused **by this peer**, whatever route it arrived by (ADR-0020).",
+    claim:
+      "A token whose audience excludes this peer is refused **by this peer**, whatever route it arrived by (ADR-0020).",
     falsifiedBy: null,
     evidence: null,
     designed: true,
@@ -445,15 +470,18 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "E-02",
     block: "E",
-    claim: "The same handler, policy and router produce identical observable results across all three edges.",
-    falsifiedBy: "any behavioural difference attributable to the edge. **This is the isomorphism criterion.**",
+    claim:
+      "The same handler, policy and router produce identical observable results across all three edges.",
+    falsifiedBy:
+      "any behavioural difference attributable to the edge. **This is the isomorphism criterion.**",
     evidence: null,
     designed: false,
   },
   {
     id: "E-03",
     block: "E",
-    claim: "An unmodified third-party client using only `fetch()` reaches a remote peer through the ServiceWorker edge with no mesh-specific code.",
+    claim:
+      "An unmodified third-party client using only `fetch()` reaches a remote peer through the ServiceWorker edge with no mesh-specific code.",
     falsifiedBy: "any required call-site change",
     evidence: null,
     designed: false,
@@ -461,7 +489,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "E-04",
     block: "E",
-    claim: "A transport error surfaces as the status §10.2 specifies, carrying the marker that distinguishes a synthesized response from one the peer sent.",
+    claim:
+      "A transport error surfaces as the status §10.2 specifies, carrying the marker that distinguishes a synthesized response from one the peer sent.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -469,7 +498,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "E-05",
     block: "E",
-    claim: "Aborting a request through an edge propagates: the remote handler's `Request.signal` fires (P1).",
+    claim:
+      "Aborting a request through an edge propagates: the remote handler's `Request.signal` fires (P1).",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -477,7 +507,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "E-06",
     block: "E",
-    claim: "Streaming works in both directions through the ServiceWorker edge, preserving chunk boundaries and order.",
+    claim:
+      "Streaming works in both directions through the ServiceWorker edge, preserving chunk boundaries and order.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -485,7 +516,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "E-07",
     block: "E",
-    claim: "Interception in relay mode is per **client**, not per URL. Content on the relay origin gets transparent `fetch()`; an embedding app page must call the edge explicitly. *This is a stated limitation, not a defect* — relay mode is a place to host a peer, not a transport for the embedding page.",
+    claim:
+      "Interception in relay mode is per **client**, not per URL. Content on the relay origin gets transparent `fetch()`; an embedding app page must call the edge explicitly. *This is a stated limitation, not a defect* — relay mode is a place to host a peer, not a transport for the embedding page.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -493,7 +525,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "X-01",
     block: "X",
-    claim: "`createPeer` with `policy` alone produces a working peer; no `tuning` field is required to be correct.",
+    claim:
+      "`createPeer` with `policy` alone produces a working peer; no `tuning` field is required to be correct.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -501,7 +534,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "X-02",
     block: "X",
-    claim: "Capability derivation and the policies that consume it are one validated value; a policy naming a capability no rule derives is rejected when the value is built, never at request time.",
+    claim:
+      "Capability derivation and the policies that consume it are one validated value; a policy naming a capability no rule derives is rejected when the value is built, never at request time.",
     falsifiedBy: "a peer starting with a policy that can never fire",
     evidence: null,
     designed: false,
@@ -517,7 +551,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "X-04",
     block: "X",
-    claim: "A `reconfigure` whose value fails validation throws and leaves the previous configuration in force.",
+    claim:
+      "A `reconfigure` whose value fails validation throws and leaves the previous configuration in force.",
     falsifiedBy: "any observable effect of a rejected configuration",
     evidence: null,
     designed: false,
@@ -525,7 +560,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "X-05",
     block: "X",
-    claim: "`asIntermediary` removes every hop-by-hop header, including fields named by `Connection`.",
+    claim:
+      "`asIntermediary` removes every hop-by-hop header, including fields named by `Connection`.",
     falsifiedBy: "any of them reaching an upstream",
     evidence: null,
     designed: false,
@@ -549,7 +585,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "X-09",
     block: "X",
-    claim: "`asIntermediary` injects exactly the credential registered for the destination, and none for an unregistered one.",
+    claim:
+      "`asIntermediary` injects exactly the credential registered for the destination, and none for an unregistered one.",
     falsifiedBy: "a credential reaching a host it was not registered for",
     evidence: null,
     designed: true,
@@ -557,7 +594,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "X-10",
     block: "X",
-    claim: "No upstream credential is ever observable from the mesh side: not in a response, not in an error, not in a log line a caller can trigger.",
+    claim:
+      "No upstream credential is ever observable from the mesh side: not in a response, not in an error, not in a log line a caller can trigger.",
     falsifiedBy: null,
     evidence: null,
     designed: true,
@@ -565,7 +603,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "X-08",
     block: "X",
-    claim: "A peer that re-issues without applying the transform is detectable by the conformance suite.",
+    claim:
+      "A peer that re-issues without applying the transform is detectable by the conformance suite.",
     falsifiedBy: "an unhygienic proxy passing",
     evidence: null,
     designed: false,
@@ -581,7 +620,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "M-02",
     block: "M",
-    claim: "An invitation id is single-use: the second redemption fails, under concurrent redemption too.",
+    claim:
+      "An invitation id is single-use: the second redemption fails, under concurrent redemption too.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -597,7 +637,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "M-04",
     block: "M",
-    claim: "Presence entries expire on the TTL sweep, and expiry is produced by the timer, not by an event.",
+    claim:
+      "Presence entries expire on the TTL sweep, and expiry is produced by the timer, not by an event.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -613,7 +654,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "M-06",
     block: "M",
-    claim: "Membership survives a restart when backed by a durable store, with no change to any signature in §9.3.",
+    claim:
+      "Membership survives a restart when backed by a durable store, with no change to any signature in §9.3.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -621,7 +663,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "M-07",
     block: "M",
-    claim: "`/.well-known/capabilities` output never influences any access decision, on this node or another.",
+    claim:
+      "`/.well-known/capabilities` output never influences any access decision, on this node or another.",
     falsifiedBy: "a decision that changes when a remote vocabulary changes",
     evidence: null,
     designed: false,
@@ -637,7 +680,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "M-09",
     block: "M",
-    claim: "Killing the hub disables discovery and search but does not affect already-established peer-to-peer data paths.",
+    claim:
+      "Killing the hub disables discovery and search but does not affect already-established peer-to-peer data paths.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -645,7 +689,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "C-01",
     block: "C",
-    claim: "Every failure surfaces as one of the classes in §10.1; none escapes as a raw transport error.",
+    claim:
+      "Every failure surfaces as one of the classes in §10.1; none escapes as a raw transport error.",
     falsifiedBy: "any transport-shaped exception reaching a caller",
     evidence: null,
     designed: false,
@@ -661,7 +706,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "C-03",
     block: "C",
-    claim: "The §10.2 mapping is total: every class maps, and no edge produces a status outside it.",
+    claim:
+      "The §10.2 mapping is total: every class maps, and no edge produces a status outside it.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -669,7 +715,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "C-04",
     block: "C",
-    claim: "A synthesized response is distinguishable from one the peer sent, and a peer-sent 503 is never marked synthesized.",
+    claim:
+      "A synthesized response is distinguishable from one the peer sent, and a peer-sent 503 is never marked synthesized.",
     falsifiedBy: null,
     evidence: null,
     designed: false,
@@ -677,7 +724,8 @@ export const CRITERIA: readonly Criterion[] = [
   {
     id: "C-05",
     block: "C",
-    claim: "A request exceeding `requestTimeoutMs` rejects with `RequestTimeoutError`, whether the time was spent dialing, negotiating, awaiting or queued.",
+    claim:
+      "A request exceeding `requestTimeoutMs` rejects with `RequestTimeoutError`, whether the time was spent dialing, negotiating, awaiting or queued.",
     falsifiedBy: null,
     evidence: null,
     designed: false,

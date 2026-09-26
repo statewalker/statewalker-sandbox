@@ -105,9 +105,10 @@ export function withAccessTree(nodes: AccessNode[]) {
       if (granted !== undefined) {
         allowed = true;
         decidedAt = nodePath || "/";
-        reason = granted.roles.length === 0
-          ? `any member of mesh ${granted.mesh}`
-          : `role ${granted.roles.filter((r) => caller.roles.includes(r)).join("|")} in mesh ${granted.mesh}`;
+        reason =
+          granted.roles.length === 0
+            ? `any member of mesh ${granted.mesh}`
+            : `role ${granted.roles.filter((r) => caller.roles.includes(r)).join("|")} in mesh ${granted.mesh}`;
         trace.push(`${nodePath || "/"} — allow`);
         continue;
       }

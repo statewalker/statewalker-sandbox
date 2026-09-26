@@ -1,8 +1,7 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { beforeEach, describe, expect, it } from "vitest";
+import { readdirSync, readFileSync } from "node:fs";
+import { type ConflictResolution, JobModel, type JobSpec, runCopyJob } from "@fm/core";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { runCopyJob, type ConflictResolution, type JobSpec } from "@fm/core";
-import { JobModel } from "@fm/core";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /* Ported: the packages live under `lib/` in this app, not `packages/`. */
 const FM_SRC = new URL("../../lib/", import.meta.url).pathname;
@@ -42,12 +41,14 @@ describe("P5 · conflicts", () => {
 
   it("asks only about entries that actually conflict", async () => {
     const asked: string[] = [];
-    await runCopyJob(spec({
-      onConflict: async (entry) => {
-        asked.push(entry.path);
-        return { resolution: "overwrite", applyToAll: false };
-      },
-    }));
+    await runCopyJob(
+      spec({
+        onConflict: async (entry) => {
+          asked.push(entry.path);
+          return { resolution: "overwrite", applyToAll: false };
+        },
+      }),
+    );
     expect(asked.sort()).toEqual(["/src/a.txt", "/src/b.txt"]); // c.txt does not exist yet
   });
 
@@ -64,10 +65,12 @@ describe("P5 · conflicts", () => {
   });
 
   it("renames rather than overwriting when asked", async () => {
-    await runCopyJob(spec({
-      batchSize: 1,
-      onConflict: async () => ({ resolution: "rename", applyToAll: true }),
-    }));
+    await runCopyJob(
+      spec({
+        batchSize: 1,
+        onConflict: async () => ({ resolution: "rename", applyToAll: true }),
+      }),
+    );
     expect(await read(target, "/dst/a.txt")).toBe("old-a");
     expect(await read(target, "/dst/a (2).txt")).toBe("new-a");
   });
@@ -83,13 +86,15 @@ describe("P5 · conflicts", () => {
     target = new MemFilesApi({ initialFiles: existing });
 
     let asked = 0;
-    await runCopyJob(spec({
-      batchSize: 4,
-      onConflict: async () => {
-        asked++;
-        return { resolution: "skip", applyToAll: true };
-      },
-    }));
+    await runCopyJob(
+      spec({
+        batchSize: 4,
+        onConflict: async () => {
+          asked++;
+          return { resolution: "skip", applyToAll: true };
+        },
+      }),
+    );
     expect(asked).toBe(1);
     expect(await read(target, "/dst/f0.txt")).toBe("old");
   });
@@ -102,17 +107,19 @@ describe("P5 · conflicts", () => {
 
   it("interrupts a pending decision when the job is cancelled", async () => {
     let aborted = false;
-    const run = runCopyJob(spec({
-      batchSize: 1,
-      onConflict: (_entry, signal) =>
-        new Promise((resolve, reject) => {
-          // A dialog that is never answered by the user.
-          signal.addEventListener("abort", () => {
-            aborted = true;
-            reject(new Error("decision aborted"));
-          });
-        }),
-    }));
+    const run = runCopyJob(
+      spec({
+        batchSize: 1,
+        onConflict: (_entry, signal) =>
+          new Promise((resolve, reject) => {
+            // A dialog that is never answered by the user.
+            signal.addEventListener("abort", () => {
+              aborted = true;
+              reject(new Error("decision aborted"));
+            });
+          }),
+      }),
+    );
     await new Promise((r) => setTimeout(r, 0));
     job.cancel();
     await run;

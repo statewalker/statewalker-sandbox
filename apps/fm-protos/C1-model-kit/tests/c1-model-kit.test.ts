@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { BaseClass } from "@statewalker/shared-baseclass";
 import { expectEdgeCounter, expectNoSelfWake, expectReplacedNotMutated, probe } from "@fm/app";
+import { BaseClass } from "@statewalker/shared-baseclass";
+import { describe, expect, it } from "vitest";
 
 /**
  * C1 — the kit is red-tested before it is trusted: each helper must FAIL a
@@ -10,33 +10,51 @@ import { expectEdgeCounter, expectNoSelfWake, expectReplacedNotMutated, probe } 
 
 class ListModel extends BaseClass {
   items: string[] = [];
-  pushInPlace(v: string) { this.items.push(v); this.notify(); }
-  replace(v: string) { this.items = [...this.items, v]; this.notify(); }
+  pushInPlace(v: string) {
+    this.items.push(v);
+    this.notify();
+  }
+  replace(v: string) {
+    this.items = [...this.items, v];
+    this.notify();
+  }
 }
 
 describe("expectReplacedNotMutated", () => {
   it("fails a model that mutates its array in place", async () => {
     const model = new ListModel();
     await expect(
-      expectReplacedNotMutated(model, () => model.items, () => model.pushInPlace("a")),
+      expectReplacedNotMutated(
+        model,
+        () => model.items,
+        () => model.pushInPlace("a"),
+      ),
     ).rejects.toThrow(/mutated in place/);
   });
 
   it("passes a model that replaces the value", async () => {
     const model = new ListModel();
     await expect(
-      expectReplacedNotMutated(model, () => model.items, () => model.replace("a")),
+      expectReplacedNotMutated(
+        model,
+        () => model.items,
+        () => model.replace("a"),
+      ),
     ).resolves.toBeUndefined();
   });
 });
 
 class Outer extends BaseClass {
-  readonly input = new (class extends BaseClass { text = ""; })();
+  readonly input = new (class extends BaseClass {
+    text = "";
+  })();
   result = "";
   reactions = 0;
   constructor(readonly wrong: boolean) {
     super();
-    const react = () => { this.reactions++; };
+    const react = () => {
+      this.reactions++;
+    };
     if (wrong) this.onUpdate(react);
     else this.input.onUpdate(react);
   }
@@ -46,20 +64,38 @@ describe("expectNoSelfWake", () => {
   it("fails a controller subscribed to the outer model", async () => {
     const model = new Outer(true);
     await expect(
-      expectNoSelfWake(model.input, model, () => model.reactions, () => { model.result = "x"; }),
+      expectNoSelfWake(
+        model.input,
+        model,
+        () => model.reactions,
+        () => {
+          model.result = "x";
+        },
+      ),
     ).rejects.toThrow(/reacted to its own write/);
   });
 
   it("passes a controller subscribed to input", async () => {
     const model = new Outer(false);
     await expect(
-      expectNoSelfWake(model.input, model, () => model.reactions, () => { model.result = "x"; }),
+      expectNoSelfWake(
+        model.input,
+        model,
+        () => model.reactions,
+        () => {
+          model.result = "x";
+        },
+      ),
     ).resolves.toBeUndefined();
   });
 });
 
-class BoolInput extends BaseClass { submitted = false as unknown as number }
-class CounterInput extends BaseClass { submitCount = 0 }
+class BoolInput extends BaseClass {
+  submitted = false as unknown as number;
+}
+class CounterInput extends BaseClass {
+  submitCount = 0;
+}
 
 describe("expectEdgeCounter", () => {
   it("fails a boolean flag, which cannot express two clicks in one tick", () => {
@@ -72,8 +108,12 @@ describe("expectEdgeCounter", () => {
   it("fails a counter whose observer collapses both edges", () => {
     const input = new CounterInput();
     let seen = 0;
-    input.onUpdate(() => { seen += 1; }); // one pulse, both edges lost
-    expect(() => expectEdgeCounter(input as never, "submitCount", () => seen)).toThrow(/lost an edge/);
+    input.onUpdate(() => {
+      seen += 1;
+    }); // one pulse, both edges lost
+    expect(() => expectEdgeCounter(input as never, "submitCount", () => seen)).toThrow(
+      /lost an edge/,
+    );
   });
 
   it("passes a counter compared against a handled watermark", () => {

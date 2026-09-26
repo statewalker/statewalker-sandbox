@@ -1,5 +1,5 @@
-import { newRegistry } from "@statewalker/shared-registry";
 import type { Command, CommandDeclaration, Commands } from "@statewalker/shared-commands";
+import { newRegistry } from "@statewalker/shared-registry";
 
 /** A rendered view. The renderer gets the model and a settle callback — nothing else. */
 export interface ViewHandle<M, R> {
@@ -21,7 +21,10 @@ export type Renderer<M, R> = (view: ViewHandle<M, R>) => (() => void) | void;
  */
 export class ViewAdapter {
   private readonly _registry = newRegistry();
-  private readonly _open = new Map<Command<unknown, unknown>, { key: string; model: unknown; cleanup?: () => void }>();
+  private readonly _open = new Map<
+    Command<unknown, unknown>,
+    { key: string; model: unknown; cleanup?: () => void }
+  >();
   private _disposed = false;
 
   constructor(private readonly _commands: Commands) {}

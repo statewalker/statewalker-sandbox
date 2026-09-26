@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
 import { TableModel } from "@fm/app";
-import { toDataFrame, orderByFor } from "@fm/ui";
+import { orderByFor, toDataFrame } from "@fm/ui";
+import { describe, expect, it } from "vitest";
 
 /** D2a — the grid adapter is a projection over the model, holding no state. */
 

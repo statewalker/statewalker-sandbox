@@ -1,6 +1,6 @@
+import { JobModel, runCopyJob } from "@fm/core";
 import type { Commands } from "@statewalker/shared-commands";
 import type { FilesApi } from "@statewalker/webrun-files";
-import { JobModel, runCopyJob } from "@fm/core";
 import { filesCopy, uiShowJob } from "./declarations.js";
 
 let seq = 0;
@@ -28,7 +28,10 @@ export class JobsController {
           const job = new JobModel(`job-${++seq}`);
           void runCopyJob({
             operation: "copy",
-            source: { uri: cmd.payload.files[0].storage, api: this._resolve(cmd.payload.files[0].storage) },
+            source: {
+              uri: cmd.payload.files[0].storage,
+              api: this._resolve(cmd.payload.files[0].storage),
+            },
             target: {
               uri: cmd.payload.target.storage,
               api: this._resolve(cmd.payload.target.storage),

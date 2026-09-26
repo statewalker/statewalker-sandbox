@@ -28,12 +28,22 @@ import { identify } from "@libp2p/identify";
 import type { Ed25519PrivateKey, Libp2p } from "@libp2p/interface";
 import { tcp } from "@libp2p/tcp";
 import { multiaddr } from "@multiformats/multiaddr";
+
 // Re-exported so `peer.ts` (and any other consumer) can type an already-
 // constructed node, or a retained signing key, without itself importing
 // `@libp2p/interface` — this file stays the only one that does.
 export type { Ed25519PrivateKey, Libp2p } from "@libp2p/interface";
-import { fetchOverDuplex, HttpParseError, serveFetchOverDuplex } from "@statewalker/webrun-http-streams";
-import { connect, type ConnectionContext, serveConnections } from "@statewalker/webrun-streams-libp2p";
+
+import {
+  fetchOverDuplex,
+  HttpParseError,
+  serveFetchOverDuplex,
+} from "@statewalker/webrun-http-streams";
+import {
+  type ConnectionContext,
+  connect,
+  serveConnections,
+} from "@statewalker/webrun-streams-libp2p";
 import { createLibp2p } from "libp2p";
 import {
   PeerCallError,
@@ -343,7 +353,10 @@ export function mapPeerCallError(err: unknown, peerId: PeerIdStr): PeerCallError
   // (not every `HttpParseError`) because a genuinely malformed response
   // (a foreign codec, corrupted bytes) is a different, real condition this
   // must not misclassify as a reset.
-  if (err instanceof HttpParseError && err.message.includes("stream ended before any bytes arrived")) {
+  if (
+    err instanceof HttpParseError &&
+    err.message.includes("stream ended before any bytes arrived")
+  ) {
     return new PeerStreamResetError(peerId, cause);
   }
 

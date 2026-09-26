@@ -1,8 +1,8 @@
 import { Commands } from "@statewalker/shared-commands";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { userEvent } from "vitest/browser";
 import { MenuModel, uiShowMenu } from "@todo/app/models";
 import { MenuView, registerViews } from "@todo/ui";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { userEvent } from "vitest/browser";
 import { all, button, createHost, render, waitFor } from "../support/react.js";
 
 /**

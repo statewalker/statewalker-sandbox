@@ -1,7 +1,7 @@
 import { readFile, readText, writeText } from "@statewalker/webrun-files";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { describe, expect, it } from "vitest";
 import { newProjectBuild } from "@statewalker/webrun-modules-build";
+import { describe, expect, it } from "vitest";
 
 /**
  * End-to-end assertion of the no-bundle emit: build the guest sources with a

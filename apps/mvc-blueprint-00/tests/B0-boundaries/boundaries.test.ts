@@ -59,7 +59,8 @@ const MODEL_FIELD_WRITE = new RegExp(
  * write fields, notify and subscribe to bare `onUpdate`. A model lives in
  * `todo-app`, so that is the only place the exemption reaches.
  */
-const isModelModule = (file: string): boolean => file.startsWith("todo-app/src/") && file.endsWith("-model.ts");
+const isModelModule = (file: string): boolean =>
+  file.startsWith("todo-app/src/") && file.endsWith("-model.ts");
 
 /** The React binding: exempt from the bare-`onUpdate` rule and from nothing else. */
 const REACT_BINDING = "todo-ui/src/use-model.ts";
@@ -97,9 +98,16 @@ const modelMethods = (): Set<string> => {
   const names = new Set<string>();
   for (const value of Object.values(modelEntry)) {
     if (typeof value !== "function" || !(value.prototype instanceof BaseClass)) continue;
-    for (let proto = value.prototype; proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) {
+    for (
+      let proto = value.prototype;
+      proto && proto !== Object.prototype;
+      proto = Object.getPrototypeOf(proto)
+    ) {
       for (const name of Object.getOwnPropertyNames(proto)) {
-        if (name !== "constructor" && typeof Object.getOwnPropertyDescriptor(proto, name)?.value === "function") {
+        if (
+          name !== "constructor" &&
+          typeof Object.getOwnPropertyDescriptor(proto, name)?.value === "function"
+        ) {
           names.add(name);
         }
       }
@@ -117,7 +125,9 @@ const CONTROLLER_SIDE = [...modelMethods()].filter((name) => !VIEW_MAY_CALL.has(
  * `"./views/notify-view.js"`.
  */
 const memberOf = (names: string[]) =>
-  new RegExp(`\\.\\s*(?:${names.join("|")})\\b|\\[\\s*${QUOTE}(?:${names.join("|")})${QUOTE}\\s*\\]`);
+  new RegExp(
+    `\\.\\s*(?:${names.join("|")})\\b|\\[\\s*${QUOTE}(?:${names.join("|")})${QUOTE}\\s*\\]`,
+  );
 const CONTROLLER_CALL = memberOf(CONTROLLER_SIDE);
 
 /**
@@ -136,7 +146,9 @@ const allSuites = () =>
       const dir = `${ROOT}tests/${d.name}`;
       let files: string[] = [];
       try {
-        files = (readdirSync(dir, { recursive: true, encoding: "utf8" }) as string[]).filter(isSource);
+        files = (readdirSync(dir, { recursive: true, encoding: "utf8" }) as string[]).filter(
+          isSource,
+        );
       } catch {
         return [];
       }
@@ -190,7 +202,9 @@ const ADAPTER_MAY_IMPORT = /^@statewalker\/shared-(commands|registry)$/;
  * it is the grep, not an importer.
  */
 const headlessModules = () => [
-  ...allSuites().filter(({ file }) => file.endsWith(".test.ts") && !file.startsWith("B0-boundaries/")),
+  ...allSuites().filter(
+    ({ file }) => file.endsWith(".test.ts") && !file.startsWith("B0-boundaries/"),
+  ),
   ...(readdirSync(`${ROOT}tests/support`, { recursive: true, encoding: "utf8" }) as string[])
     .filter((f) => f.endsWith(".ts"))
     .map((f) => ({
@@ -246,7 +260,13 @@ const reachableSpecifiers = (file: string, seen = new Set<string>()): string[] =
   seen.add(file);
   return specifiers(stripComments(readFileSync(`${ROOT}${file}`, "utf8"))).flatMap((spec) =>
     /^\.\.?\//.test(spec)
-      ? [spec, ...reachableSpecifiers(normalize(join(dirname(file), spec.replace(/\.js$/, ".ts"))), seen)]
+      ? [
+          spec,
+          ...reachableSpecifiers(
+            normalize(join(dirname(file), spec.replace(/\.js$/, ".ts"))),
+            seen,
+          ),
+        ]
       : [spec],
   );
 };
@@ -261,9 +281,7 @@ describe("B0 · package boundaries", () => {
     // and it is what fails first if `{ recursive: true }` is ever dropped. A
     // real view, not a placeholder kept only to be found — and a `.tsx`, so
     // the `isSource` filter is proven to admit the extension every view uses.
-    expect(sources("todo-ui").map((s) => s.file)).toContain(
-      "todo-ui/src/views/list-view.tsx",
-    );
+    expect(sources("todo-ui").map((s) => s.file)).toContain("todo-ui/src/views/list-view.tsx");
   });
 
   describe("todo-core is the UI-free layer", () => {
@@ -307,7 +325,9 @@ describe("B0 · package boundaries", () => {
     // the models-only entry point, `@todo/app/models`.
     it("reaches todo-app only through @todo/app/models — never a controller", () => {
       for (const { file, code } of sources("todo-ui")) {
-        expect(code, `${file} must import todo-app only as "@todo/app/models"`).not.toMatch(BEYOND_MODELS);
+        expect(code, `${file} must import todo-app only as "@todo/app/models"`).not.toMatch(
+          BEYOND_MODELS,
+        );
       }
     });
 
@@ -353,7 +373,10 @@ describe("B0 · package boundaries", () => {
       const suites = allSuites().filter(({ code }) => usesReactEntry(code));
       // The same empty-loop shape the recursion guard above exists for: if the
       // discovery ever finds nothing, the loop below asserts nothing and passes.
-      expect(suites.length, "found no view suite — the check below would be vacuous").toBeGreaterThan(0);
+      expect(
+        suites.length,
+        "found no view suite — the check below would be vacuous",
+      ).toBeGreaterThan(0);
       for (const { file, code } of suites) {
         expect(code, `${file} must not import the core directly`).not.toMatch(importOf("core"));
       }
@@ -365,7 +388,10 @@ describe("B0 · package boundaries", () => {
       const adapter = sources("todo-ui").find(({ file }) => file === "todo-ui/src/view-adapter.ts");
       expect(adapter, "the adapter entry this rule guards").toBeDefined();
       const specs = specifiers(adapter!.code);
-      expect(specs.length, "found no import in view-adapter.ts — the check below would be vacuous").toBeGreaterThan(0);
+      expect(
+        specs.length,
+        "found no import in view-adapter.ts — the check below would be vacuous",
+      ).toBeGreaterThan(0);
       for (const spec of specs) {
         expect(spec, `view-adapter.ts must not import "${spec}"`).toMatch(ADAPTER_MAY_IMPORT);
       }
@@ -386,18 +412,29 @@ describe("B0 · package boundaries", () => {
       for (const spec of ["react", "react-dom/client", "@statewalker/ui.view.shadcn"]) {
         await expect(load(spec), spec).rejects.toThrow(refused);
       }
-      await expect(load("../../src/app.js"), "the composition root pulls in the React views").rejects.toThrow(refused);
+      await expect(
+        load("../../src/app.js"),
+        "the composition root pulls in the React views",
+      ).rejects.toThrow(refused);
       // A control that refuses everything proves nothing: the adapter loads.
       await expect(load("@todo/ui/adapter")).resolves.toHaveProperty("ViewAdapter");
     });
 
     it("a node suite, or the test support it loads, takes @todo/ui only as @todo/ui/adapter", () => {
       const modules = headlessModules();
-      const users = modules.filter(({ code }) => specifiers(code).some((s) => /todo[-/]ui\b/.test(s)));
-      expect(users.length, "found no headless user of the view layer — the check below would be vacuous").toBeGreaterThan(0);
+      const users = modules.filter(({ code }) =>
+        specifiers(code).some((s) => /todo[-/]ui\b/.test(s)),
+      );
+      expect(
+        users.length,
+        "found no headless user of the view layer — the check below would be vacuous",
+      ).toBeGreaterThan(0);
       for (const { file, code } of modules) {
         for (const spec of specifiers(code)) {
-          expect(reachesUiBeyondAdapter(spec), `${file} imports "${spec}"; a node suite takes "@todo/ui/adapter"`).toBe(false);
+          expect(
+            reachesUiBeyondAdapter(spec),
+            `${file} imports "${spec}"; a node suite takes "@todo/ui/adapter"`,
+          ).toBe(false);
         }
       }
     });
@@ -416,7 +453,9 @@ describe("B0 · package boundaries", () => {
       ]) {
         expect(bad).toMatch(BEYOND_MODELS);
       }
-      expect('import { TodoListModel, uiShowList } from "@todo/app/models";').not.toMatch(BEYOND_MODELS);
+      expect('import { TodoListModel, uiShowList } from "@todo/app/models";').not.toMatch(
+        BEYOND_MODELS,
+      );
     });
 
     it("the headless rule rejects the React entry, by alias and by relative path", () => {
@@ -430,7 +469,11 @@ describe("B0 · package boundaries", () => {
       );
       expect(bad).toHaveLength(4);
       for (const spec of bad) expect(reachesUiBeyondAdapter(spec), spec).toBe(true);
-      for (const good of ["@todo/ui/adapter", "../../lib/todo-ui/src/view-adapter.js", "@todo/app/models"]) {
+      for (const good of [
+        "@todo/ui/adapter",
+        "../../lib/todo-ui/src/view-adapter.js",
+        "@todo/app/models",
+      ]) {
         expect(reachesUiBeyondAdapter(good), good).toBe(false);
       }
     });
@@ -473,7 +516,12 @@ describe("B0 · package boundaries", () => {
     });
 
     it("the build-config rule rejects vitest and this app's own test configs — not the shared table", () => {
-      for (const bad of ["vitest/config", "vitest", "./vitest.config.js", "./vitest.browser.config.ts"]) {
+      for (const bad of [
+        "vitest/config",
+        "vitest",
+        "./vitest.config.js",
+        "./vitest.browser.config.ts",
+      ]) {
         expect(bad).toMatch(TEST_RUNNER);
       }
       for (const good of ["./aliases.js", "vite", "@vitejs/plugin-react", "@tailwindcss/vite"]) {
@@ -503,7 +551,9 @@ describe("B0 · package boundaries", () => {
 
     it("the view-suite rule binds a suite taking the React entry — not one taking only the adapter", () => {
       expect(usesReactEntry('import { ListView } from "@todo/ui";')).toBe(true);
-      expect(usesReactEntry('import { ListView } from "../../lib/todo-ui/src/views/list-view.js";')).toBe(true);
+      expect(
+        usesReactEntry('import { ListView } from "../../lib/todo-ui/src/views/list-view.js";'),
+      ).toBe(true);
       expect(usesReactEntry('import { ViewAdapter } from "@todo/ui/adapter";')).toBe(false);
       expect(usesReactEntry('import { TodoListModel } from "@todo/app/models";')).toBe(false);
     });
@@ -529,9 +579,10 @@ describe("B0 · package boundaries", () => {
         ...headlessModules(),
         ...allSuites().filter(({ file }) => file.endsWith(".tsx")),
       ];
-      expect(everything.map(({ file }) => file), "the page's modules are scanned").toEqual(
-        expect.arrayContaining(["src/app.ts", "src/main.tsx"]),
-      );
+      expect(
+        everything.map(({ file }) => file),
+        "the page's modules are scanned",
+      ).toEqual(expect.arrayContaining(["src/app.ts", "src/main.tsx"]));
       const roots = everything.filter(({ code }) => knowsEveryLayer(code)).map(({ file }) => file);
       // Equality, not "is a subset": if app.ts stopped matching, the pattern
       // (or the layout) has drifted and this check would be asserting nothing.
@@ -588,7 +639,14 @@ describe("B0 · package boundaries", () => {
     it("the split is derived from the model classes, and the allow-list names only methods that exist", () => {
       const methods = modelMethods();
       expect(CONTROLLER_SIDE, "the controller-side set is found, not assumed").toEqual(
-        expect.arrayContaining(["replaceTodos", "reportOutcome", "takePending", "takeToggles", "takeRemovals", "fromJSON"]),
+        expect.arrayContaining([
+          "replaceTodos",
+          "reportOutcome",
+          "takePending",
+          "takeToggles",
+          "takeRemovals",
+          "fromJSON",
+        ]),
       );
       for (const name of VIEW_MAY_CALL) {
         expect(methods.has(name), `VIEW_MAY_CALL names "${name}", which no model has`).toBe(true);
@@ -597,9 +655,10 @@ describe("B0 · package boundaries", () => {
 
     it("todo-ui never names a controller-side model method", () => {
       for (const { file, code } of sources("todo-ui")) {
-        expect(code, `${file} may call only the view-side mutators: ${[...VIEW_MAY_CALL].join(", ")}`).not.toMatch(
-          CONTROLLER_CALL,
-        );
+        expect(
+          code,
+          `${file} may call only the view-side mutators: ${[...VIEW_MAY_CALL].join(", ")}`,
+        ).not.toMatch(CONTROLLER_CALL);
       }
     });
   });
@@ -658,12 +717,15 @@ describe("B0 · package boundaries", () => {
     // shape that makes self-wake dangerous. `useModel` is the one legitimate
     // exception: it supplies its own selector.
     it("never calls onUpdate outside a model or the React binding", () => {
-      const offenders = [...sources("todo-core"), ...sources("todo-app"), ...sources("todo-ui")].filter(
-        ({ file }) => !isModelModule(file) && file !== REACT_BINDING,
-      );
-      expect(offenders.map(({ file }) => file), "the binding is checked by name — a rename must not exempt it silently").not.toContain(
-        REACT_BINDING,
-      );
+      const offenders = [
+        ...sources("todo-core"),
+        ...sources("todo-app"),
+        ...sources("todo-ui"),
+      ].filter(({ file }) => !isModelModule(file) && file !== REACT_BINDING);
+      expect(
+        offenders.map(({ file }) => file),
+        "the binding is checked by name — a rename must not exempt it silently",
+      ).not.toContain(REACT_BINDING);
       expect(
         sources("todo-ui").map(({ file }) => file),
         "the React binding this rule exempts still exists",
@@ -682,7 +744,10 @@ describe("B0 · package boundaries", () => {
     // `aliases.ts`; this keeps it there.
     it("vite.config.ts reaches no vitest module, directly or through a local import", () => {
       const specs = reachableSpecifiers("vite.config.ts");
-      expect(specs, "the shared alias table is followed — the check below is not vacuous").toContain("./aliases.js");
+      expect(
+        specs,
+        "the shared alias table is followed — the check below is not vacuous",
+      ).toContain("./aliases.js");
       for (const spec of specs) {
         expect(spec, `vite.config.ts reaches "${spec}"`).not.toMatch(TEST_RUNNER);
       }
@@ -700,14 +765,20 @@ describe("B0 · package boundaries", () => {
       // are checked too: `todosAdd` from the sibling declarations names no
       // "Command" and still makes the port know the bus.
       const ports = sources("todo-core").filter(({ file }) => /types\.ts$|-api\.ts$/.test(file));
-      expect(ports.map((p) => p.file), "the port files this check covers").toEqual(
+      expect(
+        ports.map((p) => p.file),
+        "the port files this check covers",
+      ).toEqual(
         expect.arrayContaining(["todo-core/src/types.ts", "todo-core/src/mem-todo-api.ts"]),
       );
       for (const { file, code } of ports) {
         expect(code, `${file} must not name a command, model or bus`).not.toMatch(
           /Command|Model|BaseClass/,
         );
-        expect(code, `${file} must not import the bus, the model base, or the declarations`).not.toMatch(
+        expect(
+          code,
+          `${file} must not import the bus, the model base, or the declarations`,
+        ).not.toMatch(
           /@statewalker\/shared-(commands|baseclass)|["']\.\/(declarations|todo-commands)(\.js)?["']/,
         );
       }
@@ -718,7 +789,11 @@ describe("B0 · package boundaries", () => {
     // Spec §4.9. A hand-rolled disposer array unwinds in the wrong order and
     // strands everything after the first listener that throws.
     it("uses newRegistry rather than a hand-rolled disposer array", () => {
-      for (const { file, code } of [...sources("todo-core"), ...sources("todo-app"), ...sources("todo-ui")]) {
+      for (const { file, code } of [
+        ...sources("todo-core"),
+        ...sources("todo-app"),
+        ...sources("todo-ui"),
+      ]) {
         expect(code, `${file} must not hand-roll a disposer array`).not.toMatch(
           /(_offs|offs)\s*(:|=)\s*(\(\)\s*=>\s*void\)\[\]|\[\])/,
         );

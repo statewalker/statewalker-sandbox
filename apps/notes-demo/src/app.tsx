@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { NoteStore, Note } from "./store.js";
+import type { Note, NoteStore } from "./store.js";
 
 /** Stable id for a fresh note (no crypto dependency needed). */
 const newId = () => `n-${Date.now().toString(36)}`;

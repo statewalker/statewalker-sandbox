@@ -6,6 +6,7 @@ import type { Command, CommandListener, Commands } from "@statewalker/shared-com
  * is spelled out here rather than silently relied upon.
  */
 type Claimable<P, R> = Command<P, R> & { readonly claimed: boolean };
+
 import {
   FILE_COMMANDS,
   filesCopy,
@@ -19,7 +20,10 @@ import type { JobQueue } from "./job-queue.js";
 
 export interface FileCommandsOptions {
   queue: JobQueue;
-  resolve(storage: string): { mkdir(path: string): Promise<unknown>; move(a: string, b: string): Promise<unknown> };
+  resolve(storage: string): {
+    mkdir(path: string): Promise<unknown>;
+    move(a: string, b: string): Promise<unknown>;
+  };
 }
 
 /**
@@ -56,16 +60,22 @@ export function registerFileCommands(commands: Commands, options: FileCommandsOp
     };
 
   const transfer = (operation: "copy" | "move") =>
-    fallback<{ files: { storage: string; path: string; kind: "file" | "directory" }[]; target: { storage: string; path: string } }, { jobId: string }>((cmd) => {
-    const job = queue.enqueue({
-      operation,
-      sourceUri: cmd.payload.files[0].storage,
-      targetUri: cmd.payload.target.storage,
-      roots: cmd.payload.files.map((f) => f.path),
-      targetPath: cmd.payload.target.path,
+    fallback<
+      {
+        files: { storage: string; path: string; kind: "file" | "directory" }[];
+        target: { storage: string; path: string };
+      },
+      { jobId: string }
+    >((cmd) => {
+      const job = queue.enqueue({
+        operation,
+        sourceUri: cmd.payload.files[0].storage,
+        targetUri: cmd.payload.target.storage,
+        roots: cmd.payload.files.map((f) => f.path),
+        targetPath: cmd.payload.target.path,
+      });
+      return Promise.resolve({ jobId: job.id });
     });
-    return Promise.resolve({ jobId: job.id });
-  });
 
   disposers.push(
     commands.listen(filesCopy, transfer("copy"), at),

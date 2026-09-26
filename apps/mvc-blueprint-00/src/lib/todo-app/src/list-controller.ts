@@ -459,7 +459,9 @@ export class ListController {
    * `_reload()`, and in the loop), whichever settles first and in whichever
    * order the registry tears things down.
    */
-  private async _clearCompleted(completed: number): Promise<{ consumed?: number; failure?: string }> {
+  private async _clearCompleted(
+    completed: number,
+  ): Promise<{ consumed?: number; failure?: string }> {
     let confirmed: boolean;
     try {
       const question = new ConfirmModel(`Clear ${completedTodos(completed)}?`);
@@ -496,7 +498,10 @@ export class ListController {
     //   is deliberate: the clear it announced has already landed and been
     //   reported, and a toast that failed to finish showing is not news.
     let notifyFailed: string | undefined;
-    const note = this._commands.call(uiNotify, new NotifyModel(`Cleared ${completedTodos(cleared)}`));
+    const note = this._commands.call(
+      uiNotify,
+      new NotifyModel(`Cleared ${completedTodos(cleared)}`),
+    );
     note.promise.then(undefined, (error: unknown) => {
       notifyFailed = `notify failed: ${reason(error)}`;
     });

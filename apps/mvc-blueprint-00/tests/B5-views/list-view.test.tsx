@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { userEvent } from "vitest/browser";
 import { type Todo, TodoListModel } from "@todo/app/models";
 import { ListView } from "@todo/ui";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { userEvent } from "vitest/browser";
 import { all, button, flush, render, waitFor } from "../support/react.js";
 
 /**
@@ -36,7 +36,8 @@ const mountList = async (model: TodoListModel) => {
   return view.host;
 };
 
-const titles = (host: HTMLElement) => all(host, "li").map((li) => li.querySelector("label")?.textContent?.trim());
+const titles = (host: HTMLElement) =>
+  all(host, "li").map((li) => li.querySelector("label")?.textContent?.trim());
 const row = (host: HTMLElement, title: string) => {
   const li = all(host, "li").find((l) => l.textContent?.includes(title));
   if (!li) throw new Error(`no row "${title}"`);
@@ -53,7 +54,9 @@ describe("ListView", () => {
     it("one row per visible todo, with its done state", async () => {
       const host = await mountList(seeded());
       expect(titles(host)).toEqual(["buy milk", "walk dog", "file taxes"]);
-      const checked = all<HTMLInputElement>(host, 'li input[type="checkbox"]').map((c) => c.checked);
+      const checked = all<HTMLInputElement>(host, 'li input[type="checkbox"]').map(
+        (c) => c.checked,
+      );
       expect(checked).toEqual([false, false, true]);
     });
 
@@ -223,7 +226,11 @@ describe("ListView", () => {
       // row still reads not-done. Only the controller's `replaceTodos` moves it.
       await flush();
       expect(box.checked).toBe(false);
-      model.replaceTodos([todo("1", "buy milk"), todo("2", "walk dog", true), todo("3", "file taxes", true)]);
+      model.replaceTodos([
+        todo("1", "buy milk"),
+        todo("2", "walk dog", true),
+        todo("3", "file taxes", true),
+      ]);
       await waitFor(() => box.checked);
     });
 
@@ -242,7 +249,9 @@ describe("ListView", () => {
     it("Clear completed calls requestClearCompleted() — and writes nothing itself", async () => {
       const model = seeded();
       const host = await mountList(model);
-      const requestClearCompleted = vi.spyOn(model.input, "requestClearCompleted").mockImplementation(() => {});
+      const requestClearCompleted = vi
+        .spyOn(model.input, "requestClearCompleted")
+        .mockImplementation(() => {});
       const before = snapshot(model);
 
       await userEvent.click(button(host, "Clear completed")!);

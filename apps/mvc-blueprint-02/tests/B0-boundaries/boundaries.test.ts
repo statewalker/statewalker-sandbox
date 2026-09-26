@@ -48,7 +48,9 @@ const isUi = (file: string) => /^src\/lib\/(?:[^/]+\/ui|ui-react|ui-dom)\//.test
 /** DOM UI: the DOM host, and every `.ts` under a feature's `ui/` except its React entries. */
 const isDomUi = (file: string) =>
   file.startsWith("src/lib/ui-dom/") ||
-  (/^src\/lib\/[^/]+\/ui\//.test(file) && file.endsWith(".ts") && !/\/(?:index|react)\.ts$/.test(file));
+  (/^src\/lib\/[^/]+\/ui\//.test(file) &&
+    file.endsWith(".ts") &&
+    !/\/(?:index|react)\.ts$/.test(file));
 
 /** What a UI module may never import. `@sys` exactly (it must take `@sys/ui`); relative paths into an `app/`, a `core/` or `sys/`. */
 const UI_FORBIDDEN =
@@ -72,7 +74,7 @@ const resolveRelative = (file: string, spec: string) =>
 
 describe("B0 · boundaries", () => {
   // `lib/` now lives under `src/lib/`; walking `src` alone covers it, so this must not
-    // also walk `lib` — that would double-count every file under `src/lib`.
+  // also walk `lib` — that would double-count every file under `src/lib`.
   const all = () => sources("src");
 
   it("finds the tree it polices — nested files included", () => {
@@ -132,7 +134,9 @@ describe("B0 · boundaries", () => {
     });
 
     it("a feature's models.ts carries interfaces and kinds only: its one value import is @sys/ui", () => {
-      const models = sources("src/lib").filter((s) => /^src\/lib\/[^/]+\/app\/models\.ts$/.test(s.file));
+      const models = sources("src/lib").filter((s) =>
+        /^src\/lib\/[^/]+\/app\/models\.ts$/.test(s.file),
+      );
       expect(models.length).toBe(3);
       for (const { file, code } of models) {
         const valueImports = [
@@ -279,8 +283,10 @@ describe("B0 · boundaries", () => {
     it("resolveRelative places a relative specifier in its feature", () => {
       expect(
         featureOf(
-          resolveRelative("src/lib/todo/app/todo-controller.ts", "../../stats/app/stats-model.js") ??
-            "",
+          resolveRelative(
+            "src/lib/todo/app/todo-controller.ts",
+            "../../stats/app/stats-model.js",
+          ) ?? "",
         ),
       ).toBe("stats");
       expect(

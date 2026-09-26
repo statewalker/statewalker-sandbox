@@ -12,7 +12,9 @@ import type { ColumnDescriptor, TableModel } from "@fm/app";
  * `fm-ui` can be built and tested without React and the grid can be swapped
  * for another windowed renderer that speaks the same shape.
  */
-export interface ResolvedValue<T = unknown> { value: T }
+export interface ResolvedValue<T = unknown> {
+  value: T;
+}
 
 export interface DataFrameLike {
   columnDescriptors: { name: string; sortable?: boolean }[];
@@ -68,5 +70,7 @@ export function toDataFrame(model: TableModel): DataFrameAdapter {
  * decides — the same input/level discipline as everywhere else.
  */
 export function orderByFor(model: TableModel): { column: string; direction: "ascending" }[] {
-  return model.sortDirection === "ascending" ? [{ column: model.sortColumn, direction: "ascending" }] : [];
+  return model.sortDirection === "ascending"
+    ? [{ column: model.sortColumn, direction: "ascending" }]
+    : [];
 }
