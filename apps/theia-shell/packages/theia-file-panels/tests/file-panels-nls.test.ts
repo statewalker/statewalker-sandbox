@@ -14,13 +14,32 @@ describe("the message catalog", () => {
   });
 
   it("renders every argument and leaves no placeholder", () => {
+    const PLURAL = new Set(["transferTitle", "sameFolderTitle", "clashCount"]);
     for (const [name, fn] of Object.entries(Messages)) {
+      if (PLURAL.has(name)) continue;
       const args = Array.from({ length: fn.length }, (_, i) => (i === 0 ? 7 : `‹${i}›`));
       const text = (fn as (...a: unknown[]) => string)(...args);
       expect(text, name).not.toMatch(/\{\d\}/);
       for (const arg of args.slice(1)) expect(text, name).toContain(String(arg));
       expect(text.length, name).toBeGreaterThan(0);
     }
+  });
+
+  it("plural messages show the name for one item and the count for several", () => {
+    expect(Messages.transferTitle(1, "‹x›", "en")).toContain("‹x›");
+    expect(Messages.transferTitle(1, "‹x›", "en")).not.toMatch(/\{\d\}/);
+    expect(Messages.transferTitle(7, "‹x›", "en")).toContain("7");
+    expect(Messages.transferTitle(7, "‹x›", "en")).not.toMatch(/\{\d\}/);
+
+    expect(Messages.sameFolderTitle(1, "‹x›", "en")).toContain("‹x›");
+    expect(Messages.sameFolderTitle(1, "‹x›", "en")).not.toMatch(/\{\d\}/);
+    expect(Messages.sameFolderTitle(7, "‹x›", "en")).toContain("7");
+    expect(Messages.sameFolderTitle(7, "‹x›", "en")).not.toMatch(/\{\d\}/);
+
+    expect(Messages.clashCount(1, "en")).toContain("1");
+    expect(Messages.clashCount(1, "en")).not.toMatch(/\{\d\}/);
+    expect(Messages.clashCount(7, "en")).toContain("7");
+    expect(Messages.clashCount(7, "en")).not.toMatch(/\{\d\}/);
   });
 
   it("gives plural messages a text for every Russian category", () => {

@@ -57,35 +57,35 @@ export const Messages = {
       case "zero":
         return nls.localize(
           "theia-shell/file-panels/transferTitle.zero",
-          "Copy or move {1} ({0} item)",
+          "Copy or move {0} items",
           count,
           name,
         );
       case "two":
         return nls.localize(
           "theia-shell/file-panels/transferTitle.two",
-          "Copy or move {1} ({0} items)",
+          "Copy or move {0} items",
           count,
           name,
         );
       case "few":
         return nls.localize(
           "theia-shell/file-panels/transferTitle.few",
-          "Copy or move {1} ({0} items)",
+          "Copy or move {0} items",
           count,
           name,
         );
       case "many":
         return nls.localize(
           "theia-shell/file-panels/transferTitle.many",
-          "Copy or move {1} ({0} items)",
+          "Copy or move {0} items",
           count,
           name,
         );
       default:
         return nls.localize(
           "theia-shell/file-panels/transferTitle.other",
-          "Copy or move {1} ({0} items)",
+          "Copy or move {0} items",
           count,
           name,
         );
@@ -103,35 +103,35 @@ export const Messages = {
       case "zero":
         return nls.localize(
           "theia-shell/file-panels/sameFolderTitle.zero",
-          "Copy {1} ({0} item)",
+          "Copy {0} items",
           count,
           name,
         );
       case "two":
         return nls.localize(
           "theia-shell/file-panels/sameFolderTitle.two",
-          "Copy {1} ({0} items)",
+          "Copy {0} items",
           count,
           name,
         );
       case "few":
         return nls.localize(
           "theia-shell/file-panels/sameFolderTitle.few",
-          "Copy {1} ({0} items)",
+          "Copy {0} items",
           count,
           name,
         );
       case "many":
         return nls.localize(
           "theia-shell/file-panels/sameFolderTitle.many",
-          "Copy {1} ({0} items)",
+          "Copy {0} items",
           count,
           name,
         );
       default:
         return nls.localize(
           "theia-shell/file-panels/sameFolderTitle.other",
-          "Copy {1} ({0} items)",
+          "Copy {0} items",
           count,
           name,
         );
