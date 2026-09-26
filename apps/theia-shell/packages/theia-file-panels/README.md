@@ -15,6 +15,7 @@ copy/move by drag and drop and by menu commands. Design:
 | 4 breadcrumb model | 7 | 7 |
 | 5 transfer runner | 3 | 3 |
 | 6 the panel (e2e `file-panels.spec.ts`) | 3 failed | 4 passed |
+| 7 breadcrumb sibling dropdowns (e2e `file-panels.spec.ts`) | 3 failed, 4 passed | 7 passed |
 
 ## Notes
 
@@ -27,3 +28,24 @@ copy/move by drag and drop and by menu commands. Design:
   opens it like the explorer does"); the opened editor lands in the panel's tab group and the
   panel goes to the background — that is Theia's normal tab behaviour, unchanged
   (`FilePanelModel.doOpenNode` was not altered for this).
+- **Task 7 environment fix:** `@types/react-dom` was not installed anywhere in the workspace (only
+  `@types/react`) — pnpm reported it as a skipped optional peer dependency. `createRoot`
+  (`@theia/core/shared/react-dom/client`, which re-exports `react-dom/client`) therefore had no
+  type declarations and `tsc` failed with "has no exported member 'createRoot'". Added
+  `@types/react-dom: 19.2.7` (the latest version whose peer range accepts the installed
+  `@types/react@19.2.18`; `19.3.0` requires `@types/react@^19.3.0` and was rejected) to the
+  workspace root's `devDependencies`, matching how `@types/react` is already pinned there.
+- **Task 7 accessibility adaptation:** the brief's `folder-breadcrumb.tsx` (a `<span>` drop target,
+  and a `<ul role="listbox">`/`<li role="option">` list) fails this repo's Biome a11y lint set
+  (`noStaticElementInteractions`, `noNoninteractiveElementToInteractiveRole`,
+  `useFocusableInteractive`, `useKeyWithClickEvents`). Adapted minimally, keeping every DOM hook
+  and CSS class the spec/tests rely on:
+  - The sibling list and its items are `<div role="listbox">` / `<div role="option">` instead of
+    `<ul>`/`<li>` (WAI-ARIA's own recommendation — `ul`/`li` carry list semantics that clash with
+    listbox/option); each option got `tabIndex={-1}` and its own `onKeyDown` (Enter/Space) so it is
+    independently valid per Biome's checks, alongside the container's existing arrow-key/Enter
+    navigation.
+  - The crumb `<span>` (a drop target wrapping two buttons, not itself clickable) has no native
+    element or ARIA role that fits — `role="group"` triggered a further `useSemanticElements`
+    nudge toward `<fieldset>`, which is wrong here. Kept the plain `<span>` and added one
+    `biome-ignore lint/a11y/noStaticElementInteractions` comment explaining why.

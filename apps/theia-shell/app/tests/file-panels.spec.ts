@@ -4,6 +4,8 @@ import { runFromPalette, start } from "./helpers";
 export const panels = (page: Page) => page.locator(".file-panel");
 export const row = (panel: Locator, name: string) =>
   panel.locator(".theia-TreeNode").filter({ has: panel.page().getByText(name, { exact: true }) });
+const crumb = (panel: Locator, label: string) =>
+  panel.locator(".file-panel-crumb", { hasText: label });
 
 export async function openPanel(page: Page) {
   const before = await panels(page).count();
@@ -63,4 +65,37 @@ test("an empty folder says so", async ({ page }) => {
   await row(panel, "Browser Storage").dblclick();
   await row(panel, "empty").dblclick();
   await expect(panel.getByText("This folder is empty")).toBeVisible();
+});
+
+test("the breadcrumb navigates to an ancestor", async ({ page }) => {
+  await start(page, "?storage=memory");
+  const panel = await openPanel(page);
+  await row(panel, "Browser Storage").dblclick();
+  await row(panel, "notes").dblclick();
+  await expect(crumb(panel, "notes")).toBeVisible();
+  await crumb(panel, "Browser Storage").locator(".file-panel-crumb-label").click();
+  await expect(row(panel, "welcome.md")).toBeVisible();
+});
+
+test("a crumb's dropdown lists its sibling folders and jumps to one", async ({ page }) => {
+  await start(page, "?storage=memory");
+  const panel = await openPanel(page);
+  await row(panel, "Browser Storage").dblclick();
+  await row(panel, "notes").dblclick();
+  await crumb(panel, "notes").locator(".file-panel-crumb-toggle").click();
+  const list = page.locator(".file-panel-siblings");
+  await expect(list.locator(".file-panel-sibling")).toHaveText(["docs", "media", "notes"]);
+  await expect(list.locator(".file-panel-sibling.current")).toHaveText("notes");
+  await list.locator(".file-panel-sibling", { hasText: "docs" }).click();
+  await expect(row(panel, "cheatsheet.md")).toBeVisible();
+  await expect(list).toHaveCount(0);
+});
+
+test("the first crumb's dropdown lists the workspace roots", async ({ page }) => {
+  await start(page, "?storage=memory");
+  const panel = await openPanel(page);
+  await panel.locator(".file-panel-crumb").first().locator(".file-panel-crumb-toggle").click();
+  await expect(page.locator(".file-panel-siblings .file-panel-sibling")).toHaveText(["Files"]);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".file-panel-siblings")).toHaveCount(0);
 });

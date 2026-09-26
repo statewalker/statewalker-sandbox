@@ -1,15 +1,21 @@
+import { BreadcrumbPopupContainerFactory } from "@theia/core/lib/browser/breadcrumbs/breadcrumb-popup-container";
 import { LabelProvider } from "@theia/core/lib/browser/label-provider";
 import { BaseWidget, type Message } from "@theia/core/lib/browser/widgets/widget";
 import URI from "@theia/core/lib/common/uri";
 import { PanelLayout, type Widget } from "@theia/core/shared/@lumino/widgets";
 import { inject, injectable, type interfaces } from "@theia/core/shared/inversify";
+import * as React from "@theia/core/shared/react";
+import { createRoot } from "@theia/core/shared/react-dom/client";
+import { FileService } from "@theia/filesystem/lib/browser/file-service";
 import { createFileTreeContainer } from "@theia/filesystem/lib/browser/file-tree";
 import { WorkspaceService } from "@theia/workspace/lib/browser/workspace-service";
+import { type Crumb, siblingSource } from "../common/breadcrumb-model";
 import { Messages } from "../common/file-panels-nls";
-import { type SortState, toggleSort } from "../common/panel-sorting";
+import { compareEntries, type SortState, toggleSort } from "../common/panel-sorting";
 import { FilePanelHeader } from "./file-panel-header";
 import { FilePanelModel, FilePanelTree } from "./file-panel-tree";
 import { FilePanelTreeWidget } from "./file-panel-tree-widget";
+import { FolderBreadcrumb, FolderList } from "./folder-breadcrumb";
 
 export const FILE_PANEL_CONTEXT_MENU = ["file-panel-context-menu"];
 
@@ -29,6 +35,9 @@ export class FilePanelWidget extends BaseWidget {
   @inject(FilePanelTree) protected readonly fileTree!: FilePanelTree;
   @inject(WorkspaceService) protected readonly workspace!: WorkspaceService;
   @inject(LabelProvider) protected readonly labels!: LabelProvider;
+  @inject(BreadcrumbPopupContainerFactory)
+  protected readonly popups!: BreadcrumbPopupContainerFactory;
+  @inject(FileService) protected readonly files!: FileService;
 
   protected header!: FilePanelHeader;
 
@@ -64,6 +73,7 @@ export class FilePanelWidget extends BaseWidget {
       this.model.onDidNavigate((uri) => this.onNavigated(uri)),
       this.model.onChanged(() => this.updateEmptyState()),
       this.fileTree.onDidChangeListingError(() => this.updateEmptyState()),
+      this.workspace.onWorkspaceChanged(() => this.renderBreadcrumb()),
     ]);
     const start = this.options.folder ? new URI(this.options.folder) : await this.defaultFolder();
     await this.navigateTo(start);
@@ -97,6 +107,74 @@ export class FilePanelWidget extends BaseWidget {
     this.title.label = this.labels.getName(uri);
     this.title.caption = this.labels.getLongName(uri);
     this.updateEmptyState();
+    this.renderBreadcrumb();
+  }
+
+  protected roots(): URI[] {
+    return this.workspace.tryGetRoots().map((root) => root.resource);
+  }
+
+  protected renderBreadcrumb(): void {
+    const current = this.folder;
+    if (!current) return;
+    this.header.setState({
+      breadcrumb: React.createElement(FolderBreadcrumb, {
+        current,
+        roots: this.roots(),
+        labels: this.labels,
+        navigate: (uri) => void this.navigateTo(uri),
+        openSiblings: (crumb, anchor) => void this.openSiblings(crumb, anchor),
+        openHidden: (hidden, anchor) =>
+          this.showFolderList(
+            hidden.map((c) => ({ uri: c.uri, name: this.labels.getName(c.uri) })),
+            undefined,
+            anchor,
+          ),
+      }),
+    });
+  }
+
+  async openSiblings(crumb: Crumb, anchor: HTMLElement): Promise<void> {
+    const source = siblingSource(crumb, this.roots());
+    if (!source) return;
+    let uris: URI[];
+    if (source.kind === "roots") {
+      uris = source.roots;
+    } else {
+      const parent = await this.files.resolve(source.parent);
+      uris = (parent.children ?? []).filter((c) => c.isDirectory).map((c) => c.resource);
+    }
+    const compare = compareEntries({ column: "name", direction: "asc" });
+    const folders = uris
+      .map((uri) => ({ uri, name: this.labels.getName(uri) }))
+      .sort((a, b) =>
+        compare({ name: a.name, isDirectory: true }, { name: b.name, isDirectory: true }),
+      );
+    this.showFolderList(folders, crumb.uri, anchor);
+  }
+
+  protected showFolderList(
+    folders: { uri: URI; name: string }[],
+    current: URI | undefined,
+    anchor: HTMLElement,
+  ): void {
+    const box = anchor.getBoundingClientRect();
+    const popup = this.popups(this.node, `file-panel-siblings:${this.id}`, {
+      x: box.left,
+      y: box.bottom,
+    });
+    const root = createRoot(popup.container);
+    popup.onDidDispose(() => root.unmount());
+    root.render(
+      React.createElement(FolderList, {
+        folders,
+        current,
+        choose: (uri) => {
+          popup.dispose();
+          void this.navigateTo(uri);
+        },
+      }),
+    );
   }
 
   protected updateEmptyState(): void {
