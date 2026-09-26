@@ -124,8 +124,8 @@ export class MountCommandContribution implements CommandContribution, MenuContri
       ...this.mounts.reservedKeys(),
       ...this.mounts
         .configuredMounts()
-        .map((m) => m.key)
-        .filter((k) => k !== except),
+        .map((m) => (m as { key?: unknown } | null)?.key)
+        .filter((k): k is string => typeof k === "string" && k !== except),
     ];
   }
 
@@ -141,11 +141,7 @@ export class MountCommandContribution implements CommandContribution, MenuContri
       tooltip: "Forget this folder",
     };
     const refresh = () => {
-      const items = buildFolderList(
-        this.mounts.configuredMounts(),
-        this.mounts.types(),
-        directories,
-      );
+      const items = buildFolderList(this.mounts.validMounts(), this.mounts.types(), directories);
       const section = (
         kind: FolderListItem["kind"],
         label: string,

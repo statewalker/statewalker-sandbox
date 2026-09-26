@@ -18,6 +18,17 @@ export function buildFolderList(
   opfsDirectories: readonly string[],
 ): FolderListItem[] {
   const typeLabel = (id: string) => types.get(id)?.label ?? id;
+  // A hand-edited files.mounts may hold anything: list only well-formed entries.
+  entries = entries.filter(
+    (m): m is MountConfig =>
+      typeof m === "object" &&
+      m !== null &&
+      typeof m.key === "string" &&
+      typeof m.name === "string" &&
+      typeof m.type === "string" &&
+      typeof m.config === "object" &&
+      m.config !== null,
+  );
   const remembered: FolderListItem[] = entries
     .filter((m) => !isMounted(m))
     .map((mount) => ({

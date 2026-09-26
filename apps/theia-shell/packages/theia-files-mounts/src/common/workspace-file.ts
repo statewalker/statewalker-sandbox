@@ -1,3 +1,5 @@
+import { applyEdits, modify, type ParseError, parse } from "jsonc-parser";
+
 /**
  * The system mount holding the workspace file: the main storage's
  * `/.shell/workspace`, at `/.workspace`. It is never a root. (Theia 1.76 opens
@@ -21,23 +23,30 @@ export function workspaceRoots(mounts: readonly WorkspaceRoot[]): WorkspaceRoot[
 
 /**
  * The workspace file's text with `folders` set to one `file:///<key>` (named)
- * per root, everything else kept — or undefined when `folders` already matches.
+ * per root — or undefined when nothing needs writing. Theia reads the file as
+ * JSONC and keeps workspace settings in it, so only `folders` is edited:
+ * comments, trailing commas and every other key stay. A file that cannot be
+ * parsed is not rewritten (that would drop its settings): it throws.
+ * `createOnly` (at startup): write only when there is no file yet.
  */
 export function updateWorkspaceFile(
   existing: string | undefined,
   roots: readonly WorkspaceRoot[],
+  options: { createOnly?: boolean } = {},
 ): string | undefined {
-  let data: Record<string, unknown> = {};
-  if (existing !== undefined) {
-    try {
-      const parsed = JSON.parse(existing);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) data = parsed;
-    } catch {
-      data = {};
-    }
-  }
   const folders = roots.map((root) => ({ path: `file:///${root.key}`, name: root.name }));
-  if (existing !== undefined && JSON.stringify(data.folders) === JSON.stringify(folders))
-    return undefined;
-  return `${JSON.stringify({ ...data, folders }, null, 2)}\n`;
+  if (existing === undefined) return `${JSON.stringify({ folders }, null, 2)}\n`;
+  if (options.createOnly) return undefined;
+  const errors: ParseError[] = [];
+  const data = parse(existing, errors, { allowTrailingComma: true });
+  if (errors.length > 0 || typeof data !== "object" || data === null || Array.isArray(data)) {
+    throw new Error(
+      "The workspace file is not valid JSON(C); fix it by hand — it is left as it is.",
+    );
+  }
+  if (JSON.stringify(data.folders) === JSON.stringify(folders)) return undefined;
+  const edits = modify(existing, ["folders"], folders, {
+    formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
+  });
+  return applyEdits(existing, edits);
 }

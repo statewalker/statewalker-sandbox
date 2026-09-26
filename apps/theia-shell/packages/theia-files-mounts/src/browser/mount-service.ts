@@ -94,7 +94,9 @@ export class MountService {
       config: { key: WORKSPACE_MOUNT_KEY, name: "Workspace", type: "system", config: {} },
       api: new CompositeFilesApi(opened.files, WORKSPACE_FOLDER),
     };
-    await this.apply([]);
+    // Only the fixed mounts yet: create the workspace file if missing, never
+    // cut an existing one down to "main only" (the real list follows).
+    await this.apply([], {}, { createOnly: true });
     this.preferences.ready.then(() => this.applyPreferences()).catch((e) => this.report(e));
     this.preferences.onPreferenceChanged((event) => {
       if (event.preferenceName === MOUNTS_PREFERENCE)
@@ -184,6 +186,16 @@ export class MountService {
     await this.applyList(next, { interactive: true, recreate: (k) => k === key });
   }
 
+  /** The valid `files.mounts` entries, mounted or remembered (malformed ones are left out). */
+  validMounts(): MountConfig[] {
+    const raw: unknown = this.preferences.inspect(MOUNTS_PREFERENCE)?.globalValue;
+    return validateMountConfigs(
+      mountsSetting(raw, this.defaults.mounts),
+      this.types(),
+      this.reservedKeys(),
+    ).valid;
+  }
+
   /** The folders not in the workspace, remembered to be added back. */
   rememberedMounts(): MountConfig[] {
     return this.configuredMounts().filter((m) => !isMounted(m));
@@ -240,14 +252,18 @@ export class MountService {
   }
 
   /** Serialized: a slow S3 mount must not let an older apply overwrite a newer one. */
-  protected apply(configs: MountConfig[], options: ApplyOptions = {}): Promise<void> {
+  protected apply(
+    configs: MountConfig[],
+    options: ApplyOptions = {},
+    sync: { createOnly?: boolean } = {},
+  ): Promise<void> {
     const applied = this.queue.run(async () => {
       const fixed = [this.mainMount, this.workspaceMount].filter((m) => m !== undefined);
       this.rebuild(await this.table.apply(configs, { ...options, fixed }));
     });
     // A step of its own: writing goes through Theia's FileService and so back
     // through this root, which must not wait for itself (start() awaits apply).
-    this.workspaceSynced = this.queue.run(() => this.syncWorkspaceFile());
+    this.workspaceSynced = this.queue.run(() => this.syncWorkspaceFile(sync));
     this.workspaceSynced.catch((e) => this.report(e));
     return applied;
   }
@@ -258,11 +274,11 @@ export class MountService {
   }
 
   /** Keeps the workspace file's folders equal to the mounted keys (main first): the mounts are the roots. */
-  protected async syncWorkspaceFile(): Promise<void> {
+  protected async syncWorkspaceFile(sync: { createOnly?: boolean } = {}): Promise<void> {
     const uri = new URI(WORKSPACE_FILE_URI);
     const files = this.fileService();
     const existing = (await files.exists(uri)) ? (await files.read(uri)).value : undefined;
-    const next = updateWorkspaceFile(existing, workspaceRoots(this.table.configs()));
+    const next = updateWorkspaceFile(existing, workspaceRoots(this.table.configs()), sync);
     if (next !== undefined) await files.write(uri, next);
   }
 

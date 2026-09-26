@@ -41,3 +41,16 @@ describe("buildFolderList", () => {
     expect(items[0]).toMatchObject({ description: "Browser Storage (OPFS)" });
   });
 });
+
+describe("buildFolderList with a hand-broken files.mounts", () => {
+  it("skips entries that are not mounts instead of throwing", () => {
+    const entries = [
+      null,
+      { key: "x", name: "X", type: "opfs" },
+      "nonsense",
+      { key: "ok", name: "OK", type: "memory", config: {}, mounted: false },
+    ] as unknown as Parameters<typeof buildFolderList>[0];
+    const items = buildFolderList(entries, types, ["x"]);
+    expect(items.filter((i) => i.kind === "remembered").map((i) => i.label)).toEqual(["OK"]);
+  });
+});

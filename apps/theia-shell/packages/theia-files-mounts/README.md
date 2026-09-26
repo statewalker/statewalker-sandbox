@@ -68,8 +68,14 @@ The explorer shows one top-level workspace folder per mount — the main storage
 first, then `files.mounts` in order — with no single "Files" root. A
 multi-root workspace file lists them (`{ "folders": [{ "path": "file:///<key>",
 "name": "<name>" }] }`); `MountService` rewrites its `folders` whenever the
-mounts change and keeps everything else, so workspace-scope settings (which
-Theia stores there) work too.
+mounts change — editing only `folders`, as JSONC, so comments, trailing
+commas and every other key stay — and workspace-scope settings (which Theia
+stores there) work too. A file it cannot parse is left alone and reported. At
+startup it only creates a missing file; the full list follows once the
+settings are read.
+
+Mount paths cannot start with `.` (reserved for system mounts) or contain
+`/ \ # ? %` (they would change the root's URI).
 
 Theia 1.76 opens only `file:` workspaces, so the file lives in the `file:` tree:
 `file:///.workspace/mounts.theia-workspace`, a system mount over the main
@@ -148,8 +154,6 @@ Storage…*.
 
 ## Known gaps
 
-- Comments in a hand-edited workspace file are lost when its `folders` are
-  rewritten.
 - Theia fires a preference change before it writes `settings.json`; a reload in
   the next instant loses a mount just made.
 - `CompositeFilesApi` has no `unmount` yet

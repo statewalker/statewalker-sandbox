@@ -196,3 +196,14 @@ test("the File menu offers Mount File System… and Choose Main Storage…", asy
   await page.locator(".lm-Menu-item", { hasText: "Mount File System…" }).click();
   await expect(folderRow(page, "New In-Memory Folder…")).toBeVisible();
 });
+
+test("a broken files.mounts entry does not break Add Folder to Workspace", async ({ page }) => {
+  await start(page, "?storage=memory");
+  await writeSettings(
+    page,
+    '{ "files.mounts": [ null, { "key": "x", "name": "X", "type": "opfs" }, { "key": "kept", "name": "Kept", "type": "memory", "config": {}, "mounted": false } ] }',
+  );
+  await openFolderList(page);
+  await expect(folderRow(page, "Kept")).toBeVisible();
+  await expect(folderRow(page, "New In-Memory Folder…")).toBeVisible();
+});

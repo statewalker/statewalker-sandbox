@@ -20,8 +20,8 @@ export function suggestKey(name: string, taken: Iterable<string>): string {
 /** Why `key` cannot name a mount, or undefined if it can. */
 export function validateKey(key: string, taken: Iterable<string>): string | undefined {
   if (!key) return "A key is required.";
-  if (key === "." || key === "..") return `"${key}" cannot be a key.`;
-  if (key.includes("/")) return "A key cannot contain '/'.";
+  if (key.startsWith(".")) return "A mount path cannot start with '.' (reserved for the system).";
+  if (/[/\\#?%]/.test(key)) return "A mount path cannot contain / \\ # ? or %.";
   if (new Set(taken).has(key)) return `The key "${key}" is already used.`;
   return undefined;
 }

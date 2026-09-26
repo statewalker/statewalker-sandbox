@@ -21,7 +21,10 @@ describe("mount keys", () => {
     expect(validateKey("..", [])).toBeDefined();
     expect(validateKey("a/b", [])).toMatch(/\//);
     expect(validateKey("cloud", ["cloud"])).toMatch(/already used/);
-    expect(validateKey(".theia", [])).toBeUndefined();
+    // A leading dot is reserved for system mounts (never a root, so never reachable).
+    expect(validateKey(".data", [])).toMatch(/\./);
+    // Characters that change a URI's meaning would give a dead root.
+    for (const key of ["notes#1", "a?b", "50%", "a\\b"]) expect(validateKey(key, [])).toBeDefined();
     expect(validateKey("my-disk", ["cloud"])).toBeUndefined();
   });
 });

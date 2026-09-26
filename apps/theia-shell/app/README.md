@@ -137,11 +137,11 @@ pnpm --filter @theia-shell/theia-image-viewer test # 9 unit tests: MIME types, f
 pnpm --filter @theia-shell/theia-pdf-viewer test   # 5 unit tests: the generated PDF
 pnpm --filter @theia-shell/theia-shadcn test       # 6 unit tests: cn, the button variants, data-slots
 pnpm --filter @theia-shell/theia-secret-vault test # 19 unit tests: the vault, the KeyStoreService contract
-pnpm --filter @theia-shell/theia-files-mounts test # 45 unit tests: keys, configs, layers, mount table, workspace file, folder list, form
+pnpm --filter @theia-shell/theia-files-mounts test # 48 unit tests: keys, configs, layers, mount table, workspace file, folder list, form
 pnpm --filter @theia-shell/theia-files-s3 test     # 4 unit tests: client options, the RustFS fixture's CORS
 pnpm --filter @theia-shell/app-files test          # 8 unit tests: seeding, the PNG encoder
 pnpm --filter @theia-shell/app-style test          # 6 unit tests on the compiled CSS (build first)
-pnpm --filter @theia-shell/app test:e2e            # 58 Playwright tests against the static build
+pnpm --filter @theia-shell/app test:e2e            # 59 Playwright tests against the static build
 ```
 
 The 4 S3 e2e tests and one unit test run against RustFS in Docker
