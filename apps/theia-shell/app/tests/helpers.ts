@@ -30,10 +30,14 @@ export async function runFromPalette(page: Page, label: string) {
     await expect(input).toBeFocused({ timeout: 1000 });
   }).toPass();
   await input.pressSequentially(label);
-  await expect(
-    page.locator(".quick-input-list .monaco-list-row.focused", { hasText: label }),
-  ).toBeVisible();
-  await page.keyboard.press("Enter");
+  // The row with this exact label: fuzzy ranking may put a similar command first
+  // (e.g. "Open Workspace Settings (JSON)" in a multi-root workspace).
+  const row = page
+    .locator(".quick-input-list .monaco-list-row")
+    .filter({ has: page.locator(".monaco-icon-label", { hasText: label }) })
+    .first();
+  await expect(row).toBeVisible();
+  await row.click();
 }
 
 export async function openFile(page: Page, ...segments: string[]) {

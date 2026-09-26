@@ -108,7 +108,7 @@ export class MountCommandContribution implements CommandContribution, MenuContri
       : types.find((t) => t.id === picked?.id);
     if (!type) return;
     const taken = [
-      ...(this.mounts.mainKey() ? [this.mounts.mainKey() as string] : []),
+      ...this.mounts.reservedKeys(),
       ...this.mounts
         .configuredMounts()
         .map((m) => m.key)

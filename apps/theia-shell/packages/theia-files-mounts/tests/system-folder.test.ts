@@ -10,6 +10,7 @@ describe("system folder", () => {
     await ensureSystemFolder(files);
     expect(await hasSystemFolder(files)).toBe(true);
     expect((await files.stats("/.shell/settings"))?.kind).toBe("directory");
+    expect((await files.stats("/.shell/workspace"))?.kind).toBe("directory");
     await ensureSystemFolder(files); // idempotent
   });
 

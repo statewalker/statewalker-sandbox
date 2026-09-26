@@ -1,6 +1,6 @@
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { describe, expect, it } from "vitest";
-import { mountsSetting, validateMountConfigs } from "../src/common/mount-config";
+import { isMounted, mountsSetting, validateMountConfigs } from "../src/common/mount-config";
 import type { MountType } from "../src/common/mount-types";
 
 const s3: MountType = {
@@ -66,5 +66,30 @@ describe("mountsSetting", () => {
     const raw = { key: "x" };
     expect(mountsSetting(raw, defaults)).toBe(raw);
     expect(validateMountConfigs(mountsSetting(raw, defaults), types, []).errors).toHaveLength(1);
+  });
+});
+
+describe("remembered folders", () => {
+  it("accepts mounted: false and keeps the key taken", () => {
+    const raw = [
+      { key: "cloud", name: "Cloud", type: "s3", config: { endpoint: "http://x" }, mounted: false },
+      { key: "cloud", name: "Again", type: "s3", config: { endpoint: "http://x" } },
+    ];
+    const result = validateMountConfigs(raw, types, []);
+    expect(result.valid.map((m) => m.key)).toEqual(["cloud"]);
+    expect(result.valid[0].mounted).toBe(false);
+    expect(result.errors).toHaveLength(1);
+  });
+
+  it("refuses a mounted flag that is not a boolean", () => {
+    const raw = [
+      { key: "a", name: "A", type: "s3", config: { endpoint: "http://x" }, mounted: "no" },
+    ];
+    expect(validateMountConfigs(raw, types, []).errors[0]).toMatch(/mounted/);
+  });
+
+  it("isMounted: absent or true is mounted", () => {
+    expect(isMounted({ key: "a", name: "A", type: "s3", config: {} })).toBe(true);
+    expect(isMounted({ key: "a", name: "A", type: "s3", config: {}, mounted: false })).toBe(false);
   });
 });

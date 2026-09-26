@@ -3,13 +3,15 @@ import type { FilesApi } from "@statewalker/webrun-files";
 /** In the main storage: settings, vault key and secrets. Never shown in the file tree. */
 export const SYSTEM_FOLDER = "/.shell";
 export const SETTINGS_FOLDER = "/.shell/settings";
+/** The workspace file's folder, mounted at `/.workspace`. */
+export const WORKSPACE_FOLDER = "/.shell/workspace";
 
 export async function hasSystemFolder(files: FilesApi): Promise<boolean> {
   return (await files.stats(SYSTEM_FOLDER))?.kind === "directory";
 }
 
 export async function ensureSystemFolder(files: FilesApi): Promise<void> {
-  for (const path of [SYSTEM_FOLDER, SETTINGS_FOLDER]) {
+  for (const path of [SYSTEM_FOLDER, SETTINGS_FOLDER, WORKSPACE_FOLDER]) {
     if (!(await files.exists(path))) await files.mkdir(path);
   }
 }

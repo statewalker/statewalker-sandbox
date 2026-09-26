@@ -14,6 +14,8 @@ export interface MountConfig {
   name: string;
   type: string;
   config: Record<string, string>;
+  /** false: unmounted but remembered (configuration, secrets and local handle kept). */
+  mounted?: boolean;
 }
 
 export interface MountContext {
