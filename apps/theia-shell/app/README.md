@@ -157,7 +157,7 @@ pnpm --filter @theia-shell/app test:e2e            # 64 Playwright tests against
 E2E_PORT=3110 pnpm --filter @theia-shell/app test:e2e  # the same, on another port
 ```
 
-The 4 S3 e2e tests and one unit test run against RustFS in Docker
+The 5 S3 e2e tests and one unit test run against RustFS in Docker
 ([`tools/rustfs.mjs`](../tools/rustfs.mjs)) and are skipped without Docker.
 
 The e2e tests serve `lib/frontend` with a plain static server and drive

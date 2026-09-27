@@ -18,7 +18,9 @@ once, so bad keys, a missing bucket or a CORS refusal show as the mount's status
 **CORS.** A browser only reaches a bucket whose CORS rule allows the app's origin
 and every header the SDK sends. `S3_BROWSER_HEADERS` in
 [`tools/rustfs.mjs`](../../tools/rustfs.mjs) is the list that works (it includes
-`x-amz-checksum-mode`, which reads send); use it for real buckets too.
+`x-amz-checksum-mode`, which reads send, and `x-amz-copy-source` /
+`x-amz-metadata-directive`, which move and copy send — S3 has no native move,
+so `move()` is `CopyObject` + `remove()`); use it for real buckets too.
 
 ## Tests
 
@@ -44,3 +46,9 @@ signed S3 request sends, so the rule lists the SDK's headers explicitly
   SDK's `x-amz-checksum-mode` header was not in the fixture's list (added), and a
   reload right after mounting could come before Theia wrote `settings.json` (the
   tests now wait for it). Green: 4 of 4, twice in a row.
+- **Move and copy within a mount** (`app/tests/s3.spec.ts`, the CopyObject test).
+  Red: 1 of 1 — `S3FilesApi.copy` (used by both `copy()` and `move()`) sent
+  `CopyObjectCommand`, whose `x-amz-copy-source` header was not in the fixture's
+  `AllowedHeaders`; the browser's preflight was refused ("Failed to fetch") and
+  the object never moved. Green: 1 of 1 once `x-amz-copy-source` and
+  `x-amz-metadata-directive` were added; the full suite is 5 of 5.

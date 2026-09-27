@@ -19,6 +19,10 @@ export const S3_BROWSER_HEADERS = [
   "x-amz-sdk-checksum-algorithm",
   "amz-sdk-invocation-id",
   "amz-sdk-request",
+  // CopyObject (move/copy): the SDK signs the copy source and, for a move
+  // (copy + delete), the directive that says to keep the source's metadata.
+  "x-amz-copy-source",
+  "x-amz-metadata-directive",
 ];
 
 export function hasDocker() {

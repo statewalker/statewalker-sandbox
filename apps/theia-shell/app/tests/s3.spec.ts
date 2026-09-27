@@ -84,6 +84,53 @@ test("an S3 bucket mounts, stores files, and keeps its keys out of settings", as
   expect(errors).toEqual([]);
 });
 
+test("within an S3 mount, move and copy a file (CopyObject CORS preflight)", async ({ page }) => {
+  const errors = await start(page, "", { password: "pw" });
+  await mountS3(page, s3.endpoint);
+  await expect(explorer(page).getByText("Cloud", { exact: true })).toBeVisible();
+
+  await page.evaluate(async () => {
+    const files = (
+      window as unknown as {
+        theiaShell: {
+          filesApi: {
+            write(p: string, c: Uint8Array[]): Promise<void>;
+            mkdir(p: string): Promise<void>;
+            move(from: string, to: string): Promise<boolean>;
+            copy(from: string, to: string): Promise<boolean>;
+          };
+        };
+      }
+    ).theiaShell.filesApi;
+    await files.mkdir("/cloud/sub");
+    await files.write("/cloud/move-me.md", [new TextEncoder().encode("move")]);
+    await files.write("/cloud/copy-me.md", [new TextEncoder().encode("copy")]);
+    await files.move("/cloud/move-me.md", "/cloud/sub/move-me.md");
+    await files.copy("/cloud/copy-me.md", "/cloud/sub/copy-me.md");
+  });
+
+  // Moved: present at the destination, gone from the source.
+  const moved = await s3.client.send(
+    new GetObjectCommand({ Bucket: s3.bucket, Key: "sub/move-me.md" }),
+  );
+  expect(await moved.Body?.transformToString()).toBe("move");
+  await expect(
+    s3.client.send(new GetObjectCommand({ Bucket: s3.bucket, Key: "move-me.md" })),
+  ).rejects.toThrow();
+
+  // Copied: present at both the source and the destination.
+  const copiedSource = await s3.client.send(
+    new GetObjectCommand({ Bucket: s3.bucket, Key: "copy-me.md" }),
+  );
+  expect(await copiedSource.Body?.transformToString()).toBe("copy");
+  const copiedTarget = await s3.client.send(
+    new GetObjectCommand({ Bucket: s3.bucket, Key: "sub/copy-me.md" }),
+  );
+  expect(await copiedTarget.Body?.transformToString()).toBe("copy");
+
+  expect(errors).toEqual([]);
+});
+
 test("with the vault skipped, S3 shows as locked, and Unlock mounts it", async ({ page }) => {
   await start(page, "", { password: "pw" });
   await mountS3(page, s3.endpoint);
