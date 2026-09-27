@@ -22,7 +22,9 @@
   font-size: var(--theia-ui-font-size0);
   color: var(--theia-descriptionForeground);
 }
-.file-panel-column {
+.file-panel-column > button {
+  display: block;
+  inline-size: 100%;
   background: none;
   border: none;
   color: inherit;
@@ -30,6 +32,7 @@
   text-align: start;
   padding-block: 2px;
   padding-inline: 4px;
+  font: inherit;
 }
 .file-panel-column.file-panel-name {
   flex: 1 1 auto;
@@ -37,8 +40,11 @@
 .file-panel-size,
 .file-panel-modified {
   flex: none;
-  text-align: end;
   font-variant-numeric: tabular-nums;
+}
+.file-panel-size > button,
+.file-panel-modified > button {
+  text-align: end;
 }
 .file-panel-size {
   inline-size: 7em;

@@ -94,7 +94,7 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
         const folder = this.folder;
         if (folder && event.changes.some((change) => change.resource.isEqualOrParent(folder))) {
           void this.files.exists(folder).then((exists) => {
-            if (!exists) void this.navigateToExisting(folder);
+            if (!exists && this.folder?.isEqual(folder)) void this.navigateToExisting(folder);
           });
         }
       }),

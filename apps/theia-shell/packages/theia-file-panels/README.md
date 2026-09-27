@@ -119,5 +119,29 @@ copy/move by drag and drop and by menu commands. Design:
     design doc (`docs/plans/2026-09-26-file-panels.md`) specifies it verbatim on that button —
     an earlier task must have dropped it. The reload test's sort assertion
     (`.file-panel-column[aria-sort=descending]`) is the first test in this suite to check it, so
-    the gap went uncaught until now. Restored the one-line attribute to match the design doc; no
-    other change to that file.
+    the gap went uncaught until now.
+  - **Fix round 1 (code review):** `aria-sort` on a `<button>` is invalid ARIA (only
+    `columnheader`/`rowheader` support it); the initial fix had papered over this with a
+    `biome-ignore`. Restructured each column as `<span role="columnheader" aria-sort={…}>`
+    wrapping the actual `<button>` (the click target and tab stop; the span carries `tabIndex={-1}`
+    so it is not itself a stray focus stop), inside a `<div role="row">` (also `tabIndex={-1}`),
+    matching the ARIA grid-cell pattern — no literal `<table>`, since this is a flex-laid-out
+    column bar, not tabular data. Biome's `useSemanticElements` still nudges toward `<th>`/`<tr>`
+    for both; kept the `div`/`span` structure (a real `<table>` would fight the existing flex
+    layout for no accessibility gain — `role="columnheader"`/`role="row"` outside a literal table
+    is the standard div-based ARIA grid pattern) and added one `biome-ignore
+    lint/a11y/useSemanticElements` per element, same precedent as the crumb `<span>` note above.
+    `useAriaPropsSupportedByRole` no longer fires at all — no ignore needed for it, since
+    `aria-sort` is now on the correct role. Moved the button-specific CSS rules (background,
+    border, color, cursor, padding, text-align, plus `display: block` and full-width so the
+    button fills its cell) from `.file-panel-column` to `.file-panel-column > button`; also split
+    the numeric columns' `text-align: end` onto `.file-panel-size > button, .file-panel-modified >
+    button` (previously on the same selector as their `flex`/`font-variant-numeric`, which stayed
+    on the outer cell) — otherwise the base rule's inherited `text-align: start` on the button
+    would have overridden it and mis-aligned the Size/Modified headers. No test edits were needed:
+    the click still lands on the inner `<button>` and `.file-panel-column[aria-sort=…]` still
+    resolves to the cell.
+  - Also hardened the `onDidFilesChange` watcher: the `files.exists(folder)` check is async, so a
+    user could navigate the panel elsewhere while it was pending; the `.then` now re-checks
+    `this.folder?.isEqual(folder)` before calling `navigateToExisting`, so a stale check can no
+    longer undo a navigation made in the meantime.
