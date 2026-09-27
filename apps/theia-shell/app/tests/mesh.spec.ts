@@ -11,14 +11,14 @@ import { type Browser, type BrowserContext, expect, type Page, test } from "@pla
 import { runFromPalette } from "./helpers";
 import { type MeshStack, startMeshStack } from "./mesh-stack";
 
-const APP = "http://127.0.0.1:3100/";
-
 let stack: MeshStack;
 
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
-  stack = await startMeshStack(APP);
+  // Invitation links open the app itself, whose origin follows E2E_PORT.
+  const app = `${new URL(test.info().project.use.baseURL as string).origin}/`;
+  stack = await startMeshStack(app);
 });
 
 test.afterAll(async () => {

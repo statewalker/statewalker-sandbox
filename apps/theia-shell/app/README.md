@@ -198,7 +198,7 @@ pnpm --filter @theia-shell/theia-httpeers-proxy test # 15 unit tests: routing, h
 pnpm --filter @theia-shell/theia-llm-chat test     # 111 unit tests: llm-chat's core (97, ported) and the setup flow
 pnpm --filter @theia-shell/app-files test          # 8 unit tests: seeding, the PNG encoder
 pnpm --filter @theia-shell/app-style test          # 6 unit tests on the compiled CSS (build first)
-pnpm --filter @theia-shell/app test:e2e            # 64 Playwright tests against the static build
+pnpm --filter @theia-shell/app test:e2e            # 103 Playwright tests against the static build
 E2E_PORT=3110 pnpm --filter @theia-shell/app test:e2e  # the same, on another port
 ```
 
