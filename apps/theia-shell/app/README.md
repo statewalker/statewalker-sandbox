@@ -145,19 +145,21 @@ An app that wants one fixed `FilesApi` and no mounts can leave out
 ```bash
 pnpm --filter @theia-shell/theia-files-api test    # 23 unit tests: the FileSystemProvider contract, external changes
 pnpm --filter @theia-shell/theia-markdown test     # 15 unit tests: outline, rendering, edits
-pnpm --filter @theia-shell/theia-image-viewer test # 9 unit tests: MIME types, fit, zoom steps
-pnpm --filter @theia-shell/theia-pdf-viewer test   # 5 unit tests: the generated PDF
+pnpm --filter @theia-shell/theia-image-viewer test # 22 unit tests: MIME types, fit, zoom steps, which changes reload
+pnpm --filter @theia-shell/theia-pdf-viewer test   # 17 unit tests: the generated PDF, which changes reload
 pnpm --filter @theia-shell/theia-shadcn test       # 6 unit tests: cn, the button variants, data-slots
 pnpm --filter @theia-shell/theia-secret-vault test # 19 unit tests: the vault, the KeyStoreService contract
-pnpm --filter @theia-shell/theia-files-mounts test # 48 unit tests: keys, configs, layers, mount table, workspace file, folder list, form
+pnpm --filter @theia-shell/theia-files-mounts test # 60 unit tests: keys, configs, layers, mount table, workspace file, folder list, form, restore
 pnpm --filter @theia-shell/theia-files-s3 test     # 4 unit tests: client options, the RustFS fixture's CORS
+pnpm --filter @theia-shell/theia-file-panels test  # 63 unit tests: breadcrumb, sorting, formats, transfers, messages, file changes
 pnpm --filter @theia-shell/app-files test          # 8 unit tests: seeding, the PNG encoder
 pnpm --filter @theia-shell/app-style test          # 6 unit tests on the compiled CSS (build first)
-pnpm --filter @theia-shell/app test:e2e            # 64 Playwright tests against the static build
+pnpm --filter @theia-shell/app test:e2e            # 114 Playwright tests against the static build
 E2E_PORT=3110 pnpm --filter @theia-shell/app test:e2e  # the same, on another port
 ```
 
-The 5 S3 e2e tests and one unit test run against RustFS in Docker
+The 11 e2e tests of `s3.spec.ts`, `restore.spec.ts` and the panels' mount-recovery case, and one
+unit test, run against RustFS in Docker
 ([`tools/rustfs.mjs`](../tools/rustfs.mjs)) and are skipped without Docker.
 
 The e2e tests serve `lib/frontend` with a plain static server and drive
@@ -201,7 +203,21 @@ Chromium:
 - S3 against RustFS: files written from the browser land in the bucket, the
   keys are in neither `settings.json` nor `secrets.json` in clear, the mount
   comes back after a reload, "locked" until the vault is unlocked, an
-  unreachable endpoint shown as unavailable, a malformed endpoint refused.
+  unreachable endpoint shown as unavailable, a malformed endpoint refused,
+  copy and move within the bucket;
+- restore after mount (`restore.spec.ts`): files open on an S3 mount come back
+  after a reload once the vault is unlocked — in place when the start-up prompt
+  is answered, however long that takes, and reopened later when it is skipped,
+  also across a second reload; a mount no restored tab uses does not delay
+  startup;
+- the viewers' *Reload* button when a file cannot be read, recovery when an
+  ancestor (a mount) changes, and no reload of a readable viewer on such a
+  change;
+- file panels (`file-panels.spec.ts`): listing, sorting, the breadcrumb and
+  its sibling popups, copy/move by drag and drop and by command (across
+  mounts too), restore after a reload, falling back from a vanished folder
+  and returning to it once it is back (a mount unlocked, or added back to the
+  workspace), and live labels.
 
 Every test also asserts that the page raised no errors.
 
