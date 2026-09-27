@@ -119,3 +119,27 @@ test("an undecryptable secrets.json is reported, even when a remembered key unlo
     page.locator(".theia-notification-message").filter({ hasText: "cannot be decrypted" }).first(),
   ).toBeVisible();
 });
+
+test("the start-up prompt keeps the focus while the workbench restores an open editor behind it", async ({
+  page,
+}) => {
+  // A vault that needs a password, no mount behind it: the layout restore does not wait.
+  await start(page, "", { password: "pw" });
+  await explorer(page).getByText("welcome.md", { exact: true }).dblclick();
+  const lines = page.locator(".theia-editor .view-lines");
+  await expect(lines.last()).toBeVisible();
+  const before = await lines.last().textContent();
+  await page.reload();
+  const dialog = page.locator(".vault-dialog");
+  await expect(dialog).toBeVisible();
+  // Wait until the editor is restored (and would have taken the focus) behind the prompt.
+  await expect(page.locator(".lm-TabBar-tab", { hasText: "welcome.md" })).toBeVisible();
+  await expect(lines.last()).toBeVisible();
+  await page.waitForTimeout(1000);
+  // No click: the keys go wherever the focus is.
+  await page.keyboard.type("pw");
+  await page.keyboard.press("Enter");
+  await expect(dialog).toHaveCount(0);
+  await expect(lines.last()).toHaveText(before as string);
+  await expect(page.locator(".lm-TabBar-tab.theia-mod-dirty")).toHaveCount(0);
+});

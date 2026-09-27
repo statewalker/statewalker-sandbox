@@ -4,6 +4,7 @@ import {
   type DialogMode,
   DialogProps,
 } from "@theia/core/lib/browser/dialogs";
+import { Disposable, DisposableCollection } from "@theia/core/lib/common/disposable";
 
 export type VaultDialogMode = "unlock" | "create" | "change";
 
@@ -86,6 +87,44 @@ export class VaultPasswordDialog extends AbstractDialog<VaultDialogResult> {
     super.onAfterAttach(msg);
     this.addUpdateListener(this.password, "input");
     this.addUpdateListener(this.confirm, "input");
+  }
+
+  /**
+   * Theia makes inert only what the page holds when the dialog opens. The
+   * start-up prompt opens before the workbench is attached and its layout
+   * restored (which focuses the restored editor): whatever is added to the
+   * page while the dialog is open is made inert too, so it cannot take the
+   * focus or the keys, until the dialog closes.
+   */
+  protected override preventTabbingOutsideDialog(elements?: Element[]): Disposable {
+    const toDispose = new DisposableCollection(super.preventTabbingOutsideDialog(elements));
+    const body = this.node.ownerDocument.body;
+    const added: Element[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          // Like Theia: the select dropdown container stays interactive.
+          if (
+            !(node instanceof Element) ||
+            node === this.node ||
+            node.hasAttribute("inert") ||
+            node.id === "select-component-container"
+          ) {
+            continue;
+          }
+          node.setAttribute("inert", "");
+          added.push(node);
+        }
+      }
+    });
+    observer.observe(body, { childList: true });
+    toDispose.push(
+      Disposable.create(() => {
+        observer.disconnect();
+        for (const node of added) node.removeAttribute("inert");
+      }),
+    );
+    return toDispose;
   }
 
   protected override onActivateRequest(

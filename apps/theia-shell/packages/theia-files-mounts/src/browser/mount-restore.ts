@@ -115,10 +115,11 @@ export class MountsRestore implements FrontendApplicationContribution {
   }
 
   onDidInitializeLayout(): void {
-    this.pending = this.restorer.takeFailures().filter((failure) => {
-      const key = mountKeyOf(failure.description.constructionOptions.options);
-      return key !== undefined && this.mounts.status(key)?.state !== "mounted";
-    });
+    // Also those whose mount is mounted by now (an unlock during the restore):
+    // the first reopen below retries them once, and drops a real failure.
+    this.pending = this.restorer
+      .takeFailures()
+      .filter((failure) => mountKeyOf(failure.description.constructionOptions.options));
     if (!this.pending.length) return;
     this.listener = this.mounts.onDidChangeStatus(() => this.reopenQueued());
     void this.reopenQueued();
@@ -132,6 +133,13 @@ export class MountsRestore implements FrontendApplicationContribution {
 
   /** Re-creates the pending widgets whose mount is up now; one failing again is dropped. */
   protected async reopen(): Promise<void> {
+    // Only files on configured mounts: not the main storage (always up — a
+    // failure there is the file's own) nor a mount removed since.
+    await this.mounts.whenConfigured();
+    const configured = new Set(this.mounts.configuredMounts().map((m) => m.key));
+    this.pending = this.pending.filter((failure) =>
+      configured.has(mountKeyOf(failure.description.constructionOptions.options) as string),
+    );
     const ready = this.pending.filter((failure) => {
       const key = mountKeyOf(failure.description.constructionOptions.options) as string;
       return this.mounts.status(key)?.state === "mounted";
@@ -142,7 +150,10 @@ export class MountsRestore implements FrontendApplicationContribution {
       const widget = await this.restorer.recreate(failure);
       if (widget && !widget.isAttached) await this.shell.addWidget(widget, { area: failure.area });
     }
-    if (!this.pending.length) this.listener?.dispose();
+    if (!this.pending.length) {
+      this.listener?.dispose();
+      this.listener = undefined;
+    }
   }
 
   /** Whether the user opened the same file with the same kind of widget meanwhile. */

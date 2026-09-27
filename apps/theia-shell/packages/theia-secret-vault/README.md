@@ -46,6 +46,10 @@ corrupt vault file leaves the vault locked and says so in a notification.
   `VaultService.startupUnlock` resolves once it is over — unlocked silently or
   through the prompt, skipped, or the vault unreadable — so that what needs the
   vault (restoring files on an S3 mount) can wait for exactly that.
+  The workbench is attached and its layout restored while the prompt may still
+  be open: the dialog makes whatever is added to the page meanwhile inert too
+  (Theia's dialogs only inert what is there when they open), so the restored
+  editor cannot take the focus or the keys.
 
 Commands (category *Secrets*): Unlock, Lock, Change Password (re-wraps the data
 key only), Forget Remembered Password, Reset Vault (new key, secrets lost — for a

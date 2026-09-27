@@ -131,9 +131,20 @@ export class MountService {
     await this.configured;
     const waits = () => this.table.configs().map((c) => startupWait(this.table.status(c.key)));
     if (!waits().includes("vault")) return;
+    // Resolved by the vault's UI from its own `onStart`. That runs before the
+    // gate awaiting this (`MountsRestore.onStart`) because the vault module
+    // loads before this one (this package depends on it) and Theia runs the
+    // `onStart`s in binding order; were it otherwise, the gate's bound (not a
+    // hang) would end the wait.
     await this.vaults.startupUnlock;
     // An unlock queued the re-creation of the locked mounts: wait for it.
     await this.queue.run(async () => undefined);
+  }
+
+  /** Resolves once `files.mounts` has been read and applied for the first time. */
+  async whenConfigured(): Promise<void> {
+    await this.start();
+    await this.configured;
   }
 
   types(): Map<string, MountType> {

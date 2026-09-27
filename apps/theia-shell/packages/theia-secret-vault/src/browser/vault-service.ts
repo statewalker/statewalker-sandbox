@@ -32,7 +32,12 @@ export class VaultService {
    */
   readonly startupUnlock: Promise<void> = this.startupDone.promise;
 
-  /** Called by the vault's UI when its start-up prompt is answered. */
+  /**
+   * Called by the vault's UI when its start-up prompt is answered. The UI
+   * starts that prompt in its `onStart`; a contribution awaiting
+   * `startupUnlock` in its own `onStart` must be bound after the vault's UI
+   * (Theia runs the `onStart`s one by one, in binding order) and bound its wait.
+   */
   endStartupUnlock(): void {
     this.startupDone.resolve();
   }
