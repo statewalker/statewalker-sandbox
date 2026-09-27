@@ -9,3 +9,8 @@
   color: var(--theia-errorForeground);
   margin: 0;
 }
+
+/* The start-up prompt opens before the workbench is revealed: above Theia's loading screen. */
+.lm-Widget.dialogOverlay.vault-dialog {
+  z-index: 50001;
+}

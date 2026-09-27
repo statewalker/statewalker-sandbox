@@ -30,8 +30,14 @@ export class VaultUi implements FrontendApplicationContribution, CommandContribu
   @inject(VaultService) protected readonly vaults!: VaultService;
   @inject(MessageService) protected readonly messages!: MessageService;
 
-  onDidInitializeLayout(): void {
-    void this.ensureUnlocked();
+  /**
+   * The start-up prompt opens before the workbench restores its layout, so
+   * that files on mounts needing a secret can be restored once it is answered
+   * (the mounts wait for `VaultService.startupUnlock`). Not awaited: startup
+   * waits for it only where something needs the vault.
+   */
+  onStart(): void {
+    void this.ensureUnlocked().finally(() => this.vaults.endStartupUnlock());
   }
 
   /** Unlocks, asking when it must. Resolves false if the user skipped. */

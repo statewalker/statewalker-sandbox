@@ -16,6 +16,7 @@ import { isMounted, mountsSetting, validateMountConfigs } from "../common/mount-
 import { type ApplyOptions, MountTable } from "../common/mount-table";
 import { type MountConfig, type MountStatus, MountType } from "../common/mount-types";
 import { MountedFilesApi } from "../common/mounted-files-api";
+import { startupWait } from "../common/restore";
 import { SerialQueue } from "../common/serial-queue";
 import { WORKSPACE_FOLDER } from "../common/system-folder";
 import {
@@ -68,6 +69,8 @@ export class MountService {
   protected workspaceMount: { config: MountConfig; api: FilesApi } | undefined;
   protected workspaceSynced: Promise<void> = Promise.resolve();
   protected started: Promise<FilesApi> | undefined;
+  /** The first apply of `files.mounts`, once the preferences are ready. */
+  protected configured: Promise<void> | undefined;
   protected readonly reported = new Set<string>();
   /** Every change to the tree, one at a time; a failed step is reported and the next still runs. */
   protected readonly queue = new SerialQueue();
@@ -97,7 +100,9 @@ export class MountService {
     // Only the fixed mounts yet: create the workspace file if missing, never
     // cut an existing one down to "main only" (the real list follows).
     await this.apply([], {}, { createOnly: true });
-    this.preferences.ready.then(() => this.applyPreferences()).catch((e) => this.report(e));
+    this.configured = this.preferences.ready
+      .then(() => this.applyPreferences())
+      .catch((e) => this.report(e));
     this.preferences.onPreferenceChanged((event) => {
       if (event.preferenceName === MOUNTS_PREFERENCE)
         this.applyPreferences().catch((e) => this.report(e));
@@ -112,6 +117,23 @@ export class MountService {
       layer.onDidChange?.(() => this.rebuildQueued());
     }
     return this.root;
+  }
+
+  /**
+   * Resolves once every mounted `files.mounts` entry has settled: mounted,
+   * failed, or waiting for a click (`needs-access`); one locked behind the
+   * vault settles once the vault's start-up prompt is answered (and, if it
+   * unlocked, the mount re-created). Unbounded: the caller bounds it. Nothing
+   * the mounts need (the main storage, the preferences) may await it.
+   */
+  async settled(): Promise<void> {
+    await this.start();
+    await this.configured;
+    const waits = () => this.table.configs().map((c) => startupWait(this.table.status(c.key)));
+    if (!waits().includes("vault")) return;
+    await this.vaults.startupUnlock;
+    // An unlock queued the re-creation of the locked mounts: wait for it.
+    await this.queue.run(async () => undefined);
   }
 
   types(): Map<string, MountType> {

@@ -122,6 +122,28 @@ The root never waits for preferences — folder-scope preferences are read
 through it — so it starts with the main mount, and the other mounts follow as
 reported changes once preferences are ready.
 
+## Restoring open files after a reload
+
+Theia restores the layout (the open editors and viewers) right after every
+contribution's `onStart`. `MountsRestore.onStart` holds that until the mounts
+have settled (`MountService.settled()`): each mounted `files.mounts` entry is
+mounted, failed, or needs a click (`needs-access` — never waited for); one
+locked behind the vault waits for the vault's start-up prompt to be answered
+(`VaultService.startupUnlock`) and, after an unlock, for its re-creation. The
+wait is bounded (30 s); then startup goes on. Nothing the mounts need (the main
+storage, the preferences) awaits this gate, so it cannot deadlock.
+
+What still could not be restored — the vault prompt skipped, a local folder
+waiting for *Reconnect*, a slow mount — is not lost: `MountsLayoutRestorer`
+(Theia's `ShellLayoutRestorer`, rebound, overriding its protected `inflate`
+and `convertToWidget`) remembers the shell widgets whose creation failed, with
+their area. A file-backed one (a `file:` `uri` option: editors, viewers) on a
+mount that was not mounted at restore is re-created, with its saved state, in
+its area as soon as that mount is `mounted` — unless the file is open in the
+same kind of widget by then. Any other failed widget stays dropped, as in
+Theia. Pending reopens live for the session only: a reload before the mount
+comes up forgets them.
+
 ## Settings
 
 ```json
@@ -177,6 +199,13 @@ Storage…*.
   spike that found Theia refuses non-`file:` workspaces (hence
   `/.workspace`). The later `roots.spec.ts` cases were written after the code;
   the key one was checked by mutation (making *Remove* forget fails it).
+- **Restore after mount**, each seen red first: `tests/restore.test.ts` (8:
+  layout areas, the mount of a widget's URI, what startup waits for, the
+  bounded wait); end to end `app/tests/restore.spec.ts` (RustFS): an editor and
+  a PDF on an S3 mount come back after a reload and the unlock, in place (red
+  without the start-up gate: restored before the unlock), and after the prompt
+  is skipped and *Secrets: Unlock* is run later (red before: the editor tab
+  was gone).
 - **After the final review**, each seen red first: a failed step no longer
   blocks later mount changes (`SerialQueue`, 2 tests); a glob that does not
   compile is skipped and reported (1); a mount that never answers is failed

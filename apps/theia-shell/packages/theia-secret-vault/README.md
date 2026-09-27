@@ -41,6 +41,11 @@ corrupt vault file leaves the vault locked and says so in a notification.
   the password text.
 - A vault on non-persistent storage (in-memory main) is a session vault: a random
   key, no password prompt.
+- The start-up prompt opens in `onStart`, before the workbench restores its
+  layout (above Theia's loading screen), and is not awaited there.
+  `VaultService.startupUnlock` resolves once it is over — unlocked silently or
+  through the prompt, skipped, or the vault unreadable — so that what needs the
+  vault (restoring files on an S3 mount) can wait for exactly that.
 
 Commands (category *Secrets*): Unlock, Lock, Change Password (re-wraps the data
 key only), Forget Remembered Password, Reset Vault (new key, secrets lost — for a

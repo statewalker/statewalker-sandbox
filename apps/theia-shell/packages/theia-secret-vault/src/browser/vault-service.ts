@@ -1,5 +1,6 @@
 import type { FilesApi } from "@statewalker/webrun-files";
 import { Emitter, type Event } from "@theia/core/lib/common/event";
+import { Deferred } from "@theia/core/lib/common/promise-util";
 import { inject, injectable } from "@theia/core/shared/inversify";
 import { SecretVault, WrongPasswordError } from "../common/secret-vault";
 import { IdbStore } from "./idb-store";
@@ -22,6 +23,19 @@ export class VaultService {
 
   protected readonly unlockEmitter = new Emitter<void>();
   readonly onDidUnlock: Event<void> = this.unlockEmitter.event;
+
+  protected readonly startupDone = new Deferred<void>();
+  /**
+   * Resolves once the start-up unlock is over: unlocked silently or through
+   * the prompt, or the prompt skipped (or the vault unreadable). What must not
+   * start before it (restoring files on a mount that needs a secret) awaits it.
+   */
+  readonly startupUnlock: Promise<void> = this.startupDone.promise;
+
+  /** Called by the vault's UI when its start-up prompt is answered. */
+  endStartupUnlock(): void {
+    this.startupDone.resolve();
+  }
 
   vault(): Promise<SecretVault> {
     this.vaultPromise ??= this.location().then(({ files, dir, persistent }) => {

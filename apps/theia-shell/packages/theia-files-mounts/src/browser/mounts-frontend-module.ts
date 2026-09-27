@@ -1,5 +1,6 @@
 import { FrontendApplicationContribution } from "@theia/core/lib/browser/frontend-application-contribution";
 import { LabelProviderContribution } from "@theia/core/lib/browser/label-provider";
+import { ShellLayoutRestorer } from "@theia/core/lib/browser/shell/shell-layout-restorer";
 import { CommandContribution } from "@theia/core/lib/common/command";
 import { bindContributionProvider } from "@theia/core/lib/common/contribution-provider";
 import { EnvVariablesServer } from "@theia/core/lib/common/env-variables";
@@ -24,6 +25,7 @@ import { MountCommandContribution } from "./mount-commands";
 import { MountLabelContribution } from "./mount-label-contribution";
 import { HiddenPathsLayer, SystemFolderLayer } from "./mount-layers";
 import { MountDefaults, mountPreferenceSchema } from "./mount-preferences";
+import { MountsLayoutRestorer, MountsRestore } from "./mount-restore";
 import { LazyFileService, MountService } from "./mount-service";
 import { LocalFolderMountType } from "./mount-types/local-folder-mount-type";
 import { MemoryMountType } from "./mount-types/memory-mount-type";
@@ -90,6 +92,12 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
   rebind(UserStorageContribution).to(ShellUserStorageContribution).inSingletonScope();
   bind(ShellSystemFileServiceContribution).toSelf().inSingletonScope();
   bind(FileServiceContribution).toService(ShellSystemFileServiceContribution);
+
+  // The layout is restored once the mounts are up; what could not be, reopens when it can.
+  bind(MountsLayoutRestorer).toSelf().inSingletonScope();
+  rebind(ShellLayoutRestorer).toService(MountsLayoutRestorer);
+  bind(MountsRestore).toSelf().inSingletonScope();
+  bind(FrontendApplicationContribution).toService(MountsRestore);
 
   bind(NavigatorRefresh).toSelf().inSingletonScope();
   bind(FrontendApplicationContribution).toService(NavigatorRefresh);
