@@ -97,3 +97,57 @@ served by a mesh peer) is a one-line rebinding.
   green in `apps/theia-shell`.
 - Each prototype's README records its question, answer, and red/green runs.
 - The app README explains how to run it and how to provide a different `FilesApi`.
+
+## Stage 2: the mesh
+
+> **Status (2026-09-27): done.** Three extensions, 134 new unit tests, 6 new e2e
+> tests (3 of them on a real mesh on loopback).
+
+Goal: bring httpeers' browser pieces into the app, as Theia extensions over the
+published libraries rather than as embedded pages:
+
+- **peers and the hub**: join from an invitation, the member's state, the
+  peers and what they advertise, invitations for an admin
+  (`httpeers/packages/httpeers-member`, `httpeers-join`);
+- **proxy configuration**: expose outside origins to the mesh from this
+  browser, call other members' proxies (`httpeers/apps/demos/src/proxy`);
+- **the LLM chat**: over the mesh hub's `llm` service, or any
+  OpenAI-compatible endpoint (`httpeers/apps/llm-chat`).
+
+**P8, the one open question**: can an httpeers member (libp2p, Biscuit, the
+ServiceWorker edge, the join widget) run inside Theia's esbuild bundle and join
+a real mesh? It was answered in the app itself, against `tools/mesh-stack.mjs`:
+a relay, the hub daemon and a fake LiteLLM on loopback. Yes, with two seams:
+the edge's worker is copied to `/sw.js` rather than bundled, and
+`webrun-http-browser` needs `import.meta.url`, which a non-ESM bundle does not
+have (fixed upstream in webrun-wire; patched in `app/esbuild.mjs` meanwhile).
+
+**Decisions.**
+
+- *One member per app, in a service.* `MeshService` owns the `PeerSession`, and
+  every extension goes through it. What an extension serves goes through
+  `MeshContribution` (mounts once, adverts on every heartbeat), because the
+  member's mount table is fixed when the session is created.
+- *Native widgets, ported cores.* llm-chat's core (config, sessions, IndexedDB
+  stores, the streaming client, the chat controller, hub discovery) and the
+  proxy demo's route store and upstream have no DOM, so they are ported
+  unchanged with their tests, and the UI is Theia's own (`ReactWidget`, Theia's
+  theme variables). Embedding llm-chat's React tree would have meant a second
+  React and Tailwind in the shell. httpeers' rule is that an app never imports
+  from another app, so these are ports, not imports.
+- *The join widget as is.* `mountJoinWidget` is the one piece every httpeers
+  page shares, including its wording and the Invite panel; the Mesh view hosts
+  it rather than re-implementing it.
+- *httpeers by `link:`.* The libraries are not on npm yet; the workspace links
+  a sibling checkout. Publishing them removes this.
+- *Security model.* Everything from peers is data: replies are sanitized
+  Markdown, a proxy strips the mesh's own headers before an outside origin
+  sees the request, secrets are never persisted, and discovery trusts only the
+  hub's LLM document and URLs under the hub's own mount.
+
+| Package | Role |
+|---|---|
+| `packages/theia-httpeers` | `MeshService`, the Mesh view, status bar, commands, `MeshContribution`, `shellRules()` |
+| `packages/theia-httpeers-proxy` | the `/proxy` mount and the Mesh Proxy view |
+| `packages/theia-llm-chat` | the LLM Chat view over llm-chat's core and a setup state machine for both sources |
+| `tools/mesh-stack.mjs` | a whole mesh on loopback, for the e2e tests and by hand |
