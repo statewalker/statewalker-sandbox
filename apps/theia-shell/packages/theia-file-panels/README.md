@@ -45,8 +45,10 @@ over Theia's own tree rows, not a literal `<table>`.
   later refresh shows the same way, not as a toast.
 - The panel's layout (folder, sort) is restored after a reload. A restored folder — or the folder
   the panel was created at — that no longer exists falls back to its nearest existing ancestor
-  with the notice; one that exists but cannot be read stays, as not available with Retry. Either
-  way the panel is never dropped from the layout.
+  with the notice; one that exists but cannot be read stays, as not available with Retry. A
+  folder outside every workspace root (a layout stored before mounts became roots holds
+  `file:///`) comes back at the first root, with the same notice. Either way the panel is never
+  dropped from the layout.
 
 ## Breadcrumb
 
@@ -55,13 +57,14 @@ navigates there. An overflowing path collapses its middle segments into **…**,
 of the hidden ones.
 
 Every segment has a **▾** that opens a popup of its **sibling folders** — read fresh on open, so
-never stale — with the current one marked; for the first segment, the siblings are the
-workspace roots — the mounts ("Browser Storage", "Temporary", …), each shown by its label — so a
-panel moves between mounts from there; copies and moves between panels on different roots work
-like any other (cross-mount, see Known limits). Arrows, Enter and Esc work in the popup; it closes on an outside click or a focus
-change. Each segment is also a drop target, handled exactly as a drop on a folder row; its drag
-events stop at the segment, so the main area's own drop handling (which would open every dragged
-file in an editor, and whose `link` drop effect would cancel the drop) never sees them.
+never stale — with the current one marked; for the first segment, the siblings are the workspace
+roots — the mounts ("Browser Storage", "Temporary", …), each shown by its label — so a panel moves
+between mounts from there; copies and moves between panels on different roots work like any other
+(cross-mount, see Known limits). Arrows, Enter and Esc work in the popup; it closes on an outside
+click or a focus change. Each segment is also a drop target, handled exactly as a drop on a folder
+row; its drag events stop at the segment, so the main area's own drop handling (which would open
+every dragged file in an editor, and whose `link` drop effect would cancel the drop) never sees
+them.
 
 ## Drops and transfers
 
@@ -187,6 +190,7 @@ protected members only, no private members, no copies of Theia internals:
 | final-review fixes (e2e `file-panels.spec.ts`, new and changed tests) | 8 failed, 3 passed | 11 passed; whole file 30 passed |
 | mounts as workspace roots (unit `breadcrumb-model`: Go Up and fallback stop at a root) | new functions, not yet exported | 53 passed |
 | mounts as workspace roots (e2e `file-panels.spec.ts`) | on the merged tree 28 failed, 2 passed; tests adapted, product unchanged: 3 failed (Go Up / Backspace above a root, removed mount) | whole file 32 passed |
+| a panel never restores outside the roots (unit `outsideRoots`; e2e stored layout at `file:///`) | unit 2 failed; e2e 1 failed (panel at `/`) | unit 55 passed; e2e 33 passed |
 
 ## Notes
 

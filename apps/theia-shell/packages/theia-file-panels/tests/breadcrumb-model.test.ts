@@ -5,6 +5,7 @@ import {
   containingRoot,
   crumbsOf,
   fallbackAncestors,
+  outsideRoots,
   parentWithin,
   siblingSource,
 } from "../src/common/breadcrumb-model";
@@ -99,5 +100,19 @@ describe("fallbackAncestors", () => {
   it("walks to the path root when there is no workspace root", () => {
     expect(paths(fallbackAncestors(u("/a/b"), []))).toEqual(["/a", "/"]);
     expect(paths(fallbackAncestors(u("/a/b"), [u("/")]))).toEqual(["/a", "/"]);
+  });
+});
+
+describe("outsideRoots", () => {
+  const roots = [u("/browser"), u("/temp")];
+  it("is true above the roots — the hidden composite a pre-mount-roots layout stored", () => {
+    expect(outsideRoots(u("/"), roots)).toBe(true);
+    expect(outsideRoots(u("/cloud/x"), roots)).toBe(true);
+  });
+  it("is false at or inside a root, and whenever there are no roots", () => {
+    expect(outsideRoots(u("/browser"), roots)).toBe(false);
+    expect(outsideRoots(u("/temp/a/b"), roots)).toBe(false);
+    expect(outsideRoots(u("/"), [])).toBe(false);
+    expect(outsideRoots(u("/"), [u("/")])).toBe(false);
   });
 });

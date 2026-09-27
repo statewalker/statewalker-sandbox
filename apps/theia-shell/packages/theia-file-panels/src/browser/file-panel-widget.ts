@@ -19,6 +19,7 @@ import { WorkspaceService } from "@theia/workspace/lib/browser/workspace-service
 import {
   type Crumb,
   fallbackAncestors,
+  outsideRoots,
   parentWithin,
   siblingSource,
 } from "../common/breadcrumb-model";
@@ -133,14 +134,17 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
 
   /**
    * `uri`; if it does not exist, its nearest existing ancestor within its workspace root, else
-   * the first workspace root, with a notice. A folder that exists but cannot be read (a locked
-   * mount) stays, shown as not available with Retry. Never throws.
+   * the first workspace root, with a notice. A folder outside every root (a layout stored before
+   * mounts became roots holds `file:///`) goes to the first root the same way. A folder that
+   * exists but cannot be read (a locked mount) stays, shown as not available with Retry. Never
+   * throws.
    */
   protected async navigateToExisting(uri: URI): Promise<void> {
-    const outcome = await this.navigateTo(uri);
-    if (outcome.kind !== "failed" || !isNotFound(outcome.error)) return;
     // The roots may still be loading while the layout is restored: wait for them.
     const roots = (await this.workspace.roots).map((root) => root.resource);
+    if (outsideRoots(uri, roots)) return this.showInstead(uri, await this.defaultFolder());
+    const outcome = await this.navigateTo(uri);
+    if (outcome.kind !== "failed" || !isNotFound(outcome.error)) return;
     for (const candidate of fallbackAncestors(uri, roots)) {
       if (await this.files.exists(candidate).catch(() => false)) {
         return this.showInstead(uri, candidate);
@@ -151,7 +155,9 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
 
   protected async showInstead(gone: URI, shown: URI): Promise<void> {
     if ((await this.navigateTo(shown)).kind !== "shown") return;
-    this.notice = Messages.folderGone(gone.path.base, this.labels.getName(shown));
+    // `file:///` has no basename: name it by its label.
+    const name = gone.path.base || this.labels.getName(gone);
+    this.notice = Messages.folderGone(name, this.labels.getName(shown));
     this.updateEmptyState();
   }
 

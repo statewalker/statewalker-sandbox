@@ -461,6 +461,41 @@ test("a panel on a removed mount falls back to the first root, not above the roo
   ).toBeVisible();
 });
 
+test("a layout stored at the hidden file:/// comes back at the first root", async ({ page }) => {
+  test.slow(); // two full app starts
+  await start(page, "?storage=memory");
+  await openPanel(page);
+  // A layout saved before mounts became roots stores the panel at "file:///" — the read-only
+  // composite above the mounts, which resolves fine. Rewrite the stored folder just before the
+  // app reads its layout on the reload (Theia stores the layout on unload).
+  await page.addInitScript(() => {
+    let rewrites = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i) as string;
+      const value = localStorage.getItem(key) as string;
+      const next = value.replace(
+        /(folder\\*"\s*:\s*\\*")file:\/\/\/browser(\\*")/g,
+        (_, before: string, after: string) => {
+          rewrites++;
+          return `${before}file:///${after}`;
+        },
+      );
+      if (next !== value) localStorage.setItem(key, next);
+    }
+    (window as unknown as { layoutRewrites: number }).layoutRewrites = rewrites;
+  });
+  await page.reload();
+  await openMain(page);
+  expect(
+    await page.evaluate(() => (window as unknown as { layoutRewrites: number }).layoutRewrites),
+  ).toBe(1);
+  await expect(panels(page)).toHaveCount(1);
+  const panel = panels(page).first();
+  await expect(panel.locator(".file-panel-crumb")).toHaveText(["Browser Storage"]);
+  await expect(row(panel, "welcome.md")).toBeVisible();
+  await expect(panel.getByText(/no longer exists — showing “Browser Storage”/)).toBeVisible();
+});
+
 test("a drop on a breadcrumb segment copies there and opens no editor", async ({ page }) => {
   await start(page, "?storage=memory");
   const [a, b] = await twoPanels(page, ["docs"], ["notes"]);

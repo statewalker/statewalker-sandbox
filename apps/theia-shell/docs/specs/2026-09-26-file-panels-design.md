@@ -148,7 +148,8 @@ dialog — natively for explorer drags, through `PanelAwareNavigatorWidget` for 
 - **Freshness**: the tree refreshes on `fileService.onDidFilesChange` for its folder, which covers
   writes from the explorer, other panels and editors. If the current folder is deleted or
   renamed, the panel moves to the nearest existing ancestor within its workspace root (a removed
-  mount: the first root) and shows a short localized notice in its status line. Refresh covers backends that emit no changes.
+  mount: the first root) and shows a short localized notice in its status line. Refresh covers
+  backends that emit no changes.
 
 ## Breadcrumb
 
@@ -277,7 +278,9 @@ the explorer's menu layout.
 - `FilePanelWidget` is a `StatefulWidget` created by its `WidgetFactory` with a unique `{ id }`,
   so Theia's layout restore reopens every panel. Stored: folder URI, sort column and direction.
 - On restore, a folder that does not exist (`FILE_NOT_FOUND`) falls back to its nearest existing
-  ancestor within its workspace root, then to the first workspace root, with a notice. The same holds for the folder a panel
+  ancestor within its workspace root, then to the first workspace root, with a notice. A folder
+  outside every root — a layout stored before mounts became roots holds `file:///` — goes to the
+  first root with the same notice, although it resolves. The same holds for the folder a panel
   was created at (*Open in Files Panel*), which Theia re-creates the panel with before restoring
   its state: creating a panel never fails. A folder that exists but cannot be read (vault locked,
   local folder awaiting permission — any other error) stays: **Not available** with **Retry** —
@@ -357,7 +360,9 @@ Red and green runs are recorded, as in earlier work.
   `feat/theia-shell-mount-roots` lands first; whichever lands second re-runs the other's e2e.
   Mount-roots landed first. Re-running this e2e on it found two places that still reached above
   the roots — Go Up and the vanished-folder fallback walked to `file:///`, which is no longer a
-  workspace folder — now both stop at the containing root. The e2e start inside the main storage;
+  workspace folder — now both stop at the containing root; and a layout stored before mount-roots
+  restored a panel at `file:///`, which resolves — now any folder outside every root falls back to
+  the first root. The e2e start inside the main storage;
   the transfer-failure test targets an unreachable mount (a read-only placeholder) instead of the
   former read-only "Files" root.
 - **No visible translation** until the app gets a translation provider (separate issue).

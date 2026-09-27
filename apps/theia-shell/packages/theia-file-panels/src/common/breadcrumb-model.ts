@@ -55,6 +55,15 @@ export function parentWithin(folder: URI, roots: URI[]): URI | undefined {
 }
 
 /**
+ * True when workspace roots exist but none is or contains `uri` — e.g. `file:///`, the hidden
+ * read-only composite above the mounts, which a layout stored before mounts became roots holds.
+ * A panel never stays there.
+ */
+export function outsideRoots(uri: URI, roots: URI[]): boolean {
+  return roots.length > 0 && !containingRoot(uri, roots);
+}
+
+/**
  * The folders a vanished `uri` may fall back to, nearest first: its ancestors up to and including
  * the workspace root that contains it. None when roots exist but none contains it (a removed
  * mount): the caller then falls back to the first root, never to the space above the roots.
