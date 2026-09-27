@@ -1,7 +1,12 @@
 import type { Widget } from "@theia/core/lib/browser";
 import type { FrontendApplicationContribution } from "@theia/core/lib/browser/frontend-application-contribution";
-import { ApplicationShell } from "@theia/core/lib/browser/shell/application-shell";
 import {
+  ApplicationShell,
+  applicationShellLayoutVersion,
+} from "@theia/core/lib/browser/shell/application-shell";
+import {
+  PERSPECTIVE_LAYOUTS_STORAGE_KEY,
+  type PersistedPerspectiveData,
   ShellLayoutRestorer,
   type WidgetDescription,
 } from "@theia/core/lib/browser/shell/shell-layout-restorer";
@@ -10,20 +15,28 @@ import { WidgetManager } from "@theia/core/lib/browser/widget-manager";
 import type { Disposable } from "@theia/core/lib/common/disposable";
 import { ILogger } from "@theia/core/lib/common/logger";
 import { inject, injectable, named } from "@theia/core/shared/inversify";
+import { VaultService } from "@theia-shell/theia-secret-vault/lib/browser/vault-service";
 import {
   descriptionKey,
   layoutAreas,
+  layoutMountKeys,
+  mergePending,
   mountKeyOf,
   type RestoreArea,
+  storedPending,
   within,
 } from "../common/restore";
 import { SerialQueue } from "../common/serial-queue";
 import { MountService } from "./mount-service";
 
-/** A shell widget Theia could not re-create when it restored the layout. */
+/**
+ * A shell widget Theia could not re-create when it restored the layout.
+ * `context` is the restore's own; one kept from an earlier session (see
+ * `MountsRestore`) has none and is re-created in a fresh one.
+ */
 export interface RestoreFailure {
   readonly description: WidgetDescription;
-  readonly context: ShellLayoutRestorer.InflateContext;
+  readonly context?: ShellLayoutRestorer.InflateContext;
   readonly area: RestoreArea;
 }
 
@@ -31,6 +44,11 @@ export interface RestoreFailure {
  * Theia's layout restorer, unchanged except that it remembers the shell's
  * widgets it could not re-create (Theia drops them), with their area, so that
  * they can be re-created later — through the same restorer, with their state.
+ *
+ * Assumes one perspective, as this app has: Theia inflates every saved
+ * perspective's layout, so a failure in an inactive one would be reopened
+ * into the active shell, and `areas` (keyed by description) could mix up two
+ * perspectives holding the same widget in different areas.
  */
 @injectable()
 export class MountsLayoutRestorer extends ShellLayoutRestorer {
@@ -54,7 +72,35 @@ export class MountsLayoutRestorer extends ShellLayoutRestorer {
 
   /** Re-creates a widget that failed at restore; undefined if it fails again. */
   recreate(failure: RestoreFailure): Promise<Widget | undefined> {
-    return super.convertToWidget(failure.description, failure.context);
+    const context = failure.context ?? {
+      layout: {},
+      layoutVersion: applicationShellLayoutVersion,
+      migrations: [],
+    };
+    return super.convertToWidget(failure.description, context);
+  }
+
+  /**
+   * The mounts the stored layout's widgets live on, read where Theia reads it
+   * (the perspectives' layouts, or the single legacy one), before it does.
+   */
+  async savedMountKeys(): Promise<string[]> {
+    const layouts: unknown[] = [];
+    const perspectives = await this.storageService.getData<PersistedPerspectiveData>(
+      PERSPECTIVE_LAYOUTS_STORAGE_KEY,
+    );
+    if (perspectives?.layouts) layouts.push(...Object.values(perspectives.layouts));
+    else layouts.push(await this.storageService.getData<string>(this.storageKey));
+    const keys = new Set<string>();
+    for (const layout of layouts) {
+      if (typeof layout !== "string") continue;
+      try {
+        for (const key of layoutMountKeys(JSON.parse(layout))) keys.add(key);
+      } catch {
+        // Not JSON: Theia's own inflate reports it.
+      }
+    }
+    return [...keys];
   }
 
   protected override async inflate(layoutData: string): Promise<ApplicationShell.LayoutData> {
@@ -81,16 +127,27 @@ export class MountsLayoutRestorer extends ShellLayoutRestorer {
 }
 
 /**
- * Restoring the layout waits for the mounts, and what still could not be
- * restored reopens once its mount is up.
+ * Restoring the layout waits for the mounts it needs, and what still could not
+ * be restored reopens once its mount is up — also after further reloads.
  *
  * - `onStart` (Theia awaits it before restoring the layout) waits until the
- *   mounts have settled — see `MountService.settled` — for at most
- *   `startupTimeout`; then startup goes on regardless.
- * - A file-backed widget (an editor, a viewer: a `file:` `uri` option) on a
- *   mount that was not mounted when the layout was restored is re-created in
- *   its area as soon as that mount is `mounted` (after an unlock, a Reconnect,
- *   a slow start). Everything else Theia could not restore stays dropped.
+ *   mounts the stored layout (and the pending reopens) use have been applied
+ *   — `MountService.applyStartup`; the others do not delay start-up — and, if
+ *   one of them is locked behind the vault, for the vault's start-up prompt
+ *   and the re-creation an unlock queues. Each non-interactive wait is bounded
+ *   by `startupTimeout`; the user's own time is not: the boot gate (before the
+ *   main storage opens) and a shown vault prompt both have a way out.
+ *   The vault's `onStart`, which starts that prompt, runs first: the vault
+ *   module loads before this one (this package depends on it) and Theia runs
+ *   the `onStart`s in binding order; were it otherwise, the bound would end
+ *   the wait, not a hang.
+ * - A file-backed widget (an editor, a viewer, the Markdown preview: a `file:`
+ *   `uri` option) on a mount that was not mounted when the layout was restored
+ *   is re-created in its area as soon as that mount is `mounted` (after an
+ *   unlock, a Reconnect, a slow start). Everything else Theia could not
+ *   restore stays dropped.
+ * - The widgets still waiting are kept in the `StorageService` (Theia stores
+ *   the layout on unload without them), and merged back after the next restore.
  */
 @injectable()
 export class MountsRestore implements FrontendApplicationContribution {
@@ -98,31 +155,78 @@ export class MountsRestore implements FrontendApplicationContribution {
   @inject(MountsLayoutRestorer) protected readonly restorer!: MountsLayoutRestorer;
   @inject(ApplicationShell) protected readonly shell!: ApplicationShell;
   @inject(WidgetManager) protected readonly widgets!: WidgetManager;
+  @inject(StorageService) protected readonly storage!: StorageService;
+  @inject(VaultService) protected readonly vaults!: VaultService;
   @inject(ILogger) protected readonly logger!: ILogger;
 
-  /** How long startup waits for the mounts before restoring the layout anyway (ms). */
+  /** How long start-up waits for a non-interactive step before restoring the layout anyway (ms). */
   protected readonly startupTimeout = 30_000;
+  /** Where the pending reopens are kept across reloads. */
+  protected readonly storageKey = "theia-shell.mounts.pending-reopens";
   protected pending: RestoreFailure[] = [];
   protected readonly queue = new SerialQueue();
   protected listener: Disposable | undefined;
 
-  async onStart(): Promise<void> {
-    if (!(await within(this.mounts.settled(), this.startupTimeout))) {
-      this.logger.warn(
-        `Mounts: not settled after ${this.startupTimeout / 1000} s; restoring the layout anyway`,
-      );
+  /** The mounts restoring needs: those of the stored layout and of the pending reopens. */
+  async startupMountKeys(): Promise<string[]> {
+    const keys = new Set(await this.restorer.savedMountKeys());
+    for (const entry of await this.storedPending()) {
+      const key = mountKeyOf(entry.description.constructionOptions.options);
+      if (key !== undefined) keys.add(key);
     }
+    return [...keys];
   }
 
-  onDidInitializeLayout(): void {
+  async onStart(): Promise<void> {
+    // The boot gate (a local-folder main storage) waits for a click: the user's time.
+    await this.mounts.start();
+    if (!(await within(this.mounts.whenStartupApplied(), this.startupTimeout))) {
+      return this.notSettled();
+    }
+    if (!this.mounts.startupLocked()) return;
+    if (!(await this.vaultAnswered())) return this.notSettled();
+    if (!this.vaults.current?.unlocked) return; // skipped: the tabs reopen after a later unlock
+    // The re-creation the unlock queued; the bound restarts after the answer.
+    if (!(await within(this.mounts.idle(), this.startupTimeout))) this.notSettled();
+  }
+
+  /** Waits for the vault's start-up prompt; unbounded once it is shown (it has Skip). */
+  protected async vaultAnswered(): Promise<boolean> {
+    if (await within(this.vaults.startupUnlock, this.startupTimeout)) return true;
+    if (!this.vaults.startupPromptShown) return false;
+    await this.vaults.startupUnlock;
+    return true;
+  }
+
+  protected notSettled(): void {
+    this.logger.warn(
+      `Mounts: not settled after ${this.startupTimeout / 1000} s; restoring the layout anyway`,
+    );
+  }
+
+  async onDidInitializeLayout(): Promise<void> {
     // Also those whose mount is mounted by now (an unlock during the restore):
     // the first reopen below retries them once, and drops a real failure.
-    this.pending = this.restorer
+    const failures = this.restorer
       .takeFailures()
       .filter((failure) => mountKeyOf(failure.description.constructionOptions.options));
+    this.pending = mergePending<RestoreFailure>(failures, await this.storedPending());
+    this.store();
     if (!this.pending.length) return;
     this.listener = this.mounts.onDidChangeStatus(() => this.reopenQueued());
     void this.reopenQueued();
+  }
+
+  protected async storedPending(): Promise<RestoreFailure[]> {
+    return storedPending(await this.storage.getData(this.storageKey)) as RestoreFailure[];
+  }
+
+  /** Keeps the pending reopens for the next session (nothing once none is left). */
+  protected store(): void {
+    const entries = this.pending.map(({ description, area }) => ({ description, area }));
+    this.storage
+      .setData(this.storageKey, entries.length ? entries : undefined)
+      .catch((e) => this.logger.error("Mounts: could not keep the files to reopen", e));
   }
 
   protected reopenQueued(): Promise<void> {
@@ -145,6 +249,7 @@ export class MountsRestore implements FrontendApplicationContribution {
       return this.mounts.status(key)?.state === "mounted";
     });
     this.pending = this.pending.filter((failure) => !ready.includes(failure));
+    this.store();
     for (const failure of ready) {
       if (this.isOpen(failure)) continue;
       const widget = await this.restorer.recreate(failure);

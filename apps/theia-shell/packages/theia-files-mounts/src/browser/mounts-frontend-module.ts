@@ -26,7 +26,7 @@ import { MountLabelContribution } from "./mount-label-contribution";
 import { HiddenPathsLayer, SystemFolderLayer } from "./mount-layers";
 import { MountDefaults, mountPreferenceSchema } from "./mount-preferences";
 import { MountsLayoutRestorer, MountsRestore } from "./mount-restore";
-import { LazyFileService, MountService } from "./mount-service";
+import { LazyFileService, MountService, StartupMountKeys } from "./mount-service";
 import { LocalFolderMountType } from "./mount-types/local-folder-mount-type";
 import { MemoryMountType } from "./mount-types/memory-mount-type";
 import { OpfsMountType } from "./mount-types/opfs-mount-type";
@@ -98,6 +98,11 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
   rebind(ShellLayoutRestorer).toService(MountsLayoutRestorer);
   bind(MountsRestore).toSelf().inSingletonScope();
   bind(FrontendApplicationContribution).toService(MountsRestore);
+  bind(StartupMountKeys).toDynamicValue(
+    ({ container }) =>
+      () =>
+        container.get(MountsRestore).startupMountKeys(),
+  );
 
   bind(NavigatorRefresh).toSelf().inSingletonScope();
   bind(FrontendApplicationContribution).toService(NavigatorRefresh);

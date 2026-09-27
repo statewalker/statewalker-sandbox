@@ -331,12 +331,15 @@ work.
 - An invalid `files.mounts` entry (unknown type, bad key, duplicate, missing
   required field) is skipped and reported once in a notification.
 - After a reload, the layout (open editors and viewers) is restored only once
-  the mounts have settled: mounted, failed, or `needs-access` (not waited
-  for — only a click can grant it); a mount that needs a secret waits for the
-  vault's start-up prompt, which therefore opens before the layout is
-  restored. The wait is bounded (30 s). A file-backed tab that still could not
-  be restored (prompt skipped, *Reconnect* pending, timeout) is remembered and
-  reopens in its area when its mount becomes `mounted`.
+  the mounts it uses (those of its file-backed tabs, applied first; the others
+  do not delay startup) have settled: mounted, failed, or `needs-access` (not
+  waited for — only a click can grant it); a mount that needs a secret waits
+  for the vault's start-up prompt, which therefore opens before the layout is
+  restored. The non-interactive waits are bounded (30 s each); the time the
+  user takes to answer a shown prompt is not. A file-backed tab that still
+  could not be restored (prompt skipped, *Reconnect* pending, timeout) is
+  remembered — across further reloads — and reopens in its area when its
+  mount becomes `mounted`.
 
 ## Follow-up in webrun-files: `CompositeFilesApi.unmount`
 

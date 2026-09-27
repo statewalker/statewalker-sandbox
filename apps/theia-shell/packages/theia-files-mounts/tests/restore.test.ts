@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   descriptionKey,
   layoutAreas,
+  layoutMountKeys,
+  mergePending,
   mountKeyOf,
+  type PendingReopen,
   startupWait,
+  storedPending,
   within,
 } from "../src/common/restore";
 
@@ -82,5 +86,64 @@ describe("within", () => {
 
   it("is false when the time runs out first", async () => {
     expect(await within(new Promise(() => undefined), 10)).toBe(false);
+  });
+});
+
+describe("layoutMountKeys", () => {
+  it("is the mounts the shell's file-backed widgets live on, in every area", () => {
+    const layout = {
+      mainPanel: {
+        main: {
+          type: "tab-area",
+          widgets: [desc(editor("file:///cloud/notes.md")), desc(editor("file:///browser/a.md"))],
+        },
+      },
+      bottomPanel: { config: { main: { widgets: [desc(editor("file:///local/log.txt"))] } } },
+      leftPanel: { items: [{ widget: desc({ factoryId: "files" }) }] },
+    };
+    expect([...layoutMountKeys(JSON.parse(JSON.stringify(layout)))].sort()).toEqual([
+      "browser",
+      "cloud",
+      "local",
+    ]);
+  });
+
+  it("skips nested widget state (a string) and non-file widgets; empty for no layout", () => {
+    const nested = {
+      constructionOptions: { factoryId: "outer" },
+      innerWidgetState: JSON.stringify({ widgets: [desc(editor("file:///cloud/x.md"))] }),
+    };
+    expect(layoutMountKeys({ mainPanel: { widgets: [nested] } }).size).toBe(0);
+    expect(layoutMountKeys(undefined).size).toBe(0);
+  });
+});
+
+describe("storedPending and mergePending", () => {
+  const pending = (uri: string, area: PendingReopen["area"] = "main"): PendingReopen => ({
+    description: desc(editor(uri)),
+    area,
+  });
+
+  it("keeps only well-formed stored entries", () => {
+    const good = pending("file:///cloud/a.md", "bottom");
+    expect(storedPending(undefined)).toEqual([]);
+    expect(storedPending("x")).toEqual([]);
+    expect(
+      storedPending([
+        good,
+        null,
+        { area: "main" },
+        { ...good, area: "nowhere" },
+        { description: {} },
+      ]),
+    ).toEqual([good]);
+  });
+
+  it("merges the new failures with the stored ones, the new first, each widget once", () => {
+    const a = pending("file:///cloud/a.md");
+    const b = pending("file:///cloud/b.md");
+    const aAgain = pending("file:///cloud/a.md", "bottom");
+    expect(mergePending([a], [aAgain, b])).toEqual([a, b]);
+    expect(mergePending([], [b, b])).toEqual([b]);
   });
 });

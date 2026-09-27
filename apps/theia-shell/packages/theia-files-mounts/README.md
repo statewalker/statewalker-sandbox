@@ -126,23 +126,44 @@ reported changes once preferences are ready.
 
 Theia restores the layout (the open editors and viewers) right after every
 contribution's `onStart`. `MountsRestore.onStart` holds that until the mounts
-have settled (`MountService.settled()`): each mounted `files.mounts` entry is
-mounted, failed, or needs a click (`needs-access` — never waited for); one
-locked behind the vault waits for the vault's start-up prompt to be answered
-(`VaultService.startupUnlock`) and, after an unlock, for its re-creation. The
-wait is bounded (30 s); then startup goes on. Nothing the mounts need (the main
-storage, the preferences) awaits this gate, so it cannot deadlock.
+the restore needs are up — those the stored layout's widgets live on (their
+`file:` `uri`, read from the stored layout through `MountsLayoutRestorer`)
+plus those of the pending reopens below. `MountService` applies exactly those
+first; the other mounts follow at once and do not delay startup. So the gate
+costs nothing when no restored tab is on a mount, and otherwise what those
+mounts take to come up: an S3 mount's first listing (one round trip), up to
+its create timeout (15 s) for a host that does not answer. A mount that
+fails, or needs a click (`needs-access`), is not waited for. One locked behind
+the vault waits for the vault's start-up prompt (`VaultService.startupUnlock`)
+and, after an unlock, for its re-creation. Each non-interactive wait is
+bounded (30 s, restarted after the prompt is answered); the user's own time is
+not — the boot gate's click and a shown vault prompt, which has Skip. Nothing
+the mounts need (the main storage, the preferences) awaits this gate, so it
+cannot deadlock.
 
 What still could not be restored — the vault prompt skipped, a local folder
 waiting for *Reconnect*, a slow mount — is not lost: `MountsLayoutRestorer`
 (Theia's `ShellLayoutRestorer`, rebound, overriding its protected `inflate`
 and `convertToWidget`) remembers the shell widgets whose creation failed, with
-their area. A file-backed one (a `file:` `uri` option: editors, viewers) on a
-mount that was not mounted at restore is re-created, with its saved state, in
-its area as soon as that mount is `mounted` — unless the file is open in the
-same kind of widget by then. Any other failed widget stays dropped, as in
-Theia. Pending reopens live for the session only: a reload before the mount
-comes up forgets them.
+their area. A file-backed one (a `file:` `uri` option: editors, viewers, the
+Markdown preview — whose creation reads the file, so it throws while the file
+is missing) on a mount that was not mounted at restore is re-created, with its
+saved state, as soon as that mount is `mounted` — unless the file is open in
+the same kind of widget by then. It lands in the current tab bar of its area
+and does not become active: its split and position in the tab bar are not
+kept. Any other failed widget stays dropped, as in Theia.
+
+The pending reopens outlive a reload: Theia stores the layout on unload without
+them, so `MountsRestore` keeps them (description and area) in Theia's
+`StorageService` under `theia-shell.mounts.pending-reopens`, merges them with
+the next restore's failures (each widget once; one open by then is skipped),
+drops those of a mount removed from `files.mounts`, and forgets each once it is
+reopened or dropped. One is re-created in a fresh restore context (no layout
+migrations): a layout version change in between is not accounted for.
+
+The app has one perspective, and this relies on it: Theia inflates every
+saved perspective's layout, so failures of an inactive perspective would be
+reopened into the active shell.
 
 ## Settings
 
@@ -206,6 +227,14 @@ Storage…*.
   without the start-up gate: restored before the unlock), and after the prompt
   is skipped and *Secrets: Unlock* is run later (red before: the editor tab
   was gone).
+- **Restore, final review**, each seen red first: `tests/restore.test.ts` (+4:
+  the mounts a stored layout uses, the stored pending reopens read back and
+  merged); end to end in `restore.spec.ts`: tabs still waiting survive a
+  second reload (red: the editor never came back), a shown prompt answered
+  after 32 s still restores the layout in place (red: the workbench appeared
+  after 30 s), and a mount no restored tab uses — an S3 host that never
+  answers — no longer delays startup (red: `MountsRestore.onStart` took 15 s;
+  green: 0.6 s). The package's 60 of 60.
 - **After the final review**, each seen red first: a failed step no longer
   blocks later mount changes (`SerialQueue`, 2 tests); a glob that does not
   compile is skipped and reported (1); a mount that never answers is failed

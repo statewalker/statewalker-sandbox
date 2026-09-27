@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 // @ts-expect-error — plain JS module
 import { hasDocker, startRustFs } from "../../tools/rustfs.mjs";
-import { explorer, mountNew, runFromPalette, start, unlockVault } from "./helpers";
+import { explorer, mountNew, openMain, runFromPalette, start, unlockVault } from "./helpers";
 
 test.skip(!hasDocker(), "Docker is not available: the S3 tests need RustFS");
 test.setTimeout(180_000);
@@ -95,4 +95,77 @@ test("with the unlock prompt skipped at reload, the tabs come back after a later
   await runFromPalette(page, "Secrets: Unlock");
   await unlockVault(page, "pw");
   await expectBothRestored(page);
+});
+
+test("tabs still waiting for their mount survive another reload", async ({ page }) => {
+  await openS3Files(page);
+  for (let i = 0; i < 2; i++) {
+    await page.reload();
+    await page.locator(".vault-dialog .theia-button.secondary").click(); // Skip
+    await expect(page.locator(".vault-dialog")).toHaveCount(0);
+    await expect(explorer(page).getByText("Cloud (locked)", { exact: true })).toBeVisible();
+    // The layout is restored (the PDF viewer always is); the editor could not be.
+    await expect(tab(page, "sample.pdf")).toHaveCount(1);
+    await expect(page.locator(".theia-preload")).toHaveCount(0);
+    await page.waitForTimeout(1_000);
+    await expect(tab(page, "notes.md")).toHaveCount(0);
+  }
+  await runFromPalette(page, "Secrets: Unlock");
+  await unlockVault(page, "pw");
+  await expectBothRestored(page);
+});
+
+test("the time the user takes to answer the start-up prompt does not count", async ({ page }) => {
+  await openS3Files(page);
+  await page.reload();
+  await expect(page.locator(".vault-dialog")).toBeVisible();
+  // Longer than the start-up bound (30 s): the prompt is up, so the restore keeps waiting.
+  await page.waitForTimeout(32_000);
+  await expect(page.locator(".theia-preload")).toHaveCount(1);
+  await unlockVault(page, "pw");
+  // Restored in place by the layout, not re-added afterwards.
+  await expect(tab(page, "sample.pdf")).toHaveClass(/lm-mod-current/, { timeout: 30_000 });
+  const labels = await page.locator(".lm-TabBar-tabLabel").allTextContents();
+  expect(labels.indexOf("notes.md")).toBeGreaterThanOrEqual(0);
+  expect(labels.indexOf("notes.md")).toBeLessThan(labels.indexOf("sample.pdf"));
+  await expectBothRestored(page);
+});
+
+test("a mount no restored tab uses does not delay startup", async ({ page }) => {
+  // An S3 endpoint that never answers: creating the mount takes its full timeout (15 s).
+  const endpoint = "http://s3-never-answers.test:9000";
+  let answering = true;
+  await page.route(`${endpoint}/**`, (route) => (answering ? route.abort() : undefined));
+  await page.goto("/");
+  await unlockVault(page, "pw", true); // remembered: the vault unlocks silently at reload
+  await openMain(page);
+  await mountNew(page, "New S3 Bucket…", {
+    name: "Slow",
+    fields: {
+      endpoint,
+      region: "us-east-1",
+      bucket: "b",
+      prefix: "",
+      accessKeyId: "a",
+      secretAccessKey: "s",
+    },
+  });
+  await expect(explorer(page).getByText(/^Slow \(unavailable: /)).toBeVisible();
+  // Only a file on the main storage is open.
+  await explorer(page).getByText("welcome.md", { exact: true }).dblclick();
+  await expect(tab(page, "welcome.md")).toHaveCount(1);
+
+  answering = false;
+  const reloaded = Date.now();
+  await page.reload();
+  await openMain(page);
+  await expect(tab(page, "welcome.md")).toHaveCount(1);
+  const elapsed = Date.now() - reloaded;
+  // The workbench is up while the slow mount is still being created.
+  await expect(explorer(page).getByText(/^Slow \(unavailable: /)).toHaveCount(0);
+  test.info().annotations.push({ type: "startup", description: `${elapsed} ms` });
+  // It settles later, by itself.
+  await expect(explorer(page).getByText(/^Slow \(unavailable: /)).toBeVisible({
+    timeout: 30_000,
+  });
 });

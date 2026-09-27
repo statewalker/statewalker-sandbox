@@ -25,6 +25,28 @@ export function descriptionKey(constructionOptions: {
  */
 export function layoutAreas(layout: unknown): Map<string, RestoreArea> {
   const areas = new Map<string, RestoreArea>();
+  for (const [options, area] of layoutDescriptions(layout))
+    areas.set(descriptionKey(options), area);
+  return areas;
+}
+
+/**
+ * The mounts the shell's widgets in a stored layout live on (see `mountKeyOf`):
+ * the ones restoring that layout needs.
+ */
+export function layoutMountKeys(layout: unknown): Set<string> {
+  const keys = new Set<string>();
+  for (const [options] of layoutDescriptions(layout)) {
+    const key = mountKeyOf(options.options);
+    if (key !== undefined) keys.add(key);
+  }
+  return keys;
+}
+
+type ConstructionOptions = { factoryId: string; options?: unknown };
+
+function layoutDescriptions(layout: unknown): [ConstructionOptions, RestoreArea][] {
+  const found: [ConstructionOptions, RestoreArea][] = [];
   const visit = (value: unknown, area: RestoreArea) => {
     if (Array.isArray(value)) {
       for (const item of value) visit(item, area);
@@ -33,7 +55,7 @@ export function layoutAreas(layout: unknown): Map<string, RestoreArea> {
     if (typeof value !== "object" || value === null) return;
     const options = (value as { constructionOptions?: unknown }).constructionOptions;
     if (isConstructionOptions(options)) {
-      areas.set(descriptionKey(options), area);
+      found.push([options, area]);
       return;
     }
     for (const child of Object.values(value)) visit(child, area);
@@ -43,10 +65,47 @@ export function layoutAreas(layout: unknown): Map<string, RestoreArea> {
       visit((layout as Record<string, unknown>)[name], area);
     }
   }
-  return areas;
+  return found;
 }
 
-function isConstructionOptions(value: unknown): value is { factoryId: string; options?: unknown } {
+/** A widget waiting for its mount to reopen, as kept across reloads. */
+export interface PendingReopen {
+  readonly description: { constructionOptions: ConstructionOptions; innerWidgetState?: unknown };
+  readonly area: RestoreArea;
+}
+
+/**
+ * The stored pending reopens (what `StorageService` gave back, possibly
+ * nothing, or something malformed): the well-formed entries only.
+ */
+export function storedPending(stored: unknown): PendingReopen[] {
+  if (!Array.isArray(stored)) return [];
+  return stored.filter(
+    (entry): entry is PendingReopen =>
+      typeof entry === "object" &&
+      entry !== null &&
+      isConstructionOptions(entry.description?.constructionOptions) &&
+      Object.values(AREAS).includes(entry.area),
+  );
+}
+
+/** `first`, then those of `then` not already in it (by `descriptionKey`). */
+export function mergePending<T extends PendingReopen>(
+  first: readonly T[],
+  then: readonly T[],
+): T[] {
+  const seen = new Set(first.map((p) => descriptionKey(p.description.constructionOptions)));
+  const merged = [...first];
+  for (const entry of then) {
+    const key = descriptionKey(entry.description.constructionOptions);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(entry);
+  }
+  return merged;
+}
+
+function isConstructionOptions(value: unknown): value is ConstructionOptions {
   return (
     typeof value === "object" &&
     value !== null &&

@@ -36,10 +36,25 @@ export class VaultService {
    * Called by the vault's UI when its start-up prompt is answered. The UI
    * starts that prompt in its `onStart`; a contribution awaiting
    * `startupUnlock` in its own `onStart` must be bound after the vault's UI
-   * (Theia runs the `onStart`s one by one, in binding order) and bound its wait.
+   * (Theia runs the `onStart`s one by one, in binding order) and bound its wait
+   * — except while `startupPromptShown`.
    */
   endStartupUnlock(): void {
     this.startupDone.resolve();
+  }
+
+  protected startupPrompted = false;
+  /**
+   * Whether the start-up prompt has been shown: then waiting for
+   * `startupUnlock` is the user's time (the prompt has Skip), not a hang.
+   */
+  get startupPromptShown(): boolean {
+    return this.startupPrompted;
+  }
+
+  /** Called by the vault's UI when it shows the start-up prompt. */
+  markStartupPrompt(): void {
+    this.startupPrompted = true;
   }
 
   vault(): Promise<SecretVault> {

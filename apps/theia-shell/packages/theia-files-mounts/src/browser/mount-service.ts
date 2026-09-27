@@ -7,7 +7,7 @@ import { Emitter, type Event } from "@theia/core/lib/common/event";
 import { MessageService } from "@theia/core/lib/common/message-service";
 import { PreferenceScope, PreferenceService } from "@theia/core/lib/common/preferences";
 import URI from "@theia/core/lib/common/uri";
-import { inject, injectable, named } from "@theia/core/shared/inversify";
+import { inject, injectable, named, optional } from "@theia/core/shared/inversify";
 import type { FileService } from "@theia/filesystem/lib/browser/file-service";
 import type { FilesApiChange } from "@theia-shell/theia-files-api";
 import { VaultService } from "@theia-shell/theia-secret-vault/lib/browser/vault-service";
@@ -42,6 +42,13 @@ import {
 export const LazyFileService = Symbol("LazyFileService");
 export type LazyFileService = () => FileService;
 
+/**
+ * The mounts the restored layout needs (undefined: not known — all of them).
+ * They are applied first, and start-up waits for them alone.
+ */
+export const StartupMountKeys = Symbol("StartupMountKeys");
+export type StartupMountKeys = () => Promise<readonly string[] | undefined>;
+
 @injectable()
 export class MountService {
   @inject(MainStorageService) protected readonly main!: MainStorageService;
@@ -52,6 +59,9 @@ export class MountService {
   @inject(MountDefaults) protected readonly defaults!: MountDefaults;
   /** Resolved lazily: FileService builds the FilesApi provider, which subscribes to this service. */
   @inject(LazyFileService) protected readonly fileService!: LazyFileService;
+  @inject(StartupMountKeys)
+  @optional()
+  protected readonly startupMountKeys: StartupMountKeys | undefined;
   @inject(ContributionProvider)
   @named(MountType)
   protected readonly typeProvider!: ContributionProvider<MountType>;
@@ -69,8 +79,12 @@ export class MountService {
   protected workspaceMount: { config: MountConfig; api: FilesApi } | undefined;
   protected workspaceSynced: Promise<void> = Promise.resolve();
   protected started: Promise<FilesApi> | undefined;
-  /** The first apply of `files.mounts`, once the preferences are ready. */
+  /** The first apply of the mounts start-up needs (`startupKeys`), once the preferences are ready. */
+  protected startupApplied: Promise<void> | undefined;
+  /** The first apply of all of `files.mounts`. */
   protected configured: Promise<void> | undefined;
+  /** The mounts start-up needs; undefined: all. */
+  protected startupKeys: ReadonlySet<string> | undefined;
   protected readonly reported = new Set<string>();
   /** Every change to the tree, one at a time; a failed step is reported and the next still runs. */
   protected readonly queue = new SerialQueue();
@@ -100,18 +114,23 @@ export class MountService {
     // Only the fixed mounts yet: create the workspace file if missing, never
     // cut an existing one down to "main only" (the real list follows).
     await this.apply([], {}, { createOnly: true });
-    this.configured = this.preferences.ready
-      .then(() => this.applyPreferences())
+    this.startupApplied = this.preferences.ready
+      .then(() => this.applyStartup())
       .catch((e) => this.report(e));
+    this.configured = this.startupApplied
+      .then(() => (this.startupKeys ? this.applyPreferences() : undefined))
+      .catch((e) => this.report(e));
+    // A full apply queued before the start-up one (a change event while the
+    // preferences load, the vault's silent unlock) would hold it up behind every
+    // mount: those wait for it (the start-up apply reads the current state anyway).
+    const afterStartup = (step: () => Promise<void>) =>
+      this.startupApplied?.then(step).catch((e) => this.report(e));
     this.preferences.onPreferenceChanged((event) => {
-      if (event.preferenceName === MOUNTS_PREFERENCE)
-        this.applyPreferences().catch((e) => this.report(e));
+      if (event.preferenceName === MOUNTS_PREFERENCE) afterStartup(() => this.applyPreferences());
       if (event.preferenceName === HIDDEN_PREFERENCE) this.rebuildQueued();
     });
     this.vaults.onDidUnlock(() =>
-      this.applyPreferences({ recreate: (_key, s) => s.state === "locked" }).catch((e) =>
-        this.report(e),
-      ),
+      afterStartup(() => this.applyPreferences({ recreate: (_key, s) => s.state === "locked" })),
     );
     for (const layer of this.layerProvider.getContributions()) {
       layer.onDidChange?.(() => this.rebuildQueued());
@@ -120,25 +139,36 @@ export class MountService {
   }
 
   /**
-   * Resolves once every mounted `files.mounts` entry has settled: mounted,
-   * failed, or waiting for a click (`needs-access`); one locked behind the
-   * vault settles once the vault's start-up prompt is answered (and, if it
-   * unlocked, the mount re-created). Unbounded: the caller bounds it. Nothing
-   * the mounts need (the main storage, the preferences) may await it.
+   * The first apply: the mounts the restored layout needs (`StartupMountKeys`)
+   * alone, so that one no restored tab uses (an S3 round trip, an unreachable
+   * host's timeout) does not hold up start-up; the others follow at once.
+   * Without the keys, all of them.
    */
-  async settled(): Promise<void> {
+  protected async applyStartup(): Promise<void> {
+    const keys = await this.startupMountKeys?.().catch(() => undefined);
+    this.startupKeys = keys && new Set(keys);
+    await this.applyPreferences({}, this.startupKeys);
+  }
+
+  /** Resolves once the mounts start-up needs have been applied (see `applyStartup`). */
+  async whenStartupApplied(): Promise<void> {
     await this.start();
-    await this.configured;
-    const waits = () => this.table.configs().map((c) => startupWait(this.table.status(c.key)));
-    if (!waits().includes("vault")) return;
-    // Resolved by the vault's UI from its own `onStart`. That runs before the
-    // gate awaiting this (`MountsRestore.onStart`) because the vault module
-    // loads before this one (this package depends on it) and Theia runs the
-    // `onStart`s in binding order; were it otherwise, the gate's bound (not a
-    // hang) would end the wait.
-    await this.vaults.startupUnlock;
-    // An unlock queued the re-creation of the locked mounts: wait for it.
-    await this.queue.run(async () => undefined);
+    await this.startupApplied;
+  }
+
+  /**
+   * Whether a mount start-up needs is locked behind the vault: restoring its
+   * files waits for the vault's start-up prompt. A mount that failed, or waits
+   * for a click (`needs-access`), is not waited for.
+   */
+  startupLocked(): boolean {
+    const keys = this.startupKeys ?? this.table.configs().map((c) => c.key);
+    return [...keys].some((key) => startupWait(this.table.status(key)) === "vault");
+  }
+
+  /** Resolves once every change queued so far (e.g. the re-creation an unlock queued) has run. */
+  idle(): Promise<void> {
+    return this.queue.run(async () => undefined);
   }
 
   /** Resolves once `files.mounts` has been read and applied for the first time. */
@@ -267,13 +297,21 @@ export class MountService {
     return this.preferences.set(MOUNTS_PREFERENCE, list, PreferenceScope.User);
   }
 
-  protected applyPreferences(options: ApplyOptions = {}): Promise<void> {
+  /** `only`: apply just these mounts (and keep those already applied), leaving the workspace file alone. */
+  protected applyPreferences(
+    options: ApplyOptions = {},
+    only?: ReadonlySet<string>,
+  ): Promise<void> {
     const raw: unknown = this.preferences.inspect(MOUNTS_PREFERENCE)?.globalValue;
-    return this.applyList(mountsSetting(raw, this.defaults.mounts), options);
+    return this.applyList(mountsSetting(raw, this.defaults.mounts), options, only);
   }
 
   /** Validates a `files.mounts` value, reports what is wrong, and mounts the mounted entries. */
-  protected applyList(raw: unknown, options: ApplyOptions = {}): Promise<void> {
+  protected applyList(
+    raw: unknown,
+    options: ApplyOptions = {},
+    only?: ReadonlySet<string>,
+  ): Promise<void> {
     const reserved = this.reservedKeys();
     const { valid, errors } = validateMountConfigs(raw, this.types(), reserved);
     for (const error of errors) {
@@ -281,7 +319,7 @@ export class MountService {
       this.reported.add(error);
       this.messages.warn(`Mounts: ${error}`);
     }
-    return this.apply(valid.filter(isMounted), options);
+    return this.apply(valid.filter(isMounted), options, {}, only);
   }
 
   /** Serialized: a slow S3 mount must not let an older apply overwrite a newer one. */
@@ -289,11 +327,17 @@ export class MountService {
     configs: MountConfig[],
     options: ApplyOptions = {},
     sync: { createOnly?: boolean } = {},
+    only?: ReadonlySet<string>,
   ): Promise<void> {
     const applied = this.queue.run(async () => {
       const fixed = [this.mainMount, this.workspaceMount].filter((m) => m !== undefined);
-      this.rebuild(await this.table.apply(configs, { ...options, fixed }));
+      // A partial apply never removes a mount applied before it.
+      const list = only
+        ? configs.filter((c) => only.has(c.key) || this.table.status(c.key) !== undefined)
+        : configs;
+      this.rebuild(await this.table.apply(list, { ...options, fixed }));
     });
+    if (only) return applied;
     // A step of its own: writing goes through Theia's FileService and so back
     // through this root, which must not wait for itself (start() awaits apply).
     this.workspaceSynced = this.queue.run(() => this.syncWorkspaceFile(sync));

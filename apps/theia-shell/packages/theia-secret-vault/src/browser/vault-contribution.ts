@@ -37,14 +37,17 @@ export class VaultUi implements FrontendApplicationContribution, CommandContribu
    * waits for it only where something needs the vault.
    */
   onStart(): void {
-    void this.ensureUnlocked().finally(() => this.vaults.endStartupUnlock());
+    void this.ensureUnlocked(() => this.vaults.markStartupPrompt()).finally(() =>
+      this.vaults.endStartupUnlock(),
+    );
   }
 
-  /** Unlocks, asking when it must. Resolves false if the user skipped. */
-  async ensureUnlocked(): Promise<boolean> {
+  /** Unlocks, asking when it must (`onPrompt` is told). Resolves false if the user skipped. */
+  async ensureUnlocked(onPrompt?: () => void): Promise<boolean> {
     try {
       const state = await this.vaults.unlockSilently();
       if (state === "unlocked") return true;
+      onPrompt?.();
       return await this.prompt(state === "needs-new-password" ? "create" : "unlock");
     } catch (error) {
       // A corrupt vault file (tampered, or from another vault): say so; nothing is overwritten.
