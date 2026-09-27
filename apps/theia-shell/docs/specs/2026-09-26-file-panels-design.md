@@ -137,10 +137,11 @@ dialog — natively for explorer drags, through `PanelAwareNavigatorWidget` for 
   `role="columnheader"` with `aria-sort`, each wrapping the sort `<button>`), not a literal
   `<table>` — the rows below stay Theia's own tree.
 - **Keys inside the focused list** (tree-local, not keybindings): arrows move, Shift/Ctrl
-  extend the selection, Enter opens (folder → navigate, file → open), Backspace goes up. Opening a
+  extend the selection, Enter opens (folder → navigate, file → open), Backspace goes up (while
+  Theia's type-to-filter box is open, Backspace edits the filter instead). Opening a
   file goes through Theia's own open handler, exactly as the explorer does — the editor lands in
   the panel's tab group, over the panel (Theia's normal tab behaviour, not split beside it).
-- **Toolbar**: Go Up, Refresh.
+- **Toolbar**: Go Up, Refresh — each acts on the panel whose tab bar it sits on.
 - **Starting folder**: the folder given to *Open in Files Panel*, else the first workspace root.
 - **Freshness**: the tree refreshes on `fileService.onDidFilesChange` for its folder, which covers
   writes from the explorer, other panels and editors. If the current folder is deleted or
@@ -159,7 +160,9 @@ dialog — natively for explorer drags, through `PanelAwareNavigatorWidget` for 
   workspace roots** (one today; one per mount after mount-roots). Choosing one navigates the panel.
   Arrows, Enter and Esc work in the list; click-outside and focus loss close it
   (`BreadcrumbPopupContainer`). The list is a small React component, not a tree.
-- **Drop targets.** Dropping onto a segment targets that folder.
+- **Drop targets.** Dropping onto a segment targets that folder, exactly as a drop on a folder
+  row. The segment stops its drag events, so the main area's own handlers (a `link` drop effect
+  that cancels the drop; opening every dragged file in an editor) never see them.
 
 ## Drops and transfers
 
@@ -189,7 +192,8 @@ dialog — natively for explorer drags, through `PanelAwareNavigatorWidget` for 
 
 - **One item**: an editable **name** field — prefilled with the current name (Rename), a free
   name such as `notes copy.md` (same-folder Copy), or the source name (other folder). An existing
-  name shows an inline "already exists — it will be replaced". Validated like Theia's rename: not
+  name shows an inline "already exists — it will be replaced", and it is replaced — same-folder
+  Copy included. Validated like Theia's rename: not
   empty, not `.` / `..`, no `/`. Rename with an unchanged name disables OK.
 - **Several items with clashes**: one choice for all — **Overwrite**, **Keep both** (free names),
   **Skip** — with the count of clashing items.
@@ -218,7 +222,11 @@ the skipped sources with a reason.
   `overwrite` — the same calls the explorer makes, so change events reach every view.
 - Progress through `ProgressService`; cancellable between steps (no rollback).
 - A failing step does not stop the batch; one notification at the end: "{0} of {1} items failed"
-  with the reasons.
+  (plural on the total, counts through `Intl.NumberFormat`) and one "{0}: {1}" line (name, reason)
+  per failure.
+- A drop or transfer that fails as a whole (resolving the sources, an upload, a refresh) is
+  handled in one place: logged and shown as one localized error; a cancellation is silent. No
+  drop path leaves a rejected promise unhandled.
 - A cross-mount move is copy-then-remove inside the composite and not atomic: after a partial
   failure a copy may exist while the original remains. Stated, not hidden.
 - On completion the new items are selected in the target panel.
@@ -264,12 +272,16 @@ the explorer's menu layout.
 ## Persistence and errors
 
 - `FilePanelWidget` is a `StatefulWidget` created by its `WidgetFactory` with a unique `{ id }`,
-  so Theia's layout restore reopens every panel. Stored: folder URI, sort column and direction,
-  selected names.
-- On restore, a vanished folder falls back to its nearest existing ancestor, then to the first
-  workspace root. A folder on a mount not yet available (vault locked, local folder awaiting
-  permission) shows **Not available** with **Retry** — the panel is not closed, so the layout
-  survives an unlock.
+  so Theia's layout restore reopens every panel. Stored: folder URI, sort column and direction.
+- On restore, a folder that does not exist (`FILE_NOT_FOUND`) falls back to its nearest existing
+  ancestor, then to the first workspace root, with a notice. The same holds for the folder a panel
+  was created at (*Open in Files Panel*), which Theia re-creates the panel with before restoring
+  its state: creating a panel never fails. A folder that exists but cannot be read (vault locked,
+  local folder awaiting permission — any other error) stays: **Not available** with **Retry** —
+  the panel is not closed, so the layout survives an unlock.
+- A navigation never throws. A folder that cannot be resolved still becomes the panel's folder —
+  breadcrumb, Go Up and the stored state keep it — with an empty list and "“{0}” is not
+  available: {1}" with **Retry**, which navigates to that same folder again.
 - A listing failure shows in the panel with Retry, not as a toast. Transfer failures are
   aggregated (above). Reused commands keep Theia's error handling. All messages are localized.
 
@@ -311,10 +323,15 @@ the explorer's menu layout.
 6. Drop into the same folder: only Copy and Rename offered; Copy creates `… copy.ext`.
 7. Explorer → panel shows the dialog. Panel → explorer shows **no** dialog: a plain drop moves,
    Ctrl copies. Explorer → explorer still moves without a dialog (unchanged behaviour).
-8. Several items with a clash: Keep both, Skip, Overwrite each behave.
+8. Several items with a clash: Keep both, Skip, Overwrite each behave (one test per choice).
 9. An OS file dropped into a panel is uploaded (synthetic `DataTransfer` with a `File`).
 10. Reload: panels return at their folders with their sort.
-11. Copy to Other Panel… from the context menu.
+11. Copy to Other Panel… from the context menu; the copy is selected in the target panel.
+12. A drop on a breadcrumb segment of another panel copies there and opens no editor.
+13. A folder that cannot be read shows Not available; Retry opens it once it can. A panel whose
+    creation folder is gone after a reload comes back at its parent.
+14. Backspace inside the type-to-filter box does not go up; the toolbar's Go Up acts on its panel
+    while the focus is elsewhere; hovering a folder row during a drag leaves the selection.
 
 Red and green runs are recorded, as in earlier work.
 

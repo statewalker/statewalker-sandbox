@@ -22,17 +22,27 @@ column header sorts by it, clicking again reverses. The column headings are an A
 (`role="table"` > `role="row"` > `role="columnheader"` with `aria-sort`, a `<button>` inside each)
 over Theia's own tree rows, not a literal `<table>`.
 
-- **Toolbar**: Go Up, Refresh (tab-bar toolbar items of the active panel, not buttons inside it).
+- **Toolbar**: Go Up, Refresh (tab-bar toolbar items, not buttons inside the panel). Each acts on
+  the panel whose tab bar it sits on, even while the focus is elsewhere; Refresh on a folder that
+  could not be opened tries to open it again.
 - **Keys inside the list** are tree-local, not keybindings: arrows move, Shift/Ctrl extend the
-  selection, Enter opens (folder → navigate, file → open), Backspace goes up.
+  selection, Enter opens (folder → navigate, file → open), Backspace goes up. Typing a letter
+  opens Theia's type-to-filter box; while it is open, Backspace edits the filter instead.
 - **Opening a file** goes through Theia's own open handler, exactly as the explorer does — the
   editor lands in the panel's tab group, over the panel (Theia's normal tab behaviour;
   `FilePanelModel.doOpenNode` does not change it).
 - **Freshness**: the tree refreshes on file-system change events for its folder. If the folder is
   deleted or renamed from elsewhere, the panel falls back to its nearest existing ancestor (or the
-  first workspace root) and shows a short notice; a listing failure shows inline with **Retry**,
-  not a toast.
-- The panel's layout (folder, sort) is restored after a reload.
+  first workspace root) and shows a short notice.
+- **A folder that cannot be opened** (a locked mount, a read error — anything but "does not
+  exist") never throws out of a navigation: the panel stays at that folder with an empty list and
+  shows “{folder}” is not available: {reason} with **Retry**, which opens the same folder again.
+  The breadcrumb, Go Up and the stored layout all keep that folder. A listing that fails on a
+  later refresh shows the same way, not as a toast.
+- The panel's layout (folder, sort) is restored after a reload. A restored folder — or the folder
+  the panel was created at — that no longer exists falls back to its nearest existing ancestor
+  with the notice; one that exists but cannot be read stays, as not available with Retry. Either
+  way the panel is never dropped from the layout.
 
 ## Breadcrumb
 
@@ -43,7 +53,9 @@ of the hidden ones.
 Every segment has a **▾** that opens a popup of its **sibling folders** — read fresh on open, so
 never stale — with the current one marked; for the first segment, the siblings are the other
 workspace roots. Arrows, Enter and Esc work in the popup; it closes on an outside click or a focus
-change. Each segment is also a drop target.
+change. Each segment is also a drop target, handled exactly as a drop on a folder row; its drag
+events stop at the segment, so the main area's own drop handling (which would open every dragged
+file in an editor, and whose `link` drop effect would cancel the drop) never sees them.
 
 ## Drops and transfers
 
@@ -57,11 +69,19 @@ change. Each segment is also a drop target.
   is meaningless): one item offers Copy and Rename; several items offer Copy only, each getting a
   free name. Dropping a folder onto itself or one of its own descendants is rejected with a
   warning instead, not offered in the dialog.
+- **One item**: the name field's warning is literal — a typed name that already exists is
+  replaced, also for a Copy inside the source's own folder.
 - **Several items with a clash**: one choice for the batch — Overwrite, Keep both (free names) or
   Skip — shown with the clash count. Clashes **between the dropped sources themselves** never
   overwrite: under Overwrite the later one still gets a free name (overwriting something this same
   batch just wrote would lose data); under Keep both it also gets a free name; under Skip it is
   skipped.
+- **Selection**: what a drop or Copy/Move to Other Panel wrote is selected in the target panel.
+  Hovering a folder row during a drag does not change the selection.
+- **Failures**: steps that fail do not stop the batch; one error lists them — “1 of 7 items
+  failed” (plural on the total) and one “{name}: {reason}” line per item. A drop or transfer that
+  fails as a whole (a resolve, an upload, a refresh) is logged and shown as one error; a
+  cancellation is silent. No drop path leaves a rejected promise unhandled.
 - **Uploads.** Theia's `FileUploadService` enumerates a drop through WebKit filesystem entries; a
   `DataTransfer` built without them (as any script-driven drop is) uploads nothing through that
   path, so `FileDropHandler` falls back to Theia's own exported `CustomDataTransfer`, built
@@ -84,7 +104,8 @@ change. Each segment is also a drop target.
   their dialogs, confirmations and localization included.
 - **Copy to Other Panel… / Move to Other Panel…**: enabled once another panel with a folder is
   open. With exactly one other panel it is the target; with more, a quick pick chooses one. Opens
-  the same transfer dialog, preset to that choice.
+  the same transfer dialog, preset to that choice; the results are selected in the target
+  panel.
 - The menu has its own path (`FILE_PANEL_CONTEXT_MENU`), independent of the explorer's layout.
 
 ## Extension rule
@@ -96,8 +117,21 @@ untouched, so explorer→explorer drags and OS uploads are exactly as stock Thei
 present, it resolves the target and operation through the two other protected members it calls,
 `getDropTargetDirNode` and `getDropEffect` (Ctrl/⌥ copies, otherwise moves), and carries it out
 through the model's own public `copy`/`move` — no dialog. These three protected members of
-`FileTreeWidget` are the whole of this package's reach into Theia: no private members, no copies
-of Theia internals.
+`FileTreeWidget` are the whole of the **explorer extension's** reach into Theia.
+
+The panel's own classes extend Theia's file tree the same way — exported classes, public or
+protected members only, no private members, no copies of Theia internals:
+
+- `FilePanelTreeWidget extends FileTreeWidget` overrides `onAfterAttach` (adds the Backspace
+  listener through `addKeyListener`, reading the protected `searchBox`), `renderExpansionToggle`,
+  `handleRight`, `getPaddingLeft`, `renderTailDecorations`, `handleDragStartEvent`,
+  `handleDragEnterEvent`, `handleDragOverEvent` and `handleDropEvent`, and calls
+  `getDropTargetDirNode` and `getDropEffect`.
+- `FilePanelTree extends FileTree` overrides `resolveFileStat` and `toNodes`, using the protected
+  `fileService`.
+- `FilePanelModel extends FileTreeModel` overrides `doOpenNode`, using the protected
+  `fileService` and the public `navigateTo` and `root`.
+- `FilePanelWidget extends BaseWidget` overrides `onActivateRequest` and `onResize`.
 
 ## Internationalization
 
@@ -107,7 +141,8 @@ of Theia internals.
 - Plural messages (item counts) pick a CLDR category with `Intl.PluralRules` and carry one literal
   key per category they can hit (`zero | one | two | few | many | other`); every category but
   `one` defaults to the same `other` English text.
-- Sizes (`Intl.NumberFormat`, `style: "unit"`), dates (`Intl.DateTimeFormat`) and name ordering
+- Counts inside messages (`Intl.NumberFormat`, so `1,200` in English), sizes
+  (`Intl.NumberFormat`, `style: "unit"`), dates (`Intl.DateTimeFormat`) and name ordering
   (`Intl.Collator`) are formatted through `Intl`, not through message keys — they follow the
   platform's locale, not a translation catalog.
 - **No translation provider yet**: browser-only Theia binds a stub `AsyncLocalizationProvider`
@@ -142,6 +177,8 @@ of Theia internals.
 | 10 the explorer accepts panel drags (e2e `file-panels.spec.ts`) | 1 failed, 1 passed (new tests only) | 19 passed |
 | 11 Copy / Move to Other Panel (e2e `file-panels.spec.ts`) | 1 failed, 19 passed | 20 passed |
 | 12 restore after reload; vanished folders (e2e `file-panels.spec.ts`) | 2 failed, 20 passed | 22 passed |
+| final-review fixes (unit) | 3 failed, 44 passed | 47 passed |
+| final-review fixes (e2e `file-panels.spec.ts`, new and changed tests) | 8 failed, 3 passed | 11 passed; whole file 30 passed |
 
 ## Notes
 
