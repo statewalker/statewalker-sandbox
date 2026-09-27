@@ -2,13 +2,43 @@
 
 `pnpm test 08-biscuit-enablement` — 29 tests.
 
-`src/` is **recovered** from archive
+`src/` was **recovered** from archive
 `17-prototype-08-biscuit-enablement.tar.gz`, along with the 23 tests in
-`tests/biscuit.test.ts`; each file carries a `RECOVERED-FROM-ARCHIVE` header and
-is otherwise verbatim. This is the only rung on the ladder that owns source
+`tests/biscuit.test.ts`. This is the only rung on the ladder that owns source
 outside `lib/` — the Biscuit adapter never made it into the consolidated
 shell-core. `tests/constraints.test.ts` is new, written from the notes, and
 pins the three constraints the rung paid for on the way to its answer.
+
+## Adapted 2026-09-15: the engine is now pure TypeScript
+
+`src/biscuit-enablement.ts` **is no longer verbatim.** It runs on
+`@statewalker/webrun-biscuit` instead of `@biscuit-auth/biscuit-wasm`, and its
+header says so. The recovered body is unchanged at statewalker-sandbox `cd5bb00`,
+same path; everything below this section describes that WASM build and is kept as
+the record of what the rung found.
+
+**The rung's question, asked again: yes.** The 23 recovered tests in
+`tests/biscuit.test.ts` run against the adapted adapter with no assertion changed.
+`Enablement` did not move, and neither did the clause grammar or the rule that an
+untrusted value is a bound parameter.
+
+**What the engine change did to the three constraints** (`tests/constraints.test.ts`):
+
+| Constraint on the WASM build | On webrun-biscuit |
+|---|---|
+| Loads without a Node flag (note 18 §3) | **Moot** — nothing in the import graph is WebAssembly, and the test now asserts that |
+| A reused Authorizer fails cold with a bare `{RunLimit:"Timeout"}` (§4.1) | **Gone** — a cold child process answers three queries on one evaluation, and a bad query throws an `Error` |
+| A rule head carries at least one term (§4.2) | **Holds** — it is a property of the language; `_m()` is rejected, `_m(true)` accepted |
+
+The second row changes the design, not just a test. Because the per-query
+authorizer existed only to dodge §4.1, the adapter now evaluates **once per fact
+set** and answers every query from that world until the facts change. The cost
+test still measures and records rather than asserting a threshold.
+
+**It needed a library fix first.** webrun-biscuit 0.2.0 rejected `_m(true)` —
+names had to start with a Unicode letter — and accepted `f()`. Probing the
+reference showed 9 of 12 sources decided differently; 0.2.1 parses exactly what
+the reference parses, and this rung pins `0.2.1`.
 
 ## Goal
 
@@ -161,7 +191,7 @@ three additive members:
 | `queryAny(ruleSources)` | true if any rule yields a result: disjunction, one authorizer per branch |
 | `matchesTerm(predicate, value)` | match a predicate against an **untrusted** term bound as a parameter |
 
-`loadBiscuit()` dynamically imports the WASM and memoises the promise. The memo
+`loadBiscuit()` dynamically imports the engine and memoises the promise (on the WASM build, the ~2.35 MB module). The memo
 is deliberately **not** cleared on rejection: a missing WASM binary is not
 transient, and retrying on every menu render would be pathological.
 
