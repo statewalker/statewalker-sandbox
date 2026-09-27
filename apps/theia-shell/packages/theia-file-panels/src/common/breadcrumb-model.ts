@@ -1,4 +1,4 @@
-import URI from "@theia/core/lib/common/uri";
+import type URI from "@theia/core/lib/common/uri";
 
 export interface Crumb {
   uri: URI;

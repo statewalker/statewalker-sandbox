@@ -83,6 +83,7 @@ The design is in
 | [`packages/theia-files-mounts`](../packages/theia-files-mounts) | **Mount points.** The main storage, the mount table (a `CompositeFilesApi`), filter layers, the `files.mounts` / `files.hidden` settings, the mount wizard and commands, and Theia's settings moved to `shell-system:`. Memory, OPFS and local-folder types. |
 | [`packages/theia-secret-vault`](../packages/theia-secret-vault) | **Secrets.** A WebCrypto vault behind Theia's `KeyStoreService` / `CredentialsService`, its password dialog and commands. |
 | [`packages/theia-files-s3`](../packages/theia-files-s3) | **The S3 mount type** (`webrun-files-s3`); separate because the AWS SDK is large. |
+| [`packages/theia-file-panels`](../packages/theia-file-panels) | **File panels.** Midnight-Commander-style one-folder views opened as main-area tabs, with a sibling-aware breadcrumb, sortable columns, and copy/move between panels and the explorer by drag and drop or context menu. |
 | [`app/files`](files) | **The app's defaults**: the Temporary mount, the hidden paths, the demo files seeded into the main storage, and *New Markdown File* writing there. |
 | [`app/style`](style) | **The app's stylesheet**: Tailwind v4 without preflight over the extensions' sources, plus the shadcn theme. The extensions are styled with Tailwind classes, so an app that uses them must compile those classes too. |
 | `app` | The browser-only Theia application (`"theia": { "target": "browser-only" }`). |

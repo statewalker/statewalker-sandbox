@@ -38,6 +38,7 @@ packages/theia-shadcn       shadcn/ui components, tokens and the alignment of Th
 packages/theia-files-mounts mount points over a main storage; settings under shell-system:
 packages/theia-secret-vault the encrypted secret vault behind Theia's KeyStoreService
 packages/theia-files-s3     the S3 mount type
+packages/theia-file-panels  Midnight-Commander-style file panels (extension)
 app/                        the application, app/files (its defaults and seed), app/style (its Tailwind build), e2e tests
 tools/rustfs.mjs            test fixture: RustFS (S3) in Docker, with CORS for the app
 ```

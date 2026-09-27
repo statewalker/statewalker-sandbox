@@ -87,28 +87,33 @@ src/common/            pure, unit-tested, no DOM
   panel-sorting.ts       comparator: folders first, Intl.Collator, column + direction
   breadcrumb-model.ts    URI + workspace roots → segments; sibling selection
 src/browser/
-  file-panel-widget.ts          one panel: breadcrumb + column header + tree; StatefulWidget
-  file-panel-tree.ts            FileTreeWidget subclass: flat list, columns, drag source/target
-  folder-breadcrumb.tsx         segments, ▾ sibling popup, drop targets
-  transfer-dialog.ts            AbstractDialog: copy / move / rename, name field, clash choice
-  transfer-service.ts           runs a plan via FileService, with progress and failure report
-  file-drop-handler.ts          one entry point for every drop (panels and explorer)
-  panel-aware-navigator.ts      FileNavigatorWidget subclass; rebinding
-  file-panels-contribution.ts   commands, menus, widget factory
+  file-panel-widget.ts             one panel: header + tree, StatefulWidget; navigation, breadcrumb data
+  file-panel-header.tsx            ReactWidget: column headers (ARIA table) with sort, status/retry, breadcrumb slot
+  file-panel-tree.ts               FileTree/FileTreeModel subclasses: sorted listing, folder navigation
+  file-panel-tree-widget.tsx       FileTreeWidget subclass: flat rows, size/modified cells, drag source/target
+  folder-breadcrumb.tsx            segments, ▾ sibling popup, drop targets
+  panel-drag.ts                    the theia-file-panels/uris marker: write on drag start, read on drop
+  transfer-dialog.ts               AbstractDialog: copy / move / rename, name field, clash choice
+  transfer-service.ts              runs a plan via FileService, with progress and failure report
+  file-drop-handler.ts             one entry point for every drop into a panel
+  panel-aware-navigator-widget.ts  FileNavigatorWidget subclass; the explorer's one new drop case
+  file-panels-contribution.ts      commands, menus, widget factory
   file-panels-frontend-module.ts
   style/file-panels.css
 ```
 
 | Unit | Responsibility | Depends on |
 |---|---|---|
-| `FilePanelWidget` | Holds the current folder URI; `navigateTo(uri)` swaps the tree root; composes breadcrumb, header, tree; stores/restores state. Title = folder label, tooltip = full path. | `FilePanelTree`, `FolderBreadcrumb`, `WorkspaceService`, `LabelProvider` |
-| `FilePanelTree` | One-level file tree: folders never expand, opening a folder asks the widget to navigate, opening a file uses Theia's open handler. Renders name / size / modified as a grid row; publishes selection; sets `theia-editor-dnd` on drag; delegates drops to `FileDropHandler`. | `FileTreeWidget`, `FileDropHandler` |
+| `FilePanelWidget` | Holds the current folder URI; `navigateTo(uri)` swaps the tree root; composes the header and tree, renders the breadcrumb into the header; stores/restores state; on a vanished folder, falls back to the nearest existing ancestor. Title = folder label, tooltip = full path. | `FilePanelHeader`, `FilePanelTreeWidget`, `FolderBreadcrumb`, `WorkspaceService`, `LabelProvider` |
+| `FilePanelHeader` | A `ReactWidget`: the column headings (name / size / modified) as an ARIA table (`role="table"` > `role="row"` > `role="columnheader"` with `aria-sort`, a `<button>` inside each), a status/retry line, and the breadcrumb the widget passes in. | `FilePanelWidget` |
+| `FilePanelTree` / `FilePanelModel` | The one-level `FileTree`/`FileTreeModel`: children sorted by the active column; opening a folder navigates (`FilePanelModel.doOpenNode`) instead of expanding; opening a file uses Theia's open handler. | `FileTree`, `FileTreeModel`, `panel-sorting` |
+| `FilePanelTreeWidget` | The `FileTreeWidget` subclass: folders never expand, renders the size/modified cells, publishes selection, writes `theia-editor-dnd` and the panel drag marker on drag start, delegates every drop to `FileDropHandler`. | `FileTreeWidget`, `FileDropHandler`, `panel-drag` |
 | `FolderBreadcrumb` | Segments from `breadcrumb-model`; click navigates; ▾ opens the sibling list; each segment is a drop target. | `BreadcrumbPopupContainer`, `FileService` |
 | `TransferPlanner` | Pure: decides steps, free names, skips. | none |
 | `TransferDialog` | Collects the choice. | nls |
 | `TransferService` | Executes steps; progress; aggregated failures; selects results. | `FileService`, `ProgressService`, `MessageService` |
-| `FileDropHandler` | Reads a drop into a panel, validates, resolves, opens the dialog, runs the plan; routes OS files to upload. | the three above, `FileUploadService` |
-| `PanelAwareNavigatorWidget` | Adds one case to the explorer's drop: a panel drag, handled by the explorer model's own copy/move. Every other drop goes to Theia's handler unchanged. | `FileNavigatorWidget` |
+| `FileDropHandler` | Reads a drop into a panel, validates, resolves, opens the dialog, runs the plan; routes OS files without a usable payload to upload. | the three above, `FileUploadService` |
+| `PanelAwareNavigatorWidget` | Adds one case to the explorer's drop: a panel drag, handled by the explorer model's own copy/move. Every other drop goes to Theia's handler unchanged. | `FileNavigatorWidget`, `panel-drag` |
 
 **Drag payload.** A panel drag carries the URIs twice: in `theia-editor-dnd` (so editors, the
 shell and panels understand it, exactly as for an explorer drag) and in a panel-only marker type,
@@ -124,9 +129,13 @@ dialog — natively for explorer drags, through `PanelAwareNavigatorWidget` for 
   `Intl.Collator(locale, { numeric: true, sensitivity: "base" })` for names (`file2` before
   `file10`). Size via `Intl.NumberFormat` with localized unit keys; modified via
   `Intl.DateTimeFormat`. Folders show no size. Clicking a column header sorts by it; clicking
-  again reverses.
+  again reverses. The header is an ARIA table (`role="table"` > `role="row"` >
+  `role="columnheader"` with `aria-sort`, each wrapping the sort `<button>`), not a literal
+  `<table>` — the rows below stay Theia's own tree.
 - **Keys inside the focused list** (tree-local, not keybindings): arrows move, Shift/Ctrl
-  extend the selection, Enter opens (folder → navigate, file → open), Backspace goes up.
+  extend the selection, Enter opens (folder → navigate, file → open), Backspace goes up. Opening a
+  file goes through Theia's own open handler, exactly as the explorer does — the editor lands in
+  the panel's tab group, over the panel (Theia's normal tab behaviour, not split beside it).
 - **Toolbar**: Go Up, Refresh.
 - **Starting folder**: the folder given to *Open in Files Panel*, else the first workspace root.
 - **Freshness**: the tree refreshes on `fileService.onDidFilesChange` for its folder, which covers
@@ -153,7 +162,13 @@ dialog — natively for explorer drags, through `PanelAwareNavigatorWidget` for 
 ### `FileDropHandler`
 
 1. Read URIs from `theia-editor-dnd`. If there are none but `dataTransfer.files` is non-empty,
-   **upload** into the target with `FileUploadService` (no dialog) and stop.
+   **upload** into the target with `FileUploadService` (no dialog) and stop. `FileUploadService`
+   enumerates files through WebKit filesystem entries; a `DataTransfer` with none (as any
+   script-built drop has) uploads nothing through that path, so the handler falls back to Theia's
+   own exported `CustomDataTransfer`, built from `dataTransfer.files` directly, in that case. A
+   genuine OS drag keeps the native `DataTransfer` path, folder support included. Either way, a
+   single freshly uploaded file is auto-opened by Theia's own upload-complete handling — the same
+   as for any single-file upload anywhere in the app, not something this package opts out of.
 2. Target folder: the dropped-on folder (a row or a breadcrumb segment); a dropped-on file's
    parent; empty space → the panel's current folder.
 3. **Reject** — localized warning, no dialog — a folder dropped into itself or its own descendant.
