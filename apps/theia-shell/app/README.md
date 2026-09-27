@@ -2,10 +2,12 @@
 
 A Markdown editor with image and PDF viewers, and a member of an
 [httpeers](https://github.com/statewalker/httpeers) mesh, built on **Eclipse
-Theia 1.76**. It runs entirely in the browser. There is no backend: the build
-output is static files. Files come from a
-[`FilesApi`](https://github.com/statewalker/webrun-files)
-(`@statewalker/webrun-files`).
+Theia 1.76**, that runs entirely in the browser. There is no backend: the build
+output is static files. Files come from
+[`FilesApi`](https://github.com/statewalker/webrun-files) instances
+(`@statewalker/webrun-files`) **mounted** as the top-level folders of the
+explorer: browser storage, memory, folders on your computer, S3 buckets.
+Secrets such as S3 keys live in a password-protected, encrypted vault.
 
 On the mesh, the app joins from an invitation, shows the peers and what they
 serve, lets an admin invite others, chats with the mesh's LLM service (or any
@@ -13,6 +15,8 @@ OpenAI-compatible endpoint), and can expose outside HTTP origins to the other
 members through a proxy.
 
 ![The app: explorer over the FilesApi, the editor, the live preview and the outline](docs/screenshot.png)
+
+The screenshots show the opt-in shadcn/ui style (*Appearance: Toggle shadcn/ui Style*). The default is stock Theia.
 
 | Image viewer | PDF viewer (EmbedPDF) |
 |---|---|
@@ -45,10 +49,12 @@ pnpm --filter @theia-shell/app start     # http://127.0.0.1:3000
 
 Any static file server works: `app/lib/frontend/` is the whole app.
 
-- `http://127.0.0.1:3000/` stores files in the browser's **Origin Private File
-  System** (`getOPFSFilesApi`), so they survive reloads.
-- `http://127.0.0.1:3000/?storage=memory` uses an in-memory `MemFilesApi`,
-  fresh on every load.
+- `http://127.0.0.1:3000/` keeps the **main storage** in the browser's Origin
+  Private File System, so files and settings survive reloads. The first visit
+  asks for a password that protects the secrets vault (*Skip* is allowed; tick
+  *Remember on this device* to not be asked again).
+- `http://127.0.0.1:3000/?storage=memory` keeps everything in memory, fresh on
+  every load, with no password prompt.
 
 ### On a mesh
 
@@ -66,10 +72,48 @@ profile (or a private window) to see two peers.
 
 ### Files
 
-An empty `FilesApi` is seeded with `welcome.md`, `notes/ideas.md`,
+An empty main storage ("Browser Storage") is seeded with `welcome.md`, `notes/ideas.md`,
 `docs/cheatsheet.md`, `docs/sample.pdf`, `media/gradient.png` and
 `media/logo.svg`. The PNG and the PDF are generated in code (`app/files/src/png.ts`,
 `createTextPdf`), so no binary fixtures are checked in.
+
+## Mounts, the main storage and secrets
+
+The explorer's top-level folders are **mount points**: each one is a
+workspace folder. By default there are two: **Browser Storage** (the main
+storage, key `browser`) and **Temporary** (in memory, key `temp`).
+
+- **Add a folder**: *File → Mount File System…* or *Add Folder to Workspace…*
+  opens the folder list — remembered folders, browser-storage folders not yet
+  mounted, and *New Folder on this Computer…*, *New S3 Bucket…*, *New
+  Browser-Storage Folder…*, *New In-Memory Folder…*.
+  - *New Folder on this Computer…* opens the browser's folder picker first;
+    the form then suggests the folder's name as the workspace folder's name.
+  - *New S3 Bucket…* opens one form with the name, the mount path, and the
+    endpoint, region, bucket, prefix and keys (the keys go to the vault).
+- **Remove a folder**: *Remove Folder from Workspace* on its root. It is
+  remembered and listed under *Add Folder to Workspace…*, where one click
+  brings it back and the trash button forgets it. The main storage stays.
+- **Edit Mount… / Reconnect**: on a mount's root in the explorer. A mount that
+  cannot be reached stays listed with its reason — "Cloud (unavailable: …)",
+  "Cloud (locked)" while the vault is locked, "Local Computer (click
+  Reconnect)" when the browser needs a click to grant access again.
+- **Settings**: mounts are the `files.mounts` setting, so they come back after
+  a reload and can be edited in *Preferences: Open Settings (JSON)*. Secrets
+  never appear there.
+- **Hidden paths**: the `files.hidden` setting (globs; this app defaults to
+  `**/.git`, `**/.git/**`, `**/.DS_Store`) hides paths from the explorer,
+  editors and search, live.
+- **Main storage**: *File → Choose Main Storage…* moves your settings and vault
+  to a folder on your computer (or back to browser storage). A local-folder main
+  storage asks for one click after each reload, as browsers require.
+- **Secrets**: *Secrets: Unlock / Lock / Change Password / Forget Remembered
+  Password / Reset Vault*. See
+  [`theia-secret-vault`](../packages/theia-secret-vault) for the format and
+  its limits.
+
+The design is in
+[`docs/specs/2026-09-25-pluggable-files-api-design.md`](../docs/specs/2026-09-25-pluggable-files-api-design.md).
 
 ## What is in it
 
@@ -79,11 +123,17 @@ An empty `FilesApi` is seeded with `welcome.md`, `notes/ideas.md`,
 | [`packages/theia-markdown`](../packages/theia-markdown) | **The extension.** Commands, menus, keybindings, the preview and the outline view (below). |
 | [`packages/theia-image-viewer`](../packages/theia-image-viewer) | **Image viewer extension.** Opens PNG, JPEG, GIF, WebP, AVIF, BMP, ICO and SVG files in a zoomable view, with commands, tab-toolbar buttons, a *View → Image* menu and keybindings. |
 | [`packages/theia-pdf-viewer`](../packages/theia-pdf-viewer) | **PDF viewer extension.** Opens `.pdf` files in [EmbedPDF](https://www.embedpdf.com/) (PDFium in WebAssembly), offline. |
+| [`packages/theia-shadcn`](../packages/theia-shadcn) | **shadcn/ui.** The components (on Theia's shared React), the tokens, and an opt-in *shadcn/ui style* (`appearance.style`, or *Appearance: Toggle shadcn/ui Style*) that restyles Theia's menus, dialogs, buttons, inputs and toasts with CSS only. The default is stock Theia. Either style works with any colour theme. |
+| [`packages/theia-files-mounts`](../packages/theia-files-mounts) | **Mount points.** The main storage, the mount table (a `CompositeFilesApi`), filter layers, the `files.mounts` / `files.hidden` settings, the mount wizard and commands, and Theia's settings moved to `shell-system:`. Memory, OPFS and local-folder types. |
+| [`packages/theia-secret-vault`](../packages/theia-secret-vault) | **Secrets.** A WebCrypto vault behind Theia's `KeyStoreService` / `CredentialsService`, its password dialog and commands. |
+| [`packages/theia-files-s3`](../packages/theia-files-s3) | **The S3 mount type** (`webrun-files-s3`); separate because the AWS SDK is large. |
+| [`packages/theia-file-panels`](../packages/theia-file-panels) | **File panels.** Midnight-Commander-style one-folder views opened as main-area tabs, with a sibling-aware breadcrumb, sortable columns, and copy/move between panels and the explorer by drag and drop or context menu. |
 | [`packages/theia-httpeers`](../packages/theia-httpeers) | **The mesh member.** `MeshService` (the app's one httpeers `PeerSession`), the **Mesh** view (join widget, invitations, peers), the status-bar item, and `MeshContribution` for extensions that serve on the mesh. |
 | [`packages/theia-httpeers-proxy`](../packages/theia-httpeers-proxy) | **The proxy.** Serves `/proxy` on the mesh from a route table; the **Mesh Proxy** view edits it and calls this or another member's proxy. |
 | [`packages/theia-llm-chat`](../packages/theia-llm-chat) | **The chat.** The **LLM Chat** view over the mesh hub's LLM service or a custom OpenAI-compatible endpoint, on llm-chat's own core. |
-| [`app/files`](files) | **The app's `FilesApi`**: OPFS or memory, plus the seed. |
-| `app` | The browser-only Theia application (`"theia": { "target": "browser-only" }`). |
+| [`app/files`](files) | **The app's defaults**: the Temporary mount, the hidden paths, the demo files seeded into the main storage, and *New Markdown File* writing there. |
+| [`app/style`](style) | **The app's stylesheet**: Tailwind v4 without preflight over the extensions' sources, plus the shadcn theme. The extensions are styled with Tailwind classes, so an app that uses them must compile those classes too. |
+| `app` | The browser-only Theia application (`"theia": { "target": "browser-only" }`). It also includes `@theia/search-in-workspace` (*Find in Files*, `Ctrl+Shift+F`) and `@theia/file-search` (*Quick Open*, `Ctrl+P`). Both use their browser-only modules, which walk the workspace through Theia's `FileService`, and so the `FilesApi`. |
 
 ### Markdown extension contributions
 
@@ -99,44 +149,61 @@ Loading and saving are Theia's own editor flow, which goes through the
 `FilesApi` provider. The extension never touches storage, apart from *New
 Markdown File*, which creates the file through Theia's `FileService`.
 
+### Search
+
+*Find in Files* reads every file through the `FileService` and skips the ones
+it detects as binary, as ripgrep does on the desktop. So a search for `IHDR`
+finds nothing, although every PNG contains it. The check reads the start of the
+file, so a PDF that begins as plain ASCII, like the sample, is searched as text.
+Its matches are raw PDF syntax, and opening one opens the PDF viewer. Searching
+the text a PDF displays would need the PDF viewer to extract it with PDFium;
+that is not done yet. `search.exclude` is no help here, because *Quick Open*
+applies it too and would hide the images and PDFs.
+
 The preview treats file content as **data, never code**. markdown-it runs with
 `html: false`, so raw HTML is escaped and `javascript:` links are refused, and
 the result is also passed through DOMPurify. This follows the HTTPeers security
 model (`httpeers/docs/security-model.md` §2): a document fetched from a peer
 must never run on the shell's origin.
 
-## Providing a different `FilesApi`
+## Adding a kind of file system
 
-Bind `FilesApiSource` in a frontend module of your own; `app/files` is the
-example. The function is called once, on first use, and may be async:
+A new kind of mount is one binding: implement `MountType` (from
+`@theia-shell/theia-files-mounts`) — an id, a label, the fields the wizard asks,
+and `create(mount, ctx)` returning any `FilesApi` — in a frontend module of its
+own package, and `bind(MountType).to(…)`. `theia-files-s3` is the example.
+Wrappers around the whole tree (filters, guards, read-only) are
+`FilesApiLayer` bindings.
 
-```ts
-import { FilesApiRootLabel, FilesApiSource } from "@theia-shell/theia-files-api";
-import { ContainerModule } from "@theia/core/shared/inversify";
-
-export default new ContainerModule((_bind, _unbind, _isBound, rebind) => {
-  rebind(FilesApiSource).toConstantValue(() => openMyFilesApi()); // any FilesApi
-  rebind(FilesApiRootLabel).toConstantValue("My files");
-});
-```
-
-Put that module in its own package, listed in the app's dependencies with a
+Put the module in its own package, listed in the app's dependencies with a
 `theiaExtensions` entry. Theia ignores `theiaExtensions` in the application's
 own `package.json`.
+
+An app that wants one fixed `FilesApi` and no mounts can leave out
+`theia-files-mounts` and bind `FilesApiSource` from `theia-files-api` instead.
 
 ## Tests
 
 ```bash
-pnpm --filter @theia-shell/theia-files-api test   # 21 unit tests: the FileSystemProvider contract
-pnpm --filter @theia-shell/theia-markdown test    # 15 unit tests: outline, rendering, edits
+pnpm --filter @theia-shell/theia-files-api test    # 23 unit tests: the FileSystemProvider contract, external changes
+pnpm --filter @theia-shell/theia-markdown test     # 15 unit tests: outline, rendering, edits
 pnpm --filter @theia-shell/theia-image-viewer test # 9 unit tests: MIME types, fit, zoom steps
-pnpm --filter @theia-shell/theia-pdf-viewer test  # 5 unit tests: the generated PDF
-pnpm --filter @theia-shell/app-files test         # 7 unit tests: seeding, the PNG encoder
-pnpm --filter @theia-shell/theia-httpeers test    # 8 unit tests: the peers list, status text, rules
+pnpm --filter @theia-shell/theia-pdf-viewer test   # 5 unit tests: the generated PDF
+pnpm --filter @theia-shell/theia-shadcn test       # 6 unit tests: cn, the button variants, data-slots
+pnpm --filter @theia-shell/theia-secret-vault test # 19 unit tests: the vault, the KeyStoreService contract
+pnpm --filter @theia-shell/theia-files-mounts test # 48 unit tests: keys, configs, layers, mount table, workspace file, folder list, form
+pnpm --filter @theia-shell/theia-files-s3 test     # 4 unit tests: client options, the RustFS fixture's CORS
+pnpm --filter @theia-shell/theia-httpeers test     # 8 unit tests: the peers list, status text, rules
 pnpm --filter @theia-shell/theia-httpeers-proxy test # 15 unit tests: routing, header hygiene, secrets
-pnpm --filter @theia-shell/theia-llm-chat test    # 111 unit tests: llm-chat's core (97, ported) and the setup flow
-pnpm --filter @theia-shell/app test:e2e           # 24 Playwright tests against the static build
+pnpm --filter @theia-shell/theia-llm-chat test     # 111 unit tests: llm-chat's core (97, ported) and the setup flow
+pnpm --filter @theia-shell/app-files test          # 8 unit tests: seeding, the PNG encoder
+pnpm --filter @theia-shell/app-style test          # 6 unit tests on the compiled CSS (build first)
+pnpm --filter @theia-shell/app test:e2e            # 64 Playwright tests against the static build
+E2E_PORT=3110 pnpm --filter @theia-shell/app test:e2e  # the same, on another port
 ```
+
+The 4 S3 e2e tests and one unit test run against RustFS in Docker
+([`tools/rustfs.mjs`](../tools/rustfs.mjs)) and are skipped without Docker.
 
 The e2e tests serve `lib/frontend` with a plain static server and drive
 Chromium:
@@ -150,6 +217,36 @@ Chromium:
 - images: the viewer opens instead of the editor, zoom works from the tab
   toolbar, the keyboard and the palette, and SVG is shown as an image;
 - a PDF renders in EmbedPDF with no request to any host other than the app;
+- the viewers are navigatable:
+  - *Open Editors* lists open images and PDFs, and activates one when clicked;
+  - the explorer follows the active viewer;
+  - a rename moves the viewer;
+  - deleting the file closes it;
+- *Find in Files* lists text matches, skips binary files, and opens a result
+  at the match; *Quick Open* finds an image by name and opens it in its viewer;
+- the default style is stock Theia: menus and dialogs keep Theia's shape, and
+  the shadcn components take the theme's colours;
+- *Toggle shadcn/ui Style* switches the look live on a dark theme, the choice
+  survives a reload, and toggling again restores stock Theia;
+- the shadcn/ui style, by computed style against the tokens:
+  - menus and confirm dialogs take shadcn's shape and colours;
+  - the tokens follow a theme switch;
+  - Theia's own elements get no preflight;
+  - the outline's items are shadcn buttons;
+  - the preview is typeset with Tailwind Typography;
+  - the image status line uses the muted token.
+- mounts: the defaults by name, the wizard (a key from the name, a non-Latin
+  name, a duplicate key refused), Edit and Unmount, `files.hidden` live, a
+  malformed `files.mounts` entry skipped with a warning, an OPFS mount and a
+  local folder surviving a reload;
+- the vault: created on the first OPFS visit, asked for after a reload (a wrong
+  password shown in the dialog), *Remember on this device*, an empty password
+  refused, `settings.json` stored in the main storage's `.shell`, a local-folder
+  main storage, and the boot gate;
+- S3 against RustFS: files written from the browser land in the bucket, the
+  keys are in neither `settings.json` nor `secrets.json` in clear, the mount
+  comes back after a reload, "locked" until the vault is unlocked, an
+  unreachable endpoint shown as unavailable, a malformed endpoint refused.
 - **on a real mesh** (`tools/mesh-stack.mjs`, started by the tests): an admin
   joins from an invitation link and sees the hub and its LLM service; requests
   a key and chats with the hub's LLM; adds a proxy route; invites a member from
@@ -189,6 +286,48 @@ Every test also asserts that the page raised no errors.
     on screen unchanged; the PDF viewer never reloaded. The SVG reload test was
     already green. The PDF delete test was written after the fix and was never
     seen red. The full suite is 18 of 18.
+- **shadcn/ui and Tailwind.**
+  - End to end: 6 of 7 red before the change. The preflight test is a guard
+    and passed before and after.
+  - First green run: 6 of 7. The active menu item's radius stayed 4px, because
+    Theia's rule for the item's cells has specificity 0,3,0. It is now 7 of 7,
+    and the full suite is 25 of 25.
+  - Unit, `app-style`: the excluded-names test was 1 red, then green. The
+    `theia-shadcn` unit tests were written with the components and were never
+    seen red.
+- **Style switch.** The shadcn look became opt-in, on top of any colour theme.
+  - End to end: 9 of 10 red. The 3 new default-style tests and the 6 shadcn
+    tests, which now switch the style on first, all failed; the preflight guard
+    passed.
+  - Green: 10 of 10. The full suite is 28 of 28.
+  - Unit, `app-style`: the scoping test, that no rule on Theia's classes
+    escapes `body.shadcn-ui`, was checked by removing the scope from one rule.
+    2 tests failed, and they passed again once the scope was restored.
+- **Mounts and the vault.**
+  - Unit: every package test was seen red first (the module missing, or a
+    wrong result: `seedIfEmpty` treating `.shell` as content, a missing secret
+    reported as "locked" while unlocked). See each package's README.
+  - End to end: 33 of 33 red before the app switched to mounts (no "Browser
+    Storage" folder, no vault dialog). Then 29 of 33: two were a real race — the
+    vault dialog closed before the vault was created, so a reload right after
+    could lose the vault key or the remembered key; the operation now runs in
+    the dialog, which closes only once it is done — and two were locators (a
+    disabled button, a warning shown twice). Green: 33 of 33.
+  - S3: 4 of 4 red (no S3 type), then 2 of 4 (a CORS header, a reload before
+    Theia wrote `settings.json`), then 4 of 4. With the S3 tests the suite is
+    37 of 37.
+- **Navigatable viewers and search.**
+  - End to end: 5 of 5 red, then 5 of 5 green.
+    - Extending `search.exclude` with the binary types hid the images and PDFs
+      from *Quick Open*, which applies that preference too. The browser-only
+      search already skips binary files, so the exclusion came out.
+    - One wrong expectation: opening a result selects the match, so the cursor
+      is at its end (column 23), not its start.
+  - Deleting an open image or PDF from the explorer now closes its viewer, as it
+    does a text editor, because Theia's delete command closes every
+    navigatable widget on the deleted file. The two delete tests were changed
+    from "the viewer says the file cannot be read" to "the viewer closes".
+  - The full suite is 56 of 56 (with the mounts work).
 - **The mesh (unit).**
   - `theia-httpeers`: 7 of 7 red against an empty module, then green. A
     further red came from the first live run: the hub is not a member, so the

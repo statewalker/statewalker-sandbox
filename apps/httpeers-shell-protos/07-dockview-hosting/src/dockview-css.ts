@@ -14,8 +14,8 @@
 // Consequence, and the point of doing it this way: a Dockview upgrade that
 // adds a variable fails this rung rather than silently rendering unthemed.
 
-import { createRequire } from "node:module";
 import { readdirSync, readFileSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
 const require = createRequire(import.meta.url);
@@ -50,7 +50,7 @@ export function dockviewStandaloneBundle(): string {
   return join(dockviewPackageDir(), "dist", "dockview-core.js");
 }
 
-const TEXT_CONTENT_MARKER = 's.textContent = ';
+const TEXT_CONTENT_MARKER = "s.textContent = ";
 
 /**
  * Recover Dockview's stylesheet from the JS string literal it lives in.
@@ -69,7 +69,7 @@ export function extractDockviewStylesheet(): string {
   const start = bundle.indexOf(TEXT_CONTENT_MARKER);
   if (start < 0) {
     throw new Error(
-      "dockview-core no longer embeds its stylesheet as `s.textContent = \"...\"`; " +
+      'dockview-core no longer embeds its stylesheet as `s.textContent = "..."`; ' +
         "the extraction in 07-dockview-hosting/src/dockview-css.ts must be revisited",
     );
   }

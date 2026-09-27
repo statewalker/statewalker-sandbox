@@ -56,10 +56,7 @@ describe("plain slots accumulate", () => {
     const slots = getSlots(newShellContext());
     slots.provide(menuItemsSlot, { location: "l", command: "a" });
     slots.provide(menuItemsSlot, { location: "l", command: "b" });
-    expect(slots.getSnapshot(menuItemsSlot).map((i) => i.command)).toEqual([
-      "a",
-      "b",
-    ]);
+    expect(slots.getSnapshot(menuItemsSlot).map((i) => i.command)).toEqual(["a", "b"]);
   });
 
   it("disposal removes exactly the disposed contribution", () => {
@@ -103,9 +100,7 @@ describe("keyed slots are id-addressed", () => {
   it("throws on a colliding id with a different value", () => {
     const slots = getSlots(newShellContext());
     slots.register(viewsSlot, "notes.outline", view("Outline"));
-    expect(() =>
-      slots.register(viewsSlot, "notes.outline", view("Different")),
-    ).toThrow(RangeError);
+    expect(() => slots.register(viewsSlot, "notes.outline", view("Different"))).toThrow(RangeError);
   });
 
   it("re-registering the same value under the same id is ref-counted", () => {

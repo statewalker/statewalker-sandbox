@@ -12,10 +12,10 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { shellCatalog } from "../../lib/catalog.js";
-import type { A2uiMessage, Component } from "../../lib/renderer.js";
-import { mountStandalone, type AppModule } from "../../lib/mount.js";
-import { createPeerTransport, mountPeerApp } from "../../lib/peer.js";
 import { createShellDock } from "../../lib/dock.js";
+import { type AppModule, mountStandalone } from "../../lib/mount.js";
+import { createPeerTransport, mountPeerApp } from "../../lib/peer.js";
+import type { A2uiMessage, Component } from "../../lib/renderer.js";
 
 const CATALOG_ID = shellCatalog.catalogId;
 const SURFACE = "app";
@@ -39,15 +39,23 @@ const TREE: Component[] = [
     value: { path: "/note/title" },
   },
   { id: "hr", component: "Divider" },
-  { id: "go", component: "Button", child: "goLabel", variant: "primary",
-    action: { event: { name: "save" } } },
+  {
+    id: "go",
+    component: "Button",
+    child: "goLabel",
+    variant: "primary",
+    action: { event: { name: "save" } },
+  },
   { id: "goLabel", component: "Text", text: "Save" },
 ];
 
 const peerMessages = (components: Component[] = TREE): A2uiMessage[] => [
   { version: "v0.9.1", createSurface: { surfaceId: SURFACE, catalogId: CATALOG_ID } },
   { version: "v0.9.1", updateComponents: { surfaceId: SURFACE, components } },
-  { version: "v0.9.1", updateDataModel: { surfaceId: SURFACE, path: "/note/title", value: "draft" } },
+  {
+    version: "v0.9.1",
+    updateDataModel: { surfaceId: SURFACE, path: "/note/title", value: "draft" },
+  },
 ];
 
 /** A peer that serves a fixed list of messages, then completes. */
@@ -114,7 +122,11 @@ describe("what holds under peer delivery", () => {
 
     let localError = "";
     try {
-      mountStandalone(document.createElement("div"), { id: SURFACE, activate: (h) => h.render(hostile) }, shellCatalog);
+      mountStandalone(
+        document.createElement("div"),
+        { id: SURFACE, activate: (h) => h.render(hostile) },
+        shellCatalog,
+      );
     } catch (err) {
       localError = (err as Error).message;
     }
@@ -135,9 +147,7 @@ describe("what holds under peer delivery", () => {
     const nasty = '<img src=x onerror="globalThis.__pwned = true">';
     await mountPeerApp(
       root,
-      peer("12D3KooWabc", peerMessages([
-        { id: "root", component: "Text", text: nasty },
-      ])),
+      peer("12D3KooWabc", peerMessages([{ id: "root", component: "Text", text: nasty }])),
       shellCatalog,
     );
     expect(root.querySelector("img")).toBeNull();
@@ -147,11 +157,15 @@ describe("what holds under peer delivery", () => {
 
   it("refuses a peer offering an unknown catalogId, at createSurface", async () => {
     const wrong: A2uiMessage[] = [
-      { version: "v0.9.1", createSurface: { surfaceId: SURFACE, catalogId: "https://evil.example/catalog.json" } },
+      {
+        version: "v0.9.1",
+        createSurface: { surfaceId: SURFACE, catalogId: "https://evil.example/catalog.json" },
+      },
       { version: "v0.9.1", updateComponents: { surfaceId: SURFACE, components: TREE } },
     ];
-    await expect(mountPeerApp(root, peer("12D3KooWabc", wrong), shellCatalog))
-      .rejects.toThrow(/Unsupported catalog/);
+    await expect(mountPeerApp(root, peer("12D3KooWabc", wrong), shellCatalog)).rejects.toThrow(
+      /Unsupported catalog/,
+    );
     expect(root.children.length).toBe(0);
   });
 
@@ -166,7 +180,10 @@ describe("what holds under peer delivery", () => {
       peer("peerB", [
         { version: "v0.9.1", createSurface: { surfaceId: SURFACE, catalogId: CATALOG_ID } },
         { version: "v0.9.1", updateComponents: { surfaceId: SURFACE, components: TREE } },
-        { version: "v0.9.1", updateDataModel: { surfaceId: SURFACE, path: "/note/title", value: "other" } },
+        {
+          version: "v0.9.1",
+          updateDataModel: { surfaceId: SURFACE, path: "/note/title", value: "other" },
+        },
       ]),
       shellCatalog,
     );
@@ -197,9 +214,14 @@ describe("what holds under peer delivery", () => {
   it("sends actions back to the transport AND to the local handler", async () => {
     const sent: unknown[] = [];
     const onAction = vi.fn();
-    await mountPeerApp(root, peer("12D3KooWabc", peerMessages(), (e) => sent.push(e)), shellCatalog, {
-      onAction,
-    });
+    await mountPeerApp(
+      root,
+      peer("12D3KooWabc", peerMessages(), (e) => sent.push(e)),
+      shellCatalog,
+      {
+        onAction,
+      },
+    );
 
     (root.querySelector("button") as HTMLButtonElement).click();
 
@@ -208,7 +230,15 @@ describe("what holds under peer delivery", () => {
     // BOTH sides. An earlier version of this rung's suite checked only one
     // side of a boundary and let a mutation through (§4); the local handler
     // firing is not evidence that the peer heard anything.
-    expect(sent).toEqual([{ type: "action", surfaceId: SURFACE, name: "save", context: undefined, dataModel: { note: { title: "draft" } } }]);
+    expect(sent).toEqual([
+      {
+        type: "action",
+        surfaceId: SURFACE,
+        name: "save",
+        context: undefined,
+        dataModel: { note: { title: "draft" } },
+      },
+    ]);
   });
 });
 

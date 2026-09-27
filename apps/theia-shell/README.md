@@ -4,7 +4,7 @@ An Eclipse Theia 1.76 application that runs **only in the browser**. It has a
 file explorer over a `@statewalker/webrun-files` `FilesApi`, a Monaco editor
 that saves back to it, a Markdown extension contributing commands, menus,
 keybindings and views, and separate image and PDF viewer extensions (the PDF
-viewer uses EmbedPDF).
+viewer uses EmbedPDF). Its look is stock Theia or, with one switch, shadcn/ui applied with Tailwind.
 
 It is also a member of an **httpeers mesh**: it joins from an invitation,
 shows the peers and what they serve, lets an admin invite others, chats with
@@ -45,11 +45,28 @@ packages/theia-files-api    FilesApi → Theia file system (extension)
 packages/theia-markdown     the Markdown extension
 packages/theia-image-viewer the image viewer extension
 packages/theia-pdf-viewer   the PDF viewer extension (EmbedPDF)
+packages/theia-shadcn       shadcn/ui components, tokens and the alignment of Theia's own widgets
+packages/theia-files-mounts mount points over a main storage; settings under shell-system:
+packages/theia-secret-vault the encrypted secret vault behind Theia's KeyStoreService
+packages/theia-files-s3     the S3 mount type
+packages/theia-file-panels  Midnight-Commander-style file panels (extension)
 packages/theia-httpeers     this browser as a mesh member: Mesh view, peers, invitations, MeshContribution
 packages/theia-httpeers-proxy  expose outside origins to the mesh; call other members' proxies
 packages/theia-llm-chat     the LLM chat: the mesh hub's LLM service or any OpenAI-compatible endpoint
-app/                        the application, app/files (its FilesApi), e2e tests
+app/                        the application, app/files (its defaults and seed), app/style (its Tailwind build), e2e tests
+tools/rustfs.mjs            test fixture: RustFS (S3) in Docker, with CORS for the app
+tools/mesh-stack.mjs        test fixture: a whole mesh on loopback (relay, hub, fake LiteLLM, an outside origin)
 ```
+
+## Mounts and secrets
+
+The app's file system is a set of **mount points** — browser storage, memory,
+folders on the computer, S3 buckets — each a `@statewalker/webrun-files`
+`FilesApi` shown as a top-level folder, over a main storage that holds the
+settings and a password-protected, WebCrypto-encrypted vault for secrets. See
+[`app/README.md`](app/README.md), the
+[design](docs/specs/2026-09-25-pluggable-files-api-design.md) and the
+[plan](docs/plans/2026-09-25-pluggable-files-api.md).
 
 ## What the prototypes established
 

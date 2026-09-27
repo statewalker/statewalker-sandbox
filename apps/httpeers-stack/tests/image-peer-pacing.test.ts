@@ -80,6 +80,6 @@ describe("pacedFiles", () => {
     const paced = pacedFiles(files, 1);
     expect(await paced.exists("/a")).toBe(true);
     expect(await paced.exists("/nope")).toBe(false);
-    expect((await paced.stats("/a"))?.size).toBe(4);
+    expect(await paced.stats("/a")).toMatchObject({ kind: "file", size: 4 });
   });
 });

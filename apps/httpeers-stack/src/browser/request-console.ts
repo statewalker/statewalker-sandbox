@@ -58,7 +58,10 @@ export interface StreamStats {
  * together. Chunk count alone would not tell a streamed response from a
  * buffered one delivered in pieces.
  */
-export async function streamInto(res: Response, onText: (text: string) => void): Promise<StreamStats> {
+export async function streamInto(
+  res: Response,
+  onText: (text: string) => void,
+): Promise<StreamStats> {
   const t0 = performance.now();
   const reader = res.body?.getReader();
   if (reader == null) return { chunks: 0, firstChunkMs: null, totalMs: performance.now() - t0 };
@@ -97,7 +100,11 @@ export const DEFAULT_EXAMPLES: readonly ConsoleExample[] = [
   { label: "swapi · Luke", method: "GET", path: "/swapi/people/1/" },
   { label: "swapi · Tatooine", method: "GET", path: "/swapi/planets/1/" },
   { label: "httpbin · headers", method: "GET", path: "/httpbin/headers" },
-  { label: "httpbin · drip (streaming)", method: "GET", path: "/httpbin/drip?duration=3&numbytes=6&delay=0" },
+  {
+    label: "httpbin · drip (streaming)",
+    method: "GET",
+    path: "/httpbin/drip?duration=3&numbytes=6&delay=0",
+  },
 ];
 
 /** Buttons that fill a console's method and path fields. Returns the container. */

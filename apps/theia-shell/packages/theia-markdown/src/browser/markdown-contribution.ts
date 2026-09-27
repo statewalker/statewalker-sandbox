@@ -9,7 +9,7 @@ import type { MenuModelRegistry } from "@theia/core/lib/common/menu";
 import { SelectionService } from "@theia/core/lib/common/selection-service";
 import type URI from "@theia/core/lib/common/uri";
 import { UriAwareCommandHandler } from "@theia/core/lib/common/uri-command-handler";
-import { inject, injectable } from "@theia/core/shared/inversify";
+import { inject, injectable, optional } from "@theia/core/shared/inversify";
 import { EditorManager } from "@theia/editor/lib/browser/editor-manager";
 import { EDITOR_CONTEXT_MENU } from "@theia/editor/lib/browser/editor-menu";
 import { FileService } from "@theia/filesystem/lib/browser/file-service";
@@ -37,6 +37,13 @@ const NEW_FILE_CONTENT = "# Untitled\n\n";
  * through the FilesApi provider — nothing here touches storage except
  * *New Markdown File*, which creates the file through Theia's FileService.
  */
+/**
+ * Where *New Markdown File* creates files. Unbound: the first workspace root.
+ * An app whose root is not writable (e.g. mount points) binds a folder here.
+ */
+export const MarkdownNewFileFolder = Symbol("MarkdownNewFileFolder");
+export type MarkdownNewFileFolder = () => Promise<URI | undefined>;
+
 @injectable()
 export class MarkdownContribution
   extends AbstractViewContribution<MarkdownOutlineWidget>
@@ -48,6 +55,9 @@ export class MarkdownContribution
   @inject(SelectionService) protected readonly selection!: SelectionService;
   @inject(WidgetManager) protected readonly widgets!: WidgetManager;
   @inject(ApplicationShell) protected readonly appShell!: ApplicationShell;
+  @inject(MarkdownNewFileFolder)
+  @optional()
+  protected readonly newFileFolder?: MarkdownNewFileFolder;
 
   constructor() {
     super({
@@ -170,7 +180,7 @@ export class MarkdownContribution
   }
 
   async newFile(): Promise<URI | undefined> {
-    const root = (await this.workspace.roots)[0]?.resource;
+    const root = (await this.newFileFolder?.()) ?? (await this.workspace.roots)[0]?.resource;
     if (!root) return undefined;
     const folder = await this.files.resolve(root);
     const name = nextUntitledName((folder.children ?? []).map((c) => c.name));

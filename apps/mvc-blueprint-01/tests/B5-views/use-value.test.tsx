@@ -25,7 +25,15 @@ const mount = async (element: ReturnType<typeof createElement>, values: unknown[
 const todo = (id: string, title: string, done = false): Todo => ({ id, title, done });
 
 /** Renders nothing; records every value `useValue` hands it, once per commit. */
-function Probe<T>({ read, isEqual, values }: { read: () => T; isEqual?: (a: T, b: T) => boolean; values: T[] }) {
+function Probe<T>({
+  read,
+  isEqual,
+  values,
+}: {
+  read: () => T;
+  isEqual?: (a: T, b: T) => boolean;
+  values: T[];
+}) {
   const value = useValue(read, isEqual);
   useLayoutEffect(() => {
     values.push(value);
@@ -83,7 +91,10 @@ describe("useValue", () => {
     model.control.replaceTodos([a, b]);
 
     const values: Todo[][] = [];
-    await mount(createElement(Probe, { read: model.view.visible, isEqual: shallowEqual, values }), values);
+    await mount(
+      createElement(Probe, { read: model.view.visible, isEqual: shallowEqual, values }),
+      values,
+    );
     expect(values).toEqual([[a, b]]);
 
     // A new array at `todos` recomputes `visible` into a new array — equal contents.
@@ -104,10 +115,15 @@ describe("useValue", () => {
     const modelA = createTodoListModel();
     const modelB = createTodoListModel();
     const values: Todo[][] = [];
-    await mount(createElement(Probe, { read: modelA.view.visible, isEqual: shallowEqual, values }), values);
+    await mount(
+      createElement(Probe, { read: modelA.view.visible, isEqual: shallowEqual, values }),
+      values,
+    );
     const cachedFromA = values[0];
 
-    view!.root.render(createElement(Probe, { read: modelB.view.visible, isEqual: shallowEqual, values }));
+    view!.root.render(
+      createElement(Probe, { read: modelB.view.visible, isEqual: shallowEqual, values }),
+    );
     await waitFor(() => values.length >= 2);
     expect(values[1]).not.toBe(cachedFromA);
     expect(values[1]).toBe(modelB.view.visible());
@@ -161,7 +177,10 @@ describe("useValue", () => {
       /getSnapshot should be cached/i.test(haystack) ||
       /Maximum update depth exceeded/i.test(haystack) ||
       /Too many re-renders/i.test(haystack);
-    expect(sawLoopGuard, `expected React's getSnapshot-loop guard; captured:\n${haystack || "(nothing)"}`).toBe(true);
+    expect(
+      sawLoopGuard,
+      `expected React's getSnapshot-loop guard; captured:\n${haystack || "(nothing)"}`,
+    ).toBe(true);
   });
 
   it("a read may close over props: re-rendered with a new prop, it re-reads", async () => {
@@ -169,7 +188,10 @@ describe("useValue", () => {
     model.control.replaceTodos([todo("1", "buy milk"), todo("2", "walk dog")]);
     const values: (string | undefined)[] = [];
     const titleOf = (id: string) =>
-      createElement(Probe, { read: () => model.control.todos().find((t) => t.id === id)?.title, values });
+      createElement(Probe, {
+        read: () => model.control.todos().find((t) => t.id === id)?.title,
+        values,
+      });
 
     await mount(titleOf("1"), values);
     view!.root.render(titleOf("2"));

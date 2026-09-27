@@ -1,5 +1,9 @@
 import EmbedPDF from "@embedpdf/snippet";
 import pdfiumWasm from "@embedpdf/snippet/dist/pdfium.wasm";
+import type {
+  Navigatable,
+  NavigatableWidgetOptions,
+} from "@theia/core/lib/browser/navigatable-types";
 import { ThemeService } from "@theia/core/lib/browser/theming";
 import { BaseWidget, type Message } from "@theia/core/lib/browser/widgets/widget";
 import { Disposable } from "@theia/core/lib/common/disposable";
@@ -8,9 +12,8 @@ import { inject, injectable } from "@theia/core/shared/inversify";
 import { FileService } from "@theia/filesystem/lib/browser/file-service";
 
 export const PdfViewerOptions = Symbol("PdfViewerOptions");
-export interface PdfViewerOptions {
-  uri: string;
-}
+/** Navigatable options, so Theia can re-open the viewer when its file is moved or renamed. */
+export type PdfViewerOptions = NavigatableWidgetOptions;
 
 type EmbedPdfElement = ReturnType<typeof EmbedPDF.init>;
 
@@ -25,7 +28,7 @@ type EmbedPdfElement = ReturnType<typeof EmbedPDF.init>;
  * Reloads when the file changes, and says so when it can no longer be read.
  */
 @injectable()
-export class PdfViewerWidget extends BaseWidget {
+export class PdfViewerWidget extends BaseWidget implements Navigatable {
   static readonly FACTORY_ID = "pdf-viewer";
 
   @inject(PdfViewerOptions) protected readonly options!: PdfViewerOptions;
@@ -42,6 +45,16 @@ export class PdfViewerWidget extends BaseWidget {
     return new URI(this.options.uri);
   }
 
+  // Navigatable: Open Editors lists the viewer, the explorer reveals its file,
+  // and a move or rename re-opens it at the new URI.
+  getResourceUri(): URI {
+    return this.uri;
+  }
+
+  createMoveToUri(resourceUri: URI): URI {
+    return this.uri.withPath(resourceUri.path);
+  }
+
   async initialize(): Promise<void> {
     const uri = this.uri;
     this.id = `${PdfViewerWidget.FACTORY_ID}:${this.options.uri}`;
@@ -49,7 +62,7 @@ export class PdfViewerWidget extends BaseWidget {
     this.title.caption = uri.path.toString();
     this.title.iconClass = "codicon codicon-file-pdf";
     this.title.closable = true;
-    this.addClass("pdf-viewer-widget");
+    this.node.classList.add("pdf-viewer-widget", "flex", "overflow-hidden");
     this.node.tabIndex = 0;
 
     this.toDispose.push(Disposable.create(() => this.clear()));
@@ -73,7 +86,7 @@ export class PdfViewerWidget extends BaseWidget {
       if (ticket !== this.loads || this.isDisposed) return;
       this.clear();
       const message = document.createElement("div");
-      message.className = "pdf-viewer-message";
+      message.className = "pdf-viewer-message text-muted-foreground m-auto text-sm";
       message.textContent = `${this.uri.path.base} cannot be read (deleted or moved?)`;
       this.node.appendChild(message);
       this.shown = Disposable.create(() => message.remove());
@@ -84,7 +97,7 @@ export class PdfViewerWidget extends BaseWidget {
 
     const src = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" }));
     const target = document.createElement("div");
-    target.className = "pdf-viewer";
+    target.className = "pdf-viewer h-full min-w-0 flex-1";
     this.node.appendChild(target);
     this.viewer = EmbedPDF.init({
       type: "container",

@@ -46,5 +46,4 @@ describe("fileToImage", () => {
     expect(info.size).toBe(original.length);
     expect(info.contentType).toBe("image/png");
   });
-
 });

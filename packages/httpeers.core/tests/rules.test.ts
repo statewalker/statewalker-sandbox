@@ -37,8 +37,8 @@ import {
   capabilityNames,
   DEFAULT_RULES,
   deriveCapabilities,
-  roleNames,
   RuleSetError,
+  roleNames,
   ruleSet,
   validateRoles,
   withPolicy,
@@ -258,9 +258,9 @@ describe("fail fast, not closed", () => {
     // The verifier therefore supplies `time_ms` and never `time`, so a rule
     // ported verbatim is refused BY NAME at construction rather than silently
     // comparing two different notions of time.
-    expect(() =>
-      ruleSet({ policies: ['allow if time($t), $t < 2026-08-22T00:00:00Z;'] }),
-    ).toThrow(/names predicate 'time', which nothing asserts/);
+    expect(() => ruleSet({ policies: ["allow if time($t), $t < 2026-08-22T00:00:00Z;"] })).toThrow(
+      /names predicate 'time', which nothing asserts/,
+    );
     expect(() => ruleSet({ policies: ["allow if time_ms($t), $t < 100;"] })).not.toThrow();
   });
 
@@ -319,7 +319,10 @@ describe("fail fast, not closed", () => {
 
 describe("explainable decisions (A-06)", () => {
   const rules = ruleSet({
-    rules: ['capability("std:mesh.admin") <- role("admin");', 'capability("std:test") <- role("member");'],
+    rules: [
+      'capability("std:mesh.admin") <- role("admin");',
+      'capability("std:test") <- role("member");',
+    ],
     policies: [
       'allow if capability("std:mesh.admin"), resource($r), $r.starts_with("/admin/");',
       'allow if capability("std:test"), resource($r), $r.starts_with("/test/");',
@@ -494,7 +497,13 @@ describe("end to end, through a real token", () => {
   };
 
   it("an appended block cannot grant a role, so it cannot reach a policy either (A-23)", async () => {
-    const token = await mintToken({ privateKey: hubKey, sub: MEMBER, roles: [], ttlMs: 60_000, now });
+    const token = await mintToken({
+      privateKey: hubKey,
+      sub: MEMBER,
+      roles: [],
+      ttlMs: 60_000,
+      now,
+    });
     const forged = appendBlock(token, 'role("admin");');
 
     const verified = await verifyToken(forged, {
@@ -543,7 +552,11 @@ describe("end to end, through a real token", () => {
     const lying = appendBlock(token, 'resource("/admin/x"); operation("GET");');
 
     const verified = await verifyToken(lying, { issuer: hubPeerId, connectionPeer: MEMBER, now });
-    const d = authorize(rules, { operation: "GET", resource: "/nothing/here", now: now() }, verified);
+    const d = authorize(
+      rules,
+      { operation: "GET", resource: "/nothing/here", now: now() },
+      verified,
+    );
 
     expect(d.allowed).toBe(false);
     expect(d.reason).toBe("no policy allows GET /nothing/here");
@@ -568,8 +581,8 @@ describe("end to end, through a real token", () => {
 
     // ... and with no claims, the policy layer denies, and says which kind of
     // failure it was: no usable token, not an insufficient one.
-    const handler = withPolicy({ rules, usesTransportIdentity: async () => false })(async () =>
-      new Response("ok"),
+    const handler = withPolicy({ rules, usesTransportIdentity: async () => false })(
+      async () => new Response("ok"),
     );
     const res = await handler(new Request("http://peer/admin/x"));
     expect(res.status).toBe(401);

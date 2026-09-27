@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { expectReplacedNotMutated, PanelController, PanelModel, TableModel } from "@fm/app";
 import { Commands } from "@statewalker/shared-commands";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { PanelController, PanelModel, TableModel, expectReplacedNotMutated } from "@fm/app";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /** D2a — the table is driven by a model, and the model keys on paths. */
 
@@ -78,7 +78,10 @@ describe("D2a · TableModel", () => {
       table.selected = new Set(["/dir/sub", "/dir/a.txt"]);
       expect(table.selectionRanges()).toEqual([{ start: 0, end: 2 }]);
       table.selected = new Set(["/dir/sub", "/dir/b.txt"]);
-      expect(table.selectionRanges()).toEqual([{ start: 0, end: 1 }, { start: 2, end: 3 }]);
+      expect(table.selectionRanges()).toEqual([
+        { start: 0, end: 1 },
+        { start: 2, end: 3 },
+      ]);
     });
   });
 
@@ -105,6 +108,10 @@ describe("D2a · TableModel", () => {
   });
 
   it("replaces model state rather than mutating it", async () => {
-    await expectReplacedNotMutated(table, () => table.rowCount, () => table.setRows([]));
+    await expectReplacedNotMutated(
+      table,
+      () => table.rowCount,
+      () => table.setRows([]),
+    );
   });
 });

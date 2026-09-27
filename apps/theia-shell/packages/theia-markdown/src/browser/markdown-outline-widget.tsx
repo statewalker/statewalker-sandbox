@@ -4,6 +4,7 @@ import { inject, injectable, postConstruct } from "@theia/core/shared/inversify"
 import * as React from "@theia/core/shared/react";
 import { EditorManager } from "@theia/editor/lib/browser/editor-manager";
 import type { EditorWidget } from "@theia/editor/lib/browser/editor-widget";
+import { Button, cn } from "@theia-shell/theia-shadcn";
 import { isMarkdownPath } from "../common/markdown-edits";
 import { type OutlineItem, parseOutline } from "../common/markdown-outline";
 
@@ -60,29 +61,32 @@ export class MarkdownOutlineWidget extends ReactWidget {
   }
 
   protected render(): React.ReactNode {
-    if (!this.editor) {
-      return (
-        <div className="markdown-outline theia-widget-noInfo">No Markdown editor is active.</div>
-      );
-    }
-    if (this.items.length === 0) {
-      return <div className="markdown-outline theia-widget-noInfo">No headings.</div>;
-    }
+    if (!this.editor) return this.empty("No Markdown editor is active.");
+    if (this.items.length === 0) return this.empty("No headings.");
     return (
-      <ul className="markdown-outline">
+      <ul className="markdown-outline m-0 flex list-none flex-col gap-px p-1">
         {this.items.map((item) => (
-          <li
-            key={`${item.line}:${item.text}`}
-            className={`markdown-outline-item level-${item.level}`}
-            style={{ paddingLeft: `${(item.level - 1) * 12 + 8}px` }}
-            title={`Line ${item.line + 1}`}
-            onClick={() => this.reveal(item)}
-            onKeyDown={(e) => e.key === "Enter" && this.reveal(item)}
-          >
-            {item.text}
+          <li key={`${item.line}:${item.text}`}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "markdown-outline-item h-7 w-full justify-start font-normal",
+                item.level === 1 && "font-semibold",
+              )}
+              style={{ paddingLeft: `${(item.level - 1) * 12 + 8}px` }}
+              title={`Line ${item.line + 1}`}
+              onClick={() => this.reveal(item)}
+            >
+              <span className="truncate">{item.text}</span>
+            </Button>
           </li>
         ))}
       </ul>
     );
+  }
+
+  protected empty(message: string): React.ReactNode {
+    return <div className="markdown-outline text-muted-foreground p-4 text-sm">{message}</div>;
   }
 }

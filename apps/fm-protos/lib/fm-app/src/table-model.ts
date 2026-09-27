@@ -1,6 +1,6 @@
+import { narrowStats, sizeCell } from "@fm/core";
 import { BaseClass } from "@statewalker/shared-baseclass";
 import type { FileInfo } from "@statewalker/webrun-files";
-import { narrowStats, sizeCell } from "@fm/core";
 
 export interface ColumnDescriptor {
   key: "name" | "size" | "date";

@@ -1,7 +1,8 @@
-import { z } from "zod";
-import { Command } from "@statewalker/shared-commands";
 import { BaseClass } from "@statewalker/shared-baseclass";
+import { Command } from "@statewalker/shared-commands";
+import { z } from "zod";
 import type { PanelModel } from "./panel-model.js";
+
 // The app layer owns the `ui:*` vocabulary, so it also publishes the model
 // types those payloads carry — that is how fm-ui reaches them without ever
 // importing fm-core.
@@ -33,7 +34,10 @@ export class MenuModel extends BaseClass {
 }
 
 export class ConfirmDialogModel extends BaseClass {
-  constructor(readonly messageKey: string, readonly params: Record<string, unknown> = {}) {
+  constructor(
+    readonly messageKey: string,
+    readonly params: Record<string, unknown> = {},
+  ) {
     super();
   }
 }
@@ -45,14 +49,20 @@ export class PromptDialogModel extends BaseClass {
     submitCount = 0;
   })();
   error?: string;
-  constructor(readonly messageKey: string, readonly initial = "") {
+  constructor(
+    readonly messageKey: string,
+    readonly initial = "",
+  ) {
     super();
     this.input.text = initial;
   }
 }
 
 export class ConflictDialogModel extends BaseClass {
-  constructor(readonly path: string, readonly target: string) {
+  constructor(
+    readonly path: string,
+    readonly target: string,
+  ) {
     super();
   }
 }
@@ -79,8 +89,10 @@ export const uiShowPrompt = Command.required("ui:show-dialog:prompt")
 
 export const uiShowConflict = Command.required("ui:show-dialog:conflict")
   .input(z.custom<ConflictDialogModel>())
-  .output(z.object({
-    resolution: z.enum(["overwrite", "skip", "rename"]),
-    applyToAll: z.boolean(),
-  }))
+  .output(
+    z.object({
+      resolution: z.enum(["overwrite", "skip", "rename"]),
+      applyToAll: z.boolean(),
+    }),
+  )
   .build();

@@ -36,10 +36,7 @@ export interface Enablement {
   onChange(cb: () => void): () => void;
 }
 
-export function fact(
-  predicate: string,
-  ...terms: readonly (string | number | boolean)[]
-): Fact {
+export function fact(predicate: string, ...terms: readonly (string | number | boolean)[]): Fact {
   return Object.freeze({ predicate, terms: Object.freeze([...terms]) });
 }
 
@@ -49,7 +46,8 @@ function factId(f: Fact): string {
 }
 
 /** One fact pattern: `predicate("a", "b")`, optionally negated. */
-const CLAUSE = /^[a-z_][a-zA-Z0-9_]*\(\s*(?:"[^"]*"|-?\d+(?:\.\d+)?|true|false)?(?:\s*,\s*(?:"[^"]*"|-?\d+(?:\.\d+)?|true|false))*\s*\)$/;
+const CLAUSE =
+  /^[a-z_][a-zA-Z0-9_]*\(\s*(?:"[^"]*"|-?\d+(?:\.\d+)?|true|false)?(?:\s*,\s*(?:"[^"]*"|-?\d+(?:\.\d+)?|true|false))*\s*\)$/;
 
 /** Normalise whitespace inside a pattern so `a("x","y")` matches `a("x", "y")`. */
 function normalise(pattern: string): string {
@@ -106,30 +104,35 @@ export function factSetEnablement(initial: readonly Fact[] = []): Enablement {
 
     evaluate(when) {
       if (!when || !when.trim()) return true;
-      return when
-        .split(",")
-        // a pattern may itself contain commas between terms, so re-join
-        // and parse properly rather than splitting naively
-        .reduce<string[]>((acc, part) => {
-          const last = acc[acc.length - 1];
-          if (last !== undefined && (last.match(/\(/g)?.length ?? 0) > (last.match(/\)/g)?.length ?? 0)) {
-            acc[acc.length - 1] = `${last},${part}`;
-          } else {
-            acc.push(part);
-          }
-          return acc;
-        }, [])
-        .every((raw) => {
-          const clause = raw.trim();
-          if (!clause) return true;
-          const negated = clause.startsWith("!");
-          const pattern = (negated ? clause.slice(1) : clause).trim();
-          if (!CLAUSE.test(pattern)) {
-            throw new Error(`Malformed when clause: ${clause}`);
-          }
-          const held = facts.has(normalise(pattern));
-          return negated ? !held : held;
-        });
+      return (
+        when
+          .split(",")
+          // a pattern may itself contain commas between terms, so re-join
+          // and parse properly rather than splitting naively
+          .reduce<string[]>((acc, part) => {
+            const last = acc[acc.length - 1];
+            if (
+              last !== undefined &&
+              (last.match(/\(/g)?.length ?? 0) > (last.match(/\)/g)?.length ?? 0)
+            ) {
+              acc[acc.length - 1] = `${last},${part}`;
+            } else {
+              acc.push(part);
+            }
+            return acc;
+          }, [])
+          .every((raw) => {
+            const clause = raw.trim();
+            if (!clause) return true;
+            const negated = clause.startsWith("!");
+            const pattern = (negated ? clause.slice(1) : clause).trim();
+            if (!CLAUSE.test(pattern)) {
+              throw new Error(`Malformed when clause: ${clause}`);
+            }
+            const held = facts.has(normalise(pattern));
+            return negated ? !held : held;
+          })
+      );
     },
 
     onChange(cb) {

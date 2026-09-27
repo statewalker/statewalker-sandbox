@@ -1,3 +1,7 @@
+import type {
+  Navigatable,
+  NavigatableWidgetOptions,
+} from "@theia/core/lib/browser/navigatable-types";
 import { BaseWidget, type Message } from "@theia/core/lib/browser/widgets/widget";
 import { Disposable } from "@theia/core/lib/common/disposable";
 import { Emitter } from "@theia/core/lib/common/event";
@@ -7,9 +11,8 @@ import { FileService } from "@theia/filesystem/lib/browser/file-service";
 import { fitScale, formatZoom, imageMimeType, stepZoom } from "../common/image-view";
 
 export const ImageViewerOptions = Symbol("ImageViewerOptions");
-export interface ImageViewerOptions {
-  uri: string;
-}
+/** Navigatable options, so Theia can re-open the viewer when its file is moved or renamed. */
+export type ImageViewerOptions = NavigatableWidgetOptions;
 
 /** "fit" follows the widget's size; a number is a fixed scale. */
 export type ImageZoom = "fit" | number;
@@ -20,7 +23,7 @@ export type ImageZoom = "fit" | number;
  * Reloads when the file changes, and says so when it can no longer be read.
  */
 @injectable()
-export class ImageViewerWidget extends BaseWidget {
+export class ImageViewerWidget extends BaseWidget implements Navigatable {
   static readonly FACTORY_ID = "image-viewer";
 
   @inject(ImageViewerOptions) protected readonly options!: ImageViewerOptions;
@@ -44,6 +47,16 @@ export class ImageViewerWidget extends BaseWidget {
     return new URI(this.options.uri);
   }
 
+  // Navigatable: Open Editors lists the viewer, the explorer reveals its file,
+  // and a move or rename re-opens it at the new URI.
+  getResourceUri(): URI {
+    return this.uri;
+  }
+
+  createMoveToUri(resourceUri: URI): URI {
+    return this.uri.withPath(resourceUri.path);
+  }
+
   /** The scale the image is shown at right now. */
   get scale(): number {
     return this.zoomMode === "fit" ? this.fitScale() : this.zoomMode;
@@ -60,14 +73,24 @@ export class ImageViewerWidget extends BaseWidget {
     this.title.caption = uri.path.toString();
     this.title.iconClass = "codicon codicon-file-media";
     this.title.closable = true;
-    this.addClass("image-viewer-widget");
+    this.node.classList.add(
+      "image-viewer-widget",
+      "flex",
+      "flex-col",
+      "overflow-hidden",
+      "bg-background",
+    );
     this.node.tabIndex = 0;
 
-    this.canvas.className = "image-viewer-canvas";
-    this.image.className = "image-viewer-image";
+    this.canvas.className =
+      "image-viewer-canvas grid min-h-0 flex-1 place-items-center overflow-auto p-4";
+    // The checkerboard behind the image stays in image-viewer.css.
+    this.image.className =
+      "image-viewer-image ring-border cursor-zoom-in ring-1 [&:not(.fit)]:cursor-zoom-out";
     this.image.alt = uri.path.base;
     this.image.draggable = false;
-    this.status.className = "image-viewer-status";
+    this.status.className =
+      "image-viewer-status border-border text-muted-foreground flex-none border-t px-2 py-0.5 text-xs";
     this.canvas.appendChild(this.image);
     this.node.append(this.canvas, this.status);
 

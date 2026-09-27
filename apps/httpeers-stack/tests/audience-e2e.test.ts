@@ -146,9 +146,7 @@ describe("A-24 end to end: a token names its audience", () => {
     // handler that answered 403 to everything would pass (i) too.
     const tokenless = await alice.call(providerB.peerId, "/test/whoami");
     expect(tokenless.status).toBe(401);
-    expect(((await tokenless.json()) as { error: string }).error).toBe(
-      "membership token required",
-    );
+    expect(((await tokenless.json()) as { error: string }).error).toBe("membership token required");
 
     // (iii) And the refreshed token is not simply broken: it works where it
     // is meant to, so (i) is about the destination and not about the mint.

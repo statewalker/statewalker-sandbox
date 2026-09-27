@@ -176,7 +176,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   for (const c of criteria) byBlock[c.block] = (byBlock[c.block] ?? 0) + 1;
   console.log(
     `${criteria.length} criteria -> src/criteria.ts  (` +
-      Object.entries(byBlock).sort().map(([k, v]) => `${k}=${v}`).join(", ") +
+      Object.entries(byBlock)
+        .sort()
+        .map(([k, v]) => `${k}=${v}`)
+        .join(", ") +
       `; ${criteria.filter((c) => c.designed).length} DESIGNED)`,
   );
 }

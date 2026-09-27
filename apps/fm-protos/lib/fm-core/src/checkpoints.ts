@@ -5,12 +5,26 @@ export interface Cursor {
   cursorPath: string;
   /** Carried in the record so a startup report costs no re-enumeration. */
   remaining: number;
-  spec: { operation: "copy" | "move" | "delete"; source: { uri: string }; target: { uri: string; path: string }; roots: string[]; batchSize: number };
+  spec: {
+    operation: "copy" | "move" | "delete";
+    source: { uri: string };
+    target: { uri: string; path: string };
+    roots: string[];
+    batchSize: number;
+  };
 }
 
-export interface JobError { path: string; reason: "skipped" | "failed"; message?: string }
+export interface JobError {
+  path: string;
+  reason: "skipped" | "failed";
+  message?: string;
+}
 
-export interface InterruptedReport { jobId: string; remaining: number; cursor: Cursor }
+export interface InterruptedReport {
+  jobId: string;
+  remaining: number;
+  cursor: Cursor;
+}
 
 const encode = (value: unknown) => [new TextEncoder().encode(JSON.stringify(value))];
 
@@ -35,10 +49,17 @@ async function readJson<T>(api: FilesApi, path: string): Promise<T | undefined> 
  * storage in the job.
  */
 export class CheckpointStore {
-  constructor(private readonly _api: FilesApi, private readonly _root = "/jobs") {}
+  constructor(
+    private readonly _api: FilesApi,
+    private readonly _root = "/jobs",
+  ) {}
 
-  private _cursorPath(jobId: string) { return `${this._root}/${jobId}/cursor.json`; }
-  private _errorsPath(jobId: string) { return `${this._root}/${jobId}/errors.json`; }
+  private _cursorPath(jobId: string) {
+    return `${this._root}/${jobId}/cursor.json`;
+  }
+  private _errorsPath(jobId: string) {
+    return `${this._root}/${jobId}/errors.json`;
+  }
 
   async save(jobId: string, cursor: Cursor): Promise<void> {
     await this._api.write(this._cursorPath(jobId), encode(cursor));

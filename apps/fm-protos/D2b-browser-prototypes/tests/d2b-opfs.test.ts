@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { getOPFSFilesApi } from "@statewalker/webrun-files-browser";
+import { CheckpointStore, JobModel, narrowStats, runCopyJob } from "@fm/core";
 import type { FilesApi } from "@statewalker/webrun-files";
-import { JobModel, narrowStats, runCopyJob, CheckpointStore } from "@fm/core";
+import { getOPFSFilesApi } from "@statewalker/webrun-files-browser";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /**
  * D2b — closes the C0.5 gap: OPFS is browser-only, so mem and Node could not
@@ -96,7 +96,9 @@ describe("D2b · the engine against OPFS", () => {
       source: { uri: "opfs://a", api },
       target: { uri: "opfs://a", api, path: `${root}/dst` },
       roots: [`${root}/src`],
-      batchSize: 2, job: first, checkpoints,
+      batchSize: 2,
+      job: first,
+      checkpoints,
     });
     await new Promise((r) => setTimeout(r, 0));
     first.cancel();
@@ -140,7 +142,8 @@ describe("D2b · the engine against OPFS", () => {
       source: { uri: "opfs://a", api: failing },
       target: { uri: "opfs://a", api, path: `${root}/dst` },
       roots: [`${root}/src`],
-      batchSize: 1, job,
+      batchSize: 1,
+      job,
     });
 
     expect(job.status).toBe("failed");

@@ -1,4 +1,3 @@
-import "../../src/browser/style/markdown.css";
 import { FrontendApplicationContribution } from "@theia/core/lib/browser/frontend-application-contribution";
 import { bindViewContribution } from "@theia/core/lib/browser/shell/view-contribution";
 import { WidgetFactory } from "@theia/core/lib/browser/widget-manager";

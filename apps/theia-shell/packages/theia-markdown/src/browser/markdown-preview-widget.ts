@@ -11,6 +11,14 @@ export interface MarkdownPreviewOptions {
   uri: string;
 }
 
+/** Tailwind Typography, coloured by the shadcn tokens. */
+const PREVIEW_CLASSES = [
+  "markdown-preview prose prose-sm prose-shadcn mx-auto max-w-[860px] px-6 pt-4 pb-12",
+  "prose-code:bg-muted prose-code:rounded-sm prose-code:px-1 prose-code:py-0.5 prose-code:font-normal",
+  "prose-code:before:content-none prose-code:after:content-none",
+  "prose-pre:border prose-pre:border-border",
+].join(" ");
+
 /**
  * Renders a Markdown document. It reads the shared text model — the same one
  * the editor edits — so unsaved changes show up live, and a preview opened
@@ -38,8 +46,8 @@ export class MarkdownPreviewWidget extends BaseWidget {
     this.title.caption = `Preview of ${uri.path.toString()}`;
     this.title.iconClass = "codicon codicon-open-preview";
     this.title.closable = true;
-    this.addClass("markdown-preview-widget");
-    this.content.className = "markdown-preview";
+    this.node.classList.add("markdown-preview-widget", "overflow-auto", "bg-background");
+    this.content.className = PREVIEW_CLASSES;
     this.node.appendChild(this.content);
     this.node.tabIndex = 0;
 

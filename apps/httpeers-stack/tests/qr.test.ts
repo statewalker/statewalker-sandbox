@@ -1,7 +1,7 @@
 import jsQR from "jsqr";
 import { describe, expect, it } from "vitest";
-import { qrModules, qrSvg } from "../src/browser/qr-encode.js";
 import { invitationFromQrText } from "../src/browser/qr-decode.js";
+import { qrModules, qrSvg } from "../src/browser/qr-encode.js";
 
 /** A real join blob, the shape and length the hub actually mints (315 chars). */
 const BLOB =
@@ -78,5 +78,4 @@ describe("invitationFromQrText", () => {
   it("also accepts a ?join= link, since a phone camera may hand one over", () => {
     expect(invitationFromQrText(`https://app.httpeers.net/?join=${BLOB}`)).toBe(BLOB);
   });
-
 });

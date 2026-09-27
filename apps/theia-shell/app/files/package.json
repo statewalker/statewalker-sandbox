@@ -2,7 +2,7 @@
   "name": "@theia-shell/app-files",
   "version": "0.0.0",
   "private": true,
-  "description": "The app's FilesApi: OPFS (persistent) by default, or in-memory with ?storage=memory; seeded with sample Markdown, images and a PDF.",
+  "description": "The app's file-system defaults: a Temporary memory mount, hidden .git/.DS_Store, and the demo files seeded into the main storage.",
   "main": "lib/app-files-frontend-module.js",
   "theiaExtensions": [
     {
@@ -15,9 +15,10 @@
   },
   "dependencies": {
     "@statewalker/webrun-files": "0.10.0",
-    "@statewalker/webrun-files-browser": "0.10.0",
     "@statewalker/webrun-files-mem": "0.10.0",
     "@theia-shell/theia-files-api": "workspace:*",
+    "@theia-shell/theia-files-mounts": "workspace:*",
+    "@theia-shell/theia-markdown": "workspace:*",
     "@theia-shell/theia-pdf-viewer": "workspace:*",
     "@theia/core": "1.76.0"
   }

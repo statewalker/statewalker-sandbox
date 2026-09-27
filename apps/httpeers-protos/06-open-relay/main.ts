@@ -50,7 +50,9 @@ console.log(`trusted-to-forward set: ${trustedToForward.size === 0 ? "(empty)" :
 
 // 1. A request addressed to the server itself — legitimate, should work.
 const local = await fetchOverDuplex(call, new Request(`http://peer/${selfId}/anything`));
-console.log(`GET /{server}/anything        -> ${local.status} ${JSON.stringify(await local.json())}`);
+console.log(
+  `GET /{server}/anything        -> ${local.status} ${JSON.stringify(await local.json())}`,
+);
 
 // 2. A request addressed to a third party — the open-relay attempt.
 const relayed = await fetchOverDuplex(call, new Request(`http://peer/${stranger}/secret`));

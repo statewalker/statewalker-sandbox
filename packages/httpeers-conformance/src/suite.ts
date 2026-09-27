@@ -1,7 +1,7 @@
 import { afterAll, describe, it } from "vitest";
 import { CHECKS } from "./checks/index.js";
 import { CRITERIA } from "./criteria.js";
-import { NotImplemented, NotTestable, type Criterion, type Implementation } from "./types.js";
+import { type Criterion, type Implementation, NotImplemented, NotTestable } from "./types.js";
 
 export type Outcome = "pass" | "fail" | "missing" | "skip";
 
@@ -34,7 +34,8 @@ function summarise(name: string, rows: Record_[]): string {
   const failed = by("fail");
   if (failed.length) {
     lines.push("", "  FAIL — offered, but does not behave as specified:");
-    for (const r of failed) lines.push(`    ${r.criterion.id.padEnd(7)} ${(r.detail ?? "").split("\n")[0]}`);
+    for (const r of failed)
+      lines.push(`    ${r.criterion.id.padEnd(7)} ${(r.detail ?? "").split("\n")[0]}`);
   }
   lines.push("─".repeat(78), "");
   return lines.join("\n");
@@ -63,7 +64,11 @@ export function describeConformance(impl: Implementation): void {
 
       if (!entry) {
         it(name, () => {
-          rows.push({ criterion, outcome: "fail", detail: "no check is registered for this criterion" });
+          rows.push({
+            criterion,
+            outcome: "fail",
+            detail: "no check is registered for this criterion",
+          });
           throw new Error(
             `${criterion.id} has no check. Every criterion needs one or an explicit skip reason ` +
               `— a criterion with no outcome is how a suite quietly stops testing.`,

@@ -160,6 +160,51 @@ import { ANONYMOUS } from "./types.js";
  */
 export const LIMITS = { max_facts: 5_000, max_iterations: 200, max_time_micro: 1_000_000 };
 
+/** How many times one evaluation is tried before a `Timeout` is believed. */
+const TIMEOUT_ATTEMPTS = 3;
+
+export function isSpuriousTimeout(error: unknown): boolean {
+  return hasKey(error, "RunLimit") && String(error.RunLimit) === "Timeout";
+}
+
+/**
+ * Run a wasm evaluation, disbelieving a `RunLimit: Timeout`.
+ *
+ * THIS BUILD REPORTS `Timeout` SPURIOUSLY, and believing it turns a legitimate
+ * member away. It happens under CPU load, on evaluations that take well under a
+ * millisecond, and raising `max_time_micro` does not reduce it. Measured in
+ * httpeers-access: 4 of 300 legitimate admin authorizations, with 16 busy
+ * processes on 8 cores. Here, CI caught the image peer answering a legitimate
+ * request with 403 "evaluation budget exhausted (Timeout)".
+ *
+ * The cost at each call site: a denied authorization (`rules.ts`), a rejected
+ * valid token (`verifyToken`), or a wrong capability set.
+ *
+ * WHY RETRYING IS SOUND. These evaluations are pure functions of the rules and
+ * the facts, so a retry cannot turn a deny into an allow. A real exhaustion
+ * repeats on every attempt and still fails closed. `TooManyFacts`, the limit
+ * that actually bounds a pathological rule set because it counts work rather
+ * than elapsed time, is never retried.
+ *
+ * The caller must rebuild every wasm handle inside `run`: the handles are
+ * consumed by the call that takes them, so reusing one on a retry traps.
+ *
+ * Ported from httpeers-access, which has since dropped the wasm engine for
+ * `@statewalker/webrun-biscuit` (pure TypeScript) and with it this retry.
+ */
+export function retryOnSpuriousTimeout<T>(run: () => T): T {
+  let last: unknown;
+  for (let attempt = 0; attempt < TIMEOUT_ATTEMPTS; attempt++) {
+    try {
+      return run();
+    } catch (error) {
+      if (!isSpuriousTimeout(error)) throw error;
+      last = error;
+    }
+  }
+  throw last;
+}
+
 /**
  * Generate a fresh Ed25519 signing key for a mesh identity — a hub's own
  * key, or any peer's, since `mintToken`/`verifyToken` treat every peerId
@@ -484,41 +529,61 @@ export async function verifyToken(token: string, options: VerifyTokenOptions): P
     throw new TypeError("verifyToken: selfPeer must be this peer's own peerId string");
   }
   const root = rootKeyFor(options.issuer);
-
-  let parsed: Biscuit;
-  try {
-    parsed = Biscuit.fromBase64(token, root);
-  } catch (error) {
-    throw parseFailure(error);
-  }
-
   const now = options.now ?? Date.now;
-  const builder = new AuthorizerBuilder();
-  builder.addCodeWithParameters(
-    "root_mesh({mesh}); time_ms({now});",
-    { mesh: options.issuer, now: now() },
-    {},
-  );
-  if (options.connectionPeer !== ANONYMOUS) {
-    builder.addCodeWithParameters("connection_peer({peer});", { peer: options.connectionPeer }, {});
-  }
-  // The destination's statement about itself, which the token's audience check
-  // consumes (ADR-0020). Omitted, nothing satisfies `audience($k), self_peer($k)`.
-  if (options.selfPeer !== undefined) {
-    builder.addCodeWithParameters("self_peer({peer});", { peer: options.selfPeer }, {});
-  }
-  // This verifier contributes no policy of its own — the token's checks are the
-  // whole decision. Task 30 replaces this with the access tree as Datalog.
-  builder.addCode("allow if true;");
 
-  const authorizer = builder.buildAuthenticated(parsed);
+  // THE WHOLE EVALUATION IS REBUILT PER ATTEMPT, parse included: the wasm
+  // handles are consumed by the calls that take them (`buildAuthenticated`
+  // consumes `parsed`), so a retry that reused one would trap. Only a spurious
+  // `Timeout` is retried (see `retryOnSpuriousTimeout`). A parse failure or a
+  // failed check is thrown on the first attempt, so a bad token costs no more
+  // to reject than it did.
   try {
-    authorizer.authorizeWithLimits(LIMITS);
-  } catch (error) {
-    throw denial(error);
-  }
+    return retryOnSpuriousTimeout(() => {
+      let parsed: Biscuit;
+      try {
+        parsed = Biscuit.fromBase64(token, root);
+      } catch (error) {
+        throw parseFailure(error);
+      }
 
-  return readClaims(authorizer, options.issuer);
+      const builder = new AuthorizerBuilder();
+      builder.addCodeWithParameters(
+        "root_mesh({mesh}); time_ms({now});",
+        { mesh: options.issuer, now: now() },
+        {},
+      );
+      if (options.connectionPeer !== ANONYMOUS) {
+        builder.addCodeWithParameters(
+          "connection_peer({peer});",
+          { peer: options.connectionPeer },
+          {},
+        );
+      }
+      // The destination's statement about itself, which the token's audience check
+      // consumes (ADR-0020). Omitted, nothing satisfies `audience($k), self_peer($k)`.
+      if (options.selfPeer !== undefined) {
+        builder.addCodeWithParameters("self_peer({peer});", { peer: options.selfPeer }, {});
+      }
+      // This verifier contributes no policy of its own — the token's checks are the
+      // whole decision. Task 30 replaces this with the access tree as Datalog.
+      builder.addCode("allow if true;");
+
+      const authorizer = builder.buildAuthenticated(parsed);
+      try {
+        authorizer.authorizeWithLimits(LIMITS);
+      } catch (error) {
+        // A Timeout goes up raw, so the retry can see it.
+        if (isSpuriousTimeout(error)) throw error;
+        throw denial(error);
+      }
+
+      return readClaims(authorizer, options.issuer);
+    });
+  } catch (error) {
+    // Every attempt timed out: a real exhaustion, which denies as it always did.
+    if (isSpuriousTimeout(error)) throw denial(error);
+    throw error;
+  }
 }
 
 /**

@@ -1,8 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { MemFilesApi } from "@statewalker/webrun-files-mem";
+import { JobModel, type JobSpec, runCopyJob } from "@fm/core";
 import type { FilesApi, ListOptions } from "@statewalker/webrun-files";
-import { runCopyJob, type JobSpec } from "@fm/core";
-import { JobModel } from "@fm/core";
+import { MemFilesApi } from "@statewalker/webrun-files-mem";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /** P3 — walk, deterministic order, batches, cancel. The highest-risk rung. */
 
@@ -20,7 +19,9 @@ class SpyFilesApi implements FilesApi {
   nativeMoves = 0;
   failOn?: string;
   constructor(private readonly inner: MemFilesApi) {}
-  read(p: string, o?: never) { return this.inner.read(p, o); }
+  read(p: string, o?: never) {
+    return this.inner.read(p, o);
+  }
   async write(p: string, content: Iterable<Uint8Array> | AsyncIterable<Uint8Array>) {
     const chunks: Uint8Array[] = [];
     for await (const chunk of content as AsyncIterable<Uint8Array>) {
@@ -30,13 +31,30 @@ class SpyFilesApi implements FilesApi {
     this.writes.push(p);
     return this.inner.write(p, chunks);
   }
-  mkdir(p: string) { return this.inner.mkdir(p); }
-  list(p: string, o?: ListOptions) { return this.inner.list(p, o); }
-  stats(p: string) { return this.inner.stats(p); }
-  exists(p: string) { return this.inner.exists(p); }
-  async remove(p: string) { this.removed.push(p); return this.inner.remove(p); }
-  async move(s: string, t: string) { this.nativeMoves++; return this.inner.move(s, t); }
-  async copy(s: string, t: string) { this.nativeCopies++; return this.inner.copy(s, t); }
+  mkdir(p: string) {
+    return this.inner.mkdir(p);
+  }
+  list(p: string, o?: ListOptions) {
+    return this.inner.list(p, o);
+  }
+  stats(p: string) {
+    return this.inner.stats(p);
+  }
+  exists(p: string) {
+    return this.inner.exists(p);
+  }
+  async remove(p: string) {
+    this.removed.push(p);
+    return this.inner.remove(p);
+  }
+  async move(s: string, t: string) {
+    this.nativeMoves++;
+    return this.inner.move(s, t);
+  }
+  async copy(s: string, t: string) {
+    this.nativeCopies++;
+    return this.inner.copy(s, t);
+  }
 }
 
 describe("P3 · job engine", () => {
@@ -71,11 +89,13 @@ describe("P3 · job engine", () => {
 
     it("uses native move() when source and target are the same storageURI", async () => {
       const same = new SpyFilesApi(seeded(3));
-      await runCopyJob(spec({
-        operation: "move",
-        source: { uri: "mem://same", api: same },
-        target: { uri: "mem://same", api: same, path: "/dst" },
-      }));
+      await runCopyJob(
+        spec({
+          operation: "move",
+          source: { uri: "mem://same", api: same },
+          target: { uri: "mem://same", api: same, path: "/dst" },
+        }),
+      );
       expect(same.nativeMoves).toBe(3);
       expect(same.writes.length).toBe(0); // no read/write round trip
     });
@@ -90,10 +110,18 @@ describe("P3 · job engine", () => {
 
     it("walks whole directory trees, recreating structure", async () => {
       const tree = new MemFilesApi({
-        initialFiles: { "/src/one.txt": "1", "/src/sub/two.txt": "2", "/src/sub/deep/three.txt": "3" },
+        initialFiles: {
+          "/src/one.txt": "1",
+          "/src/sub/two.txt": "2",
+          "/src/sub/deep/three.txt": "3",
+        },
       });
       await runCopyJob(spec({ source: { uri: "mem://a", api: tree } }));
-      expect(target.writes).toEqual(["/dst/one.txt", "/dst/sub/deep/three.txt", "/dst/sub/two.txt"]);
+      expect(target.writes).toEqual([
+        "/dst/one.txt",
+        "/dst/sub/deep/three.txt",
+        "/dst/sub/two.txt",
+      ]);
     });
   });
 
@@ -136,11 +164,13 @@ describe("P3 · job engine", () => {
     it("is per-entry copy-then-delete, never a trailing delete pass", async () => {
       const src = new SpyFilesApi(seeded(6));
       const order: string[] = [];
-      await runCopyJob(spec({
-        operation: "move",
-        source: { uri: "mem://a", api: src },
-        onEntry: (path, phase) => order.push(`${phase}:${path}`),
-      }));
+      await runCopyJob(
+        spec({
+          operation: "move",
+          source: { uri: "mem://a", api: src },
+          onEntry: (path, phase) => order.push(`${phase}:${path}`),
+        }),
+      );
       // Parallel batches interleave, so the invariant is PER ENTRY, not global
       // pairing: each entry's removal follows its own write, and every write
       // has a removal. A trailing delete pass would put all removals last.
@@ -155,11 +185,13 @@ describe("P3 · job engine", () => {
 
     it("reports a precise boundary when cancelled, and the source keeps the rest", async () => {
       const src = new SpyFilesApi(seeded(40));
-      const run = runCopyJob(spec({
-        operation: "move",
-        source: { uri: "mem://a", api: src },
-        batchSize: 2,
-      }));
+      const run = runCopyJob(
+        spec({
+          operation: "move",
+          source: { uri: "mem://a", api: src },
+          batchSize: 2,
+        }),
+      );
       await new Promise((r) => setTimeout(r, 0));
       job.cancel();
       await run;
@@ -174,7 +206,9 @@ describe("P3 · job engine", () => {
     it("never removes a source entry before its target write completed", async () => {
       const src = new SpyFilesApi(seeded(5));
       target.failOn = "/dst/f0003.txt";
-      await runCopyJob(spec({ operation: "move", source: { uri: "mem://a", api: src }, batchSize: 1 }));
+      await runCopyJob(
+        spec({ operation: "move", source: { uri: "mem://a", api: src }, batchSize: 1 }),
+      );
       expect(src.removed).not.toContain("/src/f0003.txt");
     });
   });

@@ -1,7 +1,7 @@
 import type { Catalog } from "./catalog.js";
 import {
-  createRenderer,
   type A2uiMessage,
+  createRenderer,
   type Renderer,
   type RendererOptions,
 } from "./renderer.js";

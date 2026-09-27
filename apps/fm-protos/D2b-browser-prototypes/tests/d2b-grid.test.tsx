@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import HighTable from "hightable";
 import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import HighTable from "hightable";
+import { afterEach, describe, expect, it } from "vitest";
 import "hightable/src/HighTable.css";
 import { TableModel } from "@fm/app";
 import { toDataFrame } from "@fm/ui";
@@ -122,9 +122,7 @@ describe("D2b · a model-driven grid at scale", () => {
     expect(cellTexts().some((t) => t.includes("file-000000"))).toBe(true);
 
     // The controller replaced the listing; the view was told nothing.
-    model.setRows(
-      rows(100).map((r, i) => ({ ...r, name: `renamed-${i}.txt` })) as never,
-    );
+    model.setRows(rows(100).map((r, i) => ({ ...r, name: `renamed-${i}.txt` })) as never);
     await new Promise((r) => setTimeout(r, 200));
 
     expect(cellTexts().some((t) => t.includes("renamed-0"))).toBe(true);

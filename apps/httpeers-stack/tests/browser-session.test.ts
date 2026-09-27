@@ -96,6 +96,7 @@ function fakeHandle(joinedBy: JoinMethod, hubPeerId = HUB): FakeHandle {
     relayAddr: RELAY,
     joinedBy,
     meshView: () => null,
+    connectionKind: () => "none",
     stop: async () => {
       handle.stopped++;
     },

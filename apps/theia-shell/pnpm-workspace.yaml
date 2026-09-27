@@ -4,6 +4,7 @@ packages:
   - "protos/*/extension"
   - "app"
   - "app/files"
+  - "app/style"
 
 onlyBuiltDependencies:
   - drivelist

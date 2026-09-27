@@ -65,7 +65,7 @@
  */
 import { AuthorizerBuilder, Policy, Rule } from "@biscuit-auth/biscuit-wasm";
 import { lookupClaims, lookupPeer } from "./peer-context.js";
-import { LIMITS, warmUpTokens } from "./tokens.js";
+import { LIMITS, retryOnSpuriousTimeout, warmUpTokens } from "./tokens.js";
 import type { FetchHandler, MeshClaims, PeerIdStr, UsesTransportIdentity } from "./types.js";
 import { json } from "./types.js";
 
@@ -213,8 +213,12 @@ export function ruleSet(defs: RuleSetDefs = {}): RuleSet {
       }
     }
   };
-  rules.forEach((text, i) => checkBody(`rules[${i}]`, heads[i] ?? "", text));
-  policies.forEach((text, i) => checkBody(`policies[${i}]`, "", text));
+  rules.forEach((text, i) => {
+    checkBody(`rules[${i}]`, heads[i] ?? "", text);
+  });
+  policies.forEach((text, i) => {
+    checkBody(`policies[${i}]`, "", text);
+  });
 
   // A-10 / X-02: a capability no rule can derive. Skipped when a rule derives
   // `capability` into a VARIABLE, since the set is then open by construction.
@@ -228,8 +232,12 @@ export function ruleSet(defs: RuleSetDefs = {}): RuleSet {
         }
       }
     };
-    rules.forEach((text, i) => named(`rules[${i}]`, text, heads[i] ?? ""));
-    policies.forEach((text, i) => named(`policies[${i}]`, text, ""));
+    rules.forEach((text, i) => {
+      named(`rules[${i}]`, text, heads[i] ?? "");
+    });
+    policies.forEach((text, i) => {
+      named(`policies[${i}]`, text, "");
+    });
   }
 
   assertValid(problems);
@@ -283,14 +291,19 @@ export function capabilityNames(rules: RuleSet): string[] {
 export function deriveCapabilities(rules: RuleSet, roles: readonly string[]): Set<string> {
   assertBuilt(rules);
   warmUpTokens();
-  const builder = new AuthorizerBuilder();
-  for (const role of roles) {
-    if (typeof role !== "string") continue; // never let a non-string reach wasm
-    builder.addCodeWithParameters("role({role});", { role }, {});
-  }
-  addRules(builder, rules);
-  const authorizer = builder.buildUnauthenticated();
-  const facts = authorizer.queryWithLimits(Rule.fromString("held($c) <- capability($c)"), LIMITS);
+  // Everything is rebuilt per attempt: the wasm handles are consumed by the
+  // call that takes them, so a retry that reused one would trap instead.
+  const facts = retryOnSpuriousTimeout(() => {
+    const builder = new AuthorizerBuilder();
+    for (const role of roles) {
+      if (typeof role !== "string") continue; // never let a non-string reach wasm
+      builder.addCodeWithParameters("role({role});", { role }, {});
+    }
+    addRules(builder, rules);
+    return builder
+      .buildUnauthenticated()
+      .queryWithLimits(Rule.fromString("held($c) <- capability($c)"), LIMITS);
+  });
   return new Set(
     facts
       .map((fact: { terms(): unknown[] }) => fact.terms()[0])
@@ -385,7 +398,7 @@ export function authorize(
   };
 
   try {
-    const index = build().authorizeWithLimits(LIMITS);
+    const index = retryOnSpuriousTimeout(() => build().authorizeWithLimits(LIMITS));
     const matched = rules.policies[index];
     return { allowed: true, matched, failed: [], reason: `allowed by policy: ${matched ?? ""}` };
   } catch (error) {
@@ -440,7 +453,7 @@ function denial(
     const sufficient: string[] = [];
     for (const cap of candidates) {
       try {
-        build(cap).authorizeWithLimits(LIMITS);
+        retryOnSpuriousTimeout(() => build(cap).authorizeWithLimits(LIMITS));
         sufficient.push(cap);
       } catch {
         /* this capability would not have helped */

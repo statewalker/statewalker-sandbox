@@ -1,14 +1,26 @@
+import {
+  ChangeNotifier,
+  type FileRef,
+  filesCopy,
+  filesResolveActions,
+  type JobModel,
+  JobQueue,
+  registerFileCommands,
+  type StorageConfig,
+  type StorageRegistry,
+} from "@fm/core";
 import type { Commands } from "@statewalker/shared-commands";
 import {
-  ChangeNotifier, JobQueue, StorageRegistry, filesCopy, filesResolveActions,
-  registerFileCommands, type FileRef, type JobModel, type StorageConfig,
-} from "@fm/core";
-import { ConfigStore, degradedPanel, CONFIG_VERSION, type SessionFile } from "./config-store.js";
+  CONFIG_VERSION,
+  type ConfigStore,
+  degradedPanel,
+  type SessionFile,
+} from "./config-store.js";
 import { createConflictResolver } from "./conflict-resolver.js";
 import { PanelController } from "./panel-controller.js";
 import { PanelsModel } from "./panels-model.js";
 import { TableModel } from "./table-model.js";
-import { uiShowMenu, MenuModel } from "./ui-declarations.js";
+import { MenuModel, uiShowMenu } from "./ui-declarations.js";
 
 export interface FileManagerOptions {
   commands: Commands;
@@ -128,7 +140,11 @@ export class FileManager {
       panels: this.panels.order.map((id) => {
         const model = this.panels.get(id);
         return {
-          id, storage: model.storage, path: model.path, name: model.name, slot: model.slot,
+          id,
+          storage: model.storage,
+          path: model.path,
+          name: model.name,
+          slot: model.slot,
         };
       }),
     };

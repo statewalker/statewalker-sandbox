@@ -1,4 +1,3 @@
-import "../../src/browser/style/pdf-viewer.css";
 import { OpenHandler } from "@theia/core/lib/browser/opener-service";
 import { WidgetFactory } from "@theia/core/lib/browser/widget-manager";
 import { ContainerModule } from "@theia/core/shared/inversify";

@@ -34,7 +34,11 @@ const suitesUsing = (pkg: string) =>
     .flatMap((d) => {
       const dir = `${ROOT}${d.name}/tests`;
       let files: string[] = [];
-      try { files = readdirSync(dir).filter(isSource); } catch { return []; }
+      try {
+        files = readdirSync(dir).filter(isSource);
+      } catch {
+        return [];
+      }
       return files.map((f) => ({
         file: `${d.name}/tests/${f}`,
         code: stripComments(readFileSync(`${dir}/${f}`, "utf8")),
@@ -60,7 +64,9 @@ describe("package boundaries", () => {
 
     it("touches no DOM global", () => {
       for (const { file, code } of sources("fm-core")) {
-        expect(code, `${file} must stay Node-testable`).not.toMatch(/\b(document|window|HTMLElement)\b/);
+        expect(code, `${file} must stay Node-testable`).not.toMatch(
+          /\b(document|window|HTMLElement)\b/,
+        );
       }
     });
   });
@@ -74,7 +80,9 @@ describe("package boundaries", () => {
 
     it("touches no DOM global", () => {
       for (const { file, code } of sources("fm-app")) {
-        expect(code, `${file} must stay Node-testable`).not.toMatch(/\b(document|window|HTMLElement)\b/);
+        expect(code, `${file} must stay Node-testable`).not.toMatch(
+          /\b(document|window|HTMLElement)\b/,
+        );
       }
     });
   });

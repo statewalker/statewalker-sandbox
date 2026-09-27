@@ -1,5 +1,5 @@
-import { effect, untracked } from "@todo/signals";
 import type { TodoListModel } from "@todo/app/models";
+import { effect, untracked } from "@todo/signals";
 import type { SignalsImplementation } from "../../src/lib/signals/contract.js";
 
 /**

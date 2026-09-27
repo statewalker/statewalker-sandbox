@@ -30,7 +30,8 @@ function isStoredRoute(value: unknown): value is StoredRoute {
   return (
     typeof r.prefix === "string" &&
     typeof r.upstream === "string" &&
-    typeof r.headers === "object" && r.headers !== null &&
+    typeof r.headers === "object" &&
+    r.headers !== null &&
     (r.secretHeader === null || typeof r.secretHeader === "string")
   );
 }
@@ -48,7 +49,10 @@ export function loadRoutes(storage: Pick<Storage, "getItem">): StoredRoute[] {
   }
 }
 
-export function saveRoutes(storage: Pick<Storage, "setItem">, routes: readonly StoredRoute[]): void {
+export function saveRoutes(
+  storage: Pick<Storage, "setItem">,
+  routes: readonly StoredRoute[],
+): void {
   try {
     storage.setItem(ROUTES_STORAGE_KEY, JSON.stringify(routes));
   } catch {
