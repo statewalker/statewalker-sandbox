@@ -113,7 +113,10 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
       this.model.onDidNavigate((uri) => this.onNavigated(uri)),
       this.model.onChanged(() => this.updateEmptyState()),
       this.fileTree.onDidChangeListingError(() => this.updateEmptyState()),
-      this.workspace.onWorkspaceChanged(() => this.renderBreadcrumb()),
+      this.workspace.onWorkspaceChanged(() => {
+        this.renderBreadcrumb();
+        this.returnToGone();
+      }),
       this.tree.onDidDrop.event((uris) => void this.selectWritten(uris)),
       Disposable.create(() => this.popup?.dispose()),
       this.labels.onDidChange((event) => this.onLabelsChanged(event)),
@@ -186,9 +189,9 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
   }
 
   /**
-   * The current folder disappearing (falls back, as `navigateToExisting` already does), and —
-   * new here — a fallback's requested folder (`notice.gone`) becoming reachable again (a vault
-   * unlock, a Reconnect): the panel returns to it by itself, clearing the notice.
+   * The current folder disappearing (falls back, as `navigateToExisting` already does), and a
+   * fallback's requested folder (`notice.gone`) becoming reachable again (a vault unlock, a
+   * Reconnect): the panel returns to it by itself, clearing the notice — see `returnToGone`.
    */
   protected onFilesChanged(event: FileChangesEvent): void {
     const folder = this.folder;
@@ -201,14 +204,24 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
         });
     }
     const gone = this.notice?.gone;
-    if (gone && touchesFile(event.changes, gone)) {
-      void this.files
-        .exists(gone)
-        .catch(() => false)
-        .then((exists) => {
-          if (exists && this.notice?.gone.isEqual(gone)) void this.navigateToExisting(gone);
-        });
-    }
+    if (gone && touchesFile(event.changes, gone)) this.returnToGone();
+  }
+
+  /**
+   * Returns to the fallback's requested folder once it exists within a workspace root. Checked
+   * on a files change touching it and on a workspace change: a mount added back appears
+   * (`added /<key>`) before the workspace file lists it as a root. A folder outside every root
+   * (a layout stored at `file:///`) is never returned to — not even re-checked.
+   */
+  protected returnToGone(): void {
+    const gone = this.notice?.gone;
+    if (!gone || outsideRoots(gone, this.roots())) return;
+    void this.files
+      .exists(gone)
+      .catch(() => false)
+      .then((exists) => {
+        if (exists && this.notice?.gone.isEqual(gone)) void this.navigateToExisting(gone);
+      });
   }
 
   /** The folder Go Up leads to; none at a workspace root. */

@@ -3,6 +3,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 import { hasDocker, startRustFs } from "../../tools/rustfs.mjs";
 import {
   explorer,
+  folderRow,
   mountNew,
   openMain,
   readFile,
@@ -472,13 +473,12 @@ test("a panel on a removed mount falls back to the first root, not above the roo
   ).toBeVisible();
 });
 
-test("a layout stored at the hidden file:/// comes back at the first root", async ({ page }) => {
-  test.slow(); // two full app starts
-  await start(page, "?storage=memory");
-  await openPanel(page);
-  // A layout saved before mounts became roots stores the panel at "file:///" — the read-only
-  // composite above the mounts, which resolves fine. Rewrite the stored folder just before the
-  // app reads its layout on the reload (Theia stores the layout on unload).
+/**
+ * A layout saved before mounts became roots stores the panel at "file:///" — the read-only
+ * composite above the mounts, which resolves fine. Rewrites the stored folder just before the
+ * app reads its layout on the next reload (Theia stores the layout on unload).
+ */
+async function storePanelAtHiddenRoot(page: Page) {
   await page.addInitScript(() => {
     let rewrites = 0;
     for (let i = 0; i < localStorage.length; i++) {
@@ -495,6 +495,13 @@ test("a layout stored at the hidden file:/// comes back at the first root", asyn
     }
     (window as unknown as { layoutRewrites: number }).layoutRewrites = rewrites;
   });
+}
+
+test("a layout stored at the hidden file:/// comes back at the first root", async ({ page }) => {
+  test.slow(); // two full app starts
+  await start(page, "?storage=memory");
+  await openPanel(page);
+  await storePanelAtHiddenRoot(page);
   await page.reload();
   await openMain(page);
   expect(
@@ -505,6 +512,71 @@ test("a layout stored at the hidden file:/// comes back at the first root", asyn
   await expect(panel.locator(".file-panel-crumb")).toHaveText(["Browser Storage"]);
   await expect(row(panel, "welcome.md")).toBeVisible();
   await expect(panel.getByText(/no longer exists — showing “Browser Storage”/)).toBeVisible();
+});
+
+test("a fallback from outside the roots does not re-navigate when the tree changes", async ({
+  page,
+}) => {
+  test.slow(); // two full app starts
+  await start(page, "?storage=memory");
+  await openPanel(page);
+  await storePanelAtHiddenRoot(page);
+  await page.reload();
+  await openMain(page);
+  const panel = panels(page).first();
+  await expect(panel.getByText(/no longer exists — showing “Browser Storage”/)).toBeVisible();
+  // Hold the panel's next navigation (into docs) until released: a navigation started meanwhile
+  // would supersede it.
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      theiaShell: { filesApi: { stats(p: string): Promise<unknown> } };
+      releaseDocs: () => void;
+    };
+    const files = w.theiaShell.filesApi;
+    const stats = files.stats.bind(files);
+    const held = new Promise<void>((resolve) => {
+      w.releaseDocs = resolve;
+    });
+    let armed = true;
+    files.stats = async (p: string) => {
+      if (armed && p === "/browser/docs") {
+        armed = false;
+        await held;
+      }
+      return stats(p);
+    };
+  });
+  await row(panel, "docs").dblclick();
+  // `updated /` (a files.hidden change) touches "file:///", which exists but is outside every
+  // root: the panel cannot return there, so the change must not start a navigation.
+  await runFromPalette(page, "Preferences: Open Settings (JSON)");
+  const editor = page.locator(".theia-editor .monaco-editor").last();
+  await editor.click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.insertText('{ "files.hidden": ["**/welcome.md"] }');
+  await page.keyboard.press("Control+s");
+  await expect(explorer(page).getByText("welcome.md", { exact: true })).toHaveCount(0);
+  await page.waitForTimeout(1_000);
+  await page.evaluate(() => (window as unknown as { releaseDocs: () => void }).releaseDocs());
+  await expect(panel.locator(".file-panel-crumb")).toHaveText(["Browser Storage", "docs"]);
+});
+
+test("a panel on a removed mount returns to it when the mount is added back", async ({ page }) => {
+  await start(page, "?storage=memory");
+  await mountNew(page, "New In-Memory Folder…", { name: "Scratch" });
+  const panel = await openPanel(page);
+  await toRoot(panel, "Scratch");
+  await explorer(page).getByText("Scratch", { exact: true }).click({ button: "right" });
+  await page.locator(".lm-Menu-itemLabel", { hasText: "Remove Folder from Workspace" }).click();
+  await expect(
+    panel.getByText("“scratch” no longer exists — showing “Browser Storage”"),
+  ).toBeVisible();
+  // Added back: the mount appears (`added /scratch`) before the workspace file lists it as a root.
+  await runFromPalette(page, "Add Folder to Workspace");
+  await folderRow(page, "Scratch").click();
+  await expect(explorer(page).getByText("Scratch", { exact: true })).toBeVisible();
+  await expect(panel.locator(".file-panel-crumb")).toHaveText(["Scratch"], { timeout: 10_000 });
+  await expect(panel.getByText(/no longer exists/)).toHaveCount(0);
 });
 
 test("a drop on a breadcrumb segment copies there and opens no editor", async ({ page }) => {

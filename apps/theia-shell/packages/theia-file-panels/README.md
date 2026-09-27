@@ -39,8 +39,11 @@ over Theia's own tree rows, not a literal `<table>`.
   its workspace root (or the first workspace root) and shows a short notice. A panel on a mount
   that is removed from the workspace goes to the first root, never above the roots.
 - **Returning to the requested folder**: a fallback remembers the folder it could not reach and
-  watches for it to exist again (a mount recreated after a vault unlock, a Reconnect) — once it
-  does, the panel returns there by itself, clearing the notice. Navigating elsewhere by hand (a
+  watches for it to exist again (a mount recreated after a vault unlock, a Reconnect, a mount
+  added back to the workspace) — once it does within a workspace root, the panel returns there by
+  itself, clearing the notice. It checks on a files change touching the folder and on a workspace
+  change (a mount added back appears before the workspace lists it as a root). A folder outside
+  every root (a layout stored at `file:///`) is never returned to. Navigating elsewhere by hand (a
   breadcrumb click, opening a folder in the list, Go Up, …) forgets it instead.
 - **Live labels**: the breadcrumb, the tab title and the notice follow `LabelProvider.onDidChange`
   — a mount's "(locked)" / "(click Reconnect)" / "(unavailable: …)" suffix updates in place, with

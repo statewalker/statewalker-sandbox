@@ -296,8 +296,11 @@ the explorer's menu layout.
   local folder awaiting permission — any other error) stays: **Not available** with **Retry** —
   the panel is not closed, so the layout survives an unlock.
 - A fallback is not the end of the story: the panel remembers the folder it requested and returns
-  to it, clearing the notice, once that folder exists again — a vault unlocked later (*Secrets:
-  Unlock*, prompt dismissed or not), a mount Reconnected. Navigating elsewhere by hand forgets it.
+  to it, clearing the notice, once that folder exists again within a workspace root — a vault
+  unlocked later (*Secrets: Unlock*, prompt dismissed or not), a mount Reconnected or added back
+  (checked again on the workspace change, since the mount appears before the workspace lists it).
+  A folder outside every root (`file:///`) is never returned to. Navigating elsewhere by hand
+  forgets it.
 - A navigation never throws. A folder that cannot be resolved still becomes the panel's folder —
   breadcrumb, Go Up and the stored state keep it — with an empty list and "“{0}” is not
   available: {1}" with **Retry**, which navigates to that same folder again.
