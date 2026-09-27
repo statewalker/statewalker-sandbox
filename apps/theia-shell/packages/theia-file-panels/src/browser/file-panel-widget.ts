@@ -16,7 +16,12 @@ import { FileService } from "@theia/filesystem/lib/browser/file-service";
 import { createFileTreeContainer } from "@theia/filesystem/lib/browser/file-tree";
 import { FileOperationError, FileOperationResult } from "@theia/filesystem/lib/common/files";
 import { WorkspaceService } from "@theia/workspace/lib/browser/workspace-service";
-import { type Crumb, siblingSource } from "../common/breadcrumb-model";
+import {
+  type Crumb,
+  fallbackAncestors,
+  parentWithin,
+  siblingSource,
+} from "../common/breadcrumb-model";
 import { Messages } from "../common/file-panels-nls";
 import { compareEntries, type SortState, toggleSort } from "../common/panel-sorting";
 import { FilePanelHeader, type FilePanelHeaderState } from "./file-panel-header";
@@ -127,15 +132,16 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
   }
 
   /**
-   * `uri`; if it does not exist, its nearest existing ancestor, else the first workspace root,
-   * with a notice. A folder that exists but cannot be read (a locked mount) stays, shown as not
-   * available with Retry. Never throws.
+   * `uri`; if it does not exist, its nearest existing ancestor within its workspace root, else
+   * the first workspace root, with a notice. A folder that exists but cannot be read (a locked
+   * mount) stays, shown as not available with Retry. Never throws.
    */
   protected async navigateToExisting(uri: URI): Promise<void> {
     const outcome = await this.navigateTo(uri);
     if (outcome.kind !== "failed" || !isNotFound(outcome.error)) return;
-    for (let candidate = uri; !candidate.path.isRoot; ) {
-      candidate = candidate.parent;
+    // The roots may still be loading while the layout is restored: wait for them.
+    const roots = (await this.workspace.roots).map((root) => root.resource);
+    for (const candidate of fallbackAncestors(uri, roots)) {
       if (await this.files.exists(candidate).catch(() => false)) {
         return this.showInstead(uri, candidate);
       }
@@ -155,9 +161,14 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
     return this.model.navigateToFolder(uri);
   }
 
+  /** The folder Go Up leads to; none at a workspace root. */
+  get upFolder(): URI | undefined {
+    return this.folder && parentWithin(this.folder, this.roots());
+  }
+
   async goUp(): Promise<void> {
-    const folder = this.folder;
-    if (folder && !folder.path.isRoot) await this.navigateTo(folder.parent);
+    const up = this.upFolder;
+    if (up) await this.navigateTo(up);
   }
 
   /** Re-reads the folder; one that could not be opened is tried again. */

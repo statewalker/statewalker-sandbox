@@ -4,6 +4,8 @@ import {
   collapseCrumbs,
   containingRoot,
   crumbsOf,
+  fallbackAncestors,
+  parentWithin,
   siblingSource,
 } from "../src/common/breadcrumb-model";
 
@@ -64,5 +66,38 @@ describe("siblingSource", () => {
   it("has nothing for the path root when it is not a workspace root", () => {
     const [root] = crumbsOf(u("/elsewhere"), [u("/browser")]);
     expect(siblingSource(root, [u("/browser")])).toBeUndefined();
+  });
+});
+
+describe("parentWithin", () => {
+  const roots = [u("/browser"), u("/temp")];
+  it("goes up inside a root", () => {
+    expect(parentWithin(u("/browser/notes"), roots)?.path.toString()).toBe("/browser");
+  });
+  it("stops at a workspace root: nothing above the mounts is a workspace folder", () => {
+    expect(parentWithin(u("/browser"), roots)).toBeUndefined();
+    expect(parentWithin(u("/"), [u("/")])).toBeUndefined();
+  });
+  it("goes up outside every root, down to the path root", () => {
+    expect(parentWithin(u("/elsewhere"), roots)?.path.toString()).toBe("/");
+    expect(parentWithin(u("/"), roots)).toBeUndefined();
+  });
+});
+
+describe("fallbackAncestors", () => {
+  const paths = (uris: URI[]) => uris.map((uri) => uri.path.toString());
+  it("walks up to the containing root, not above it", () => {
+    expect(paths(fallbackAncestors(u("/browser/a/b"), [u("/browser"), u("/temp")]))).toEqual([
+      "/browser/a",
+      "/browser",
+    ]);
+    expect(fallbackAncestors(u("/browser"), [u("/browser")])).toEqual([]);
+  });
+  it("has none for a folder of a removed mount, so the panel falls back to the first root", () => {
+    expect(fallbackAncestors(u("/cloud/x"), [u("/browser"), u("/temp")])).toEqual([]);
+  });
+  it("walks to the path root when there is no workspace root", () => {
+    expect(paths(fallbackAncestors(u("/a/b"), []))).toEqual(["/a", "/"]);
+    expect(paths(fallbackAncestors(u("/a/b"), [u("/")]))).toEqual(["/a", "/"]);
   });
 });

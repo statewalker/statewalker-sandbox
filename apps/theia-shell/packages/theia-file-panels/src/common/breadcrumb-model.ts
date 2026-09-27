@@ -43,3 +43,29 @@ export function siblingSource(crumb: Crumb, roots: URI[]): SiblingSource | undef
   }
   return { kind: "folder", parent: crumb.uri.parent };
 }
+
+/**
+ * Where Go Up leads from `folder`: its parent — but nothing at a workspace root, since above the
+ * roots lies no workspace folder (with mounts as roots, `file:///` is the hidden, read-only
+ * composite), nor at the path root.
+ */
+export function parentWithin(folder: URI, roots: URI[]): URI | undefined {
+  if (folder.path.isRoot || roots.some((root) => root.isEqual(folder))) return undefined;
+  return folder.parent;
+}
+
+/**
+ * The folders a vanished `uri` may fall back to, nearest first: its ancestors up to and including
+ * the workspace root that contains it. None when roots exist but none contains it (a removed
+ * mount): the caller then falls back to the first root, never to the space above the roots.
+ */
+export function fallbackAncestors(uri: URI, roots: URI[]): URI[] {
+  const root = containingRoot(uri, roots);
+  if (!root && roots.length > 0) return [];
+  const ancestors: URI[] = [];
+  for (let candidate = uri; !(root ? candidate.isEqual(root) : candidate.path.isRoot); ) {
+    candidate = candidate.parent;
+    ancestors.push(candidate);
+  }
+  return ancestors;
+}

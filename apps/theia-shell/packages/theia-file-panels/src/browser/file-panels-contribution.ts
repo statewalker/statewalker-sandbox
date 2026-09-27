@@ -134,10 +134,7 @@ export class FilePanelsContribution
       },
       {
         execute: (widget?: unknown) => this.panelOf(widget)?.goUp(),
-        isEnabled: (widget?: unknown) => {
-          const folder = this.panelOf(widget)?.folder;
-          return !!folder && !folder.path.isRoot;
-        },
+        isEnabled: (widget?: unknown) => !!this.panelOf(widget)?.upFolder,
         isVisible: (widget?: unknown) => widget instanceof FilePanelWidget || !!this.currentPanel,
       },
     );
