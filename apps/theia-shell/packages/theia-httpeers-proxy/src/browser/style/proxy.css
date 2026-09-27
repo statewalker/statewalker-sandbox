@@ -1,0 +1,47 @@
+.httpeers-proxy {
+  padding: 12px 16px;
+  max-width: 960px;
+}
+.httpeers-proxy h3 {
+  margin: 16px 0 8px;
+}
+.httpeers-proxy .httpeers-muted {
+  color: var(--theia-descriptionForeground);
+}
+.httpeers-proxy-routes {
+  width: 100%;
+  border-collapse: collapse;
+}
+.httpeers-proxy-routes th,
+.httpeers-proxy-routes td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--theia-panel-border);
+}
+.httpeers-proxy-form,
+.httpeers-proxy-console {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  margin-top: 12px;
+}
+.httpeers-proxy-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--theia-ui-font-size0);
+}
+.httpeers-proxy-console .theia-input {
+  flex: 1;
+  min-width: 200px;
+}
+.httpeers-proxy-output {
+  margin-top: 8px;
+  padding: 8px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: var(--theia-editor-background);
+  border: 1px solid var(--theia-panel-border);
+}

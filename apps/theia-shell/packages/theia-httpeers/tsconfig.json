@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.theia.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib",
+    "jsx": "react",
+    // The httpeers packages are ESM with an `exports` map (`./browser`), which
+    // `moduleResolution: node` cannot see. Theia's esbuild bundles ESM and
+    // CommonJS extensions alike, so this one is emitted as ESM.
+    "module": "ES2022",
+    "moduleResolution": "bundler"
+  },
+  "include": ["src"]
+}

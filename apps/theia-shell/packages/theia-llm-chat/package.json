@@ -1,0 +1,29 @@
+{
+  "name": "@theia-shell/theia-llm-chat",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Theia extension: a chat for any OpenAI-compatible API, or for the LLM service of the httpeers mesh this browser has joined.",
+  "main": "lib/common/index.js",
+  "types": "lib/common/index.d.ts",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "theiaExtensions": [
+    {
+      "frontendOnly": "lib/browser/chat-frontend-module"
+    }
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@theia-shell/theia-httpeers": "workspace:*",
+    "@theia-shell/theia-markdown": "workspace:*",
+    "@theia/core": "1.76.0"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "6.2.5"
+  }
+}

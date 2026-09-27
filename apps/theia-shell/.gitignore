@@ -7,5 +7,8 @@ webpack.config.js
 test-results/
 playwright-report/
 plugins/
+# Theia regenerates a stock esbuild.mjs where it is missing; the app's own is
+# customised (the mesh edge's ServiceWorker, webrun-http-browser's import.meta.url).
 esbuild.mjs
+!app/esbuild.mjs
 gen-esbuild.*.mjs
