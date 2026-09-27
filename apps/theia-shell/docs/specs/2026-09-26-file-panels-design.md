@@ -71,7 +71,7 @@ members, no symbols a module does not export, no copies of Theia internals.
   `SelectionService`; a panel that publishes file-stat selections reuses them unchanged.
 - The branch `feat/theia-shell-mount-roots` makes each mount a **workspace root**. Panels are
   therefore anchored on `WorkspaceService.tryGetRoots()`, not on `/`, and work the same before and
-  after that lands.
+  after that lands. (It landed first; see *Mount-roots interplay* under Risks for what changed.)
 
 ## Architecture
 
@@ -141,12 +141,14 @@ dialog — natively for explorer drags, through `PanelAwareNavigatorWidget` for 
   Theia's type-to-filter box is open, Backspace edits the filter instead). Opening a
   file goes through Theia's own open handler, exactly as the explorer does — the editor lands in
   the panel's tab group, over the panel (Theia's normal tab behaviour, not split beside it).
-- **Toolbar**: Go Up, Refresh — each acts on the panel whose tab bar it sits on.
+- **Toolbar**: Go Up, Refresh — each acts on the panel whose tab bar it sits on. Go Up (and
+  Backspace) stops at a workspace root: above the mounts lies no workspace folder, only the hidden
+  read-only composite `file:///`.
 - **Starting folder**: the folder given to *Open in Files Panel*, else the first workspace root.
 - **Freshness**: the tree refreshes on `fileService.onDidFilesChange` for its folder, which covers
   writes from the explorer, other panels and editors. If the current folder is deleted or
-  renamed, the panel moves to the nearest existing ancestor and shows a short localized notice
-  in its status line. Refresh covers backends that emit no changes.
+  renamed, the panel moves to the nearest existing ancestor within its workspace root (a removed
+  mount: the first root) and shows a short localized notice in its status line. Refresh covers backends that emit no changes.
 
 ## Breadcrumb
 
@@ -156,8 +158,9 @@ dialog — natively for explorer drags, through `PanelAwareNavigatorWidget` for 
   overflows, middle segments collapse into **…**, which opens a list of the hidden ones.
 - **▾ Siblings.** Each segment has a ▾ that opens a popup listing its **sibling folders** —
   folders of its parent, read on open with `fileService.resolve(parent)` so never stale — sorted
-  with the collator, the current one marked. For the first segment, the siblings are **the other
-  workspace roots** (one today; one per mount after mount-roots). Choosing one navigates the panel.
+  with the collator, the current one marked. For the first segment, the siblings are **the
+  workspace roots** — one per mount ("Browser Storage", "Temporary", …). Choosing one navigates
+  the panel.
   Arrows, Enter and Esc work in the list; click-outside and focus loss close it
   (`BreadcrumbPopupContainer`). The list is a small React component, not a tree.
 - **Drop targets.** Dropping onto a segment targets that folder, exactly as a drop on a folder
@@ -274,7 +277,7 @@ the explorer's menu layout.
 - `FilePanelWidget` is a `StatefulWidget` created by its `WidgetFactory` with a unique `{ id }`,
   so Theia's layout restore reopens every panel. Stored: folder URI, sort column and direction.
 - On restore, a folder that does not exist (`FILE_NOT_FOUND`) falls back to its nearest existing
-  ancestor, then to the first workspace root, with a notice. The same holds for the folder a panel
+  ancestor within its workspace root, then to the first workspace root, with a notice. The same holds for the folder a panel
   was created at (*Open in Files Panel*), which Theia re-creates the panel with before restoring
   its state: creating a panel never fails. A folder that exists but cannot be read (vault locked,
   local folder awaiting permission — any other error) stays: **Not available** with **Retry** —
@@ -310,7 +313,8 @@ the explorer's menu layout.
 - `panel-sorting`: folders first; numeric order; accented names under a `de` collator; direction;
   size and date columns.
 - `breadcrumb-model`: segments from a URI and workspace roots (single and multi-root); siblings
-  of the first segment are the other roots.
+  of the first segment are the other roots; Go Up stops at a root; a vanished folder falls back
+  only within its root.
 - `file-panels-nls`: keys unique; every entry's placeholders consistent; plural pairs complete.
 
 **E2E (Playwright, static build, seeded files)**
@@ -332,6 +336,10 @@ the explorer's menu layout.
     creation folder is gone after a reload comes back at its parent.
 14. Backspace inside the type-to-filter box does not go up; the toolbar's Go Up acts on its panel
     while the focus is elsewhere; hovering a folder row during a drag leaves the selection.
+15. Mounts as roots: a panel opens in the main storage; the first segment's ▾ lists the mounts
+    and moves the panel to one; Move to Other Panel moves across mounts; Go Up and Backspace stop
+    at a root; a panel on a removed mount falls back to the first root; a copy into an
+    unreachable (read-only) mount is reported as failed.
 
 Red and green runs are recorded, as in earlier work.
 
@@ -347,6 +355,11 @@ Red and green runs are recorded, as in earlier work.
 - **Non-atomic cross-mount moves** (above).
 - **Mount-roots interplay.** Anchoring on workspace roots keeps panels correct whether or not
   `feat/theia-shell-mount-roots` lands first; whichever lands second re-runs the other's e2e.
+  Mount-roots landed first. Re-running this e2e on it found two places that still reached above
+  the roots — Go Up and the vanished-folder fallback walked to `file:///`, which is no longer a
+  workspace folder — now both stop at the containing root. The e2e start inside the main storage;
+  the transfer-failure test targets an unreachable mount (a read-only placeholder) instead of the
+  former read-only "Files" root.
 - **No visible translation** until the app gets a translation provider (separate issue).
 
 ## Decisions made while planning

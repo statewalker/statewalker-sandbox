@@ -8,7 +8,8 @@ copy/move by drag and drop and by menu commands. Design:
 ## Opening a panel
 
 - **View → Open Files Panel** (also in the command palette) opens a panel at the first workspace
-  root.
+  root — in this app, where every mount is a workspace root, the main storage ("Browser
+  Storage").
 - **Open in Files Panel**, on the explorer's context menu for a folder (or for a file → its
   parent folder), opens one there.
 - A new panel opens **split to the right** of the current panel; from anywhere else, as a tab in
@@ -24,7 +25,9 @@ over Theia's own tree rows, not a literal `<table>`.
 
 - **Toolbar**: Go Up, Refresh (tab-bar toolbar items, not buttons inside the panel). Each acts on
   the panel whose tab bar it sits on, even while the focus is elsewhere; Refresh on a folder that
-  could not be opened tries to open it again.
+  could not be opened tries to open it again. Go Up (and Backspace) stops at a workspace root:
+  above the roots lies no workspace folder (here, the hidden read-only composite `file:///` that
+  holds the mounts). Another root is one ▾ away, on the first breadcrumb segment.
 - **Keys inside the list** are tree-local, not keybindings: arrows move, Shift/Ctrl extend the
   selection, Enter opens (folder → navigate, file → open), Backspace goes up. Typing a letter
   opens Theia's type-to-filter box; while it is open, Backspace edits the filter instead.
@@ -32,8 +35,9 @@ over Theia's own tree rows, not a literal `<table>`.
   editor lands in the panel's tab group, over the panel (Theia's normal tab behaviour;
   `FilePanelModel.doOpenNode` does not change it).
 - **Freshness**: the tree refreshes on file-system change events for its folder. If the folder is
-  deleted or renamed from elsewhere, the panel falls back to its nearest existing ancestor (or the
-  first workspace root) and shows a short notice.
+  deleted or renamed from elsewhere, the panel falls back to its nearest existing ancestor within
+  its workspace root (or the first workspace root) and shows a short notice. A panel on a mount
+  that is removed from the workspace goes to the first root, never above the roots.
 - **A folder that cannot be opened** (a locked mount, a read error — anything but "does not
   exist") never throws out of a navigation: the panel stays at that folder with an empty list and
   shows “{folder}” is not available: {reason} with **Retry**, which opens the same folder again.
@@ -51,8 +55,10 @@ navigates there. An overflowing path collapses its middle segments into **…**,
 of the hidden ones.
 
 Every segment has a **▾** that opens a popup of its **sibling folders** — read fresh on open, so
-never stale — with the current one marked; for the first segment, the siblings are the other
-workspace roots. Arrows, Enter and Esc work in the popup; it closes on an outside click or a focus
+never stale — with the current one marked; for the first segment, the siblings are the
+workspace roots — the mounts ("Browser Storage", "Temporary", …), each shown by its label — so a
+panel moves between mounts from there; copies and moves between panels on different roots work
+like any other (cross-mount, see Known limits). Arrows, Enter and Esc work in the popup; it closes on an outside click or a focus
 change. Each segment is also a drop target, handled exactly as a drop on a folder row; its drag
 events stop at the segment, so the main area's own drop handling (which would open every dragged
 file in an editor, and whose `link` drop effect would cancel the drop) never sees them.
@@ -157,9 +163,9 @@ protected members only, no private members, no copies of Theia internals:
 - **Only the explorer accepts a panel drag.** Other Theia file trees (the file-open dialog, the
   editor breadcrumb's folder popup) are not extended; dropping a panel row onto one does nothing,
   as today.
-- **The workspace's "Files" root (`file:///`) is read-only** in this app (it is wrapped read-only
-  in the mount table), so a panel opened there can list it but not write to it — the same as for
-  the explorer.
+- **A mount that cannot be reached is read-only.** A mount that failed, is locked or awaits
+  access is an empty read-only placeholder in the mount table; a panel lists it (empty) and every
+  write into it fails, reported as for any failed transfer — the same as for the explorer.
 
 ## Red / green
 
@@ -179,6 +185,8 @@ protected members only, no private members, no copies of Theia internals:
 | 12 restore after reload; vanished folders (e2e `file-panels.spec.ts`) | 2 failed, 20 passed | 22 passed |
 | final-review fixes (unit) | 3 failed, 44 passed | 47 passed |
 | final-review fixes (e2e `file-panels.spec.ts`, new and changed tests) | 8 failed, 3 passed | 11 passed; whole file 30 passed |
+| mounts as workspace roots (unit `breadcrumb-model`: Go Up and fallback stop at a root) | new functions, not yet exported | 53 passed |
+| mounts as workspace roots (e2e `file-panels.spec.ts`) | on the merged tree 28 failed, 2 passed; tests adapted, product unchanged: 3 failed (Go Up / Backspace above a root, removed mount) | whole file 32 passed |
 
 ## Notes
 
