@@ -20,6 +20,7 @@ copy/move by drag and drop and by menu commands. Design:
 | 9 drops into panels: dialog, service, drag source, uploads (e2e `file-panels.spec.ts`) | 8 failed, 9 passed | 17 passed |
 | 10 the explorer accepts panel drags (e2e `file-panels.spec.ts`) | 1 failed, 17 passed | 19 passed |
 | 11 Copy / Move to Other Panel (e2e `file-panels.spec.ts`) | 1 failed, 19 passed | 20 passed |
+| 12 restore after reload; vanished folders (e2e `file-panels.spec.ts`) | 2 failed, 20 passed | 22 passed |
 
 ## Notes
 
@@ -107,3 +108,16 @@ copy/move by drag and drop and by menu commands. Design:
   - No signature or behavioural divergence from the brief: the 1.76 `FileNavigatorWidget`
     constructor is exactly `(props, model, contextMenuRenderer)`, matching the brief's three
     parameters with nothing extra to mirror.
+- **Task 12:** `FilePanelWidget implements StatefulWidget` (`storeState`/`restoreState`/
+  `navigateToExisting`) exactly per the brief; a `files.onDidFilesChange` watcher catches the
+  active folder (or an ancestor) disappearing out from under an open panel, not just a restore.
+  `navigateTo` clears a `notice` field that `navigateToExisting` sets after moving to the nearest
+  existing ancestor, and `updateEmptyState` falls back to it between the error and empty-folder
+  cases. No divergence from the brief's design.
+  - GREEN surfaced a pre-existing defect outside this task's own files: `file-panel-header.tsx`'s
+    `column()` renderer never emitted the `aria-sort` attribute, even though the feature's own
+    design doc (`docs/plans/2026-09-26-file-panels.md`) specifies it verbatim on that button —
+    an earlier task must have dropped it. The reload test's sort assertion
+    (`.file-panel-column[aria-sort=descending]`) is the first test in this suite to check it, so
+    the gap went uncaught until now. Restored the one-line attribute to match the design doc; no
+    other change to that file.

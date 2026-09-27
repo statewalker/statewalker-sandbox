@@ -31,9 +31,13 @@ export class FilePanelHeader extends ReactWidget {
   protected render(): React.ReactNode {
     const { sort, status, breadcrumb } = this.state;
     const column = (id: SortColumn, label: string, className: string) => (
+      // biome-ignore lint/a11y/useAriaPropsSupportedByRole: sortable column header button (no <table>/<th> here); aria-sort exposes its sort state.
       <button
         type="button"
         className={`file-panel-column ${className}`}
+        aria-sort={
+          sort.column === id ? (sort.direction === "asc" ? "ascending" : "descending") : "none"
+        }
         onClick={() => this.onSort(id)}
       >
         {label}

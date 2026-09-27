@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { explorer, runFromPalette, start, toast } from "./helpers";
+import { explorer, openMain, runFromPalette, start, toast } from "./helpers";
 
 export const panels = (page: Page) => page.locator(".file-panel");
 export const row = (panel: Locator, name: string) =>
@@ -326,4 +326,33 @@ test("Copy to Other Panel copies the selection into the other panel's folder", a
   await expect(dialog(page).locator("input[name=file-panels-op][value=copy]")).toBeChecked();
   await dialog(page).locator(".theia-button.main").click();
   await expect(row(b, "welcome.md")).toBeVisible();
+});
+
+test("panels come back after a reload, at their folders and sort", async ({ page }) => {
+  await start(page, "?storage=memory");
+  const [a] = await twoPanels(page, ["Browser Storage", "docs"], ["Browser Storage", "notes"]);
+  await a.locator(".file-panel-column", { hasText: "Name" }).click();
+  // Theia stores the layout on unload.
+  await page.reload();
+  await openMain(page);
+  await expect(panels(page)).toHaveCount(2);
+  await expect(row(panels(page).first(), "cheatsheet.md")).toBeVisible();
+  await expect(row(panels(page).last(), "ideas.md")).toBeVisible();
+  await expect(panels(page).first().locator(".file-panel-column[aria-sort=descending]")).toHaveText(
+    /Name/,
+  );
+});
+
+test("a panel whose folder is deleted moves up and says so", async ({ page }) => {
+  await start(page, "?storage=memory");
+  const panel = await openPanel(page);
+  await row(panel, "Browser Storage").dblclick();
+  await row(panel, "notes").dblclick();
+  await explorer(page).getByText("notes", { exact: true }).click();
+  await page.keyboard.press("Delete");
+  await page.locator(".dialogBlock .theia-button.main").click();
+  await expect(row(panel, "welcome.md")).toBeVisible();
+  await expect(
+    panel.getByText("“notes” no longer exists — showing “Browser Storage”"),
+  ).toBeVisible();
 });

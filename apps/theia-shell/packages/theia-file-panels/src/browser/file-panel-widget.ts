@@ -1,5 +1,6 @@
 import { BreadcrumbPopupContainerFactory } from "@theia/core/lib/browser/breadcrumbs/breadcrumb-popup-container";
 import { LabelProvider } from "@theia/core/lib/browser/label-provider";
+import type { StatefulWidget } from "@theia/core/lib/browser/shell/shell-layout-restorer";
 import { SelectableTreeNode } from "@theia/core/lib/browser/tree/tree-selection";
 import { BaseWidget, type Message } from "@theia/core/lib/browser/widgets/widget";
 import URI from "@theia/core/lib/common/uri";
@@ -28,7 +29,7 @@ export interface FilePanelOptions {
 
 /** One file panel: header (breadcrumb, column headings, status) over a flat file tree. */
 @injectable()
-export class FilePanelWidget extends BaseWidget {
+export class FilePanelWidget extends BaseWidget implements StatefulWidget {
   static readonly FACTORY_ID = "file-panel";
 
   @inject(FilePanelOptions) protected readonly options!: FilePanelOptions;
@@ -41,6 +42,9 @@ export class FilePanelWidget extends BaseWidget {
   @inject(FileService) protected readonly files!: FileService;
 
   protected header!: FilePanelHeader;
+
+  /** A notice shown until the next navigation (a folder that disappeared). */
+  protected notice: string | undefined;
 
   get model(): FilePanelModel {
     return this.tree.model;
@@ -86,12 +90,46 @@ export class FilePanelWidget extends BaseWidget {
           else this.model.addSelection(node);
         });
       }),
+      this.files.onDidFilesChange((event) => {
+        const folder = this.folder;
+        if (folder && event.changes.some((change) => change.resource.isEqualOrParent(folder))) {
+          void this.files.exists(folder).then((exists) => {
+            if (!exists) void this.navigateToExisting(folder);
+          });
+        }
+      }),
     ]);
     const start = this.options.folder ? new URI(this.options.folder) : await this.defaultFolder();
     await this.navigateTo(start);
   }
 
+  storeState(): object {
+    return { folder: this.folder?.toString(), sort: this.sort };
+  }
+
+  restoreState(state: { folder?: string; sort?: SortState }): void {
+    if (state.sort) this.setSort(state.sort);
+    if (state.folder) void this.navigateToExisting(new URI(state.folder));
+  }
+
+  /** `uri`, or its nearest existing ancestor, or the first workspace root. */
+  protected async navigateToExisting(uri: URI): Promise<void> {
+    for (let candidate = uri; ; candidate = candidate.parent) {
+      if (await this.files.exists(candidate)) {
+        await this.navigateTo(candidate);
+        if (!candidate.isEqual(uri)) {
+          this.notice = Messages.folderGone(uri.path.base, this.labels.getName(candidate));
+          this.updateEmptyState();
+        }
+        return;
+      }
+      if (candidate.path.isRoot) break;
+    }
+    await this.navigateTo(await this.defaultFolder());
+  }
+
   async navigateTo(uri: URI): Promise<void> {
+    this.notice = undefined;
     await this.model.navigateToFolder(uri);
   }
 
@@ -200,9 +238,11 @@ export class FilePanelWidget extends BaseWidget {
     this.header.setState({
       status: error
         ? { text: Messages.notAvailable(this.title.label, error), retry: () => void this.refresh() }
-        : empty
-          ? { text: Messages.emptyFolder() }
-          : undefined,
+        : this.notice
+          ? { text: this.notice }
+          : empty
+            ? { text: Messages.emptyFolder() }
+            : undefined,
     });
   }
 
