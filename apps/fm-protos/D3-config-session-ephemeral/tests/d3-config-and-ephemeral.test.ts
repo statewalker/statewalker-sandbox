@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { CheckpointStore, JobModel, archiveSink, readOnly, runCopyJob } from "@fm/core";
 import { CONFIG_VERSION, ConfigStore, degradedPanel, type SessionFile } from "@fm/app";
+import { archiveSink, CheckpointStore, JobModel, readOnly, runCopyJob } from "@fm/core";
+import { MemFilesApi } from "@statewalker/webrun-files-mem";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /** D3 — config, session, and the storages that exist for one job only. */
 
@@ -76,20 +76,18 @@ describe("D3 · two files, two write policies", () => {
 
   describe("versioning", () => {
     it("REFUSES a storages.json from a newer build", async () => {
-      await disk.write(
-        "/config/storages.json",
-        [new TextEncoder().encode(JSON.stringify({ version: CONFIG_VERSION + 1, storages: [] }))],
-      );
+      await disk.write("/config/storages.json", [
+        new TextEncoder().encode(JSON.stringify({ version: CONFIG_VERSION + 1, storages: [] })),
+      ]);
       // Writing a v1 file over a v2 one destroys configuration the user may
       // have written by hand in a newer build. Refusing is the safe failure.
       await expect(config.loadStorages()).rejects.toThrow(/version/);
     });
 
     it("DISCARDS a session from another version, because a session is disposable", async () => {
-      await disk.write(
-        "/config/session.json",
-        [new TextEncoder().encode(JSON.stringify({ version: 99, panels: [] }))],
-      );
+      await disk.write("/config/session.json", [
+        new TextEncoder().encode(JSON.stringify({ version: 99, panels: [] })),
+      ]);
       expect(await config.loadSession()).toBeUndefined();
     });
   });
@@ -115,7 +113,9 @@ describe("D3 · ephemeral storages", () => {
     const dropped = readOnly(new MemFilesApi({ initialFiles: { "/drop/a.txt": "a" } }));
     expect(await dropped.exists("/drop/a.txt")).toBe(true);
 
-    await expect(async () => dropped.write("/drop/b.txt", [] as never)).rejects.toThrow(/read-only/);
+    await expect(async () => dropped.write("/drop/b.txt", [] as never)).rejects.toThrow(
+      /read-only/,
+    );
     await expect(async () => dropped.remove("/drop/a.txt")).rejects.toThrow(/read-only/);
     await expect(async () => dropped.move("/drop/a.txt", "/x")).rejects.toThrow(/read-only/);
   });
@@ -131,7 +131,9 @@ describe("D3 · ephemeral storages", () => {
       operation: "copy",
       source: { uri: "ephemeral://drop", api: dropped },
       target: { uri: "mem://b", api: target, path: "/dst" },
-      roots: ["/drop"], batchSize: 1, job,
+      roots: ["/drop"],
+      batchSize: 1,
+      job,
     });
 
     expect(job.status).toBe("done");
@@ -169,7 +171,9 @@ describe("D3 · ephemeral storages", () => {
         operation: "copy",
         source: { uri: "mem://a", api: source },
         target: { uri: "archive://out", api: sink, path: "/archive" },
-        roots: ["/src"], batchSize: 1, job,
+        roots: ["/src"],
+        batchSize: 1,
+        job,
         checkpoints,
         resumable: sink.resumable,
       });
@@ -191,7 +195,10 @@ describe("D3 · ephemeral storages", () => {
         operation: "copy",
         source: { uri: "mem://a", api: source },
         target: { uri: "mem://b", api: new MemFilesApi(), path: "/dst" },
-        roots: ["/src"], batchSize: 1, job, checkpoints,
+        roots: ["/src"],
+        batchSize: 1,
+        job,
+        checkpoints,
       });
       await new Promise((r) => setTimeout(r, 0));
       job.cancel();

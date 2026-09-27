@@ -1,9 +1,9 @@
+import type { JobModel } from "@fm/core";
 import type { Commands } from "@statewalker/shared-commands";
 import type { FilesApi } from "@statewalker/webrun-files";
 import { JobsController } from "./jobs-controller.js";
 import { PanelController } from "./panel-controller.js";
 import { PanelModel } from "./panel-model.js";
-import type { JobModel } from "@fm/core";
 
 export interface BootstrapPanelSpec {
   id: string;

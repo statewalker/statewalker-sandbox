@@ -1,0 +1,26 @@
+{
+  "name": "@theia-shell/theia-image-viewer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Theia extension: opens image files (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO, SVG) in a zoomable viewer.",
+  "main": "lib/common/index.js",
+  "types": "lib/common/index.d.ts",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/image-viewer-frontend-module",
+      "frontendOnly": "lib/browser/image-viewer-frontend-module"
+    }
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@theia/core": "1.76.0",
+    "@theia/filesystem": "1.76.0"
+  }
+}

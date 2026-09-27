@@ -1,0 +1,30 @@
+{
+  "name": "@theia-shell/theia-files-api",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Theia extension: serves a @statewalker/webrun-files FilesApi as the file system of a browser-only Theia app.",
+  "main": "lib/common/index.js",
+  "types": "lib/common/index.d.ts",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "theiaExtensions": [
+    {
+      "frontendOnly": "lib/browser/files-api-frontend-module"
+    }
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@statewalker/webrun-files": "0.10.0",
+    "@statewalker/webrun-files-mem": "0.10.0",
+    "@theia/core": "1.76.0",
+    "@theia/filesystem": "1.76.0",
+    "@theia/navigator": "1.76.0",
+    "@theia/workspace": "1.76.0"
+  },
+  "devDependencies": {}
+}

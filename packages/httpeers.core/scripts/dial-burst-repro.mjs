@@ -95,8 +95,8 @@ import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { identify } from "@libp2p/identify";
 import { tcp } from "@libp2p/tcp";
-import { createLibp2p } from "libp2p";
 import { connect, serveConnections } from "@statewalker/webrun-streams-libp2p";
+import { createLibp2p } from "libp2p";
 
 const WITH_IDENTIFY = true;
 const WATCHDOG_MS = 8000;
@@ -178,7 +178,9 @@ async function variantB(n) {
   try {
     const conn = await connect({ node: client, peer: addr });
     try {
-      const promises = Array.from({ length: n }, (_, i) => drain(conn.call(singleChunkSource(`m${i}`))));
+      const promises = Array.from({ length: n }, (_, i) =>
+        drain(conn.call(singleChunkSource(`m${i}`))),
+      );
       return await Promise.allSettled(promises);
     } finally {
       await conn.close();
@@ -193,12 +195,16 @@ async function variantB(n) {
 function withWatchdog(promise, ms, label) {
   return Promise.race([
     promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} watchdog: exceeded ${ms}ms`)), ms)),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} watchdog: exceeded ${ms}ms`)), ms),
+    ),
   ]);
 }
 
 async function runVariant(label, fn, rounds, n) {
-  console.log(`[dial-burst-repro] ${label}: ${rounds} rounds x ${n} concurrent, zero stagger, identify=${WITH_IDENTIFY}`);
+  console.log(
+    `[dial-burst-repro] ${label}: ${rounds} rounds x ${n} concurrent, zero stagger, identify=${WITH_IDENTIFY}`,
+  );
   for (let round = 0; round < rounds; round++) {
     const before = uncaughtCount;
     try {
@@ -207,7 +213,9 @@ async function runVariant(label, fn, rounds, n) {
       console.log(`  round ${round}: ${label} threw (caught, promise-level): ${err?.message}`);
     }
     if (uncaughtCount > before) {
-      console.log(`  round ${round}: *** uncaught exception fired (count now ${uncaughtCount}) ***`);
+      console.log(
+        `  round ${round}: *** uncaught exception fired (count now ${uncaughtCount}) ***`,
+      );
     }
   }
 }
@@ -219,7 +227,9 @@ async function main() {
   await runVariant("Variant A (separate fresh clients)", variantA, ROUNDS, N);
   await runVariant("Variant B (one connection, N conn.call())", variantB, ROUNDS, N);
 
-  console.log(`\n[dial-burst-repro] TOTAL uncaught synchronous exceptions observed: ${uncaughtCount}`);
+  console.log(
+    `\n[dial-burst-repro] TOTAL uncaught synchronous exceptions observed: ${uncaughtCount}`,
+  );
   for (const s of uncaughtSamples) {
     console.log("--- sample ---");
     console.log(s.name, s.message);

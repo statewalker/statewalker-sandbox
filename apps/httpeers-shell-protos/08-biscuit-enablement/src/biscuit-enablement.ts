@@ -194,9 +194,7 @@ export async function createBiscuitEnablement(
       // predicate (trusted, from shell code) is part of the source; the value is
       // a bound `{value}` PARAMETER, so Datalog syntax inside it is data, never
       // code.
-      return (
-        world().query(`_m(true) <- ${predicate}({value})`, { params: { value } }).length > 0
-      );
+      return world().query(`_m(true) <- ${predicate}({value})`, { params: { value } }).length > 0;
     },
   };
 }

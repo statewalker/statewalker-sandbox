@@ -1,7 +1,12 @@
+import {
+  createTodoListModel,
+  type Todo,
+  type TodoListModel,
+  type TodoListView,
+} from "@todo/app/models";
+import { ListView } from "@todo/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
-import { createTodoListModel, type Todo, type TodoListModel, type TodoListView } from "@todo/app/models";
-import { ListView } from "@todo/ui";
 import { all, button, flush, render, waitFor } from "../support/react.js";
 import { snapshotOf } from "../support/signals.js";
 
@@ -25,7 +30,11 @@ const todo = (id: string, title: string, done = false): Todo => ({ id, title, do
 
 const seeded = () => {
   const model = createTodoListModel();
-  model.control.replaceTodos([todo("1", "buy milk"), todo("2", "walk dog"), todo("3", "file taxes", true)]);
+  model.control.replaceTodos([
+    todo("1", "buy milk"),
+    todo("2", "walk dog"),
+    todo("3", "file taxes", true),
+  ]);
   return model;
 };
 
@@ -38,7 +47,8 @@ const mountList = async (view: TodoListView) => {
   return rendered.host;
 };
 
-const titles = (host: HTMLElement) => all(host, "li").map((li) => li.querySelector("label")?.textContent?.trim());
+const titles = (host: HTMLElement) =>
+  all(host, "li").map((li) => li.querySelector("label")?.textContent?.trim());
 const row = (host: HTMLElement, title: string) => {
   const li = all(host, "li").find((l) => l.textContent?.includes(title));
   if (!li) throw new Error(`no row "${title}"`);
@@ -55,7 +65,9 @@ describe("ListView", () => {
     it("one row per visible todo, with its done state", async () => {
       const host = await mountList(seeded().view);
       expect(titles(host)).toEqual(["buy milk", "walk dog", "file taxes"]);
-      const checked = all<HTMLInputElement>(host, 'li input[type="checkbox"]').map((c) => c.checked);
+      const checked = all<HTMLInputElement>(host, 'li input[type="checkbox"]').map(
+        (c) => c.checked,
+      );
       expect(checked).toEqual([false, false, true]);
     });
 
@@ -144,8 +156,11 @@ describe("ListView", () => {
     // here. (A frozen facet cannot be spied on in place; copying it is how a
     // test swaps one function.)
     const snapshot = snapshotOf;
-    const withStub = <K extends keyof TodoListView>(model: TodoListModel, key: K, stub: TodoListView[K]) =>
-      ({ ...model.view, [key]: stub }) as TodoListView;
+    const withStub = <K extends keyof TodoListView>(
+      model: TodoListModel,
+      key: K,
+      stub: TodoListView[K],
+    ) => ({ ...model.view, [key]: stub }) as TodoListView;
 
     it("typing in the filter calls setFilter with what was typed — and writes nothing itself", async () => {
       const model = seeded();
@@ -223,7 +238,11 @@ describe("ListView", () => {
       // row still reads not-done. Only the controller's `replaceTodos` moves it.
       await flush();
       expect(box.checked).toBe(false);
-      model.control.replaceTodos([todo("1", "buy milk"), todo("2", "walk dog", true), todo("3", "file taxes", true)]);
+      model.control.replaceTodos([
+        todo("1", "buy milk"),
+        todo("2", "walk dog", true),
+        todo("3", "file taxes", true),
+      ]);
       await waitFor(() => box.checked);
     });
 

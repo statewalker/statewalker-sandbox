@@ -51,7 +51,9 @@ describe("manifest generation from source", () => {
     // it, this test would fail. That is the whole point: a manifest must be
     // derivable at build time from source that may not even be runnable in
     // the build environment.
-    await expect(generateManifest("04-manifest-generation/tests/fixtures/explodes-on-import.ts")).resolves.toBeDefined();
+    await expect(
+      generateManifest("04-manifest-generation/tests/fixtures/explodes-on-import.ts"),
+    ).resolves.toBeDefined();
   });
 
   it("reports an unresolvable key rather than guessing", async () => {

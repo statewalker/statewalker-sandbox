@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { type ConflictDialogModel, createConflictResolver } from "@fm/app";
+import { JobModel, runCopyJob } from "@fm/core";
+import { ViewAdapter } from "@fm/ui";
 import { Commands } from "@statewalker/shared-commands";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { JobModel, runCopyJob } from "@fm/core";
-import { createConflictResolver, type ConflictDialogModel } from "@fm/app";
-import { ViewAdapter } from "@fm/ui";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /* Ported: the packages live under `lib/` in this app, not `packages/`. */
 const FM_SRC = new URL("../../lib/", import.meta.url).pathname;
@@ -41,10 +41,7 @@ describe("D1.5 · the conflict dialog, end to end", () => {
     expect(dialogs.length, `dialog ${n} never opened`).toBeGreaterThanOrEqual(n);
   };
 
-  const answer = (
-    resolution: "overwrite" | "skip" | "rename",
-    applyToAll = false,
-  ) => {
+  const answer = (resolution: "overwrite" | "skip" | "rename", applyToAll = false) => {
     const dialog = dialogs[dialogs.length - 1];
     dialog.settle({ resolution, applyToAll });
   };
@@ -71,7 +68,9 @@ describe("D1.5 · the conflict dialog, end to end", () => {
         // Only one conflict dialog may ever be on screen: the engine serialises
         // decisions, and a second one here would mean it stopped.
         expect(open).toBe(1);
-        return () => { open--; };
+        return () => {
+          open--;
+        };
       }) as never,
     });
     source = new MemFilesApi({

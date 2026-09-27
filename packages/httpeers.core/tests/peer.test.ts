@@ -194,9 +194,11 @@ describe("createPeer: identity by closure over the shipped transport", () => {
     // The refusal is therefore not a routing artefact: it is this peer
     // evaluating the token's audience against its own `self_peer` fact.
     const clientId = clientA.peerId.toString();
-    const token = await tokenFor(clientId, ["member"], [
-      "12D3KooWSomeOtherProviderXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-    ]);
+    const token = await tokenFor(
+      clientId,
+      ["member"],
+      ["12D3KooWSomeOtherProviderXXXXXXXXXXXXXXXXXXXXXXXXXXX"],
+    );
     const res = await call(
       clientA,
       serverAddr,

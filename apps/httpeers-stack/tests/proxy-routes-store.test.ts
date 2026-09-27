@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_ROUTES, ROUTES_STORAGE_KEY, type StoredRoute, loadRoutes, loadRoutesOrSeed, saveRoutes, withSecrets,
+  DEFAULT_ROUTES,
+  loadRoutes,
+  loadRoutesOrSeed,
+  ROUTES_STORAGE_KEY,
+  type StoredRoute,
+  saveRoutes,
+  withSecrets,
 } from "../src/pages/proxy/routes-store.js";
 
 const ROUTE: StoredRoute = {
@@ -13,7 +19,13 @@ const ROUTE: StoredRoute = {
 function fakeStorage(seed?: string) {
   const map = new Map<string, string>();
   if (seed !== undefined) map.set(ROUTES_STORAGE_KEY, seed);
-  return { getItem: (k: string) => map.get(k) ?? null, setItem: (k: string, v: string) => { map.set(k, v); }, map };
+  return {
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      map.set(k, v);
+    },
+    map,
+  };
 }
 
 describe("saveRoutes / loadRoutes", () => {
@@ -40,9 +52,12 @@ describe("saveRoutes / loadRoutes", () => {
     const s = fakeStorage();
     saveRoutes(s, [ROUTE]);
     const parsed = JSON.parse(s.map.get(ROUTES_STORAGE_KEY) ?? "[]") as Record<string, unknown>[];
-    expect(Object.keys(parsed[0] ?? {}).sort()).toEqual(
-      ["headers", "prefix", "secretHeader", "upstream"],
-    );
+    expect(Object.keys(parsed[0] ?? {}).sort()).toEqual([
+      "headers",
+      "prefix",
+      "secretHeader",
+      "upstream",
+    ]);
   });
 
   it("returns an empty list when nothing is stored", () => {
@@ -58,7 +73,11 @@ describe("saveRoutes / loadRoutes", () => {
   });
 
   it("survives a storage that throws", () => {
-    const hostile = { getItem: () => { throw new Error("blocked"); } };
+    const hostile = {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+    };
     expect(loadRoutes(hostile)).toEqual([]);
   });
 });
@@ -66,7 +85,10 @@ describe("saveRoutes / loadRoutes", () => {
 describe("withSecrets", () => {
   it("merges the in-memory secret into the route's headers", () => {
     const [merged] = withSecrets([ROUTE], new Map([["/openai", "Bearer sk-live"]]));
-    expect(merged?.headers).toEqual({ "content-type": "application/json", authorization: "Bearer sk-live" });
+    expect(merged?.headers).toEqual({
+      "content-type": "application/json",
+      authorization: "Bearer sk-live",
+    });
   });
 
   it("omits the secret header entirely when no value was entered", () => {

@@ -1,6 +1,12 @@
+import {
+  type ChangeEvent,
+  type ChangeNotifier,
+  compareInfos,
+  isUnder,
+  narrowStats,
+} from "@fm/core";
 import type { Commands } from "@statewalker/shared-commands";
 import type { FilesApi } from "@statewalker/webrun-files";
-import { compareInfos, isUnder, narrowStats, type ChangeEvent, type ChangeNotifier } from "@fm/core";
 import { panelsNavigate, uiShowPanel } from "./declarations.js";
 import type { PanelModel } from "./panel-model.js";
 
@@ -15,7 +21,9 @@ export class PanelController {
   private _pending: Promise<void> = Promise.resolve();
 
   /** Exposed for the assembly: the registry owns it, the panel borrows it. */
-  get api(): FilesApi { return this._api; }
+  get api(): FilesApi {
+    return this._api;
+  }
 
   constructor(
     readonly model: PanelModel,
@@ -76,8 +84,12 @@ export class PanelController {
   private _sort: "name" | "size" | "date" = "name";
   private _filter = "";
 
-  canGoBack(): boolean { return this._historyAt > 0; }
-  canGoForward(): boolean { return this._historyAt < this._history.length - 1; }
+  canGoBack(): boolean {
+    return this._historyAt > 0;
+  }
+  canGoForward(): boolean {
+    return this._historyAt < this._history.length - 1;
+  }
 
   async back(): Promise<void> {
     if (!this.canGoBack()) return;
@@ -134,7 +146,11 @@ export class PanelController {
    * indistinguishable from a complete one, so "the file isn't there" becomes
    * ambiguous and "copy everything here" would silently copy a subset.
    */
-  private async _load(path: string, mode: "navigate" | "refresh", pushHistory: boolean): Promise<void> {
+  private async _load(
+    path: string,
+    mode: "navigate" | "refresh",
+    pushHistory: boolean,
+  ): Promise<void> {
     const buffer = [];
     try {
       for await (const entry of this._api.list(path)) {

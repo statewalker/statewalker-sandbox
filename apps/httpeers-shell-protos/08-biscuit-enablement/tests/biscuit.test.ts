@@ -4,8 +4,8 @@
 // Since 2026-09-15 it runs against the ADAPTED adapter (webrun-biscuit, not
 // biscuit-wasm), still with no assertion changed: the substitution claim, re-asked.
 import { describe, expect, it, vi } from "vitest";
-import { fact, factSetEnablement, type Enablement } from "../src/enablement.js";
 import { createBiscuitEnablement, loadBiscuit } from "../src/biscuit-enablement.js";
+import { type Enablement, fact, factSetEnablement } from "../src/enablement.js";
 
 /**
  * PROTOTYPE 8 — does Biscuit satisfy `Enablement` unchanged?
@@ -20,7 +20,10 @@ import { createBiscuitEnablement, loadBiscuit } from "../src/biscuit-enablement.
  * versa, shows up as a divergence.
  */
 
-const IMPLEMENTATIONS: [string, (initial?: readonly ReturnType<typeof fact>[]) => Promise<Enablement> | Enablement][] = [
+const IMPLEMENTATIONS: [
+  string,
+  (initial?: readonly ReturnType<typeof fact>[]) => Promise<Enablement> | Enablement,
+][] = [
   ["stub", (initial) => factSetEnablement(initial ?? [])],
   ["biscuit", (initial) => createBiscuitEnablement(initial ?? [])],
 ];
@@ -102,24 +105,18 @@ describe("what Biscuit adds beyond the stub", () => {
       fact("current_peer", "peer1"),
     ]);
     // A real Datalog join: enabled if the CURRENT peer holds the right.
-    expect(e.query('allowed($op) <- current_peer($p), right($p, $op)')).toEqual(["read"]);
+    expect(e.query("allowed($op) <- current_peer($p), right($p, $op)")).toEqual(["read"]);
   });
 
   it("supports disjunction through multiple rules", async () => {
     const e = await createBiscuitEnablement([fact("selection", "folder")]);
     // A rule head must carry at least one term: `ok()` is a parse error.
-    expect(
-      e.queryAny([
-        '_m(true) <- selection("file")',
-        '_m(true) <- selection("folder")',
-      ]),
-    ).toBe(true);
-    expect(
-      e.queryAny([
-        '_m(true) <- selection("file")',
-        '_m(true) <- selection("image")',
-      ]),
-    ).toBe(false);
+    expect(e.queryAny(['_m(true) <- selection("file")', '_m(true) <- selection("folder")'])).toBe(
+      true,
+    );
+    expect(e.queryAny(['_m(true) <- selection("file")', '_m(true) <- selection("image")'])).toBe(
+      false,
+    );
   });
 
   it("uses parameter injection so untrusted input cannot inject Datalog", async () => {

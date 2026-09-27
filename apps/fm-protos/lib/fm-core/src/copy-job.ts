@@ -7,7 +7,11 @@ export interface ConflictResolution {
   applyToAll: boolean;
 }
 
-export interface Endpoint { uri: string; api: FilesApi; path?: string }
+export interface Endpoint {
+  uri: string;
+  api: FilesApi;
+  path?: string;
+}
 
 export interface JobSpec {
   operation: "copy" | "move" | "delete";
@@ -32,7 +36,10 @@ export interface JobSpec {
    * resolver that goes through its dialog mechanism, a test passes a constant,
    * an agent passes its own policy.
    */
-  onConflict?(entry: { path: string; target: string }, signal: AbortSignal): Promise<ConflictResolution>;
+  onConflict?(
+    entry: { path: string; target: string },
+    signal: AbortSignal,
+  ): Promise<ConflictResolution>;
   /** Used when no callback is supplied, so the simple case needs nothing. */
   conflictPolicy?: "overwrite" | "skip" | "rename";
   onBatch?(batch: string[]): void;
@@ -45,11 +52,16 @@ export interface JobSpec {
   onWritten?(targetPath: string): void;
 }
 
-interface Entry { path: string; relative: string }
+interface Entry {
+  path: string;
+  relative: string;
+}
 
 function rename(path: string): string {
   const dot = path.lastIndexOf(".");
-  return dot > path.lastIndexOf("/") ? `${path.slice(0, dot)} (2)${path.slice(dot)}` : `${path} (2)`;
+  return dot > path.lastIndexOf("/")
+    ? `${path.slice(0, dot)} (2)${path.slice(dot)}`
+    : `${path} (2)`;
 }
 
 interface Conflicts {
@@ -139,18 +151,19 @@ export async function runCopyJob(spec: JobSpec): Promise<void> {
 
       // The batch is the checkpoint barrier: the cursor is rewritten after
       // every batch, so a crash costs one batch, never a flush interval.
-      if (spec.resumable !== false) await spec.checkpoints?.save(job.id, {
-        lastCompletedBatch: Math.floor(i / spec.batchSize),
-        cursorPath: batch[batch.length - 1].path,
-        remaining: entries.length - job.completed,
-        spec: {
-          operation: spec.operation,
-          source: { uri: source.uri },
-          target: { uri: target.uri, path: target.path },
-          roots: spec.roots,
-          batchSize: spec.batchSize,
-        },
-      });
+      if (spec.resumable !== false)
+        await spec.checkpoints?.save(job.id, {
+          lastCompletedBatch: Math.floor(i / spec.batchSize),
+          cursorPath: batch[batch.length - 1].path,
+          remaining: entries.length - job.completed,
+          spec: {
+            operation: spec.operation,
+            source: { uri: source.uri },
+            target: { uri: target.uri, path: target.path },
+            roots: spec.roots,
+            batchSize: spec.batchSize,
+          },
+        });
       // Errors ride the same barrier as the cursor. Written only at the end,
       // a cancelled job would lose its skip record, and the resumed job would
       // ask again about entries the user had already chosen to skip.

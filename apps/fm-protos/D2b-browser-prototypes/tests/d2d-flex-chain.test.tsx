@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import HighTable from "hightable";
 import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import HighTable from "hightable";
+import { afterEach, describe, expect, it } from "vitest";
 import "hightable/src/HighTable.css";
 import { TableModel } from "@fm/app";
 import { toDataFrame } from "@fm/ui";
@@ -123,10 +123,7 @@ describe("D2d · the flex chain, with no fixed pixel height anywhere", () => {
 
   it("that same broken chain looks fine at 500 rows", async () => {
     const result = await mountIn(
-      [
-        "height:100vh;width:900px;display:flex;flex-direction:column",
-        "flex:1;display:flex",
-      ],
+      ["height:100vh;width:900px;display:flex;flex-direction:column", "flex:1;display:flex"],
       "flex:1;display:flex;flex-direction:column",
       500,
     );

@@ -130,16 +130,20 @@ describe("B3 · dispose() liveness — a controller stuck on a view-settled comm
         setTimeout(() => resolve("timeout"), 500);
       });
       const disposed = app.dispose().then(() => "disposed" as const);
-      expect(await Promise.race([disposed, timeout]), "dispose must not wait on the open confirm").toBe(
-        "disposed",
-      );
+      expect(
+        await Promise.race([disposed, timeout]),
+        "dispose must not wait on the open confirm",
+      ).toBe("disposed");
       await new Promise((r) => setTimeout(r, 0)); // let the rejected confirm unwind the run
       expect(confirmCleanupRan, "the view layer's own dispose closed the dialog").toBe(true);
       expect(views.openViews()).toEqual([]);
-      expect(api.calls, "the open question was never answered, so nothing was cleared").not.toContain(
-        "clearCompleted",
+      expect(
+        api.calls,
+        "the open question was never answered, so nothing was cleared",
+      ).not.toContain("clearCompleted");
+      expect(writes.n, "the force-rejected confirm must not land a write (e.g. an outcome)").toBe(
+        0,
       );
-      expect(writes.n, "the force-rejected confirm must not land a write (e.g. an outcome)").toBe(0);
       expect(unhandled, "the force-rejected confirm is caught inside the run").toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandled);

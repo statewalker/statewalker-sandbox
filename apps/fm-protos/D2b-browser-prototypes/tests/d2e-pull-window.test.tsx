@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import HighTable from "hightable";
 import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import HighTable from "hightable";
+import { afterEach, describe, expect, it } from "vitest";
 import "hightable/src/HighTable.css";
 import { TableModel } from "@fm/app";
 import { toDataFrame } from "@fm/ui";
@@ -47,16 +47,31 @@ const mount = async (n: number) => {
     numRowsReads: 0,
     cells: [],
     rowNumbers: [],
-    reset() { this.numRowsReads = 0; this.cells = []; this.rowNumbers = []; },
+    reset() {
+      this.numRowsReads = 0;
+      this.cells = [];
+      this.rowNumbers = [];
+    },
   };
 
   // A recording proxy in front of the adapter: everything the grid pulls
   // passes through here.
   const recorded = {
-    get columnDescriptors() { return frame.columnDescriptors; },
-    get numRows() { calls.numRowsReads++; return frame.numRows; },
-    getRowNumber(args: { row: number }) { calls.rowNumbers.push(args.row); return frame.getRowNumber(args); },
-    getCell(args: { row: number; column: string }) { calls.cells.push(args.row); return frame.getCell(args); },
+    get columnDescriptors() {
+      return frame.columnDescriptors;
+    },
+    get numRows() {
+      calls.numRowsReads++;
+      return frame.numRows;
+    },
+    getRowNumber(args: { row: number }) {
+      calls.rowNumbers.push(args.row);
+      return frame.getRowNumber(args);
+    },
+    getCell(args: { row: number; column: string }) {
+      calls.cells.push(args.row);
+      return frame.getCell(args);
+    },
     eventTarget: frame.eventTarget,
   };
 

@@ -43,7 +43,8 @@ const importOf = (pkg: string) =>
  * create signals. A model lives in `todo-app`, so that is the only place the
  * exemption reaches.
  */
-const isModelModule = (file: string): boolean => file.startsWith("todo-app/src/") && file.endsWith("-model.ts");
+const isModelModule = (file: string): boolean =>
+  file.startsWith("todo-app/src/") && file.endsWith("-model.ts");
 
 /**
  * Every rung's suites, found by walking `tests/<rung>` recursively. `support`
@@ -58,7 +59,9 @@ const allSuites = () =>
       const dir = `${ROOT}tests/${d.name}`;
       let files: string[] = [];
       try {
-        files = (readdirSync(dir, { recursive: true, encoding: "utf8" }) as string[]).filter(isSource);
+        files = (readdirSync(dir, { recursive: true, encoding: "utf8" }) as string[]).filter(
+          isSource,
+        );
       } catch {
         return [];
       }
@@ -112,7 +115,9 @@ const ADAPTER_MAY_IMPORT = /^@statewalker\/shared-(commands|registry)$/;
  * it is the grep, not an importer.
  */
 const headlessModules = () => [
-  ...allSuites().filter(({ file }) => file.endsWith(".test.ts") && !file.startsWith("tests/B0-boundaries/")),
+  ...allSuites().filter(
+    ({ file }) => file.endsWith(".test.ts") && !file.startsWith("tests/B0-boundaries/"),
+  ),
   ...(readdirSync(`${ROOT}tests/support`, { recursive: true, encoding: "utf8" }) as string[])
     .filter((f) => f.endsWith(".ts"))
     .map((f) => ({
@@ -165,7 +170,13 @@ const reachableSpecifiers = (file: string, seen = new Set<string>()): string[] =
   seen.add(file);
   return specifiers(stripComments(readFileSync(`${ROOT}${file}`, "utf8"))).flatMap((spec) =>
     /^\.\.?\//.test(spec)
-      ? [spec, ...reachableSpecifiers(normalize(join(dirname(file), spec.replace(/\.js$/, ".ts"))), seen)]
+      ? [
+          spec,
+          ...reachableSpecifiers(
+            normalize(join(dirname(file), spec.replace(/\.js$/, ".ts"))),
+            seen,
+          ),
+        ]
       : [spec],
   );
 };
@@ -175,10 +186,12 @@ const TEST_RUNNER = /^vitest(\/|$)|(^|\/)vitest(\.[\w-]+)?\.config(\.[jt]s)?$/;
 
 /** `src/lib/signals` — the substrate. Has no nested `src/`, so `sources()` does not reach it. */
 const signalSources = () =>
-  (readdirSync(`${ROOT}src/lib/signals`, { encoding: "utf8" }) as string[]).filter(isSource).map((f) => ({
-    file: `signals/${f}`,
-    code: stripComments(readFileSync(`${ROOT}src/lib/signals/${f}`, "utf8")),
-  }));
+  (readdirSync(`${ROOT}src/lib/signals`, { encoding: "utf8" }) as string[])
+    .filter(isSource)
+    .map((f) => ({
+      file: `signals/${f}`,
+      code: stripComments(readFileSync(`${ROOT}src/lib/signals/${f}`, "utf8")),
+    }));
 
 /** Every module this app compiles or runs, B0 itself excepted — it spells the patterns as fixtures. */
 const everyModule = () => [
@@ -196,13 +209,15 @@ const LIBRARY_OWNER: Record<string, string> = {
   "alien-signals": "signals/alien.ts",
   "@preact/signals-core": "signals/preact.ts",
 };
-const importsLibrary = (lib: string) => (spec: string) => spec === lib || spec.startsWith(`${lib}/`);
+const importsLibrary = (lib: string) => (spec: string) =>
+  spec === lib || spec.startsWith(`${lib}/`);
 
 /** A specifier naming an implementation file rather than the swap point. */
 const IMPLEMENTATION_FILE = /(?:^\.\/|\/signals\/)(?:alien|preact)(?:\.[jt]s)?$/;
 
 /** What `src/lib/signals` may import: the two libraries and its own files. */
-const SIGNALS_MAY_IMPORT = /^(?:alien-signals|@preact\/signals-core|\.\/(?:contract|alien|preact)\.js)$/;
+const SIGNALS_MAY_IMPORT =
+  /^(?:alien-signals|@preact\/signals-core|\.\/(?:contract|alien|preact)\.js)$/;
 
 /** A specifier reaching the signals, by alias or relative path. */
 const SIGNALS_SPEC = /^@todo\/signals$|(?:^|\/)signals\//;
@@ -242,7 +257,9 @@ const signalsImportNames = (code: string): string[] => {
 };
 
 /** The controller's facet, named in the view layer — as a member, bracketed, or by type. */
-const NAMES_CONTROL = new RegExp(`\\.\\s*control\\b|\\[\\s*${QUOTE}control${QUOTE}\\s*\\]|\\bTodoListControl\\b`);
+const NAMES_CONTROL = new RegExp(
+  `\\.\\s*control\\b|\\[\\s*${QUOTE}control${QUOTE}\\s*\\]|\\bTodoListControl\\b`,
+);
 
 describe("B0 · package boundaries", () => {
   it("finds sources recursively, including subdirectories", () => {
@@ -251,9 +268,7 @@ describe("B0 · package boundaries", () => {
     // and it is what fails first if `{ recursive: true }` is ever dropped. A
     // real view, not a placeholder kept only to be found — and a `.tsx`, so
     // the `isSource` filter is proven to admit the extension every view uses.
-    expect(sources("todo-ui").map((s) => s.file)).toContain(
-      "todo-ui/src/views/list-view.tsx",
-    );
+    expect(sources("todo-ui").map((s) => s.file)).toContain("todo-ui/src/views/list-view.tsx");
   });
 
   describe("todo-core is the UI-free layer", () => {
@@ -297,7 +312,9 @@ describe("B0 · package boundaries", () => {
     // the models-only entry point, `@todo/app/models`.
     it("reaches todo-app only through @todo/app/models — never a controller", () => {
       for (const { file, code } of sources("todo-ui")) {
-        expect(code, `${file} must import todo-app only as "@todo/app/models"`).not.toMatch(BEYOND_MODELS);
+        expect(code, `${file} must import todo-app only as "@todo/app/models"`).not.toMatch(
+          BEYOND_MODELS,
+        );
       }
     });
 
@@ -343,7 +360,10 @@ describe("B0 · package boundaries", () => {
       const suites = allSuites().filter(({ code }) => usesReactEntry(code));
       // The same empty-loop shape the recursion guard above exists for: if the
       // discovery ever finds nothing, the loop below asserts nothing and passes.
-      expect(suites.length, "found no view suite — the check below would be vacuous").toBeGreaterThan(0);
+      expect(
+        suites.length,
+        "found no view suite — the check below would be vacuous",
+      ).toBeGreaterThan(0);
       for (const { file, code } of suites) {
         expect(code, `${file} must not import the core directly`).not.toMatch(importOf("core"));
       }
@@ -355,7 +375,10 @@ describe("B0 · package boundaries", () => {
       const adapter = sources("todo-ui").find(({ file }) => file === "todo-ui/src/view-adapter.ts");
       expect(adapter, "the adapter entry this rule guards").toBeDefined();
       const specs = specifiers(adapter!.code);
-      expect(specs.length, "found no import in view-adapter.ts — the check below would be vacuous").toBeGreaterThan(0);
+      expect(
+        specs.length,
+        "found no import in view-adapter.ts — the check below would be vacuous",
+      ).toBeGreaterThan(0);
       for (const spec of specs) {
         expect(spec, `view-adapter.ts must not import "${spec}"`).toMatch(ADAPTER_MAY_IMPORT);
       }
@@ -376,18 +399,29 @@ describe("B0 · package boundaries", () => {
       for (const spec of ["react", "react-dom/client", "@statewalker/ui.view.shadcn"]) {
         await expect(load(spec), spec).rejects.toThrow(refused);
       }
-      await expect(load("../../src/app.js"), "the composition root pulls in the React views").rejects.toThrow(refused);
+      await expect(
+        load("../../src/app.js"),
+        "the composition root pulls in the React views",
+      ).rejects.toThrow(refused);
       // A control that refuses everything proves nothing: the adapter loads.
       await expect(load("@todo/ui/adapter")).resolves.toHaveProperty("ViewAdapter");
     });
 
     it("a node suite, or the test support it loads, takes @todo/ui only as @todo/ui/adapter", () => {
       const modules = headlessModules();
-      const users = modules.filter(({ code }) => specifiers(code).some((s) => /todo[-/]ui\b/.test(s)));
-      expect(users.length, "found no headless user of the view layer — the check below would be vacuous").toBeGreaterThan(0);
+      const users = modules.filter(({ code }) =>
+        specifiers(code).some((s) => /todo[-/]ui\b/.test(s)),
+      );
+      expect(
+        users.length,
+        "found no headless user of the view layer — the check below would be vacuous",
+      ).toBeGreaterThan(0);
       for (const { file, code } of modules) {
         for (const spec of specifiers(code)) {
-          expect(reachesUiBeyondAdapter(spec), `${file} imports "${spec}"; a node suite takes "@todo/ui/adapter"`).toBe(false);
+          expect(
+            reachesUiBeyondAdapter(spec),
+            `${file} imports "${spec}"; a node suite takes "@todo/ui/adapter"`,
+          ).toBe(false);
         }
       }
     });
@@ -406,7 +440,9 @@ describe("B0 · package boundaries", () => {
       ]) {
         expect(bad).toMatch(BEYOND_MODELS);
       }
-      expect('import { TodoListModel, uiShowList } from "@todo/app/models";').not.toMatch(BEYOND_MODELS);
+      expect('import { TodoListModel, uiShowList } from "@todo/app/models";').not.toMatch(
+        BEYOND_MODELS,
+      );
     });
 
     it("the headless rule rejects the React entry, by alias and by relative path", () => {
@@ -420,7 +456,11 @@ describe("B0 · package boundaries", () => {
       );
       expect(bad).toHaveLength(4);
       for (const spec of bad) expect(reachesUiBeyondAdapter(spec), spec).toBe(true);
-      for (const good of ["@todo/ui/adapter", "../../lib/todo-ui/src/view-adapter.js", "@todo/app/models"]) {
+      for (const good of [
+        "@todo/ui/adapter",
+        "../../lib/todo-ui/src/view-adapter.js",
+        "@todo/app/models",
+      ]) {
         expect(reachesUiBeyondAdapter(good), good).toBe(false);
       }
     });
@@ -441,7 +481,12 @@ describe("B0 · package boundaries", () => {
     });
 
     it("the build-config rule rejects vitest and this app's own test configs — not the shared table", () => {
-      for (const bad of ["vitest/config", "vitest", "./vitest.config.js", "./vitest.browser.config.ts"]) {
+      for (const bad of [
+        "vitest/config",
+        "vitest",
+        "./vitest.config.js",
+        "./vitest.browser.config.ts",
+      ]) {
         expect(bad).toMatch(TEST_RUNNER);
       }
       for (const good of ["./aliases.js", "vite", "@vitejs/plugin-react", "@tailwindcss/vite"]) {
@@ -471,34 +516,59 @@ describe("B0 · package boundaries", () => {
 
     it("the view-suite rule binds a suite taking the React entry — not one taking only the adapter", () => {
       expect(usesReactEntry('import { ListView } from "@todo/ui";')).toBe(true);
-      expect(usesReactEntry('import { ListView } from "../../lib/todo-ui/src/views/list-view.js";')).toBe(true);
+      expect(
+        usesReactEntry('import { ListView } from "../../lib/todo-ui/src/views/list-view.js";'),
+      ).toBe(true);
       expect(usesReactEntry('import { ViewAdapter } from "@todo/ui/adapter";')).toBe(false);
       expect(usesReactEntry('import { TodoListModel } from "@todo/app/models";')).toBe(false);
     });
 
     it("the signals rules reject what they exist to reject", () => {
-      expect(specifiers('import * as A from "alien-signals";').some(importsLibrary("alien-signals"))).toBe(true);
-      expect(specifiers('import { x } from "@preact/signals-core/extra";').some(importsLibrary("@preact/signals-core"))).toBe(true);
-      for (const bad of ["./alien.js", "./preact.ts", "../../lib/signals/preact.js", "../signals/alien"]) {
+      expect(
+        specifiers('import * as A from "alien-signals";').some(importsLibrary("alien-signals")),
+      ).toBe(true);
+      expect(
+        specifiers('import { x } from "@preact/signals-core/extra";').some(
+          importsLibrary("@preact/signals-core"),
+        ),
+      ).toBe(true);
+      for (const bad of [
+        "./alien.js",
+        "./preact.ts",
+        "../../lib/signals/preact.js",
+        "../signals/alien",
+      ]) {
         expect(bad, bad).toMatch(IMPLEMENTATION_FILE);
       }
-      for (const good of ["./contract.js", "./deps.js", "@todo/signals", "../../lib/signals/deps.js"]) {
+      for (const good of [
+        "./contract.js",
+        "./deps.js",
+        "@todo/signals",
+        "../../lib/signals/deps.js",
+      ]) {
         expect(good, good).not.toMatch(IMPLEMENTATION_FILE);
       }
       // Assembled, not spelled — like `coreByPath` above: a literal
       // "../todo-core/" here would itself match `importOf("core")`, and "holds
       // for VIEW suites too" scans this very file's raw text for that pattern.
       const coreRelPath = ["../todo", "core/src/index.js"].join("-");
-      for (const bad of ["@todo/app", coreRelPath, "zod"]) expect(bad).not.toMatch(SIGNALS_MAY_IMPORT);
-      for (const bad of ["@todo/signals", "../../signals/deps.js"]) expect(bad).toMatch(SIGNALS_SPEC);
+      for (const bad of ["@todo/app", coreRelPath, "zod"])
+        expect(bad).not.toMatch(SIGNALS_MAY_IMPORT);
+      for (const bad of ["@todo/signals", "../../signals/deps.js"])
+        expect(bad).toMatch(SIGNALS_SPEC);
       expect("@todo/app/models").not.toMatch(SIGNALS_SPEC);
-      for (const bad of ["const s = signal(0);", "computed (() => 1)", "batch(() => {})"]) expect(bad).toMatch(CREATES);
+      for (const bad of ["const s = signal(0);", "computed (() => 1)", "batch(() => {})"])
+        expect(bad).toMatch(CREATES);
       expect("designal(0); AbortSignal(0)").not.toMatch(CREATES);
       expect("effect(() => {})").toMatch(REACTS);
       expect("sideeffect(1)").not.toMatch(REACTS);
       expect("untracked(() => 1)").toMatch(UNTRACKS);
       expect("undertracked(1)").not.toMatch(UNTRACKS);
-      for (const bad of ["model.control.replaceTodos([]);", 'model["control"]', "import type { TodoListControl } from 'x';"]) {
+      for (const bad of [
+        "model.control.replaceTodos([]);",
+        'model["control"]',
+        "import type { TodoListControl } from 'x';",
+      ]) {
         expect(bad, bad).toMatch(NAMES_CONTROL);
       }
       for (const good of ["model.setFilter(x);", "const controller = 1;", "model.controls"]) {
@@ -509,7 +579,11 @@ describe("B0 · package boundaries", () => {
     it("the reactive-call patterns are not walked past by an explicit type argument", () => {
       // Verified bypass: `signal<number>(0)` reached `(` only after `<number>`,
       // which the un-widened patterns required right after the name.
-      for (const bad of ["signal<number>(0)", "computed<Todo[]>(() => [])", "batch<void>(() => {})"]) {
+      for (const bad of [
+        "signal<number>(0)",
+        "computed<Todo[]>(() => [])",
+        "batch<void>(() => {})",
+      ]) {
         expect(bad, bad).toMatch(CREATES);
       }
       expect("effect<void>(() => {})").toMatch(REACTS);
@@ -521,13 +595,18 @@ describe("B0 · package boundaries", () => {
       // "@todo/signals"` and calling `cell(...)` matched none of CREATES —
       // there is no `signal(` in the file — so the call-pattern check alone
       // never saw it create a signal.
-      expect(signalsImportNames('import { signal as cell } from "@todo/signals";')).toEqual(["signal"]);
-      expect(signalsImportNames('import { effect, untracked as u } from "@todo/signals";')).toEqual([
-        "effect",
-        "untracked",
+      expect(signalsImportNames('import { signal as cell } from "@todo/signals";')).toEqual([
+        "signal",
       ]);
-      expect(signalsImportNames('import type { Signal } from "@todo/signals";')).toEqual(["Signal"]);
-      expect(signalsImportNames('import { signal } from "../../lib/signals/deps.js";')).toEqual(["signal"]);
+      expect(signalsImportNames('import { effect, untracked as u } from "@todo/signals";')).toEqual(
+        ["effect", "untracked"],
+      );
+      expect(signalsImportNames('import type { Signal } from "@todo/signals";')).toEqual([
+        "Signal",
+      ]);
+      expect(signalsImportNames('import { signal } from "../../lib/signals/deps.js";')).toEqual([
+        "signal",
+      ]);
       expect(signalsImportNames('import { registerViews } from "@todo/ui";')).toEqual([]);
     });
   });
@@ -552,9 +631,10 @@ describe("B0 · package boundaries", () => {
         ...headlessModules(),
         ...allSuites().filter(({ file }) => file.endsWith(".tsx")),
       ];
-      expect(everything.map(({ file }) => file), "the page's modules are scanned").toEqual(
-        expect.arrayContaining(["src/app.ts", "src/main.tsx"]),
-      );
+      expect(
+        everything.map(({ file }) => file),
+        "the page's modules are scanned",
+      ).toEqual(expect.arrayContaining(["src/app.ts", "src/main.tsx"]));
       const roots = everything.filter(({ code }) => knowsEveryLayer(code)).map(({ file }) => file);
       // Equality, not "is a subset": if app.ts stopped matching, the pattern
       // (or the layout) has drifted and this check would be asserting nothing.
@@ -617,7 +697,10 @@ describe("B0 · package boundaries", () => {
     // `aliases.ts`; this keeps it there.
     it("vite.config.ts reaches no vitest module, directly or through a local import", () => {
       const specs = reachableSpecifiers("vite.config.ts");
-      expect(specs, "the shared alias table is followed — the check below is not vacuous").toContain("./aliases.js");
+      expect(
+        specs,
+        "the shared alias table is followed — the check below is not vacuous",
+      ).toContain("./aliases.js");
       for (const spec of specs) {
         expect(spec, `vite.config.ts reaches "${spec}"`).not.toMatch(TEST_RUNNER);
       }
@@ -635,14 +718,20 @@ describe("B0 · package boundaries", () => {
       // are checked too: `todosAdd` from the sibling declarations names no
       // "Command" and still makes the port know the bus.
       const ports = sources("todo-core").filter(({ file }) => /types\.ts$|-api\.ts$/.test(file));
-      expect(ports.map((p) => p.file), "the port files this check covers").toEqual(
+      expect(
+        ports.map((p) => p.file),
+        "the port files this check covers",
+      ).toEqual(
         expect.arrayContaining(["todo-core/src/types.ts", "todo-core/src/mem-todo-api.ts"]),
       );
       for (const { file, code } of ports) {
         expect(code, `${file} must not name a command, model or bus`).not.toMatch(
           /Command|Model|BaseClass/,
         );
-        expect(code, `${file} must not import the bus, the model base, or the declarations`).not.toMatch(
+        expect(
+          code,
+          `${file} must not import the bus, the model base, or the declarations`,
+        ).not.toMatch(
           /@statewalker\/shared-(commands|baseclass)|["']\.\/(declarations|todo-commands)(\.js)?["']/,
         );
       }
@@ -672,8 +761,12 @@ describe("B0 · package boundaries", () => {
 
     it("src/lib/signals imports only the libraries and itself; todo-core imports no signals", () => {
       const specs = signalSources().flatMap(({ code }) => specifiers(code));
-      expect(specs.length, "found no import in src/lib/signals — the check below would be vacuous").toBeGreaterThan(0);
-      for (const spec of specs) expect(spec, `src/lib/signals must not import "${spec}"`).toMatch(SIGNALS_MAY_IMPORT);
+      expect(
+        specs.length,
+        "found no import in src/lib/signals — the check below would be vacuous",
+      ).toBeGreaterThan(0);
+      for (const spec of specs)
+        expect(spec, `src/lib/signals must not import "${spec}"`).toMatch(SIGNALS_MAY_IMPORT);
       for (const { file, code } of sources("todo-core")) {
         for (const spec of specifiers(code)) {
           expect(SIGNALS_SPEC.test(spec), `${file} must not import "${spec}"`).toBe(false);
@@ -691,12 +784,22 @@ describe("B0 · package boundaries", () => {
     it("in todo-app, signals are created only in a model; effects only in the controller and the kit", () => {
       const app = sources("todo-app");
       const creators = app.filter(({ code }) => CREATES.test(code)).map(({ file }) => file);
-      expect(creators, "signal( computed( batch( only in a model module").toEqual(["todo-app/src/todo-model.ts"]);
-      const reactors = app.filter(({ code }) => REACTS.test(code)).map(({ file }) => file).sort();
-      expect(reactors, "effect( only in the controller and the model kit").toEqual([...MAY_REACT].sort());
+      expect(creators, "signal( computed( batch( only in a model module").toEqual([
+        "todo-app/src/todo-model.ts",
+      ]);
+      const reactors = app
+        .filter(({ code }) => REACTS.test(code))
+        .map(({ file }) => file)
+        .sort();
+      expect(reactors, "effect( only in the controller and the model kit").toEqual(
+        [...MAY_REACT].sort(),
+      );
       for (const { file, code } of app) {
         if (!UNTRACKS.test(code)) continue;
-        expect(isModelModule(file) || MAY_REACT.includes(file), `${file} must not call untracked(`).toBe(true);
+        expect(
+          isModelModule(file) || MAY_REACT.includes(file),
+          `${file} must not call untracked(`,
+        ).toBe(true);
       }
     });
 
@@ -708,9 +811,10 @@ describe("B0 · package boundaries", () => {
       for (const { file, code } of sources("todo-app")) {
         for (const name of signalsImportNames(code)) {
           if (name === "signal" || name === "computed" || name === "batch") {
-            expect(isModelModule(file), `${file} imports "${name}" from @todo/signals; only a model module may`).toBe(
-              true,
-            );
+            expect(
+              isModelModule(file),
+              `${file} imports "${name}" from @todo/signals; only a model module may`,
+            ).toBe(true);
           } else if (name === "effect") {
             expect(
               MAY_REACT.includes(file),
@@ -744,7 +848,11 @@ describe("B0 · package boundaries", () => {
     // Spec §4.9. A hand-rolled disposer array unwinds in the wrong order and
     // strands everything after the first listener that throws.
     it("uses newRegistry rather than a hand-rolled disposer array", () => {
-      for (const { file, code } of [...sources("todo-core"), ...sources("todo-app"), ...sources("todo-ui")]) {
+      for (const { file, code } of [
+        ...sources("todo-core"),
+        ...sources("todo-app"),
+        ...sources("todo-ui"),
+      ]) {
         expect(code, `${file} must not hand-roll a disposer array`).not.toMatch(
           /(_offs|offs)\s*(:|=)\s*(\(\)\s*=>\s*void\)\[\]|\[\])/,
         );

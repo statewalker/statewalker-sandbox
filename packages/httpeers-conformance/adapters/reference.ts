@@ -17,11 +17,11 @@
 import {
   type AuthorizationResult,
   Biscuit,
+  evaluate,
+  generateKeypair,
   type Keypair,
   type LoadedToken,
   type RunLimits,
-  evaluate,
-  generateKeypair,
   thirdPartyBlock,
 } from "@statewalker/webrun-biscuit";
 import type {
@@ -131,15 +131,24 @@ function mint(init: MintInit, meshKey: Keypair): string {
  * A-04 already required.
  */
 const RESERVED = [
-  "connection_peer", "self_peer", "self_fact", "time",
-  "operation", "resource", "revoked_subject", "revoked_binding",
+  "connection_peer",
+  "self_peer",
+  "self_fact",
+  "time",
+  "operation",
+  "resource",
+  "revoked_subject",
+  "revoked_binding",
 ];
 
 function declaresReserved(token: LoadedToken): string[] {
   const found = new Set<string>();
   for (const block of token.blocks) {
     // a FACT declaration, or a rule deriving one — not a reference inside a body
-    const declared = [...block.facts.map((f) => f.predicate.name), ...block.rules.map((r) => r.head.name)];
+    const declared = [
+      ...block.facts.map((f) => f.predicate.name),
+      ...block.rules.map((r) => r.head.name),
+    ];
     for (const p of RESERVED) if (declared.includes(p)) found.add(p);
   }
   return [...found];
@@ -195,31 +204,48 @@ function verify(
   for (const p of rules.policies) code.push(p);
 
   const limits: RunLimits = ctx.budget
-    ? { maxFacts: ctx.budget.maxFacts, maxIterations: ctx.budget.maxIterations, maxTimeMs: ctx.budget.maxTimeMicro / 1000 }
+    ? {
+        maxFacts: ctx.budget.maxFacts,
+        maxIterations: ctx.budget.maxIterations,
+        maxTimeMs: ctx.budget.maxTimeMicro / 1000,
+      }
     : LIMITS;
   const { result } = evaluate(parsed, code.join("\n"), { limits, params });
   if (result.kind === "ok") return { allowed: true };
   const budgetExceeded =
-    result.kind === "execution" && ["TooManyFacts", "TooManyIterations", "Timeout"].includes(result.error);
+    result.kind === "execution" &&
+    ["TooManyFacts", "TooManyIterations", "Timeout"].includes(result.error);
   return { allowed: false, budgetExceeded, failed: failedChecks(result) };
 }
 
 function failedChecks(result: AuthorizationResult): string[] {
-  if (result.kind !== "unauthorized" && result.kind !== "noMatchingPolicy") return [JSON.stringify(result)];
+  if (result.kind !== "unauthorized" && result.kind !== "noMatchingPolicy")
+    return [JSON.stringify(result)];
   if (result.checks.length === 0) return [JSON.stringify(result)];
   return result.checks.map((c) =>
-    c.source === "block" ? `block ${c.blockId} check ${c.checkId}: ${c.rule}` : `authorizer check ${c.checkId}: ${c.rule}`,
+    c.source === "block"
+      ? `block ${c.blockId} check ${c.checkId}: ${c.rule}`
+      : `authorizer check ${c.checkId}: ${c.rule}`,
   );
 }
 
 // ------------------------------------------------------------------ block X
 
 const HOP_BY_HOP = new Set([
-  "connection", "keep-alive", "te", "transfer-encoding", "upgrade",
-  "proxy-authenticate", "proxy-authorization", "trailer",
+  "connection",
+  "keep-alive",
+  "te",
+  "transfer-encoding",
+  "upgrade",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "trailer",
 ]);
 
-function asIntermediary(req: Request, opts: { via: string; credentials?: Record<string, string> }): Request {
+function asIntermediary(
+  req: Request,
+  opts: { via: string; credentials?: Record<string, string> },
+): Request {
   const headers = new Headers(req.headers);
   // RFC 9110: everything the Connection header names is hop-by-hop too.
   for (const named of (headers.get("connection") ?? "").split(",")) {
@@ -240,7 +266,8 @@ function asIntermediary(req: Request, opts: { via: string; credentials?: Record<
 
 export const referenceImplementation: Implementation = {
   name: "reference (spec-conformant)",
-  notes: "Biscuit tokens + Datalog policy, per ADR-0019. The seed for @statewalker/httpeers.biscuit.",
+  notes:
+    "Biscuit tokens + Datalog policy, per ADR-0019. The seed for @statewalker/httpeers.biscuit.",
   mounts: { build: buildMounts },
   policy: {
     build(source) {
@@ -266,11 +293,21 @@ export const referenceImplementation: Implementation = {
   },
   intermediary: { asIntermediary },
   tokens: {
-    async newMeshKey() { return generateKeypair(); },
-    async newDeviceKey() { return generateKeypair(); },
-    publicOf(key) { return (key as Keypair).publicKey; },
-    async mint(init, meshKey) { return mint(init, meshKey as Keypair); },
-    async verify(token, meshPublic, ctx, rules) { return verify(token, meshPublic as Uint8Array, ctx, rules); },
+    async newMeshKey() {
+      return generateKeypair();
+    },
+    async newDeviceKey() {
+      return generateKeypair();
+    },
+    publicOf(key) {
+      return (key as Keypair).publicKey;
+    },
+    async mint(init, meshKey) {
+      return mint(init, meshKey as Keypair);
+    },
+    async verify(token, meshPublic, ctx, rules) {
+      return verify(token, meshPublic as Uint8Array, ctx, rules);
+    },
     async attenuate(token, meshPublic, constraints) {
       const t = Biscuit.fromBase64(token);
       t.verify(meshPublic as Uint8Array);
@@ -280,7 +317,13 @@ export const referenceImplementation: Implementation = {
       const t = Biscuit.fromBase64(token);
       t.verify(meshPublic as Uint8Array);
       const holder = holderKey as Keypair;
-      const block = thirdPartyBlock(t.thirdPartyRequest(), holder.secretKey, ["delegate({to});", ...restrict].join("\n"), 0, { to });
+      const block = thirdPartyBlock(
+        t.thirdPartyRequest(),
+        holder.secretKey,
+        ["delegate({to});", ...restrict].join("\n"),
+        0,
+        { to },
+      );
       return t.appendThirdParty(block).toBase64();
     },
     async forgeDelegation(token, meshPublic, to) {

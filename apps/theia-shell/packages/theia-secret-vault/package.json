@@ -1,0 +1,27 @@
+{
+  "name": "@theia-shell/theia-secret-vault",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Theia extension: a password-protected, WebCrypto-encrypted secret vault behind Theia's KeyStoreService.",
+  "main": "lib/common/index.js",
+  "types": "lib/common/index.d.ts",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/vault-frontend-module",
+      "frontendOnly": "lib/browser/vault-frontend-module"
+    }
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@statewalker/webrun-files": "0.10.0",
+    "@statewalker/webrun-files-mem": "0.10.0",
+    "@theia/core": "1.76.0"
+  }
+}

@@ -1,7 +1,8 @@
 // RECOVERED-FROM-ARCHIVE: notes/drive/2026-09-02.Httpeers-Shell/13-prototype-04-manifest-generation.tar.gz
 // Unmodified.
-import ts from "typescript";
+
 import { readFileSync } from "node:fs";
+import ts from "typescript";
 
 /**
  * PROTOTYPE 4 — can a manifest be derived from TypeScript source without

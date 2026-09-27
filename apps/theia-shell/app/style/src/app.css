@@ -1,0 +1,25 @@
+/*
+ * The app's Tailwind entry, compiled to lib/app.css at build time.
+ *
+ * Preflight is left out on purpose: it would reset Theia's own CSS. Utilities
+ * are not put in a cascade layer, because Theia's CSS is unlayered and would
+ * beat any layered rule on our own elements.
+ */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css";
+@import "@theia-shell/theia-shadcn/src/browser/style/theme.css";
+@plugin "@tailwindcss/typography";
+
+/* The app's extensions whose classes are Tailwind utilities. */
+@source "../../../packages/theia-markdown/src";
+@source "../../../packages/theia-image-viewer/src";
+@source "../../../packages/theia-pdf-viewer/src";
+
+/*
+ * Tailwind picks candidates from any word in those sources, comments included.
+ * These would also match class names Theia or Monaco put on their own DOM
+ * (Monaco's context view is `.fixed`; @theia/callhierarchy renders a
+ * `container`, not loaded yet but one dependency away), so they are never
+ * generated. `node tools/audit-classes.mjs` checks the rest; see README.md.
+ */
+@source not inline("container fixed");

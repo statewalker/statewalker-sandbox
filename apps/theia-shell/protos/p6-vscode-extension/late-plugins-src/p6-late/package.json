@@ -1,0 +1,21 @@
+{
+  "name": "p6-late",
+  "displayName": "P6 Late",
+  "publisher": "statewalker",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "browser": "./extension.js",
+  "activationEvents": [
+    "onCommand:p6.late"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "p6.late",
+        "title": "P6: Deployed at Runtime"
+      }
+    ]
+  }
+}

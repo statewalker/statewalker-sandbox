@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { Commands, CommandError } from "@statewalker/shared-commands";
-import { MemFilesApi } from "@statewalker/webrun-files-mem";
+import { PanelController, PanelModel, type Picker, registerStorageOpener } from "@fm/app";
 import { JobQueue, StorageRegistry, storagesOpen } from "@fm/core";
-import { PanelController, PanelModel, registerStorageOpener, type Picker } from "@fm/app";
+import { type CommandError, Commands } from "@statewalker/shared-commands";
+import { MemFilesApi } from "@statewalker/webrun-files-mem";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /* Ported: the packages live under `lib/` in this app, not `packages/`. */
 const FM_SRC = new URL("../../lib/", import.meta.url).pathname;
@@ -30,7 +30,15 @@ describe("D4 · opening a filesystem", () => {
 
   beforeEach(() => {
     commands = new Commands();
-    registry = new StorageRegistry([], {}, { async get() { return undefined; } });
+    registry = new StorageRegistry(
+      [],
+      {},
+      {
+        async get() {
+          return undefined;
+        },
+      },
+    );
     picked = new MemFilesApi({ initialFiles: { "/a.txt": "a", "/sub/b.txt": "b" } });
     requests = [];
   });
@@ -38,9 +46,10 @@ describe("D4 · opening a filesystem", () => {
   it("fails loudly when the environment wired no picker at all", async () => {
     // There is no sensible default filesystem to invent, so the core registers
     // no fallback: an unwired app says so instead of opening something.
-    const err = await commands
-      .call(storagesOpen, { mode: "read" })
-      .promise.then(() => null, (e) => e);
+    const err = await commands.call(storagesOpen, { mode: "read" }).promise.then(
+      () => null,
+      (e) => e,
+    );
     expect((err as CommandError).kind).toBe("no-handlers");
   });
 
@@ -166,7 +175,10 @@ describe("D4 · opening a filesystem", () => {
   it("does not replace an existing opener: the first registered fallback wins", async () => {
     const first = new MemFilesApi({ initialFiles: { "/first.txt": "1" } });
     const second = new MemFilesApi({ initialFiles: { "/second.txt": "2" } });
-    const off = registerStorageOpener(commands, registry, async () => ({ api: first, name: "First" }));
+    const off = registerStorageOpener(commands, registry, async () => ({
+      api: first,
+      name: "First",
+    }));
     registerStorageOpener(commands, registry, async () => ({ api: second, name: "Second" }));
 
     // Both are fallbacks at the same priority and both decline once claimed,

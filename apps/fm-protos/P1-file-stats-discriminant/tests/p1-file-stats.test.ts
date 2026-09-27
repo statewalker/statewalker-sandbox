@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { compareEntries, narrowStats, type Stats, sizeCell } from "@fm/core";
+import type { FileStats, FilesApi } from "@statewalker/webrun-files";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import type { FilesApi, FileStats } from "@statewalker/webrun-files";
-import { narrowStats, sizeCell, compareEntries, type Stats } from "@fm/core";
+import { describe, expect, it } from "vitest";
 
 /**
  * P1 — the substrate must tell the truth.
@@ -20,7 +20,9 @@ class LyingFilesApi extends MemFilesApi {
   async stats(path: string): Promise<FileStats | undefined> {
     const s = await super.stats(path);
     if (!s) return s;
-    return s.kind === "file" ? { kind: "file" } : s;
+    // Deliberately ill-typed: webrun-files 0.9 makes this lie a compile error,
+    // and the suite must still catch it from an adapter that is not type-checked.
+    return s.kind === "file" ? ({ kind: "file" } as unknown as FileStats) : s;
   }
 }
 
@@ -29,7 +31,10 @@ class InventingFilesApi extends MemFilesApi {
   async stats(path: string): Promise<FileStats | undefined> {
     const s = await super.stats(path);
     if (!s) return s;
-    return s.kind === "directory" ? { kind: "directory", size: 0, lastModified: 0 } : s;
+    // Deliberately ill-typed, as above.
+    return s.kind === "directory"
+      ? ({ kind: "directory", size: 0, lastModified: 0 } as unknown as FileStats)
+      : s;
   }
 }
 
@@ -101,11 +106,17 @@ describe("consequences for the panel row", () => {
       { name: "a.txt", stats: { kind: "file", size: 99, lastModified: 1 } as Stats },
       { name: "adir", stats: { kind: "directory" } as Stats },
     ];
-    expect(rows.slice().sort(compareEntries("name")).map((r) => r.name)).toEqual([
-      "adir", "zdir", "a.txt", "b.txt",
-    ]);
-    expect(rows.slice().sort(compareEntries("size")).map((r) => r.name)).toEqual([
-      "adir", "zdir", "b.txt", "a.txt",
-    ]);
+    expect(
+      rows
+        .slice()
+        .sort(compareEntries("name"))
+        .map((r) => r.name),
+    ).toEqual(["adir", "zdir", "a.txt", "b.txt"]);
+    expect(
+      rows
+        .slice()
+        .sort(compareEntries("size"))
+        .map((r) => r.name),
+    ).toEqual(["adir", "zdir", "b.txt", "a.txt"]);
   });
 });

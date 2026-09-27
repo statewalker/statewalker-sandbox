@@ -2,9 +2,10 @@
 // and 4) and §4; 08-The Prototype Ladder.md §6 (provenance blindness,
 // parent-chain inheritance)
 
-import { describe, expect, it } from "vitest";
 import { Commands, CommandsRegistry } from "@statewalker/shared-commands";
 import { Slots } from "@statewalker/shared-slots";
+import { describe, expect, it } from "vitest";
+import { shellCommands } from "../src/commands.js";
 import {
   type AppIdentity,
   getApp,
@@ -16,7 +17,6 @@ import {
   newShellContext,
   setCommands,
 } from "../src/context.js";
-import { shellCommands } from "../src/commands.js";
 
 describe("criterion 1 — a context is passed untyped but accessed typed", () => {
   it("is a plain object, with no class and no required shape", () => {
@@ -49,19 +49,17 @@ describe("criterion 1 — a context is passed untyped but accessed typed", () =>
 describe("startup — what newShellContext populates", () => {
   it("seeds the registry with the four shell standard-library commands", () => {
     const registry = getRegistry(newShellContext());
-    expect(registry.list().map((d) => d.key).sort()).toEqual([
-      "shell:dialog:open",
-      "shell:notify",
-      "shell:palette:show",
-      "shell:view:open",
-    ]);
+    expect(
+      registry
+        .list()
+        .map((d) => d.key)
+        .sort(),
+    ).toEqual(["shell:dialog:open", "shell:notify", "shell:palette:show", "shell:view:open"]);
     expect(registry.list()).toHaveLength(shellCommands.length);
   });
 
   it("gives every shell context its own buses", () => {
-    expect(getCommands(newShellContext())).not.toBe(
-      getCommands(newShellContext()),
-    );
+    expect(getCommands(newShellContext())).not.toBe(getCommands(newShellContext()));
   });
 });
 
@@ -148,10 +146,7 @@ describe("criterion 4 — everything runs headless", () => {
 describe("capability filtering and peer namespacing", () => {
   it("`filter` is the capability gate", () => {
     const shell = newShellContext();
-    const gated = CommandsRegistry.filter(
-      getRegistry(shell),
-      (d) => d.key !== "shell:dialog:open",
-    );
+    const gated = CommandsRegistry.filter(getRegistry(shell), (d) => d.key !== "shell:dialog:open");
     expect(gated.get("shell:dialog:open")).toBeUndefined();
     expect(gated.get("shell:notify")?.key).toBe("shell:notify");
     expect(gated.list()).toHaveLength(3);
@@ -160,12 +155,8 @@ describe("capability filtering and peer namespacing", () => {
   it("`namespace` is how a peer's commands mount", () => {
     const remote = getRegistry(newShellContext());
     const mounted = CommandsRegistry.namespace(remote, "peer:12D3KooWabc:");
-    expect(mounted.list().map((d) => d.key)).toContain(
-      "peer:12D3KooWabc:shell:notify",
-    );
+    expect(mounted.list().map((d) => d.key)).toContain("peer:12D3KooWabc:shell:notify");
     expect(mounted.get("shell:notify")).toBeUndefined();
-    expect(mounted.get("peer:12D3KooWabc:shell:notify")?.key).toBe(
-      "peer:12D3KooWabc:shell:notify",
-    );
+    expect(mounted.get("peer:12D3KooWabc:shell:notify")?.key).toBe("peer:12D3KooWabc:shell:notify");
   });
 });

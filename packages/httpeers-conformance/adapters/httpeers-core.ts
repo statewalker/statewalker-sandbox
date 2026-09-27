@@ -21,24 +21,25 @@
  * `NotImplemented`. Those are different claims: "this harness cannot build the
  * input through the public API" is not "the implementation lacks the behaviour".
  */
+
+import type { Ed25519PrivateKey } from "@libp2p/interface";
+import { peerIdFromPrivateKey } from "@libp2p/peer-id";
 import {
   authorize,
   createMounts,
   generateMeshKey,
+  type MeshClaims,
   mintToken,
+  type RuleSet,
   ruleSet,
   verifyToken,
   warmUpTokens,
-  type MeshClaims,
-  type RuleSet,
 } from "@statewalker/httpeers.core";
-import { peerIdFromPrivateKey } from "@libp2p/peer-id";
-import type { Ed25519PrivateKey } from "@libp2p/interface";
 import {
-  NotTestable,
   type FetchHandler,
   type Implementation,
   type MountsTable,
+  NotTestable,
   type PolicySource,
   type VerifyContext,
   type VerifyOutcome,
@@ -76,10 +77,16 @@ export const httpeersCoreImplementation: Implementation = {
 
   tokens: {
     warmUp: warmUpTokens,
-    async newMeshKey() { return generateMeshKey(); },
-    async newDeviceKey() { return generateMeshKey(); },
+    async newMeshKey() {
+      return generateMeshKey();
+    },
+    async newDeviceKey() {
+      return generateMeshKey();
+    },
     /** Core verifies against the mesh peerId, which a private key derives. */
-    publicOf(key) { return peerIdFromPrivateKey(key as Ed25519PrivateKey).toString(); },
+    publicOf(key) {
+      return peerIdFromPrivateKey(key as Ed25519PrivateKey).toString();
+    },
 
     async mint(init, meshKey) {
       if (init.extraChecks?.length) {
@@ -132,13 +139,17 @@ export const httpeersCoreImplementation: Implementation = {
           failed: [msg],
         };
       }
-      const d = authorize(compile(rules), {
-        operation: ctx.operation,
-        resource: ctx.resource,
-        selfPeer: ctx.selfPeer,
-        connectionPeer: ctx.connectionPeer,
-        now: ctx.now.getTime(),
-      }, claims);
+      const d = authorize(
+        compile(rules),
+        {
+          operation: ctx.operation,
+          resource: ctx.resource,
+          selfPeer: ctx.selfPeer,
+          connectionPeer: ctx.connectionPeer,
+          now: ctx.now.getTime(),
+        },
+        claims,
+      );
       return { allowed: d.allowed, failed: d.failed.length ? d.failed : [d.reason] };
     },
   },

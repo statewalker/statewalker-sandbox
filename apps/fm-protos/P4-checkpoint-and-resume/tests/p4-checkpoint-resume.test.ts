@@ -1,8 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { CheckpointStore, JobModel, type JobSpec, runCopyJob } from "@fm/core";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { CheckpointStore } from "@fm/core";
-import { runCopyJob, type JobSpec } from "@fm/core";
-import { JobModel } from "@fm/core";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /** P4 — batch cursor, errors.json, report-and-re-enqueue. */
 
@@ -109,10 +107,12 @@ describe("P4 · checkpoint and resume", () => {
 
       const writes: string[] = [];
       const second = new JobModel("j4-resume");
-      await runCopyJob(spec(second, {
-        resumeFrom: "j4",
-        onEntry: (p, phase) => phase === "wrote" && writes.push(p),
-      }));
+      await runCopyJob(
+        spec(second, {
+          resumeFrom: "j4",
+          onEntry: (p, phase) => phase === "wrote" && writes.push(p),
+        }),
+      );
 
       // nothing already done is copied a second time
       for (const path of copiedBefore) {
@@ -129,10 +129,14 @@ describe("P4 · checkpoint and resume", () => {
       // path — the loop runs to completion and only then sees the abort. A
       // cursor cleared here would make the job unresumable.
       const job = new JobModel("j-last");
-      await runCopyJob(spec(job, {
-        source: { uri: "mem://a", api: seeded(8) },
-        onEntry: (path) => { if (path.endsWith("f0007.txt")) job.cancel(); },
-      }));
+      await runCopyJob(
+        spec(job, {
+          source: { uri: "mem://a", api: seeded(8) },
+          onEntry: (path) => {
+            if (path.endsWith("f0007.txt")) job.cancel();
+          },
+        }),
+      );
       expect(job.status).toBe("cancelled");
       expect(await checkpoints.load("j-last")).toBeDefined();
     });
@@ -169,13 +173,17 @@ describe("P4 · checkpoint and resume", () => {
       await run;
 
       const resumed = new JobModel("j6-resume");
-      await runCopyJob(spec(resumed, {
-        resumeFrom: "j6",
-        source: {
-          uri: "mem://a",
-          get api(): never { throw new Error("auth expired"); },
-        } as never,
-      }));
+      await runCopyJob(
+        spec(resumed, {
+          resumeFrom: "j6",
+          source: {
+            uri: "mem://a",
+            get api(): never {
+              throw new Error("auth expired");
+            },
+          } as never,
+        }),
+      );
       expect(resumed.status).toBe("failed");
       expect(resumed.error).toMatch(/auth expired/);
       expect(await checkpoints.load("j6")).toBeDefined(); // cursor survives a failed resume

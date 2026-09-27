@@ -1,0 +1,28 @@
+{
+  "name": "@theia-shell/theia-file-panels",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Theia extension: Midnight-Commander-style file panels with sibling-folder breadcrumbs and a copy/move dialog.",
+  "main": "lib/common/index.js",
+  "types": "lib/common/index.d.ts",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/file-panels-frontend-module",
+      "frontendOnly": "lib/browser/file-panels-frontend-module"
+    }
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@theia/core": "1.76.0",
+    "@theia/filesystem": "1.76.0",
+    "@theia/navigator": "1.76.0",
+    "@theia/workspace": "1.76.0"
+  }
+}

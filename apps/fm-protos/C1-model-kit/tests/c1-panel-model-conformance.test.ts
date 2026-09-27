@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { expectNoSelfWake, expectReplacedNotMutated, PanelController, PanelModel } from "@fm/app";
 import { Commands } from "@statewalker/shared-commands";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { PanelController, PanelModel, expectNoSelfWake, expectReplacedNotMutated } from "@fm/app";
+import { describe, expect, it } from "vitest";
 
 /**
  * C1 — every model built from here on runs the kit. Applied retroactively to
@@ -12,13 +12,19 @@ describe("PanelModel conformance", () => {
     const api = new MemFilesApi({ initialFiles: { "/a.txt": "a", "/b.txt": "b" } });
     const model = new PanelModel("p1", "left", "mem://a", "/");
     let reactions = 0;
-    const controller = new PanelController(model, api, new Commands(), () => { reactions++; });
+    const controller = new PanelController(model, api, new Commands(), () => {
+      reactions++;
+    });
     return { model, controller, reactions: () => reactions };
   };
 
   it("replaces `entries` rather than mutating it", async () => {
     const { model, controller } = build();
-    await expectReplacedNotMutated(model, () => model.entries, () => controller.refresh());
+    await expectReplacedNotMutated(
+      model,
+      () => model.entries,
+      () => controller.refresh(),
+    );
   });
 
   it("cannot be woken by its own controller's writes", async () => {

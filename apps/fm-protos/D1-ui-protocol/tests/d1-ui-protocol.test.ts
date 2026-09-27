@@ -1,11 +1,20 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { Commands, CommandError } from "@statewalker/shared-commands";
 import {
-  ConfirmDialogModel, ConflictDialogModel, MenuModel, NotificationModel, PanelModel,
-  PromptDialogModel, uiNotify, uiShowConfirm, uiShowConflict, uiShowMenu, uiShowPanel,
+  ConfirmDialogModel,
+  ConflictDialogModel,
+  MenuModel,
+  NotificationModel,
+  PanelModel,
+  PromptDialogModel,
+  uiNotify,
+  uiShowConfirm,
+  uiShowConflict,
+  uiShowMenu,
+  uiShowPanel,
   uiShowPrompt,
 } from "@fm/app";
-import { ViewAdapter, type Renderers } from "@fm/ui";
+import { type Renderers, ViewAdapter } from "@fm/ui";
+import { type CommandError, Commands } from "@statewalker/shared-commands";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /** D1 — views are command handlers, at four different lifetimes. */
 
@@ -108,7 +117,9 @@ describe("D1 · UI protocol", () => {
     it("cleans up BEFORE the caller hears back, so 'answered' implies 'gone'", async () => {
       const call = commands.call(uiShowConfirm, new ConfirmDialogModel("x"));
       let openWhenRejected = -1;
-      const settled = call.promise.catch(() => { openWhenRejected = adapter.openViews().length; });
+      const settled = call.promise.catch(() => {
+        openWhenRejected = adapter.openViews().length;
+      });
       adapter.dispose();
       await settled;
       expect(openWhenRejected).toBe(0);
@@ -117,9 +128,10 @@ describe("D1 · UI protocol", () => {
 
     it("stops claiming new commands once disposed", async () => {
       adapter.dispose();
-      const err = await commands
-        .call(uiNotify, new NotificationModel("info", "x"))
-        .promise.then(() => null, (e) => e);
+      const err = await commands.call(uiNotify, new NotificationModel("info", "x")).promise.then(
+        () => null,
+        (e) => e,
+      );
       expect((err as CommandError).kind).toBe("no-handlers");
     });
   });
@@ -130,7 +142,10 @@ describe("D1 · UI protocol", () => {
       const bare = new ViewAdapter(partial, { panel: renderer("panel") });
       const err = await partial
         .call(uiShowConflict, new ConflictDialogModel("/a.txt", "/dst/a.txt"))
-        .promise.then(() => null, (e) => e);
+        .promise.then(
+          () => null,
+          (e) => e,
+        );
       // Reported to the caller as not-claimed — never thrown at a controller
       // that could do nothing about it.
       expect((err as CommandError).kind).toBe("not-claimed");

@@ -28,14 +28,8 @@
  */
 import { createMounts } from "@statewalker/httpeers.core";
 import type { AdvertisementInput } from "../../browser/join.js";
-import { createQrJoinUi } from "../../browser/qr-join-ui.js";
 import { wireQrJoin } from "../../browser/qr-join.js";
-import type { PeerSession, SessionState } from "../../browser/session.js";
-import { createPeerSession } from "../../browser/session.js";
-import type { ProxyRoute } from "../../services/proxy-routes.js";
-import { createProxyEndpoint, PROXY_POLICIES } from "../../services/proxy.js";
-import type { StoredRoute } from "./routes-store.js";
-import { DEFAULT_ROUTES, loadRoutesOrSeed, saveRoutes, withSecrets } from "./routes-store.js";
+import { createQrJoinUi } from "../../browser/qr-join-ui.js";
 import {
   DEFAULT_EXAMPLES,
   describeStatus,
@@ -43,6 +37,12 @@ import {
   renderExamples,
   streamInto,
 } from "../../browser/request-console.js";
+import type { PeerSession, SessionState } from "../../browser/session.js";
+import { createPeerSession } from "../../browser/session.js";
+import { createProxyEndpoint, PROXY_POLICIES } from "../../services/proxy.js";
+import type { ProxyRoute } from "../../services/proxy-routes.js";
+import type { StoredRoute } from "./routes-store.js";
+import { DEFAULT_ROUTES, loadRoutesOrSeed, saveRoutes, withSecrets } from "./routes-store.js";
 
 const el = <T extends HTMLElement>(id: string): T => document.querySelector<T>(`#${id}`)!;
 
@@ -85,8 +85,6 @@ let stored: StoredRoute[] = loadRoutesOrSeed(localStorage, DEFAULT_ROUTES);
  * effect immediately and without a reconnect.
  */
 const currentRoutes = (): ProxyRoute[] => withSecrets(stored, secrets);
-
-
 
 function say(tone: string, text: string): void {
   routeStatusEl.dataset.tone = tone;
@@ -258,8 +256,7 @@ async function runConsole(): Promise<void> {
     // The timing IS the streaming evidence: a buffered response would put the
     // first chunk at the same moment as the last.
     if (stats.firstChunkMs !== null) {
-      consoleStatusEl.textContent +=
-        ` · ${stats.chunks} chunk(s), first at ${Math.round(stats.firstChunkMs)} ms of ${Math.round(stats.totalMs)} ms`;
+      consoleStatusEl.textContent += ` · ${stats.chunks} chunk(s), first at ${Math.round(stats.firstChunkMs)} ms of ${Math.round(stats.totalMs)} ms`;
     }
   } catch (err) {
     // A fetch that never reached the edge at all -- the ServiceWorker gone,
@@ -316,7 +313,6 @@ async function buildMounts(): Promise<ReturnType<typeof createMounts>> {
  * this page that writes a status line or enables a control.
  */
 function renderSession(state: SessionState): void {
-
   peerIdEl.textContent = state.identity ?? "none saved yet";
 
   joinForm.hidden = !state.controls.join;

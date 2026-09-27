@@ -1,0 +1,16 @@
+{
+  "name": "@theia-shell/p3-extension",
+  "version": "0.0.0",
+  "private": true,
+  "description": "P3's app module: provides the FilesApi. Theia reads theiaExtensions only from dependencies, never from the app package itself.",
+  "theiaExtensions": [
+    {
+      "frontendOnly": "app-module.js"
+    }
+  ],
+  "dependencies": {
+    "@statewalker/webrun-files-mem": "0.10.0",
+    "@theia-shell/theia-files-api": "workspace:*",
+    "@theia/core": "1.76.0"
+  }
+}

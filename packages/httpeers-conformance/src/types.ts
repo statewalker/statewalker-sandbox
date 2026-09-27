@@ -115,11 +115,22 @@ export interface TokenCapability {
   /** Public half, for verification. */
   publicOf(key: unknown): unknown;
   mint(init: MintInit, meshKey: unknown): Promise<string>;
-  verify(token: string, meshPublic: unknown, ctx: VerifyContext, rules: PolicySource): Promise<VerifyOutcome>;
+  verify(
+    token: string,
+    meshPublic: unknown,
+    ctx: VerifyContext,
+    rules: PolicySource,
+  ): Promise<VerifyOutcome>;
   /** Narrow a token by appending constraints, offline. */
   attenuate?(token: string, meshPublic: unknown, constraints: string[]): Promise<string>;
   /** Delegate to another key, signed by the holder's device key (ADR-0010 amd.). */
-  delegate?(token: string, meshPublic: unknown, holderKey: unknown, to: string, restrict: string[]): Promise<string>;
+  delegate?(
+    token: string,
+    meshPublic: unknown,
+    holderKey: unknown,
+    to: string,
+    restrict: string[],
+  ): Promise<string>;
   /** The forgeable path: append a delegate claim with no holder signature. */
   forgeDelegation?(token: string, meshPublic: unknown, to: string): Promise<string>;
   /** Called once before any verification. See prototype 10 finding F2. */
@@ -138,7 +149,10 @@ export interface PolicyCapability {
 
 export interface IntermediaryCapability {
   /** Strip hop-by-hop headers, consume the mesh token, supply the upstream one. */
-  asIntermediary(req: Request, opts: { via: string; credentials?: Record<string, string> }): Request;
+  asIntermediary(
+    req: Request,
+    opts: { via: string; credentials?: Record<string, string> },
+  ): Request;
 }
 
 /** An implementation under test. Every capability is optional; absent ⇒ `missing`. */

@@ -72,9 +72,10 @@ describe("B6 · the emitted CSS", () => {
   it("contains a utility class that only the shadcn kit's source spells", async () => {
     const css = await emittedCss();
     expect(css, "the app's own theme is in the bundle").toContain("--color-primary");
-    expect(css, `.${KIT_ONLY_CLASS} — reachable only through @statewalker/ui.view.shadcn/styles`).toMatch(
-      KIT_ONLY_RULE,
-    );
+    expect(
+      css,
+      `.${KIT_ONLY_CLASS} — reachable only through @statewalker/ui.view.shadcn/styles`,
+    ).toMatch(KIT_ONLY_RULE);
   }, 120_000);
 
   it("and loses it when the kit's ./styles import is removed — the check can fail", async () => {

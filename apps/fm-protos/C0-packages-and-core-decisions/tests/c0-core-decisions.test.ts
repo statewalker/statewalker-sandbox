@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import {
+  CheckpointStore,
+  DEFAULTS,
+  JobModel,
+  JobQueue,
+  runCopyJob,
+  StorageRegistry,
+} from "@fm/core";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { CheckpointStore, JobModel, JobQueue, StorageRegistry, runCopyJob, DEFAULTS } from "@fm/core";
+import { describe, expect, it } from "vitest";
 
 /** C0 — the three decisions Phase B deliberately left open. */
 
@@ -16,14 +23,21 @@ describe("C0 · batch size and parallelism", () => {
   });
 
   it("is declared per storage, because a remote backend is not OPFS", async () => {
-    const instances: Record<string, MemFilesApi> = { "mem://a": seeded(20), "s3://b": new MemFilesApi() };
+    const instances: Record<string, MemFilesApi> = {
+      "mem://a": seeded(20),
+      "s3://b": new MemFilesApi(),
+    };
     const registry = new StorageRegistry(
       [
         { uri: "mem://a", adapter: "mem", options: {} },
         { uri: "s3://b", adapter: "mem", options: {}, batchSize: 2 },
       ],
       { mem: (uri) => instances[uri] },
-      { async get() { return undefined; } },
+      {
+        async get() {
+          return undefined;
+        },
+      },
     );
     expect(registry.batchSize("mem://a")).toBe(DEFAULTS.batchSize);
     expect(registry.batchSize("s3://b")).toBe(2);
@@ -31,8 +45,11 @@ describe("C0 · batch size and parallelism", () => {
     const sizes: number[] = [];
     const queue = new JobQueue(registry, { onBatch: (b) => sizes.push(b.length) });
     const job = queue.enqueue({
-      operation: "copy", sourceUri: "mem://a", targetUri: "s3://b",
-      roots: ["/src"], targetPath: "/dst",
+      operation: "copy",
+      sourceUri: "mem://a",
+      targetUri: "s3://b",
+      roots: ["/src"],
+      targetPath: "/dst",
     });
     await job.done;
     // The TARGET's declaration governs: it is the side being written to.
@@ -49,7 +66,9 @@ describe("C0 · a cancelled copy reports, it does not clean up", () => {
       operation: "copy",
       source: { uri: "mem://a", api: source },
       target: { uri: "mem://b", api: target, path: "/dst" },
-      roots: ["/src"], batchSize: 2, job,
+      roots: ["/src"],
+      batchSize: 2,
+      job,
     });
     await new Promise((r) => setTimeout(r, 0));
     job.cancel();
@@ -74,7 +93,10 @@ describe("C0 · checkpoint retention", () => {
       operation: "copy",
       source: { uri: "mem://a", api: seeded(20) },
       target: { uri: "mem://b", api: new MemFilesApi(), path: "/dst" },
-      roots: ["/src"], batchSize: 2, job, checkpoints,
+      roots: ["/src"],
+      batchSize: 2,
+      job,
+      checkpoints,
       // A skip so errors.json actually exists — discard must remove BOTH the
       // cursor and the error record, or a re-enqueued job inherits stale skips.
       shouldSkip: (path) => path.endsWith("f001.txt"),

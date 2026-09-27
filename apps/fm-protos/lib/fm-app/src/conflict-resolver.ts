@@ -1,5 +1,5 @@
-import type { Commands } from "@statewalker/shared-commands";
 import type { ConflictResolution } from "@fm/core";
+import type { Commands } from "@statewalker/shared-commands";
 import { ConflictDialogModel, uiShowConflict } from "./ui-declarations.js";
 
 /**

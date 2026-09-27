@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { afterEach, describe, expect, it } from "vitest";
 import "hightable/src/HighTable.css";
-import { Commands } from "@statewalker/shared-commands";
-import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { PanelController, PanelModel, TableModel } from "@fm/app";
 import { PanelView } from "@fm/ui";
+import { Commands } from "@statewalker/shared-commands";
+import { MemFilesApi } from "@statewalker/webrun-files-mem";
 
 /** D2f — the panel component, driven only by models. */
 
