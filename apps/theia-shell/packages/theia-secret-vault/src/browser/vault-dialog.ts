@@ -94,7 +94,8 @@ export class VaultPasswordDialog extends AbstractDialog<VaultDialogResult> {
    * start-up prompt opens before the workbench is attached and its layout
    * restored (which focuses the restored editor): whatever is added to the
    * page while the dialog is open is made inert too, so it cannot take the
-   * focus or the keys, until the dialog closes.
+   * focus or the keys, until the dialog closes. Another dialog opened over this
+   * one (a `.dialogOverlay`) stays usable.
    */
   protected override preventTabbingOutsideDialog(elements?: Element[]): Disposable {
     const toDispose = new DisposableCollection(super.preventTabbingOutsideDialog(elements));
@@ -103,12 +104,15 @@ export class VaultPasswordDialog extends AbstractDialog<VaultDialogResult> {
     const observer = new MutationObserver((records) => {
       for (const record of records) {
         for (const node of record.addedNodes) {
-          // Like Theia: the select dropdown container stays interactive.
+          // Like Theia: the select dropdown container stays interactive; so does
+          // another dialog opened over this one (e.g. by a keybinding).
           if (
             !(node instanceof Element) ||
             node === this.node ||
             node.hasAttribute("inert") ||
-            node.id === "select-component-container"
+            node.id === "select-component-container" ||
+            node.classList.contains("dialogOverlay") ||
+            node.querySelector(".dialogOverlay") !== null
           ) {
             continue;
           }

@@ -143,3 +143,27 @@ test("the start-up prompt keeps the focus while the workbench restores an open e
   await expect(lines.last()).toHaveText(before as string);
   await expect(page.locator(".lm-TabBar-tab.theia-mod-dirty")).toHaveCount(0);
 });
+
+test("a dialog opened over the unlock prompt stays usable; the page behind does not", async ({
+  page,
+}) => {
+  await start(page, "", { password: "pw" });
+  await page.reload();
+  const dialog = page.locator(".vault-dialog");
+  await expect(dialog).toBeVisible();
+  // What Theia attaches for another dialog (a keybinding can open one over the prompt): a
+  // `.dialogOverlay` body child; and, for contrast, any other late body child.
+  const inert = await page.evaluate(async () => {
+    const overlay = document.createElement("div");
+    overlay.className = "dialogOverlay";
+    const other = document.createElement("div");
+    document.body.append(overlay, other);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const result = { overlay: overlay.inert, other: other.inert };
+    overlay.remove();
+    other.remove();
+    return result;
+  });
+  expect(inert).toEqual({ overlay: false, other: true });
+  await unlockVault(page, "pw");
+});
