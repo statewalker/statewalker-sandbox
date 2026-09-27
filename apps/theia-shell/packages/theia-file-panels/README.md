@@ -53,9 +53,10 @@ change. Each segment is also a drop target.
 | From the explorer | Dialog: Copy / Move / Rename | Theia's own drop, unchanged |
 | From the operating system | Uploaded, no dialog | Theia's own upload, unchanged |
 
-- A drop **onto the source folder itself** offers Copy and Rename only (Move onto its own folder
-  is meaningless). Dropping a folder onto itself or one of its own descendants is rejected with a
-  warning, not offered in the dialog.
+- A drop **onto the source folder itself** never offers Move (moving something onto its own folder
+  is meaningless): one item offers Copy and Rename; several items offer Copy only, each getting a
+  free name. Dropping a folder onto itself or one of its own descendants is rejected with a
+  warning instead, not offered in the dialog.
 - **Several items with a clash**: one choice for the batch — Overwrite, Keep both (free names) or
   Skip — shown with the clash count. Clashes **between the dropped sources themselves** never
   overwrite: under Overwrite the later one still gets a free name (overwriting something this same

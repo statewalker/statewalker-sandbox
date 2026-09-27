@@ -82,10 +82,14 @@ build `--filter` list, like every other extension.
 
 ```
 src/common/            pure, unit-tested, no DOM
+  index.ts               re-exports every module below
+  locale.ts              currentLocale(): nls.locale, "en" outside a browser
+  format.ts              formatSize, formatDate, pluralCategory — all Intl-backed
   file-panels-nls.ts     every message key + English default; plural helper
-  transfer-planner.ts    sources + target + choices → steps; free names; clash resolution
   panel-sorting.ts       comparator: folders first, Intl.Collator, column + direction
   breadcrumb-model.ts    URI + workspace roots → segments; sibling selection
+  transfer-planner.ts    sources + target + choices → steps; free names; clash resolution
+  transfer-runner.ts     runs a plan's steps against injected copy/move; records failures, no rollback
 src/browser/
   file-panel-widget.ts             one panel: header + tree, StatefulWidget; navigation, breadcrumb data
   file-panel-header.tsx            ReactWidget: column headers (ARIA table) with sort, status/retry, breadcrumb slot
