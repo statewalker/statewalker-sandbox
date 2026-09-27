@@ -1,8 +1,12 @@
-import { BreadcrumbPopupContainerFactory } from "@theia/core/lib/browser/breadcrumbs/breadcrumb-popup-container";
+import {
+  type BreadcrumbPopupContainer,
+  BreadcrumbPopupContainerFactory,
+} from "@theia/core/lib/browser/breadcrumbs/breadcrumb-popup-container";
 import { LabelProvider } from "@theia/core/lib/browser/label-provider";
 import type { StatefulWidget } from "@theia/core/lib/browser/shell/shell-layout-restorer";
 import { SelectableTreeNode } from "@theia/core/lib/browser/tree/tree-selection";
 import { BaseWidget, type Message } from "@theia/core/lib/browser/widgets/widget";
+import { Disposable } from "@theia/core/lib/common/disposable";
 import URI from "@theia/core/lib/common/uri";
 import { PanelLayout, type Widget } from "@theia/core/shared/@lumino/widgets";
 import { inject, injectable, type interfaces } from "@theia/core/shared/inversify";
@@ -10,14 +14,16 @@ import * as React from "@theia/core/shared/react";
 import { createRoot } from "@theia/core/shared/react-dom/client";
 import { FileService } from "@theia/filesystem/lib/browser/file-service";
 import { createFileTreeContainer } from "@theia/filesystem/lib/browser/file-tree";
+import { FileOperationError, FileOperationResult } from "@theia/filesystem/lib/common/files";
 import { WorkspaceService } from "@theia/workspace/lib/browser/workspace-service";
 import { type Crumb, siblingSource } from "../common/breadcrumb-model";
 import { Messages } from "../common/file-panels-nls";
 import { compareEntries, type SortState, toggleSort } from "../common/panel-sorting";
-import { FilePanelHeader } from "./file-panel-header";
-import { FilePanelModel, FilePanelTree } from "./file-panel-tree";
+import { FilePanelHeader, type FilePanelHeaderState } from "./file-panel-header";
+import { FilePanelModel, FilePanelTree, type NavigationOutcome } from "./file-panel-tree";
 import { FilePanelTreeWidget } from "./file-panel-tree-widget";
 import { FolderBreadcrumb, FolderList } from "./folder-breadcrumb";
+import { TransferService } from "./transfer-service";
 
 export const FILE_PANEL_CONTEXT_MENU = ["file-panel-context-menu"];
 
@@ -25,6 +31,14 @@ export const FilePanelOptions = Symbol("FilePanelOptions");
 export interface FilePanelOptions {
   id: string;
   folder?: string;
+}
+
+/** A folder that does not exist — as opposed to one that exists but cannot be read now. */
+function isNotFound(error: Error): boolean {
+  return (
+    error instanceof FileOperationError &&
+    error.fileOperationResult === FileOperationResult.FILE_NOT_FOUND
+  );
 }
 
 /** One file panel: header (breadcrumb, column headings, status) over a flat file tree. */
@@ -40,8 +54,11 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
   @inject(BreadcrumbPopupContainerFactory)
   protected readonly popups!: BreadcrumbPopupContainerFactory;
   @inject(FileService) protected readonly files!: FileService;
+  @inject(TransferService) protected readonly transfers!: TransferService;
 
   protected header!: FilePanelHeader;
+  /** The open sibling / hidden-folder popup, if any. */
+  protected popup: BreadcrumbPopupContainer | undefined;
 
   /** A notice shown until the next navigation (a folder that disappeared). */
   protected notice: string | undefined;
@@ -50,8 +67,9 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
     return this.tree.model;
   }
 
+  /** The panel's folder — also while it cannot be read (then the header says why). */
   get folder(): URI | undefined {
-    return this.model.location;
+    return this.model.folder;
   }
 
   get sort(): SortState {
@@ -79,28 +97,24 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
       this.model.onChanged(() => this.updateEmptyState()),
       this.fileTree.onDidChangeListingError(() => this.updateEmptyState()),
       this.workspace.onWorkspaceChanged(() => this.renderBreadcrumb()),
-      this.tree.onDidDrop.event(async (uris) => {
-        await this.model.refresh();
-        const nodes = uris
-          .filter((uri) => this.folder && uri.parent.isEqual(this.folder))
-          .map((uri) => this.model.getNode(uri.path.toString()))
-          .filter((node): node is SelectableTreeNode => SelectableTreeNode.is(node));
-        nodes.forEach((node, i) => {
-          if (i === 0) this.model.selectNode(node);
-          else this.model.addSelection(node);
-        });
-      }),
+      this.tree.onDidDrop.event((uris) => void this.selectWritten(uris)),
+      Disposable.create(() => this.popup?.dispose()),
       this.files.onDidFilesChange((event) => {
         const folder = this.folder;
         if (folder && event.changes.some((change) => change.resource.isEqualOrParent(folder))) {
-          void this.files.exists(folder).then((exists) => {
-            if (!exists && this.folder?.isEqual(folder)) void this.navigateToExisting(folder);
-          });
+          void this.files
+            .exists(folder)
+            .catch(() => false)
+            .then((exists) => {
+              if (!exists && this.folder?.isEqual(folder)) void this.navigateToExisting(folder);
+            });
         }
       }),
     ]);
+    // Never throws: a creation folder that is gone falls back like a restored one, so Theia's
+    // layout restore never drops the panel.
     const start = this.options.folder ? new URI(this.options.folder) : await this.defaultFolder();
-    await this.navigateTo(start);
+    await this.navigateToExisting(start);
   }
 
   storeState(): object {
@@ -112,25 +126,33 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
     if (state.folder) void this.navigateToExisting(new URI(state.folder));
   }
 
-  /** `uri`, or its nearest existing ancestor, or the first workspace root. */
+  /**
+   * `uri`; if it does not exist, its nearest existing ancestor, else the first workspace root,
+   * with a notice. A folder that exists but cannot be read (a locked mount) stays, shown as not
+   * available with Retry. Never throws.
+   */
   protected async navigateToExisting(uri: URI): Promise<void> {
-    for (let candidate = uri; ; candidate = candidate.parent) {
-      if (await this.files.exists(candidate)) {
-        await this.navigateTo(candidate);
-        if (!candidate.isEqual(uri)) {
-          this.notice = Messages.folderGone(uri.path.base, this.labels.getName(candidate));
-          this.updateEmptyState();
-        }
-        return;
+    const outcome = await this.navigateTo(uri);
+    if (outcome.kind !== "failed" || !isNotFound(outcome.error)) return;
+    for (let candidate = uri; !candidate.path.isRoot; ) {
+      candidate = candidate.parent;
+      if (await this.files.exists(candidate).catch(() => false)) {
+        return this.showInstead(uri, candidate);
       }
-      if (candidate.path.isRoot) break;
     }
-    await this.navigateTo(await this.defaultFolder());
+    await this.showInstead(uri, await this.defaultFolder());
   }
 
-  async navigateTo(uri: URI): Promise<void> {
+  protected async showInstead(gone: URI, shown: URI): Promise<void> {
+    if ((await this.navigateTo(shown)).kind !== "shown") return;
+    this.notice = Messages.folderGone(gone.path.base, this.labels.getName(shown));
+    this.updateEmptyState();
+  }
+
+  /** Never throws; see `FilePanelModel.navigateToFolder`. */
+  navigateTo(uri: URI): Promise<NavigationOutcome> {
     this.notice = undefined;
-    await this.model.navigateToFolder(uri);
+    return this.model.navigateToFolder(uri);
   }
 
   async goUp(): Promise<void> {
@@ -138,8 +160,27 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
     if (folder && !folder.path.isRoot) await this.navigateTo(folder.parent);
   }
 
+  /** Re-reads the folder; one that could not be opened is tried again. */
   async refresh(): Promise<void> {
-    await this.model.refresh();
+    if (this.model.failure && this.folder) await this.navigateTo(this.folder);
+    else await this.model.refresh();
+  }
+
+  /** Selects what a drop or transfer wrote into this panel's folder. */
+  async selectWritten(uris: URI[]): Promise<void> {
+    try {
+      await this.model.refresh();
+      const nodes = uris
+        .filter((uri) => this.folder && uri.parent.isEqual(this.folder))
+        .map((uri) => this.model.getNode(uri.path.toString()))
+        .filter((node): node is SelectableTreeNode => SelectableTreeNode.is(node));
+      nodes.forEach((node, i) => {
+        if (i === 0) this.model.selectNode(node);
+        else this.model.addSelection(node);
+      });
+    } catch (error) {
+      this.transfers.reportError(error);
+    }
   }
 
   setSort(state: SortState): void {
@@ -180,10 +221,8 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
             undefined,
             anchor,
           ),
-        onDropOnCrumb: (uri, event) => {
-          event.preventDefault();
-          void this.tree.dropOnFolder(uri, event);
-        },
+        onDragOverCrumb: (event) => this.tree.dragOverFolder(event),
+        onDropOnCrumb: (uri, event) => void this.tree.dropOnFolder(uri, event),
       }),
     });
   }
@@ -212,13 +251,18 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
     current: URI | undefined,
     anchor: HTMLElement,
   ): void {
+    this.popup?.dispose();
     const box = anchor.getBoundingClientRect();
     const popup = this.popups(this.node, `file-panel-siblings:${this.id}`, {
       x: box.left,
       y: box.bottom,
     });
+    this.popup = popup;
     const root = createRoot(popup.container);
-    popup.onDidDispose(() => root.unmount());
+    popup.onDidDispose(() => {
+      root.unmount();
+      if (this.popup === popup) this.popup = undefined;
+    });
     root.render(
       React.createElement(FolderList, {
         folders,
@@ -232,18 +276,30 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
   }
 
   protected updateEmptyState(): void {
+    this.header.setState({ status: this.status() });
+  }
+
+  /** The status line: a folder that could not be opened, a failed listing, a notice, or empty. */
+  protected status(): FilePanelHeaderState["status"] {
+    const { failure } = this.model;
+    const folder = this.folder;
+    if (failure && folder) {
+      return {
+        text: Messages.notAvailable(this.labels.getName(folder), failure.message),
+        retry: () => void this.navigateTo(folder),
+      };
+    }
     const error = this.fileTree.listingError;
+    if (error) {
+      return {
+        text: Messages.notAvailable(this.title.label, error),
+        retry: () => void this.refresh(),
+      };
+    }
+    if (this.notice) return { text: this.notice };
     const root = this.model.root;
-    const empty = !error && root && "children" in root && (root.children as unknown[]).length === 0;
-    this.header.setState({
-      status: error
-        ? { text: Messages.notAvailable(this.title.label, error), retry: () => void this.refresh() }
-        : this.notice
-          ? { text: this.notice }
-          : empty
-            ? { text: Messages.emptyFolder() }
-            : undefined,
-    });
+    const empty = root && "children" in root && (root.children as unknown[]).length === 0;
+    return empty ? { text: Messages.emptyFolder() } : undefined;
   }
 
   protected override onActivateRequest(msg: Message): void {

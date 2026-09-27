@@ -53,21 +53,50 @@ export class FilePanelTree extends FileTree {
   }
 }
 
+/** What one navigation came to: the folder listed, a failure and why, or a newer navigation won. */
+export type NavigationOutcome =
+  | { kind: "shown" }
+  | { kind: "failed"; error: Error }
+  | { kind: "superseded" };
+
 /** Opening a folder navigates the panel into it; opening a file opens it like the explorer does. */
 @injectable()
 export class FilePanelModel extends FileTreeModel {
   @inject(OpenerService) protected readonly openerService!: OpenerService;
   protected readonly onDidNavigateEmitter = new Emitter<URI>();
+  /** Fired when the panel stands at a new folder — listed, or failed to open (see `failure`). */
   readonly onDidNavigate = this.onDidNavigateEmitter.event;
   /** Bumped by every navigation, so a slower, older listing never replaces a newer one. */
   protected navigations = 0;
+  /** The folder the panel stands at: listed, or — while `failure` is set — failed to open. */
+  folder: URI | undefined;
+  /** Why `folder` could not be opened; undefined while it is listed. */
+  failure: Error | undefined;
 
-  async navigateToFolder(uri: URI): Promise<void> {
+  /**
+   * Never throws. A folder that cannot be resolved still becomes the panel's `folder` (so it is
+   * stored, and Retry and Go Up start from it); the list is emptied and `failure` says why.
+   */
+  async navigateToFolder(uri: URI): Promise<NavigationOutcome> {
     const ticket = ++this.navigations;
-    const stat = await this.fileService.resolve(uri);
-    if (ticket !== this.navigations) return;
-    await this.navigateTo({ ...DirNode.createRoot(stat), visible: false });
+    let outcome: NavigationOutcome;
+    try {
+      const stat = await this.fileService.resolve(uri);
+      if (ticket !== this.navigations) return { kind: "superseded" };
+      await this.navigateTo({ ...DirNode.createRoot(stat), visible: false });
+      outcome = { kind: "shown" };
+    } catch (error) {
+      outcome = {
+        kind: "failed",
+        error: error instanceof Error ? error : new Error(String(error)),
+      };
+    }
+    if (ticket !== this.navigations) return { kind: "superseded" };
+    this.folder = uri;
+    this.failure = outcome.kind === "failed" ? outcome.error : undefined;
+    if (this.failure) this.root = undefined;
     this.onDidNavigateEmitter.fire(uri);
+    return outcome;
   }
 
   protected override doOpenNode(node: TreeNode): void {

@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { explorer, openMain, runFromPalette, start, toast } from "./helpers";
+import { explorer, openMain, readFile, runFromPalette, start, toast } from "./helpers";
 
 export const panels = (page: Page) => page.locator(".file-panel");
 export const row = (panel: Locator, name: string) =>
@@ -31,6 +31,22 @@ test("a panel lists a folder flat, navigates into folders and back up", async ({
   // Folders never expand in place.
   await expect(panel.locator(".theia-ExpansionToggle")).toHaveCount(0);
   expect(errors).toEqual([]);
+});
+
+test("Backspace inside the type-to-filter box edits the filter, not the folder", async ({
+  page,
+}) => {
+  await start(page, "?storage=memory");
+  const panel = await openPanel(page);
+  await row(panel, "Browser Storage").dblclick();
+  await row(panel, "notes").dblclick();
+  await row(panel, "ideas.md").click();
+  await page.keyboard.press("i");
+  await expect(panel.locator(".theia-search-input")).toBeVisible();
+  await page.keyboard.press("Backspace");
+  await expect(crumb(panel, "notes")).toBeVisible();
+  await expect(row(panel, "ideas.md")).toBeVisible();
+  await expect(row(panel, "welcome.md")).toHaveCount(0);
 });
 
 test("the panel shows size and date columns and sorts by clicking a header", async ({ page }) => {
@@ -200,25 +216,57 @@ test("a drop into the same folder offers only Copy or Rename; Copy makes a free 
   await expect(row(panel, "ideas copy.md")).toBeVisible();
 });
 
-test("several items with a clash: Keep both, then Skip", async ({ page }) => {
-  await start(page, "?storage=memory");
-  const [a, b] = await twoPanels(page, ["Browser Storage", "docs"], ["Browser Storage", "notes"]);
-  // Put a cheatsheet.md into notes first, so the second drop clashes.
-  await row(a, "cheatsheet.md").dragTo(b.locator(".file-panel-tree"));
-  await dialog(page).locator("input[name=file-panels-op][value=copy]").check();
-  await dialog(page).locator(".theia-button.main").click();
-  await expect(row(b, "cheatsheet.md")).toBeVisible();
+const writeText = (page: Page, path: string, text: string) =>
+  page.evaluate(
+    async ([p, t]) => {
+      const files = (
+        window as unknown as {
+          theiaShell: {
+            filesApi: { write(p: string, c: AsyncIterable<Uint8Array>): Promise<void> };
+          };
+        }
+      ).theiaShell.filesApi;
+      await files.write(
+        p,
+        (async function* () {
+          yield new TextEncoder().encode(t);
+        })(),
+      );
+    },
+    [path, text] as const,
+  );
 
-  await row(a, "cheatsheet.md").click();
-  await row(a, "sample.pdf").click({ modifiers: ["Control"] });
-  await row(a, "sample.pdf").dragTo(b.locator(".file-panel-tree"));
-  await expect(dialog(page).getByText("1 item already exists in the target:")).toBeVisible();
-  await dialog(page).locator("input[name=file-panels-op][value=copy]").check();
-  await dialog(page).locator("input[name=file-panels-clash][value=keepBoth]").check();
-  await dialog(page).locator(".theia-button.main").click();
-  await expect(row(b, "cheatsheet copy.md")).toBeVisible();
-  await expect(row(b, "sample.pdf")).toBeVisible();
-});
+for (const [policy, label] of [
+  ["keepBoth", "Keep both"],
+  ["skip", "Skip"],
+  ["overwrite", "Overwrite"],
+] as const) {
+  test(`several items with a clash: ${label}`, async ({ page }) => {
+    await start(page, "?storage=memory");
+    // notes gets its own cheatsheet.md, so copying docs/{cheatsheet.md, sample.pdf} clashes once.
+    await writeText(page, "/browser/notes/cheatsheet.md", "the old one");
+    const source = await readFile(page, "/browser/docs/cheatsheet.md");
+    const [a, b] = await twoPanels(page, ["Browser Storage", "docs"], ["Browser Storage", "notes"]);
+    await row(a, "cheatsheet.md").click();
+    await row(a, "sample.pdf").click({ modifiers: ["Control"] });
+    await row(a, "sample.pdf").dragTo(b.locator(".file-panel-tree"));
+    await expect(dialog(page).getByText("1 item already exists in the target:")).toBeVisible();
+    await dialog(page).locator("input[name=file-panels-op][value=copy]").check();
+    await dialog(page).locator(`input[name=file-panels-clash][value=${policy}]`).check();
+    await dialog(page).locator(".theia-button.main").click();
+    await expect(row(b, "sample.pdf")).toBeVisible();
+    if (policy === "keepBoth") {
+      await expect(row(b, "cheatsheet copy.md")).toBeVisible();
+      expect(await readFile(page, "/browser/notes/cheatsheet.md")).toBe("the old one");
+    } else if (policy === "skip") {
+      expect(await readFile(page, "/browser/notes/cheatsheet.md")).toBe("the old one");
+      await expect(row(b, "cheatsheet copy.md")).toHaveCount(0);
+    } else {
+      await expect.poll(() => readFile(page, "/browser/notes/cheatsheet.md")).toBe(source);
+      await expect(row(b, "cheatsheet copy.md")).toHaveCount(0);
+    }
+  });
+}
 
 test("dropping a folder into itself is refused", async ({ page }) => {
   await start(page, "?storage=memory");
@@ -264,7 +312,7 @@ test("the explorer drags into a panel with the dialog; failures are reported", a
     .dragTo(panel.locator(".file-panel-tree"), { targetPosition: { x: 20, y: 200 } });
   await dialog(page).locator("input[name=file-panels-op][value=copy]").check();
   await dialog(page).locator(".theia-button.main").click();
-  await expect(toast(page, "1 of 1 items failed")).toBeVisible();
+  await expect(toast(page, "1 of 1 item failed")).toBeVisible();
 });
 
 test("an operating-system file dropped on a panel is uploaded", async ({ page }) => {
@@ -326,6 +374,8 @@ test("Copy to Other Panel copies the selection into the other panel's folder", a
   await expect(dialog(page).locator("input[name=file-panels-op][value=copy]")).toBeChecked();
   await dialog(page).locator(".theia-button.main").click();
   await expect(row(b, "welcome.md")).toBeVisible();
+  // The copy is selected in the target panel, as after a drop.
+  await expect(row(b, "welcome.md")).toHaveClass(/theia-mod-selected/);
 });
 
 test("panels come back after a reload, at their folders and sort", async ({ page }) => {
@@ -355,4 +405,100 @@ test("a panel whose folder is deleted moves up and says so", async ({ page }) =>
   await expect(
     panel.getByText("“notes” no longer exists — showing “Browser Storage”"),
   ).toBeVisible();
+});
+
+test("a drop on a breadcrumb segment copies there and opens no editor", async ({ page }) => {
+  await start(page, "?storage=memory");
+  const [a, b] = await twoPanels(page, ["Browser Storage", "docs"], ["Browser Storage", "notes"]);
+  const editors = await page.locator(".theia-editor").count();
+  await row(a, "cheatsheet.md").dragTo(
+    crumb(b, "Browser Storage").locator(".file-panel-crumb-label"),
+  );
+  await expect(dialog(page)).toBeVisible();
+  await dialog(page).locator("input[name=file-panels-op][value=copy]").check();
+  await dialog(page).locator(".theia-button.main").click();
+  await expect.poll(() => readText(page, "/browser/cheatsheet.md")).toBe(true);
+  await expect.poll(() => readText(page, "/browser/docs/cheatsheet.md")).toBe(true);
+  await expect(page.locator(".theia-editor")).toHaveCount(editors);
+});
+
+test("a panel whose creation folder is gone after a reload comes back at its parent", async ({
+  page,
+}) => {
+  await start(page, "?storage=memory");
+  // Memory storage is re-seeded on reload, so a folder made during the test is gone afterwards.
+  await page.evaluate(async () => {
+    const files = (
+      window as unknown as { theiaShell: { filesApi: { mkdir(p: string): Promise<void> } } }
+    ).theiaShell.filesApi;
+    await files.mkdir("/browser/fresh");
+  });
+  await runFromPalette(page, "Refresh in Explorer");
+  await explorer(page).getByText("fresh", { exact: true }).click({ button: "right" });
+  await page.locator(".lm-Menu-item", { hasText: "Open in Files Panel" }).click();
+  const panel = panels(page).last();
+  await expect(panel.getByText("This folder is empty")).toBeVisible();
+  await page.reload();
+  await openMain(page);
+  await expect(panels(page)).toHaveCount(1);
+  await expect(row(panels(page).first(), "welcome.md")).toBeVisible();
+  await expect(
+    panels(page).first().getByText("“fresh” no longer exists — showing “Browser Storage”"),
+  ).toBeVisible();
+});
+
+test("a folder that cannot be read says so, and Retry opens it once it can", async ({ page }) => {
+  const errors = await start(page, "?storage=memory");
+  const panel = await openPanel(page);
+  await row(panel, "Browser Storage").dblclick();
+  await expect(row(panel, "notes")).toBeVisible();
+  // Make /browser/notes unreadable (not missing): the provider's stats throws a plain error.
+  await page.evaluate(() => {
+    const files = (window as unknown as { theiaShell: { filesApi: Record<string, unknown> } })
+      .theiaShell.filesApi;
+    const stats = files.stats as (p: string) => Promise<unknown>;
+    files.stats = (p: string) =>
+      p === "/browser/notes"
+        ? Promise.reject(new Error("locked for the test"))
+        : stats.call(files, p);
+    (window as unknown as { unlockNotes: () => void }).unlockNotes = () => {
+      delete files.stats;
+    };
+  });
+  await row(panel, "notes").dblclick();
+  const status = panel.locator(".file-panel-status");
+  await expect(status).toContainText("“notes” is not available");
+  await expect(status).toContainText("locked for the test");
+  await expect(crumb(panel, "notes")).toBeVisible();
+  await expect(row(panel, "welcome.md")).toHaveCount(0);
+  await page.evaluate(() => (window as unknown as { unlockNotes: () => void }).unlockNotes());
+  await status.getByRole("button", { name: "Retry" }).click();
+  await expect(row(panel, "ideas.md")).toBeVisible();
+  await expect(status).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("the toolbar's Go Up acts on its panel while the focus is elsewhere", async ({ page }) => {
+  await start(page, "?storage=memory");
+  const panel = await openPanel(page);
+  await row(panel, "Browser Storage").dblclick();
+  await row(panel, "notes").dblclick();
+  await expect(row(panel, "ideas.md")).toBeVisible();
+  // The explorer takes the focus; the panel's tab-bar toolbar stays on screen.
+  await explorer(page).getByText("media", { exact: true }).click();
+  await page.locator('[id="file-panels.goUp"]').click();
+  await expect(row(panel, "welcome.md")).toBeVisible();
+});
+
+test("dragging over a folder row does not change the panel's selection", async ({ page }) => {
+  await start(page, "?storage=memory");
+  const panel = await openPanel(page);
+  await row(panel, "Browser Storage").dblclick();
+  await row(panel, "welcome.md").click();
+  await row(panel, "welcome.md").dragTo(row(panel, "notes"));
+  await expect(dialog(page)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+  await expect(row(panel, "welcome.md")).toHaveClass(/theia-mod-selected/);
+  await expect(row(panel, "notes")).not.toHaveClass(/theia-mod-selected/);
 });

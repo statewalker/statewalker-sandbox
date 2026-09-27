@@ -25,6 +25,7 @@ import {
   type FilePanelOptions,
   FilePanelWidget,
 } from "./file-panel-widget";
+import { TransferService } from "./transfer-service";
 
 export namespace FilePanelsCommands {
   export const OPEN: Command = { id: "file-panels.open" };
@@ -54,6 +55,7 @@ export class FilePanelsContribution
   @inject(FileService) protected readonly files!: FileService;
   @inject(FileDropHandler) protected readonly drops!: FileDropHandler;
   @inject(QuickInputService) protected readonly quickInput!: QuickInputService;
+  @inject(TransferService) protected readonly transfers!: TransferService;
 
   get panels(): FilePanelWidget[] {
     return this.widgets.getWidgets(FilePanelWidget.FACTORY_ID) as FilePanelWidget[];
@@ -63,6 +65,11 @@ export class FilePanelsContribution
   get currentPanel(): FilePanelWidget | undefined {
     const current = this.shell.currentWidget;
     return current instanceof FilePanelWidget ? current : undefined;
+  }
+
+  /** The panel a command acts on: the toolbar's own widget, else the current panel. */
+  protected panelOf(widget: unknown): FilePanelWidget | undefined {
+    return widget instanceof FilePanelWidget ? widget : this.currentPanel;
   }
 
   async openPanel(folder?: URI): Promise<FilePanelWidget> {
@@ -97,13 +104,19 @@ export class FilePanelsContribution
     return picked?.panel;
   }
 
+  /** The same dialog and plan as a drop; the results are selected in the target panel. */
   protected async toOther(op: "copy" | "move"): Promise<void> {
     const from = this.currentPanel;
     if (!from) return;
     const uris = from.model.selectedNodes.filter(FileStatNode.is).map((node) => node.uri);
-    const to = await this.otherPanel(from);
-    if (!to?.folder || uris.length === 0) return;
-    await this.drops.transfer(uris, to.folder, { preferCopy: op === "copy", op });
+    try {
+      const to = await this.otherPanel(from);
+      if (!to?.folder || uris.length === 0) return;
+      const written = await this.drops.transfer(uris, to.folder, { preferCopy: op === "copy", op });
+      if (written.length > 0) await to.selectWritten(written);
+    } catch (error) {
+      this.transfers.reportError(error);
+    }
   }
 
   registerCommands(registry: CommandRegistry): void {
@@ -120,8 +133,11 @@ export class FilePanelsContribution
         iconClass: "codicon codicon-arrow-up",
       },
       {
-        execute: () => this.currentPanel?.goUp(),
-        isEnabled: () => !!this.currentPanel?.folder && !this.currentPanel.folder.path.isRoot,
+        execute: (widget?: unknown) => this.panelOf(widget)?.goUp(),
+        isEnabled: (widget?: unknown) => {
+          const folder = this.panelOf(widget)?.folder;
+          return !!folder && !folder.path.isRoot;
+        },
         isVisible: (widget?: unknown) => widget instanceof FilePanelWidget || !!this.currentPanel,
       },
     );
@@ -133,8 +149,8 @@ export class FilePanelsContribution
         iconClass: "codicon codicon-refresh",
       },
       {
-        execute: () => this.currentPanel?.refresh(),
-        isEnabled: () => !!this.currentPanel,
+        execute: (widget?: unknown) => this.panelOf(widget)?.refresh(),
+        isEnabled: (widget?: unknown) => !!this.panelOf(widget),
         isVisible: (widget?: unknown) => widget instanceof FilePanelWidget || !!this.currentPanel,
       },
     );

@@ -3,7 +3,7 @@ import { ApplicationShell } from "@theia/core/lib/browser/shell/application-shel
 import type { TreeNode } from "@theia/core/lib/browser/tree/tree";
 import { TreeModel } from "@theia/core/lib/browser/tree/tree-model";
 import { type NodeProps, TreeProps } from "@theia/core/lib/browser/tree/tree-widget";
-import { isCancelled } from "@theia/core/lib/common/cancellation";
+import type { Message } from "@theia/core/lib/browser/widgets/widget";
 import { Emitter } from "@theia/core/lib/common/event";
 import { Key } from "@theia/core/lib/common/keys";
 import type URI from "@theia/core/lib/common/uri";
@@ -14,6 +14,7 @@ import { formatDate, formatSize } from "../common/format";
 import { FileDropHandler } from "./file-drop-handler";
 import type { FilePanelModel } from "./file-panel-tree";
 import { writePanelDrag } from "./panel-drag";
+import { TransferService } from "./transfer-service";
 
 @injectable()
 export class FilePanelTreeWidget extends FileTreeWidget {
@@ -22,6 +23,7 @@ export class FilePanelTreeWidget extends FileTreeWidget {
   readonly onDidDrop = new Emitter<URI[]>();
 
   @inject(FileDropHandler) protected readonly drops!: FileDropHandler;
+  @inject(TransferService) protected readonly transfers!: TransferService;
 
   constructor(
     @inject(TreeProps) props: TreeProps,
@@ -34,9 +36,17 @@ export class FilePanelTreeWidget extends FileTreeWidget {
     this.toDispose.push(this.onDidDrop);
   }
 
-  protected override init(): void {
-    super.init();
-    this.addKeyListener(this.node, Key.BACKSPACE, () => this.onGoUp.fire());
+  /**
+   * Backspace goes up — unless the type-to-filter box is open, where it edits the filter. Added
+   * before `super.onAfterAttach` registers the search box's own key listener, so this one sees
+   * the box still open on the Backspace that empties and closes it. Re-added on every attach:
+   * `addKeyListener` listeners are disposed on detach.
+   */
+  protected override onAfterAttach(msg: Message): void {
+    this.addKeyListener(this.node, Key.BACKSPACE, () => {
+      if (!this.searchBox?.isVisible) this.onGoUp.fire();
+    });
+    super.onAfterAttach(msg);
   }
 
   /** Folders never expand: opening one navigates (FilePanelModel.doOpenNode). */
@@ -74,6 +84,15 @@ export class FilePanelTreeWidget extends FileTreeWidget {
     event.dataTransfer.effectAllowed = "copyMove";
   }
 
+  /** Hovering a folder during a drag leaves the selection alone (the inherited one selects it). */
+  protected override handleDragEnterEvent(
+    _node: TreeNode | undefined,
+    event: React.DragEvent,
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
   /** No auto-expansion while hovering a folder: the list is flat. */
   protected override handleDragOverEvent(
     _node: TreeNode | undefined,
@@ -91,7 +110,19 @@ export class FilePanelTreeWidget extends FileTreeWidget {
     event.preventDefault();
     event.stopPropagation();
     const target = this.getDropTargetDirNode(node)?.uri ?? this.model.location;
-    if (!target) return;
+    if (target) await this.dropOnFolder(target, event);
+  }
+
+  /** A drag over a breadcrumb segment: the same as over a row. */
+  dragOverFolder(event: React.DragEvent): void {
+    this.handleDragOverEvent(undefined, event);
+  }
+
+  /**
+   * A drop on `target` — a row's folder, the panel's folder or a breadcrumb segment. Reads the
+   * payload before its first `await`; a failure is reported, never left unhandled.
+   */
+  async dropOnFolder(target: URI, event: React.DragEvent): Promise<void> {
     try {
       const written = await this.drops.drop(
         target,
@@ -100,17 +131,7 @@ export class FilePanelTreeWidget extends FileTreeWidget {
       );
       if (written.length > 0) this.onDidDrop.fire(written);
     } catch (error) {
-      if (!isCancelled(error as Error)) this.logger.error(error);
+      this.transfers.reportError(error);
     }
-  }
-
-  /** A drop on a breadcrumb segment: the same path as a drop on a folder row. */
-  async dropOnFolder(target: URI, event: React.DragEvent): Promise<void> {
-    const written = await this.drops.drop(
-      target,
-      event.dataTransfer,
-      this.getDropEffect(event) === "copy",
-    );
-    if (written.length > 0) this.onDidDrop.fire(written);
   }
 }

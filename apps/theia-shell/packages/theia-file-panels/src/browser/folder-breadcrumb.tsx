@@ -11,6 +11,8 @@ export interface FolderBreadcrumbProps {
   navigate(uri: URI): void;
   openSiblings(crumb: Crumb, anchor: HTMLElement): void;
   openHidden(hidden: Crumb[], anchor: HTMLElement): void;
+  /** Sets the drop effect of a drag over a segment. */
+  onDragOverCrumb?(event: React.DragEvent): void;
   onDropOnCrumb?(uri: URI, event: React.DragEvent): void;
 }
 
@@ -44,10 +46,23 @@ export function FolderBreadcrumb(props: FolderBreadcrumbProps): React.ReactEleme
             key={crumb.uri.toString()}
             className="file-panel-crumb"
             data-uri={crumb.uri.toString()}
+            // Every drag event stops here: the main area's own listeners would otherwise answer
+            // it — its dragover sets a "link" effect that cancels the drop, and its drop opens
+            // every dragged file in an editor.
+            onDragEnter={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
             onDragOver={(e) => {
               e.preventDefault();
+              e.stopPropagation();
+              props.onDragOverCrumb?.(e);
             }}
-            onDrop={(e) => props.onDropOnCrumb?.(crumb.uri, e)}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              props.onDropOnCrumb?.(crumb.uri, e);
+            }}
           >
             <button
               type="button"
