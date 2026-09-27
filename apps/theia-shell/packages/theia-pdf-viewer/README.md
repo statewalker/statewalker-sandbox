@@ -19,7 +19,10 @@ Other behaviour:
 
 - Priority 500 for `.pdf` (the text editor has 100).
 - It reloads when the file changes (a new EmbedPDF instance; page and zoom
-  reset). If the file can no longer be read (deleted, moved), it says so.
+  reset). If the file can no longer be read, it says so.
+- It is `Navigatable`, like a text editor. *Open Editors* lists it, the
+  explorer reveals its file when it becomes active, a rename or move re-opens
+  it at the new name, and deleting the file from the explorer closes it.
 - The viewer's theme follows Theia's light/dark theme.
 - Annotation and redaction are off, because this is a viewer. Writing edits back
   to the file is a later step: EmbedPDF can export the modified document, which

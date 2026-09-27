@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { shellCatalog } from "../../lib/catalog.js";
-import { createRenderer, type A2uiMessage } from "../../lib/renderer.js";
+import { type A2uiMessage, createRenderer } from "../../lib/renderer.js";
 
 /**
  * PROTOTYPE 3 — do data binding and action dispatch round-trip?
@@ -57,11 +57,17 @@ describe("data binding", () => {
         components: [{ id: "root", component: "Text", text: { path: "/count" } }],
       },
     });
-    r.handle({ version: "v0.9.1", updateDataModel: { surfaceId: "dialog", path: "/count", value: "1" } });
+    r.handle({
+      version: "v0.9.1",
+      updateDataModel: { surfaceId: "dialog", path: "/count", value: "1" },
+    });
     expect(root.textContent).toBe("1");
 
     // Only the data model changes. No updateComponents.
-    r.handle({ version: "v0.9.1", updateDataModel: { surfaceId: "dialog", path: "/count", value: "2" } });
+    r.handle({
+      version: "v0.9.1",
+      updateDataModel: { surfaceId: "dialog", path: "/count", value: "2" },
+    });
     expect(root.textContent).toBe("2");
   });
 
@@ -85,7 +91,10 @@ describe("data binding", () => {
       version: "v0.9.1",
       updateDataModel: { surfaceId: "dialog", path: "/f", value: { a: "1", b: "2" } },
     });
-    r.handle({ version: "v0.9.1", updateDataModel: { surfaceId: "dialog", path: "/f/a", value: "CHANGED" } });
+    r.handle({
+      version: "v0.9.1",
+      updateDataModel: { surfaceId: "dialog", path: "/f/a", value: "CHANGED" },
+    });
     r.handle({
       version: "v0.9.1",
       updateComponents: {
@@ -105,8 +114,14 @@ describe("data binding", () => {
     const r = createRenderer(root, shellCatalog);
     r.handle(create);
     r.handle({ version: "v0.9.1", createSurface: { surfaceId: "other", catalogId: CATALOG_ID } });
-    r.handle({ version: "v0.9.1", updateDataModel: { surfaceId: "dialog", path: "/v", value: "A" } });
-    r.handle({ version: "v0.9.1", updateDataModel: { surfaceId: "other", path: "/v", value: "B" } });
+    r.handle({
+      version: "v0.9.1",
+      updateDataModel: { surfaceId: "dialog", path: "/v", value: "A" },
+    });
+    r.handle({
+      version: "v0.9.1",
+      updateDataModel: { surfaceId: "other", path: "/v", value: "B" },
+    });
     expect(r.dataModel("dialog")).toMatchObject({ v: "A" });
     expect(r.dataModel("other")).toMatchObject({ v: "B" });
   });
@@ -136,7 +151,10 @@ describe("focus preservation", () => {
     input.setSelectionRange(3, 3);
     expect(document.activeElement).toBe(input);
 
-    r.handle({ version: "v0.9.1", updateDataModel: { surfaceId: "dialog", path: "/status", value: "saving" } });
+    r.handle({
+      version: "v0.9.1",
+      updateDataModel: { surfaceId: "dialog", path: "/status", value: "saving" },
+    });
 
     expect(root.textContent).toContain("saving");
     // SAME element instance, still focused, caret intact.
@@ -158,7 +176,10 @@ describe("focus preservation", () => {
     const input = root.querySelector("input") as HTMLInputElement;
     input.focus();
     input.value = "typing";
-    r.handle({ version: "v0.9.1", updateDataModel: { surfaceId: "dialog", path: "/other", value: "x" } });
+    r.handle({
+      version: "v0.9.1",
+      updateDataModel: { surfaceId: "dialog", path: "/other", value: "x" },
+    });
     expect(input.value).toBe("typing");
   });
 });
@@ -193,8 +214,12 @@ describe("action dispatch", () => {
       updateComponents: {
         surfaceId: "dialog",
         components: [
-          { id: "root", component: "Button", child: "l",
-            action: { event: { name: "delete", context: { id: "note-7" } } } },
+          {
+            id: "root",
+            component: "Button",
+            child: "l",
+            action: { event: { name: "delete", context: { id: "note-7" } } },
+          },
           { id: "l", component: "Text", text: "Delete" },
         ],
       },
@@ -209,7 +234,10 @@ describe("action dispatch", () => {
     const onAction = vi.fn();
     const r = createRenderer(root, shellCatalog, { onAction });
     r.handle(create);
-    r.handle({ version: "v0.9.1", updateDataModel: { surfaceId: "dialog", path: "/name", value: "Ada" } });
+    r.handle({
+      version: "v0.9.1",
+      updateDataModel: { surfaceId: "dialog", path: "/name", value: "Ada" },
+    });
     r.handle({
       version: "v0.9.1",
       updateComponents: {
@@ -260,7 +288,10 @@ describe("action dispatch", () => {
     });
     expect(() => (root.querySelector("button") as HTMLButtonElement).click()).not.toThrow();
     // surface still updates afterwards
-    r.handle({ version: "v0.9.1", updateDataModel: { surfaceId: "dialog", path: "/x", value: "1" } });
+    r.handle({
+      version: "v0.9.1",
+      updateDataModel: { surfaceId: "dialog", path: "/x", value: "1" },
+    });
     expect(r.dataModel("dialog")).toMatchObject({ x: "1" });
   });
 });
@@ -306,7 +337,10 @@ describe("client to server data flow", () => {
     const onDataModelChange = vi.fn();
     const r = createRenderer(root, shellCatalog, { onDataModelChange });
     r.handle(create);
-    r.handle({ version: "v0.9.1", updateDataModel: { surfaceId: "dialog", path: "/name", value: "Ada" } });
+    r.handle({
+      version: "v0.9.1",
+      updateDataModel: { surfaceId: "dialog", path: "/name", value: "Ada" },
+    });
     expect(onDataModelChange).not.toHaveBeenCalled();
   });
 });

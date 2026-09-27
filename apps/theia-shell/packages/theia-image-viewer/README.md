@@ -8,7 +8,8 @@ those file types. It works in browser-only apps and in apps with a backend.
 | Contribution | What |
 |---|---|
 | Open handler | Priority 500 for image extensions (the text editor has 100). *Open With…* still offers the editor. |
-| View | The image on a checkerboard, as a `blob:` URL of bytes read through Theia's `FileService`. It reloads when the file changes; if the file can no longer be read (deleted, moved), the status line says so. Clicking the image toggles *fit* and *actual size*. A status line shows `width × height · zoom · size`. |
+| View | The image on a checkerboard, as a `blob:` URL of bytes read through Theia's `FileService`. It reloads when the file changes. If the file can no longer be read, the status line says so. Clicking the image toggles *fit* and *actual size*. A status line shows `width × height · zoom · size`. |
+| Navigation | The viewer is `Navigatable`, like a text editor. *Open Editors* lists it, the explorer reveals its file when it becomes active (`explorer.autoReveal`), a rename or move re-opens it at the new name, and deleting the file from the explorer closes it. |
 | Commands | *Image: Zoom In*, *Zoom Out*, *Actual Size*, *Fit to Window* |
 | Tab toolbar | The same four commands, as buttons on the viewer's tab bar |
 | Menu | *View → Image ▸* |

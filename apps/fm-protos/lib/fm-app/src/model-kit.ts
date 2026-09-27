@@ -1,4 +1,4 @@
-import { BaseClass, onChange } from "@statewalker/shared-baseclass";
+import { type BaseClass, onChange } from "@statewalker/shared-baseclass";
 
 /**
  * C1 — the model kit.
@@ -25,7 +25,9 @@ export function probe<T>(model: BaseClass, selector: () => T): Probe {
     selector,
   );
   return {
-    get count() { return count; },
+    get count() {
+      return count;
+    },
     stop: off,
   };
 }

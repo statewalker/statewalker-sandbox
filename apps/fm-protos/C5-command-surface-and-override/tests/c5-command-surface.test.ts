@@ -1,10 +1,18 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { Commands, CommandError, CommandsRegistry } from "@statewalker/shared-commands";
-import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import {
-  FILE_COMMANDS, JobQueue, StorageRegistry, filesCopy, filesDelete, filesMkdir,
-  filesMove, filesRename, filesResolveActions, registerFileCommands,
+  FILE_COMMANDS,
+  filesCopy,
+  filesDelete,
+  filesMkdir,
+  filesMove,
+  filesRename,
+  filesResolveActions,
+  JobQueue,
+  registerFileCommands,
+  StorageRegistry,
 } from "@fm/core";
+import { CommandError, Commands, CommandsRegistry } from "@statewalker/shared-commands";
+import { MemFilesApi } from "@statewalker/webrun-files-mem";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /** C5 — the whole namespace, its override convention, and its error kinds. */
 
@@ -24,7 +32,11 @@ describe("C5 · command surface", () => {
     registry = new StorageRegistry(
       ["mem://a", "mem://b"].map((uri) => ({ uri, adapter: "mem", options: {} })),
       { mem: (uri) => instances[uri] },
-      { async get() { return undefined; } },
+      {
+        async get() {
+          return undefined;
+        },
+      },
     );
     queue = new JobQueue(registry, { batchSize: 2 });
     commands = new Commands();
@@ -44,7 +56,10 @@ describe("C5 · command surface", () => {
     it("rejects a payload that breaks the schema, before any handler runs", async () => {
       const err = await commands
         .call(filesRename, { files: [ref("/src/a.txt"), ref("/src/b.txt")], name: "x" })
-        .promise.then(() => null, (e) => e);
+        .promise.then(
+          () => null,
+          (e) => e,
+        );
       expect(err).toBeInstanceOf(CommandError);
       expect((err as CommandError).kind).toBe("input-validation");
     });
@@ -62,13 +77,15 @@ describe("C5 · command surface", () => {
       const a = instances["mem://a"];
 
       const copy = await commands.call(filesCopy, {
-        files: [ref("/src/a.txt")], target: { storage: "mem://b", path: "/dst" },
+        files: [ref("/src/a.txt")],
+        target: { storage: "mem://b", path: "/dst" },
       }).promise;
       await queue.get(copy.jobId).done;
       expect(await instances["mem://b"].exists("/dst/a.txt")).toBe(true);
 
       const move = await commands.call(filesMove, {
-        files: [ref("/src/b.txt")], target: { storage: "mem://b", path: "/dst" },
+        files: [ref("/src/b.txt")],
+        target: { storage: "mem://b", path: "/dst" },
       }).promise;
       await queue.get(move.jobId).done;
       expect(await a.exists("/src/b.txt")).toBe(false);
@@ -78,14 +95,16 @@ describe("C5 · command surface", () => {
       expect(await a.exists("/src/a.txt")).toBe(false);
 
       const dir = await commands.call(filesMkdir, {
-        target: { storage: "mem://a", path: "/src" }, name: "new",
+        target: { storage: "mem://a", path: "/src" },
+        name: "new",
       }).promise;
       expect(dir.path).toBe("/src/new");
       expect(await a.exists("/src/new")).toBe(true);
 
       await a.write("/src/old.txt", [new TextEncoder().encode("o")]);
       const renamed = await commands.call(filesRename, {
-        files: [ref("/src/old.txt")], name: "new.txt",
+        files: [ref("/src/old.txt")],
+        name: "new.txt",
       }).promise;
       expect(renamed.path).toBe("/src/new.txt");
       expect(await a.exists("/src/new.txt")).toBe(true);
@@ -115,10 +134,18 @@ describe("C5 · command surface", () => {
     });
 
     it("lets a host add an approval step that can decline", async () => {
-      commands.listen(filesCopy, () => Promise.reject(new Error("denied by policy")), { priority: 0 });
+      commands.listen(filesCopy, () => Promise.reject(new Error("denied by policy")), {
+        priority: 0,
+      });
       const err = await commands
-        .call(filesCopy, { files: [ref("/src/a.txt")], target: { storage: "mem://b", path: "/dst" } })
-        .promise.then(() => null, (e) => e);
+        .call(filesCopy, {
+          files: [ref("/src/a.txt")],
+          target: { storage: "mem://b", path: "/dst" },
+        })
+        .promise.then(
+          () => null,
+          (e) => e,
+        );
       // A rejecting listener surfaces as listener-threw, with the reason as
       // the cause — the caller sees a failure, not a silent fallthrough.
       expect((err as CommandError).kind).toBe("listener-threw");
@@ -131,15 +158,24 @@ describe("C5 · command surface", () => {
       // namespace; one command left at priority 0 is an unoverridable hole.
       for (const declaration of [filesCopy, filesMove, filesDelete, filesMkdir, filesRename]) {
         let claimed = false;
-        const off = commands.listen(declaration as never, (() => {
-          claimed = true;
-          return Promise.resolve({ jobId: "host", path: "/host" });
-        }) as never, { priority: 0 });
-        await commands.call(declaration as never, {
-          files: [ref("/src/a.txt")],
-          target: { storage: "mem://b", path: "/dst" },
-          name: "n",
-        } as never).promise.catch(() => undefined);
+        const off = commands.listen(
+          declaration as never,
+          (() => {
+            claimed = true;
+            return Promise.resolve({ jobId: "host", path: "/host" });
+          }) as never,
+          { priority: 0 },
+        );
+        await commands
+          .call(
+            declaration as never,
+            {
+              files: [ref("/src/a.txt")],
+              target: { storage: "mem://b", path: "/dst" },
+              name: "n",
+            } as never,
+          )
+          .promise.catch(() => undefined);
         off();
         expect(claimed, `${declaration.key} must be overridable`).toBe(true);
       }
@@ -148,7 +184,8 @@ describe("C5 · command surface", () => {
 
   describe("applicability is asked, not encoded", () => {
     it("offers the whole namespace when no host claims the question", async () => {
-      const { keys } = await commands.call(filesResolveActions, { files: [ref("/src/a.txt")] }).promise;
+      const { keys } = await commands.call(filesResolveActions, { files: [ref("/src/a.txt")] })
+        .promise;
       expect(keys).toEqual(FILE_COMMANDS.map((c) => c.key));
     });
 
@@ -162,7 +199,8 @@ describe("C5 · command surface", () => {
         }),
         { priority: 0 },
       );
-      const { keys } = await commands.call(filesResolveActions, { files: [ref("/src/a.txt")] }).promise;
+      const { keys } = await commands.call(filesResolveActions, { files: [ref("/src/a.txt")] })
+        .promise;
       expect(keys).toEqual(["files:copy", "files:rename"]);
     });
   });
@@ -172,8 +210,11 @@ describe("C5 · command surface", () => {
       // Only `true` or a thenable claims; anything else is observe-only. This
       // is the sharpest edge in the whole override convention: a host author
       // writing `(cmd) => ({ keys: [...] })` gets silently ignored.
-      commands.listen(filesResolveActions, () => ({ keys: ["files:copy"] }) as never, { priority: 0 });
-      const { keys } = await commands.call(filesResolveActions, { files: [ref("/src/a.txt")] }).promise;
+      commands.listen(filesResolveActions, () => ({ keys: ["files:copy"] }) as never, {
+        priority: 0,
+      });
+      const { keys } = await commands.call(filesResolveActions, { files: [ref("/src/a.txt")] })
+        .promise;
       expect(keys).toEqual(FILE_COMMANDS.map((c) => c.key));
     });
 
@@ -192,17 +233,25 @@ describe("C5 · command surface", () => {
   describe("error kinds are distinguishable", () => {
     it("no-handlers when nothing is registered at all", async () => {
       const bare = new Commands();
-      const err = await bare
-        .call(filesDelete, { files: [ref("/src/a.txt")] })
-        .promise.then(() => null, (e) => e);
+      const err = await bare.call(filesDelete, { files: [ref("/src/a.txt")] }).promise.then(
+        () => null,
+        (e) => e,
+      );
       expect((err as CommandError).kind).toBe("no-handlers");
     });
 
     it("listener-threw short-circuits rather than silently falling through", async () => {
-      commands.listen(filesDelete, () => { throw new Error("boom"); }, { priority: 0 });
-      const err = await commands
-        .call(filesDelete, { files: [ref("/src/a.txt")] })
-        .promise.then(() => null, (e) => e);
+      commands.listen(
+        filesDelete,
+        () => {
+          throw new Error("boom");
+        },
+        { priority: 0 },
+      );
+      const err = await commands.call(filesDelete, { files: [ref("/src/a.txt")] }).promise.then(
+        () => null,
+        (e) => e,
+      );
       expect((err as CommandError).kind).toBe("listener-threw");
       // The core fallback must NOT have run: a throwing host is a visible
       // failure, not an invitation to do it anyway.
@@ -214,14 +263,20 @@ describe("C5 · command surface", () => {
     it("exposes declarations with labels for the menu", () => {
       const reg = CommandsRegistry.create(...FILE_COMMANDS);
       expect(reg.list().map((d) => d.label)).toEqual([
-        "Copy", "Move", "Delete", "New folder", "Rename",
+        "Copy",
+        "Move",
+        "Delete",
+        "New folder",
+        "Rename",
       ]);
     });
 
     it("notifies when a host adds or removes a command at runtime", () => {
       const reg = CommandsRegistry.create(...FILE_COMMANDS);
       let updates = 0;
-      reg.onUpdate(() => { updates++; });
+      reg.onUpdate(() => {
+        updates++;
+      });
       reg.remove("files:delete");
       expect(reg.get("files:delete")).toBeUndefined();
       expect(updates).toBeGreaterThan(0);
@@ -246,7 +301,11 @@ describe("C5 · command surface", () => {
         })),
       );
       expect(tools.map((t) => t.name)).toEqual([
-        "files_copy", "files_move", "files_delete", "files_mkdir", "files_rename",
+        "files_copy",
+        "files_move",
+        "files_delete",
+        "files_mkdir",
+        "files_rename",
       ]);
       expect(tools[0].description).toMatch(/Copy the selected files/);
       expect(tools.every((t) => t.input_schema.type === "object")).toBe(true);

@@ -36,7 +36,11 @@ export class MemTodoApi implements TodoApi {
   async toggle(id: string): Promise<Todo | undefined> {
     await this._tick("toggle");
     let found: Todo | undefined;
-    this._rows = this._rows.map((t) => (t.id === id ? ((found = { ...t, done: !t.done }), found) : t));
+    this._rows = this._rows.map((t) => {
+      if (t.id !== id) return t;
+      found = { ...t, done: !t.done };
+      return found;
+    });
     return found;
   }
 

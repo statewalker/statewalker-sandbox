@@ -1,7 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { JobQueue, StorageRegistry } from "@fm/core";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { JobQueue } from "@fm/core";
-import { StorageRegistry } from "@fm/core";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /** P6 — serialise mutating jobs per target storageURI; jobs outlive panels. */
 
@@ -25,7 +24,11 @@ describe("P6 · job queue", () => {
     registry = new StorageRegistry(
       ["mem://a", "mem://b", "mem://c"].map((uri) => ({ uri, adapter: "mem", options: {} })),
       { mem: (uri) => instances[uri] },
-      { async get() { return undefined; } },
+      {
+        async get() {
+          return undefined;
+        },
+      },
     );
     timeline = [];
     queue = new JobQueue(registry, { batchSize: 2 });
@@ -62,7 +65,12 @@ describe("P6 · job queue", () => {
   it("exposes a global activity surface of live jobs", async () => {
     const one = copy("one", "mem://b");
     const two = copy("two", "mem://c");
-    expect(queue.active().map((j) => j.id).sort()).toEqual([one.id, two.id].sort());
+    expect(
+      queue
+        .active()
+        .map((j) => j.id)
+        .sort(),
+    ).toEqual([one.id, two.id].sort());
     await Promise.all([one.done, two.done]);
     expect(queue.active()).toEqual([]);
   });

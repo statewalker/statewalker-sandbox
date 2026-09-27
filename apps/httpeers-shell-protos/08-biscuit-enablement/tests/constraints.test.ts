@@ -9,8 +9,8 @@
 
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { fact, factSetEnablement } from "../src/enablement.js";
 import { createBiscuitEnablement, loadBiscuit } from "../src/biscuit-enablement.js";
+import { fact, factSetEnablement } from "../src/enablement.js";
 
 /** The 20-fact background the note measured against (§5). */
 const NOISE = Array.from({ length: 20 }, (_, i) => fact(`f${i}`, `v${i}`));
@@ -170,7 +170,9 @@ describe("the cost of substitution", () => {
    * visible in the run output next to the number the note recorded, and so a
    * catastrophic regression (an authorizer built per fact, say) still fails.
    */
-  it("records the per-evaluation and 30-entry menu cost of both implementations", async ({ annotate }) => {
+  it("records the per-evaluation and 30-entry menu cost of both implementations", async ({
+    annotate,
+  }) => {
     const stub = factSetEnablement(FACTS);
     const biscuit = await createBiscuitEnablement(FACTS);
 
@@ -192,20 +194,20 @@ describe("the cost of substitution", () => {
     // reaches the terminal, so a measurement logged that way would be
     // invisible — which would defeat the whole point of this test.
     const report = [
-        "",
-        "  enablement cost — 20 facts, two-clause `when`, 200 iterations after warm-up",
-        "  ┌───────────┬──────────────────┬───────────────┐",
-        "  │           │  per evaluation  │ 30-entry menu │",
-        "  ├───────────┼──────────────────┼───────────────┤",
-        `  │ stub      │ ${stubMs.toFixed(3).padStart(11)} ms  │ ${(stubMs * MENU).toFixed(1).padStart(9)} ms  │`,
-        `  │ biscuit   │ ${biscuitMs.toFixed(3).padStart(11)} ms  │ ${(biscuitMs * MENU).toFixed(1).padStart(9)} ms  │`,
-        "  └───────────┴──────────────────┴───────────────┘",
-        `  ratio ${(biscuitMs / stubMs).toFixed(1)}x · note 18 §5 recorded 0.586 ms / 17.6 ms / ~8x`,
-        `  frame budget ${FRAME_BUDGET_MS} ms — a 30-entry menu ${
-          biscuitMs * MENU > FRAME_BUDGET_MS ? "EXCEEDS" : "fits within"
-        } it on this machine`,
-        "",
-      ].join("\n");
+      "",
+      "  enablement cost — 20 facts, two-clause `when`, 200 iterations after warm-up",
+      "  ┌───────────┬──────────────────┬───────────────┐",
+      "  │           │  per evaluation  │ 30-entry menu │",
+      "  ├───────────┼──────────────────┼───────────────┤",
+      `  │ stub      │ ${stubMs.toFixed(3).padStart(11)} ms  │ ${(stubMs * MENU).toFixed(1).padStart(9)} ms  │`,
+      `  │ biscuit   │ ${biscuitMs.toFixed(3).padStart(11)} ms  │ ${(biscuitMs * MENU).toFixed(1).padStart(9)} ms  │`,
+      "  └───────────┴──────────────────┴───────────────┘",
+      `  ratio ${(biscuitMs / stubMs).toFixed(1)}x · note 18 §5 recorded 0.586 ms / 17.6 ms / ~8x`,
+      `  frame budget ${FRAME_BUDGET_MS} ms — a 30-entry menu ${
+        biscuitMs * MENU > FRAME_BUDGET_MS ? "EXCEEDS" : "fits within"
+      } it on this machine`,
+      "",
+    ].join("\n");
     process.stdout.write(`${report}\n`);
     await annotate(
       `stub ${stubMs.toFixed(3)} ms/eval, ${(stubMs * MENU).toFixed(1)} ms per ${MENU}-entry menu; ` +

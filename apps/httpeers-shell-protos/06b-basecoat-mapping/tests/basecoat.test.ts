@@ -14,9 +14,9 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { shellCatalog } from "../../lib/catalog.js";
-import { createRenderer, type A2uiMessage } from "../../lib/renderer.js";
 import { BASECOAT_CLASSES, unmappedComponents } from "../../lib/basecoat.js";
+import { shellCatalog } from "../../lib/catalog.js";
+import { type A2uiMessage, createRenderer } from "../../lib/renderer.js";
 
 /**
  * PROTOTYPE 6b — can the A2UI catalogue render as Basecoat components?
@@ -131,15 +131,14 @@ describe("semantic classes, not class soup", () => {
     const danger = signatureFor("danger");
 
     // Distinguishable: three different rendered signatures.
-    const signatures = [primary, secondary, danger].map(
-      (s) => `${s.className}|${s.variant ?? ""}`,
-    );
+    const signatures = [primary, secondary, danger].map((s) => `${s.className}|${s.variant ?? ""}`);
     expect(new Set(signatures).size).toBe(3);
 
     // ...and the distinction is NOT in the class, which stays constant.
     // Were a future change to reintroduce `btn-secondary`, this fails.
-    expect(new Set(signatures.map((_, i) => [primary, secondary, danger][i]!.className)))
-      .toEqual(new Set(["btn"]));
+    expect(new Set(signatures.map((_, i) => [primary, secondary, danger][i]!.className))).toEqual(
+      new Set(["btn"]),
+    );
 
     // Primary is Basecoat's default: the attribute is omitted, not set.
     expect(primary.variant).toBeNull();
@@ -243,9 +242,7 @@ describe("styling does not weaken the rung 2 and 3 guarantees", () => {
       version: "v0.9.1",
       updateComponents: {
         surfaceId: "dialog",
-        components: [
-          { id: "root", component: "Text", text: "<img src=x onerror=alert(1)>" },
-        ],
+        components: [{ id: "root", component: "Text", text: "<img src=x onerror=alert(1)>" }],
       },
     });
     expect(root.querySelector("img")).toBeNull();

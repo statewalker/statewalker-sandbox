@@ -1,10 +1,5 @@
 import type { Catalog } from "./catalog.js";
-import {
-  createRenderer,
-  type ActionEvent,
-  type Component,
-  type Renderer,
-} from "./renderer.js";
+import { type ActionEvent, type Component, createRenderer, type Renderer } from "./renderer.js";
 
 /**
  * PROTOTYPE 6 — the application module contract.

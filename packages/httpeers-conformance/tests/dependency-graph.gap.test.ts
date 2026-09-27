@@ -14,7 +14,10 @@ const TRANSPORT = /^(libp2p|@libp2p\/|@chainsafe\/libp2p|@multiformats\/multiadd
 
 describe("dependency graph (R-14, A-19)", () => {
   it("the router and block A carry no transport dependency", () => {
-    const pkg = JSON.parse(readFileSync(CORE, "utf8")) as { name: string; dependencies?: Record<string, string> };
+    const pkg = JSON.parse(readFileSync(CORE, "utf8")) as {
+      name: string;
+      dependencies?: Record<string, string>;
+    };
     const offenders = Object.keys(pkg.dependencies ?? {}).filter((d) => TRANSPORT.test(d));
     expect(
       offenders,

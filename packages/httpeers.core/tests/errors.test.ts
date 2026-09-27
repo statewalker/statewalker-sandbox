@@ -21,13 +21,14 @@
  * concurrency cliff at N=512 itself (Task 18's job, not this one's -- row
  * 3b below proves the same code path at a small, fast N instead).
  */
+
+import { noise } from "@chainsafe/libp2p-noise";
+import { yamux } from "@chainsafe/libp2p-yamux";
 import { generateKeyPair } from "@libp2p/crypto/keys";
 import { identify } from "@libp2p/identify";
 import type { Libp2p } from "@libp2p/interface";
 import { peerIdFromPrivateKey } from "@libp2p/peer-id";
 import { tcp } from "@libp2p/tcp";
-import { noise } from "@chainsafe/libp2p-noise";
-import { yamux } from "@chainsafe/libp2p-yamux";
 import { createLibp2p } from "libp2p";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -39,9 +40,9 @@ import {
   PeerUnreachableError,
   UnknownPeerCallError,
 } from "../src/index.js";
+import { createPeer, type Peer } from "../src/peer.js";
 import { createMounts } from "../src/router.js";
 import { createRemote, mapPeerCallError, serveTransport } from "../src/transport-duplex.js";
-import { createPeer, type Peer } from "../src/peer.js";
 import { json } from "../src/types.js";
 
 async function node(listen: boolean): Promise<Libp2p> {
@@ -204,9 +205,7 @@ describe("T-2: failure -> observation", () => {
     ]);
 
     const fulfilled = results.filter((r) => r.status === "fulfilled");
-    const rejected = results.filter(
-      (r): r is PromiseRejectedResult => r.status === "rejected",
-    );
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(1);
     expect(rejected[0]?.reason).toBeInstanceOf(PeerStreamResetError);

@@ -8,6 +8,7 @@ import type { MountConfig, MountField, MountType } from "../../common/mount-type
 export class OpfsMountType implements MountType {
   readonly id = "opfs";
   readonly label = "Browser Storage (OPFS)";
+  readonly newLabel = "New Browser-Storage Folder…";
   readonly fields: MountField[] = [
     {
       name: "directory",
@@ -20,6 +21,19 @@ export class OpfsMountType implements MountType {
 
   isAvailable(): boolean {
     return typeof navigator !== "undefined" && !!navigator.storage?.getDirectory;
+  }
+
+  /** The folders under OPFS `mounts/`, mounted or not. */
+  async listDirectories(): Promise<string[]> {
+    const root = await navigator.storage.getDirectory();
+    const mounts = await root.getDirectoryHandle("mounts", { create: true });
+    const names: string[] = [];
+    for await (const [name, handle] of (
+      mounts as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }
+    ).entries()) {
+      if (handle.kind === "directory") names.push(name);
+    }
+    return names;
   }
 
   async create(mount: MountConfig): Promise<FilesApi> {

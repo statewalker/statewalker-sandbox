@@ -26,8 +26,8 @@
 import ts from "typescript";
 import { UnresolvableSchemaError } from "./errors.js";
 
-export { UnresolvableSchemaError } from "./errors.js";
 export type { UnresolvableReason } from "./errors.js";
+export { UnresolvableSchemaError } from "./errors.js";
 
 /** A derived JSON Schema node. Deliberately loose: the oracle decides shape. */
 export type JsonSchema = Record<string, unknown>;
@@ -232,13 +232,21 @@ function deriveEnum(base: Link, sf: ts.SourceFile): JsonSchema {
   if (!arg || !ts.isArrayLiteralExpression(arg)) {
     // `z.enum(KINDS)` — category 2. The members live in a value this rung
     // would have to execute the module to read.
-    throw new UnresolvableSchemaError("computed-enum", src, "enum members are not an array literal");
+    throw new UnresolvableSchemaError(
+      "computed-enum",
+      src,
+      "enum members are not an array literal",
+    );
   }
   const members: string[] = [];
   for (const element of arg.elements) {
     const value = stringLiteral(element);
     if (value === undefined) {
-      throw new UnresolvableSchemaError("computed-enum", src, "an enum member is not a string literal");
+      throw new UnresolvableSchemaError(
+        "computed-enum",
+        src,
+        "an enum member is not a string literal",
+      );
     }
     members.push(value);
   }
@@ -283,9 +291,7 @@ function deriveObject(base: Link, sf: ts.SourceFile): JsonSchema {
       );
     }
 
-    const name = ts.isIdentifier(property.name)
-      ? property.name.text
-      : stringLiteral(property.name);
+    const name = ts.isIdentifier(property.name) ? property.name.text : stringLiteral(property.name);
     if (name === undefined) {
       throw new UnresolvableSchemaError(
         "unsupported-type",

@@ -1,5 +1,5 @@
+import { expectReplacedNotMutated, PanelsModel } from "@fm/app";
 import { describe, expect, it } from "vitest";
-import { PanelsModel, expectReplacedNotMutated } from "@fm/app";
 
 /** C2 — two orders over one id set, plus slots and naming. */
 
@@ -74,7 +74,11 @@ describe("C2 · the operation target", () => {
 });
 
 describe("C2 · removal (head, middle and tail of the ring)", () => {
-  const cases: [string, number][] = [["head", 0], ["middle", 1], ["tail", 2]];
+  const cases: [string, number][] = [
+    ["head", 0],
+    ["middle", 1],
+    ["tail", 2],
+  ];
 
   for (const [where, index] of cases) {
     it(`keeps both orders consistent when removing at the ${where}`, () => {
@@ -183,9 +187,13 @@ describe("C2 · model discipline", () => {
   it("replaces the ring rather than mutating it", async () => {
     const panels = build(["a", "b", "c"]);
     add(panels, 2);
-    await expectReplacedNotMutated(panels, () => panels.order, () => {
-      panels.add({ storage: "mem://a", path: "/new" });
-    });
+    await expectReplacedNotMutated(
+      panels,
+      () => panels.order,
+      () => {
+        panels.add({ storage: "mem://a", path: "/new" });
+      },
+    );
   });
 
   it("replaces the MRU stack rather than mutating it", async () => {
@@ -193,12 +201,19 @@ describe("C2 · model discipline", () => {
     const ids = add(panels, 3);
     // ids[2] is already active after add(), and activate() is idempotent by
     // design — so the write must target a panel that is NOT active.
-    await expectReplacedNotMutated(panels, () => panels.mru, () => panels.activate(ids[0]));
+    await expectReplacedNotMutated(
+      panels,
+      () => panels.mru,
+      () => panels.activate(ids[0]),
+    );
   });
 });
 
 describe("C2 · property tests over random sequences", () => {
-  const rng = (seed: number) => () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const rng = (seed: number) => () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
 
   for (const seed of [1, 7, 42, 1337, 90210]) {
     it(`holds every invariant for seed ${seed}`, () => {

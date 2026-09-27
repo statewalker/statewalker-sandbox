@@ -1,5 +1,5 @@
-import { createElement, type ReactNode } from "react";
 import type { PanelModel, PanelsModel } from "@fm/app";
+import { createElement, type ReactNode } from "react";
 
 export interface PanelSlotsProps {
   panels: PanelsModel;

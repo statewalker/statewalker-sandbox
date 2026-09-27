@@ -1,5 +1,5 @@
-import { z } from "zod";
 import { Command } from "@statewalker/shared-commands";
+import { z } from "zod";
 
 /** A resolved location. Never panel identity — that is what lets jobs outlive panels. */
 export const fileRef = z.object({
@@ -95,6 +95,4 @@ export const storagesOpen = Command.required("storages:open")
   .build();
 
 /** Every file command, in declaration order. */
-export const FILE_COMMANDS = [
-  filesCopy, filesMove, filesDelete, filesMkdir, filesRename,
-] as const;
+export const FILE_COMMANDS = [filesCopy, filesMove, filesDelete, filesMkdir, filesRename] as const;

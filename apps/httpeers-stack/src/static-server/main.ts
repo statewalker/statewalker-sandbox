@@ -388,7 +388,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   //
   // This was not theoretical: the printed 0.0.0.0 URL was followed, and the
   // failure surfaced as a relay/gater error naming neither cause nor fix.
-  const shown = scheme === "https" ? process.env.PUBLIC_HOST ?? "127.0.0.1" : "127.0.0.1";
+  const shown = scheme === "https" ? (process.env.PUBLIC_HOST ?? "127.0.0.1") : "127.0.0.1";
   console.log(`static-server: app listening at ${scheme}://${shown}:${APP_PORT}`);
   console.log(`static-server: image peer listening at ${scheme}://${shown}:${IMAGE_PEER_PORT}`);
   console.log(`static-server: hub page listening at ${scheme}://${shown}:${HUB_PAGE_PORT}`);

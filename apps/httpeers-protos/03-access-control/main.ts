@@ -26,9 +26,9 @@ if (addr == null) throw new Error("server has no listen address");
 // capability table, no session store.
 const roles = new Map<string, string[]>([[alice.peerId.toString(), ["std:reader"]]]);
 const policy: Record<string, string[]> = {
-  "/public": [],                 // no role required
-  "/reports": ["std:reader"],    // reader or better
-  "/admin": ["std:admin"],       // nobody here holds this
+  "/public": [], // no role required
+  "/reports": ["std:reader"], // reader or better
+  "/admin": ["std:admin"], // nobody here holds this
 };
 
 const stopServing = await serveConnections({ node: server }, (context) =>
@@ -52,7 +52,12 @@ const stopServing = await serveConnections({ node: server }, (context) =>
   }),
 );
 
-async function attempt(who: string, node: Awaited<ReturnType<typeof createNode>>, path: string, forge = false) {
+async function attempt(
+  who: string,
+  node: Awaited<ReturnType<typeof createNode>>,
+  path: string,
+  forge = false,
+) {
   const { call, close } = await connect({ node, peer: addr });
   const res = await fetchOverDuplex(
     call,

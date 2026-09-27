@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { afterEach, describe, expect, it } from "vitest";
 import "hightable/src/HighTable.css";
-import { Commands } from "@statewalker/shared-commands";
-import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { PanelController, PanelModel, PanelsModel, TableModel } from "@fm/app";
 import { FM_SELECTION, PanelView, placements, readSelection } from "@fm/ui";
+import { Commands } from "@statewalker/shared-commands";
+import { MemFilesApi } from "@statewalker/webrun-files-mem";
 
 /** D2g — internal drags, and the panel the layout cannot place. */
 
@@ -50,11 +50,15 @@ const mountTwo = async () => {
       "div",
       { style: { display: "flex", flex: 1, minHeight: 0 } },
       createElement(PanelView, {
-        key: "p1", panel: left.panel, table: left.table,
+        key: "p1",
+        panel: left.panel,
+        table: left.table,
         onDropFiles: (r: Drop) => drops.push(r),
       }),
       createElement(PanelView, {
-        key: "p2", panel: right.panel, table: right.table,
+        key: "p2",
+        panel: right.panel,
+        table: right.table,
         onDropFiles: (r: Drop) => drops.push(r),
       }),
     ),
@@ -147,7 +151,10 @@ describe("D2g · the panel the layout cannot place", () => {
 
   it("places every panel that has a slot the layout knows", () => {
     const model = panelsWith(["left", "right"], 2);
-    const placed = placements(model, { left: document.createElement("div"), right: document.createElement("div") });
+    const placed = placements(model, {
+      left: document.createElement("div"),
+      right: document.createElement("div"),
+    });
     expect(placed.every((p) => !p.floating)).toBe(true);
     expect(placed.map((p) => p.slot)).toEqual(["left", "right"]);
   });

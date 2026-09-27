@@ -1,9 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { Commands, CommandError } from "@statewalker/shared-commands";
+import { type App, bootstrap, filesCopy, panelsNavigate, uiShowJob, uiShowPanel } from "@fm/app";
 import { onChange } from "@statewalker/shared-baseclass";
-import { bootstrap, type App } from "@fm/app";
-import { filesCopy, panelsNavigate, uiShowJob, uiShowPanel } from "@fm/app";
+import { CommandError, Commands } from "@statewalker/shared-commands";
+import { MemFilesApi } from "@statewalker/webrun-files-mem";
+import { beforeEach, describe, expect, it } from "vitest";
 import { FakeViewLayer } from "./support/fake-view-layer.js";
 
 /**
@@ -77,7 +76,11 @@ describe("P0 · architecture skeleton", () => {
     it("level fields holding arrays are replaced, never mutated in place", async () => {
       const panel = app.panels.get("p1");
       let fired = 0;
-      onChange(panel.onUpdate, () => fired++, () => panel.entries);
+      onChange(
+        panel.onUpdate,
+        () => fired++,
+        () => panel.entries,
+      );
 
       panel.input.requestedPath = "/";
       panel.input.navigateCount++;
@@ -207,9 +210,10 @@ describe("P0 · architecture skeleton", () => {
 
     it("rejects as not-claimed when the panel is gone", async () => {
       await app.panels.remove("p2");
-      const err = await commands
-        .call(panelsNavigate, { panelId: "p2", path: "/" })
-        .promise.then(() => null, (e) => e);
+      const err = await commands.call(panelsNavigate, { panelId: "p2", path: "/" }).promise.then(
+        () => null,
+        (e) => e,
+      );
       expect(err).toBeInstanceOf(CommandError);
       expect((err as CommandError).kind).toBe("not-claimed");
     });
@@ -227,9 +231,10 @@ describe("P0 · architecture skeleton", () => {
 describe("P0 · bootstrap order", () => {
   it("a controller emitting before view handlers exist is a loud wiring bug", async () => {
     const commands = new Commands();
-    const err = await commands
-      .call(uiShowPanel, { id: "p1" } as never)
-      .promise.then(() => null, (e) => e);
+    const err = await commands.call(uiShowPanel, { id: "p1" } as never).promise.then(
+      () => null,
+      (e) => e,
+    );
     expect(err).toBeInstanceOf(CommandError);
     expect((err as CommandError).kind).toBe("no-handlers");
     expect(uiShowJob.policy.onNoHandlers).toBe("reject");

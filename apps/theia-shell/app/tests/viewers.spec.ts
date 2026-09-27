@@ -87,14 +87,16 @@ test.describe("image viewer", () => {
     expect(errors).toEqual([]);
   });
 
-  test("deleting an open image leaves the viewer saying so, without errors", async ({ page }) => {
+  test("deleting an open image closes its viewer, as it does an editor, without errors", async ({
+    page,
+  }) => {
     const errors = await start(page, "?storage=memory");
     await open(page, "media", "gradient.png");
-    const status = page.locator(".image-viewer-status");
-    await expect(status).toContainText("320 × 200");
+    await expect(page.locator(".image-viewer-status")).toContainText("320 × 200");
 
     await deleteFromExplorer(page, "gradient.png");
-    await expect(status).toContainText("cannot be read");
+    await expect(tab(page, "gradient.png")).toHaveCount(0);
+    await expect(page.locator(".image-viewer-widget")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 });
@@ -131,15 +133,17 @@ test.describe("PDF viewer", () => {
     expect(errors).toEqual([]);
   });
 
-  test("deleting an open PDF leaves the viewer saying so, without errors", async ({ page }) => {
+  test("deleting an open PDF closes its viewer, as it does an editor, without errors", async ({
+    page,
+  }) => {
     const errors = await start(page, "?storage=memory");
     await open(page, "docs", "sample.pdf");
     const viewer = page.locator(".pdf-viewer-widget");
     await expect(viewer.locator("img[src^='blob:']").first()).toBeVisible({ timeout: 30_000 });
 
     await deleteFromExplorer(page, "sample.pdf");
-    await expect(viewer.locator(".pdf-viewer-message")).toContainText("cannot be read");
-    await expect(viewer.locator(".pdf-viewer")).toHaveCount(0);
+    await expect(tab(page, "sample.pdf")).toHaveCount(0);
+    await expect(viewer).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 });

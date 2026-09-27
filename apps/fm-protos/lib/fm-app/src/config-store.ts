@@ -1,5 +1,5 @@
-import type { FilesApi } from "@statewalker/webrun-files";
 import type { StorageConfig } from "@fm/core";
+import type { FilesApi } from "@statewalker/webrun-files";
 
 export const CONFIG_VERSION = 1;
 
@@ -55,8 +55,12 @@ export class ConfigStore {
     private readonly _debounceMs = 250,
   ) {}
 
-  private _storagesPath() { return `${this._root}/storages.json`; }
-  private _sessionPath() { return `${this._root}/session.json`; }
+  private _storagesPath() {
+    return `${this._root}/storages.json`;
+  }
+  private _sessionPath() {
+    return `${this._root}/session.json`;
+  }
 
   async loadStorages(): Promise<StoragesFile> {
     const file = await readJson<StoragesFile>(this._api, this._storagesPath());
@@ -114,7 +118,10 @@ export class ConfigStore {
  * than failing activation. The user opened `Photos` yesterday; today the drive
  * is unplugged, and they should see `Photos — unavailable`, not an empty app.
  */
-export function degradedPanel(panel: SessionPanel, known: Set<string>): SessionPanel & { error?: string } {
+export function degradedPanel(
+  panel: SessionPanel,
+  known: Set<string>,
+): SessionPanel & { error?: string } {
   if (known.has(panel.storage)) return panel;
   return { ...panel, error: `storage ${panel.storage} is not configured` };
 }

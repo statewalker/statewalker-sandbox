@@ -13,14 +13,20 @@ import type { TodoListModel } from "./todo-model.js";
  * B0 greps for it.
  */
 export class ConfirmModel extends BaseClass {
-  constructor(readonly question: string) { super(); }
+  constructor(readonly question: string) {
+    super();
+  }
 }
 export class NotifyModel extends BaseClass {
-  constructor(readonly text: string) { super(); }
+  constructor(readonly text: string) {
+    super();
+  }
 }
 export class MenuModel extends BaseClass {
   /** Built by the CONTROLLER from the declarations — the view may not read the registry. */
-  constructor(readonly items: { key: string; label?: string; icon?: string }[]) { super(); }
+  constructor(readonly items: { key: string; label?: string; icon?: string }[]) {
+    super();
+  }
 }
 
 export const uiShowList = Command.required("ui:show-list")

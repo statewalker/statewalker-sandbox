@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { expectEdgeCounter, expectReplacedNotMutated, PanelController, PanelModel } from "@fm/app";
 import { Commands } from "@statewalker/shared-commands";
-import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import type { FileInfo, FilesApi } from "@statewalker/webrun-files";
-import { PanelController, PanelModel, expectEdgeCounter, expectReplacedNotMutated } from "@fm/app";
+import { MemFilesApi } from "@statewalker/webrun-files-mem";
+import { beforeEach, describe, expect, it } from "vitest";
 
 /** C3 — navigation, refresh, sort, filter, and the failure matrix. */
 
@@ -18,14 +18,30 @@ const tree = {
 class FaultyFilesApi implements FilesApi {
   failAfter?: number;
   constructor(private readonly inner: MemFilesApi) {}
-  read(p: string, o?: never) { return this.inner.read(p, o); }
-  write(p: string, c: never) { return this.inner.write(p, c); }
-  mkdir(p: string) { return this.inner.mkdir(p); }
-  stats(p: string) { return this.inner.stats(p); }
-  exists(p: string) { return this.inner.exists(p); }
-  remove(p: string) { return this.inner.remove(p); }
-  move(s: string, t: string) { return this.inner.move(s, t); }
-  copy(s: string, t: string) { return this.inner.copy(s, t); }
+  read(p: string, o?: never) {
+    return this.inner.read(p, o);
+  }
+  write(p: string, c: never) {
+    return this.inner.write(p, c);
+  }
+  mkdir(p: string) {
+    return this.inner.mkdir(p);
+  }
+  stats(p: string) {
+    return this.inner.stats(p);
+  }
+  exists(p: string) {
+    return this.inner.exists(p);
+  }
+  remove(p: string) {
+    return this.inner.remove(p);
+  }
+  move(s: string, t: string) {
+    return this.inner.move(s, t);
+  }
+  copy(s: string, t: string) {
+    return this.inner.copy(s, t);
+  }
   async *list(p: string, o?: never): AsyncGenerator<FileInfo> {
     let n = 0;
     for await (const entry of this.inner.list(p, o)) {
@@ -95,8 +111,14 @@ describe("C3 · listing lifecycle", () => {
       let listings = 0;
       const counting = new PanelController(model, api, new Commands(), () => {});
       void counting;
-      model.input.onUpdate(() => { listings++; });
-      expectEdgeCounter(model.input as never, "refreshCount", () => listings * 0 + model.input.refreshCount);
+      model.input.onUpdate(() => {
+        listings++;
+      });
+      expectEdgeCounter(
+        model.input as never,
+        "refreshCount",
+        () => listings * 0 + model.input.refreshCount,
+      );
     });
   });
 
@@ -213,8 +235,16 @@ describe("C3 · listing lifecycle", () => {
 
   describe("model discipline", () => {
     it("replaces entries and visible rather than mutating them", async () => {
-      await expectReplacedNotMutated(model, () => model.entries, () => controller.refresh());
-      await expectReplacedNotMutated(model, () => model.visible, () => controller.setFilter("b"));
+      await expectReplacedNotMutated(
+        model,
+        () => model.entries,
+        () => controller.refresh(),
+      );
+      await expectReplacedNotMutated(
+        model,
+        () => model.visible,
+        () => controller.setFilter("b"),
+      );
     });
   });
 });

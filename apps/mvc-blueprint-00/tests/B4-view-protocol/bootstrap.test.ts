@@ -145,7 +145,9 @@ describe("B4 · bootstrap ordering", () => {
     // way when the error arrives, and done within the turn.
     await tick();
     const add = commands.call(todosAdd, { title: "orphaned?" });
-    await expect(add.promise, "the default todos:add was released").rejects.toBeInstanceOf(CommandError);
+    await expect(add.promise, "the default todos:add was released").rejects.toBeInstanceOf(
+      CommandError,
+    );
     await expect(add.promise).rejects.toMatchObject({ kind: "no-handlers" });
   });
 

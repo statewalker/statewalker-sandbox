@@ -1,5 +1,5 @@
-import { createElement, useCallback, useMemo, type KeyboardEvent } from "react";
 import HighTable from "hightable";
+import { createElement, type KeyboardEvent, useCallback, useMemo } from "react";
 // The component ships the constraint it depends on. Leaving it to the host to
 // remember is how the flex chain silently breaks (D2d).
 import "./grid-host.css";
@@ -88,7 +88,11 @@ export function PanelView({ panel, table, onDropFiles }: PanelViewProps) {
         .filter((row) => table.isSelected(row) || row === table.cursor)
         .map((row) => {
           const entry = table.getRow(row)!;
-          return { storage: panel.storage, path: entry.path, kind: entry.kind as "file" | "directory" };
+          return {
+            storage: panel.storage,
+            path: entry.path,
+            kind: entry.kind as "file" | "directory",
+          };
         }),
     [panel, table],
   );

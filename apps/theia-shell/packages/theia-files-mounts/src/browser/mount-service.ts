@@ -6,16 +6,24 @@ import { ContributionProvider } from "@theia/core/lib/common/contribution-provid
 import { Emitter, type Event } from "@theia/core/lib/common/event";
 import { MessageService } from "@theia/core/lib/common/message-service";
 import { PreferenceScope, PreferenceService } from "@theia/core/lib/common/preferences";
-import type URI from "@theia/core/lib/common/uri";
+import URI from "@theia/core/lib/common/uri";
 import { inject, injectable, named } from "@theia/core/shared/inversify";
+import type { FileService } from "@theia/filesystem/lib/browser/file-service";
 import type { FilesApiChange } from "@theia-shell/theia-files-api";
 import { VaultService } from "@theia-shell/theia-secret-vault/lib/browser/vault-service";
 import { applyLayers, FilesApiLayer } from "../common/layers";
-import { mountsSetting, validateMountConfigs } from "../common/mount-config";
+import { isMounted, mountsSetting, validateMountConfigs } from "../common/mount-config";
 import { type ApplyOptions, MountTable } from "../common/mount-table";
 import { type MountConfig, type MountStatus, MountType } from "../common/mount-types";
 import { MountedFilesApi } from "../common/mounted-files-api";
 import { SerialQueue } from "../common/serial-queue";
+import { WORKSPACE_FOLDER } from "../common/system-folder";
+import {
+  updateWorkspaceFile,
+  WORKSPACE_FILE_URI,
+  WORKSPACE_MOUNT_KEY,
+  workspaceRoots,
+} from "../common/workspace-file";
 import { MainStorageService } from "./main-storage";
 import {
   HIDDEN_PREFERENCE,
@@ -30,6 +38,9 @@ import {
  * open — it never waits for preferences, because folder-scope preferences are
  * read through this root — and the other mounts follow as reported changes.
  */
+export const LazyFileService = Symbol("LazyFileService");
+export type LazyFileService = () => FileService;
+
 @injectable()
 export class MountService {
   @inject(MainStorageService) protected readonly main!: MainStorageService;
@@ -38,6 +49,8 @@ export class MountService {
   @inject(VaultService) protected readonly vaults!: VaultService;
   @inject(MessageService) protected readonly messages!: MessageService;
   @inject(MountDefaults) protected readonly defaults!: MountDefaults;
+  /** Resolved lazily: FileService builds the FilesApi provider, which subscribes to this service. */
+  @inject(LazyFileService) protected readonly fileService!: LazyFileService;
   @inject(ContributionProvider)
   @named(MountType)
   protected readonly typeProvider!: ContributionProvider<MountType>;
@@ -52,6 +65,8 @@ export class MountService {
     () => !this.vaults.current?.unlocked,
   );
   protected mainMount: { config: MountConfig; api: FilesApi } | undefined;
+  protected workspaceMount: { config: MountConfig; api: FilesApi } | undefined;
+  protected workspaceSynced: Promise<void> = Promise.resolve();
   protected started: Promise<FilesApi> | undefined;
   protected readonly reported = new Set<string>();
   /** Every change to the tree, one at a time; a failed step is reported and the next still runs. */
@@ -59,6 +74,9 @@ export class MountService {
 
   protected readonly changeEmitter = new Emitter<readonly FilesApiChange[]>();
   readonly onDidChange: Event<readonly FilesApiChange[]> = this.changeEmitter.event;
+  protected readonly layersEmitter = new Emitter<void>();
+  /** Fires after a filter layer changed what the mounts show. */
+  readonly onDidChangeLayers: Event<void> = this.layersEmitter.event;
   protected readonly statusEmitter = new Emitter<void>();
   readonly onDidChangeStatus: Event<void> = this.statusEmitter.event;
 
@@ -71,7 +89,14 @@ export class MountService {
     const opened = await this.main.open();
     const { key, name } = opened.storage;
     this.mainMount = { config: { key, name, type: "main", config: {} }, api: opened.files };
-    await this.apply([]);
+    // The workspace file's folder: a system mount, never a root.
+    this.workspaceMount = {
+      config: { key: WORKSPACE_MOUNT_KEY, name: "Workspace", type: "system", config: {} },
+      api: new CompositeFilesApi(opened.files, WORKSPACE_FOLDER),
+    };
+    // Only the fixed mounts yet: create the workspace file if missing, never
+    // cut an existing one down to "main only" (the real list follows).
+    await this.apply([], {}, { createOnly: true });
     this.preferences.ready.then(() => this.applyPreferences()).catch((e) => this.report(e));
     this.preferences.onPreferenceChanged((event) => {
       if (event.preferenceName === MOUNTS_PREFERENCE)
@@ -91,6 +116,11 @@ export class MountService {
 
   types(): Map<string, MountType> {
     return new Map(this.typeProvider.getContributions().map((t) => [t.id, t]));
+  }
+
+  /** Keys no mount may take: the main storage's and the system mounts'. */
+  reservedKeys(): string[] {
+    return [...(this.mainKey() ? [this.mainKey() as string] : []), WORKSPACE_MOUNT_KEY];
   }
 
   mainKey(): string | undefined {
@@ -144,7 +174,35 @@ export class MountService {
     await this.preferences.set(MOUNTS_PREFERENCE, next, PreferenceScope.User);
   }
 
+  /** Removes a folder from the workspace but remembers it: configuration, secrets and local handle stay. */
   async unmount(key: string): Promise<void> {
+    await this.saveMounts(this.withMounted(key, false));
+  }
+
+  /** From a click: brings a remembered folder back (the click may grant folder access). */
+  async remount(key: string): Promise<void> {
+    const next = this.withMounted(key, true);
+    await this.saveMounts(next);
+    await this.applyList(next, { interactive: true, recreate: (k) => k === key });
+  }
+
+  /** The valid `files.mounts` entries, mounted or remembered (malformed ones are left out). */
+  validMounts(): MountConfig[] {
+    const raw: unknown = this.preferences.inspect(MOUNTS_PREFERENCE)?.globalValue;
+    return validateMountConfigs(
+      mountsSetting(raw, this.defaults.mounts),
+      this.types(),
+      this.reservedKeys(),
+    ).valid;
+  }
+
+  /** The folders not in the workspace, remembered to be added back. */
+  rememberedMounts(): MountConfig[] {
+    return this.configuredMounts().filter((m) => !isMounted(m));
+  }
+
+  /** Deletes a mount for good: its entry, its secrets and what its type stored (a local handle). */
+  async forget(key: string): Promise<void> {
     const config = this.configuredMounts().find((m) => m.key === key);
     if (!config) return;
     const type = this.types().get(config.type);
@@ -164,33 +222,73 @@ export class MountService {
     return this.applyPreferences({ interactive: true, recreate: (k) => k === key });
   }
 
+  protected withMounted(key: string, mounted: boolean): MountConfig[] {
+    return this.configuredMounts().map((m) => {
+      if (m.key !== key) return m;
+      const { mounted: _, ...rest } = m;
+      return mounted ? rest : { ...rest, mounted: false };
+    });
+  }
+
+  protected saveMounts(list: MountConfig[]): Promise<void> {
+    return this.preferences.set(MOUNTS_PREFERENCE, list, PreferenceScope.User);
+  }
+
   protected applyPreferences(options: ApplyOptions = {}): Promise<void> {
-    const reserved = this.mainKey() ? [this.mainKey() as string] : [];
     const raw: unknown = this.preferences.inspect(MOUNTS_PREFERENCE)?.globalValue;
-    const { valid, errors } = validateMountConfigs(
-      mountsSetting(raw, this.defaults.mounts),
-      this.types(),
-      reserved,
-    );
+    return this.applyList(mountsSetting(raw, this.defaults.mounts), options);
+  }
+
+  /** Validates a `files.mounts` value, reports what is wrong, and mounts the mounted entries. */
+  protected applyList(raw: unknown, options: ApplyOptions = {}): Promise<void> {
+    const reserved = this.reservedKeys();
+    const { valid, errors } = validateMountConfigs(raw, this.types(), reserved);
     for (const error of errors) {
       if (this.reported.has(error)) continue;
       this.reported.add(error);
       this.messages.warn(`Mounts: ${error}`);
     }
-    return this.apply(valid, options);
+    return this.apply(valid.filter(isMounted), options);
   }
 
   /** Serialized: a slow S3 mount must not let an older apply overwrite a newer one. */
-  protected apply(configs: MountConfig[], options: ApplyOptions = {}): Promise<void> {
-    return this.queue.run(async () => {
-      const fixed = this.mainMount ? [this.mainMount] : [];
+  protected apply(
+    configs: MountConfig[],
+    options: ApplyOptions = {},
+    sync: { createOnly?: boolean } = {},
+  ): Promise<void> {
+    const applied = this.queue.run(async () => {
+      const fixed = [this.mainMount, this.workspaceMount].filter((m) => m !== undefined);
       this.rebuild(await this.table.apply(configs, { ...options, fixed }));
     });
+    // A step of its own: writing goes through Theia's FileService and so back
+    // through this root, which must not wait for itself (start() awaits apply).
+    this.workspaceSynced = this.queue.run(() => this.syncWorkspaceFile(sync));
+    this.workspaceSynced.catch((e) => this.report(e));
+    return applied;
   }
 
+  /** Resolves once the workspace file matches the mounts applied so far. */
+  workspaceReady(): Promise<void> {
+    return this.workspaceSynced.catch(() => undefined);
+  }
+
+  /** Keeps the workspace file's folders equal to the mounted keys (main first): the mounts are the roots. */
+  protected async syncWorkspaceFile(sync: { createOnly?: boolean } = {}): Promise<void> {
+    const uri = new URI(WORKSPACE_FILE_URI);
+    const files = this.fileService();
+    const existing = (await files.exists(uri)) ? (await files.read(uri)).value : undefined;
+    const next = updateWorkspaceFile(existing, workspaceRoots(this.table.configs()), sync);
+    if (next !== undefined) await files.write(uri, next);
+  }
+
+  /** A rebuild that changes what every mount shows (a filter). */
   protected rebuildQueued(): void {
     this.queue
-      .run(async () => this.rebuild([{ type: "updated", path: "/" }]))
+      .run(async () => {
+        this.rebuild([{ type: "updated", path: "/" }]);
+        this.layersEmitter.fire();
+      })
       .catch((e) => this.report(e));
   }
 

@@ -3,7 +3,7 @@
 // prose but never asserts. Each carries its DERIVED-FROM-NOTE marker.
 import { beforeEach, describe, expect, it } from "vitest";
 import { shellCatalog } from "../../lib/catalog.js";
-import { createRenderer, type A2uiMessage } from "../../lib/renderer.js";
+import { type A2uiMessage, createRenderer } from "../../lib/renderer.js";
 
 let root: HTMLElement;
 

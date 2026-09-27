@@ -4,14 +4,17 @@ import { describeStatus, parseHeaders, streamInto } from "../src/browser/request
 describe("parseHeaders", () => {
   it("reads one Name: value per line", () => {
     expect(parseHeaders("x-trace: abc\naccept: application/json")).toEqual({
-      "x-trace": "abc", accept: "application/json",
+      "x-trace": "abc",
+      accept: "application/json",
     });
   });
 
   // A bearer token contains no colon, but a URL-valued header does; only the
   // FIRST colon separates name from value.
   it("keeps colons inside the value", () => {
-    expect(parseHeaders("x-origin: https://a.example:8443")).toEqual({ "x-origin": "https://a.example:8443" });
+    expect(parseHeaders("x-origin: https://a.example:8443")).toEqual({
+      "x-origin": "https://a.example:8443",
+    });
   });
 
   it("ignores blank lines, lines without a colon, and lines with no name", () => {
@@ -37,7 +40,12 @@ describe("streamInto", () => {
   it("writes every chunk as it arrives and reports how many there were", async () => {
     const enc = new TextEncoder();
     const body = new ReadableStream<Uint8Array>({
-      start(c) { c.enqueue(enc.encode("one ")); c.enqueue(enc.encode("two ")); c.enqueue(enc.encode("three")); c.close(); },
+      start(c) {
+        c.enqueue(enc.encode("one "));
+        c.enqueue(enc.encode("two "));
+        c.enqueue(enc.encode("three"));
+        c.close();
+      },
     });
     const seen: string[] = [];
     const stats = await streamInto(new Response(body), (text) => seen.push(text));

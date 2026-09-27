@@ -1,7 +1,4 @@
-import type {
-  LanguageModelV3,
-  LanguageModelV3CallOptions,
-} from "@ai-sdk/provider";
+import type { LanguageModelV3, LanguageModelV3CallOptions } from "@ai-sdk/provider";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
 

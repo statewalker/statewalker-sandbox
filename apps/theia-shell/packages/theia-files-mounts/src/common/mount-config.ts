@@ -42,6 +42,10 @@ function checkEntry(
   const mountType = typeof type === "string" ? types.get(type) : undefined;
   if (!mountType) return `mount "${key}" has an unknown type "${String(type)}".`;
   if (typeof config !== "object" || config === null) return `mount "${key}" has no config.`;
+  const mounted = (entry as Partial<MountConfig>).mounted;
+  if (mounted !== undefined && typeof mounted !== "boolean") {
+    return `mount "${key}": "mounted" must be true or false.`;
+  }
   for (const field of mountType.fields) {
     const value = (config as Record<string, unknown>)[field.name];
     if (field.kind === "secret") {
@@ -61,4 +65,9 @@ function checkEntry(
  */
 export function mountsSetting(raw: unknown, defaults: MountConfig[]): unknown {
   return raw === undefined ? defaults : raw;
+}
+
+/** Absent or true: mounted. false: unmounted but remembered. */
+export function isMounted(mount: MountConfig): boolean {
+  return mount.mounted !== false;
 }

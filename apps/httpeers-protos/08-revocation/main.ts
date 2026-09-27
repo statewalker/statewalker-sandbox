@@ -30,15 +30,21 @@ console.log(`before removal          -> ${cache.check(aliceToken) ?? "\x1b[32mac
 now += 1_000;
 hub.remove("alice");
 console.log(`\nhub.remove("alice") at t+1s — her token is still unexpired and well-formed`);
-console.log(`provider, before next heartbeat -> ${cache.check(aliceToken) ?? "\x1b[31maccepted (stale cache)\x1b[0m"}`);
+console.log(
+  `provider, before next heartbeat -> ${cache.check(aliceToken) ?? "\x1b[31maccepted (stale cache)\x1b[0m"}`,
+);
 
 // The next heartbeat carries a bumped counter, so the provider pulls once.
 now += HEARTBEAT_MS;
 const pulled = heartbeat();
 const refused = cache.check(aliceToken);
 console.log(`\nheartbeat at t+6s: counter moved -> pulled change list: ${pulled}`);
-console.log(`provider, after heartbeat       -> ${refused ? `\x1b[32mrefused: ${refused}\x1b[0m` : "\x1b[31maccepted\x1b[0m"}`);
-console.log(`worst-case exposure             = one heartbeat interval (${HEARTBEAT_MS / 1000}s), not the ${TTL_MS / 1000}s TTL`);
+console.log(
+  `provider, after heartbeat       -> ${refused ? `\x1b[32mrefused: ${refused}\x1b[0m` : "\x1b[31maccepted\x1b[0m"}`,
+);
+console.log(
+  `worst-case exposure             = one heartbeat interval (${HEARTBEAT_MS / 1000}s), not the ${TTL_MS / 1000}s TTL`,
+);
 
 // Re-admission is why `iat` exists: a token minted AFTER the change is fine.
 now += 1_000;
@@ -51,7 +57,9 @@ console.log("  without `iat` this is impossible: revocation would be all-or-noth
 // A quiet period must not cause needless pulls.
 now += HEARTBEAT_MS;
 const pulledAgain = heartbeat();
-console.log(`\nheartbeat with no changes       -> pulled again: ${pulledAgain} ${pulledAgain ? "\x1b[31m✗\x1b[0m" : "\x1b[32m✓ hub stays off the request path\x1b[0m"}`);
+console.log(
+  `\nheartbeat with no changes       -> pulled again: ${pulledAgain} ${pulledAgain ? "\x1b[31m✗\x1b[0m" : "\x1b[32m✓ hub stays off the request path\x1b[0m"}`,
+);
 
 const ok = refused !== null && readmitCheck === null && !pulledAgain;
 console.log(

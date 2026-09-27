@@ -44,8 +44,9 @@ export function render(element: ReactNode): { host: HTMLElement; root: Root; unm
 }
 
 /** Every element under `scope` matching `selector`, as an array. */
-export const all = <E extends Element = HTMLElement>(scope: ParentNode, selector: string): E[] =>
-  [...scope.querySelectorAll<E>(selector)];
+export const all = <E extends Element = HTMLElement>(scope: ParentNode, selector: string): E[] => [
+  ...scope.querySelectorAll<E>(selector),
+];
 
 /** The first button under `scope` whose visible text or aria-label is exactly `name`. */
 export function button(scope: ParentNode, name: string): HTMLButtonElement | undefined {

@@ -23,13 +23,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { shellCatalog } from "../../lib/catalog.js";
 import { createShellDock } from "../../lib/dock.js";
-import {
-  createAppHost,
-  mountStandalone,
-  type AppHost,
-  type AppModule,
-} from "../../lib/mount.js";
-import { createRenderer, type ActionEvent, type Renderer } from "../../lib/renderer.js";
+import { type AppHost, type AppModule, createAppHost, mountStandalone } from "../../lib/mount.js";
+import { type ActionEvent, createRenderer, type Renderer } from "../../lib/renderer.js";
 
 /** The AppHost contract, spelled out so a leak is a diff and not a judgement call. */
 const APP_HOST_KEYS = ["getData", "notify", "render", "setData"] as const;
@@ -237,11 +232,7 @@ describe("the host has the same shape in both", () => {
 
     const bare = document.createElement("div");
     document.body.appendChild(bare);
-    const direct = createAppHost(
-      createRenderer(bare, shellCatalog),
-      "any-id-at-all",
-      shellCatalog,
-    );
+    const direct = createAppHost(createRenderer(bare, shellCatalog), "any-id-at-all", shellCatalog);
     expect(Object.keys(direct).sort()).toEqual(Object.keys(trace.hosts[0]!).sort());
   });
 });
@@ -257,7 +248,7 @@ describe("the same module produces the same result in both", () => {
 
     expect(surfaceBody(container)).toBe(surfaceBody(docked.dockHost));
     // And it is not identical because both are empty.
-    expect(surfaceBody(container)).toContain("data-component=\"Button\"");
+    expect(surfaceBody(container)).toContain('data-component="Button"');
     expect(surfaceBody(container).length).toBeGreaterThan(100);
   });
 
@@ -286,9 +277,7 @@ describe("the same module produces the same result in both", () => {
 
   it("renders the same action affordance in both, carrying only the host's own id", () => {
     const standaloneSeen: ActionEvent[] = [];
-    mountStandaloneWith(confirmModule(newTrace()), container, (e) =>
-      standaloneSeen.push(e),
-    );
+    mountStandaloneWith(confirmModule(newTrace()), container, (e) => standaloneSeen.push(e));
     const docked = mountDocked(confirmModule(newTrace()), "pane-alpha");
 
     // Identical markup, identical declared action, in both.
@@ -331,12 +320,8 @@ describe("the same module produces the same result in both", () => {
     // ------------------------------------------------------------------
     const standaloneSeen: ActionEvent[] = [];
     const dockedSeen: ActionEvent[] = [];
-    mountStandaloneWith(confirmModule(newTrace()), container, (e) =>
-      standaloneSeen.push(e),
-    );
-    const docked = mountDocked(confirmModule(newTrace()), "pane-alpha", (e) =>
-      dockedSeen.push(e),
-    );
+    mountStandaloneWith(confirmModule(newTrace()), container, (e) => standaloneSeen.push(e));
+    const docked = mountDocked(confirmModule(newTrace()), "pane-alpha", (e) => dockedSeen.push(e));
 
     (container.querySelector("button") as HTMLElement).click();
     (docked.dockHost.querySelector("button") as HTMLElement).click();
@@ -354,9 +339,7 @@ describe("the same module produces the same result in both", () => {
     const renderer = createRenderer(paneLike, shellCatalog, {
       onAction: (e) => wired.push(e),
     });
-    confirmModule(newTrace()).activate(
-      createAppHost(renderer, "pane-beta", shellCatalog),
-    );
+    confirmModule(newTrace()).activate(createAppHost(renderer, "pane-beta", shellCatalog));
     (paneLike.querySelector("button") as HTMLElement).click();
 
     const strip = (e: ActionEvent) => ({
@@ -374,12 +357,8 @@ describe("the same module produces the same result in both", () => {
     const dockedSeen: string[] = [];
     const sTrace = newTrace();
     const dTrace = newTrace();
-    mountStandaloneWith(confirmModule(sTrace), container, undefined, (m) =>
-      standaloneSeen.push(m),
-    );
-    mountDocked(confirmModule(dTrace), "pane-alpha", undefined, (m) =>
-      dockedSeen.push(m),
-    );
+    mountStandaloneWith(confirmModule(sTrace), container, undefined, (m) => standaloneSeen.push(m));
+    mountDocked(confirmModule(dTrace), "pane-alpha", undefined, (m) => dockedSeen.push(m));
     sTrace.hosts[0]!.notify("saved");
     dTrace.hosts[0]!.notify("saved");
     expect(standaloneSeen).toEqual(["saved"]);

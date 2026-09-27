@@ -1,6 +1,6 @@
-import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium";
 import { writeFileSync } from "node:fs";
+import chromium from "@sparticuz/chromium";
+import puppeteer from "puppeteer-core";
 
 /**
  * BROWSER STATE HARNESS.  Run with: npm run test:browser
@@ -97,7 +97,10 @@ async function measureFloating(page) {
     const dock = window.__dock;
     const panel = dock.dockview.panels[0];
     dock.dockview.addFloatingGroup(panel.group ?? panel, {
-      x: 320, y: 160, width: 340, height: 190,
+      x: 320,
+      y: 160,
+      width: 340,
+      height: 190,
     });
     const rc = document.querySelector(".dv-resize-container");
     if (!rc) return { found: false };

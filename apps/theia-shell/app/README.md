@@ -40,20 +40,25 @@ An empty main storage ("Browser Storage") is seeded with `welcome.md`, `notes/id
 
 ## Mounts, the main storage and secrets
 
-The explorer's top-level folders are **mount points**. By default there are
-two: **Browser Storage** (the main storage, key `browser`) and **Temporary**
-(in memory, key `temp`).
+The explorer's top-level folders are **mount points**: each one is a
+workspace folder. By default there are two: **Browser Storage** (the main
+storage, key `browser`) and **Temporary** (in memory, key `temp`).
 
-- **Mount a file system**: *File → Mount File System…* (also in the command
-  palette and the explorer's context menu). Pick a type — *In Memory*, *Browser Storage (OPFS)*,
-  *Folder on this Computer*, *S3 Bucket* — then a name ("Local Computer") and a
-  key (the folder name, derived from the name, editable, unique), then the
-  type's own fields. S3 keys are typed as passwords and go to the vault.
-- **Edit Mount… / Unmount / Reconnect**: on a mount's folder in the explorer.
-  A mount that cannot be reached stays listed with its reason — "Cloud
-  (unavailable: …)", "Cloud (locked)" while the vault is locked, "Local
-  Computer (click Reconnect)" when the browser needs a click to grant access
-  again.
+- **Add a folder**: *File → Mount File System…* or *Add Folder to Workspace…*
+  opens the folder list — remembered folders, browser-storage folders not yet
+  mounted, and *New Folder on this Computer…*, *New S3 Bucket…*, *New
+  Browser-Storage Folder…*, *New In-Memory Folder…*.
+  - *New Folder on this Computer…* opens the browser's folder picker first;
+    the form then suggests the folder's name as the workspace folder's name.
+  - *New S3 Bucket…* opens one form with the name, the mount path, and the
+    endpoint, region, bucket, prefix and keys (the keys go to the vault).
+- **Remove a folder**: *Remove Folder from Workspace* on its root. It is
+  remembered and listed under *Add Folder to Workspace…*, where one click
+  brings it back and the trash button forgets it. The main storage stays.
+- **Edit Mount… / Reconnect**: on a mount's root in the explorer. A mount that
+  cannot be reached stays listed with its reason — "Cloud (unavailable: …)",
+  "Cloud (locked)" while the vault is locked, "Local Computer (click
+  Reconnect)" when the browser needs a click to grant access again.
 - **Settings**: mounts are the `files.mounts` setting, so they come back after
   a reload and can be edited in *Preferences: Open Settings (JSON)*. Secrets
   never appear there.
@@ -86,7 +91,7 @@ The design is in
 | [`packages/theia-file-panels`](../packages/theia-file-panels) | **File panels.** Midnight-Commander-style one-folder views opened as main-area tabs, with a sibling-aware breadcrumb, sortable columns, and copy/move between panels and the explorer by drag and drop or context menu. |
 | [`app/files`](files) | **The app's defaults**: the Temporary mount, the hidden paths, the demo files seeded into the main storage, and *New Markdown File* writing there. |
 | [`app/style`](style) | **The app's stylesheet**: Tailwind v4 without preflight over the extensions' sources, plus the shadcn theme. The extensions are styled with Tailwind classes, so an app that uses them must compile those classes too. |
-| `app` | The browser-only Theia application (`"theia": { "target": "browser-only" }`). |
+| `app` | The browser-only Theia application (`"theia": { "target": "browser-only" }`). It also includes `@theia/search-in-workspace` (*Find in Files*, `Ctrl+Shift+F`) and `@theia/file-search` (*Quick Open*, `Ctrl+P`). Both use their browser-only modules, which walk the workspace through Theia's `FileService`, and so the `FilesApi`. |
 
 ### Markdown extension contributions
 
@@ -101,6 +106,17 @@ The design is in
 Loading and saving are Theia's own editor flow, which goes through the
 `FilesApi` provider. The extension never touches storage, apart from *New
 Markdown File*, which creates the file through Theia's `FileService`.
+
+### Search
+
+*Find in Files* reads every file through the `FileService` and skips the ones
+it detects as binary, as ripgrep does on the desktop. So a search for `IHDR`
+finds nothing, although every PNG contains it. The check reads the start of the
+file, so a PDF that begins as plain ASCII, like the sample, is searched as text.
+Its matches are raw PDF syntax, and opening one opens the PDF viewer. Searching
+the text a PDF displays would need the PDF viewer to extract it with PDFium;
+that is not done yet. `search.exclude` is no help here, because *Quick Open*
+applies it too and would hide the images and PDFs.
 
 The preview treats file content as **data, never code**. markdown-it runs with
 `html: false`, so raw HTML is escaped and `javascript:` links are refused, and
@@ -133,11 +149,12 @@ pnpm --filter @theia-shell/theia-image-viewer test # 9 unit tests: MIME types, f
 pnpm --filter @theia-shell/theia-pdf-viewer test   # 5 unit tests: the generated PDF
 pnpm --filter @theia-shell/theia-shadcn test       # 6 unit tests: cn, the button variants, data-slots
 pnpm --filter @theia-shell/theia-secret-vault test # 19 unit tests: the vault, the KeyStoreService contract
-pnpm --filter @theia-shell/theia-files-mounts test # 30 unit tests: keys, configs, layers, mount table, folder access, queue
+pnpm --filter @theia-shell/theia-files-mounts test # 48 unit tests: keys, configs, layers, mount table, workspace file, folder list, form
 pnpm --filter @theia-shell/theia-files-s3 test     # 4 unit tests: client options, the RustFS fixture's CORS
 pnpm --filter @theia-shell/app-files test          # 8 unit tests: seeding, the PNG encoder
 pnpm --filter @theia-shell/app-style test          # 6 unit tests on the compiled CSS (build first)
-pnpm --filter @theia-shell/app test:e2e            # 50 Playwright tests against the static build
+pnpm --filter @theia-shell/app test:e2e            # 64 Playwright tests against the static build
+E2E_PORT=3110 pnpm --filter @theia-shell/app test:e2e  # the same, on another port
 ```
 
 The 4 S3 e2e tests and one unit test run against RustFS in Docker
@@ -155,6 +172,13 @@ Chromium:
 - images: the viewer opens instead of the editor, zoom works from the tab
   toolbar, the keyboard and the palette, and SVG is shown as an image;
 - a PDF renders in EmbedPDF with no request to any host other than the app;
+- the viewers are navigatable:
+  - *Open Editors* lists open images and PDFs, and activates one when clicked;
+  - the explorer follows the active viewer;
+  - a rename moves the viewer;
+  - deleting the file closes it;
+- *Find in Files* lists text matches, skips binary files, and opens a result
+  at the match; *Quick Open* finds an image by name and opens it in its viewer;
 - the default style is stock Theia: menus and dialogs keep Theia's shape, and
   the shadcn components take the theme's colours;
 - *Toggle shadcn/ui Style* switches the look live on a dark theme, the choice
@@ -238,3 +262,15 @@ Every test also asserts that the page raised no errors.
   - S3: 4 of 4 red (no S3 type), then 2 of 4 (a CORS header, a reload before
     Theia wrote `settings.json`), then 4 of 4. With the S3 tests the suite is
     37 of 37.
+- **Navigatable viewers and search.**
+  - End to end: 5 of 5 red, then 5 of 5 green.
+    - Extending `search.exclude` with the binary types hid the images and PDFs
+      from *Quick Open*, which applies that preference too. The browser-only
+      search already skips binary files, so the exclusion came out.
+    - One wrong expectation: opening a result selects the match, so the cursor
+      is at its end (column 23), not its start.
+  - Deleting an open image or PDF from the explorer now closes its viewer, as it
+    does a text editor, because Theia's delete command closes every
+    navigatable widget on the deleted file. The two delete tests were changed
+    from "the viewer says the file cannot be read" to "the viewer closes".
+  - The full suite is 56 of 56 (with the mounts work).

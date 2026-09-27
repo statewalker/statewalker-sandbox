@@ -32,11 +32,15 @@ export interface ViewOptions {
 export function registerViews(mount: HTMLElement, options: ViewOptions = {}) {
   return viewLayer((adapter) => {
     show(adapter, mount, uiShowList, ({ model }) => <ListView model={model} />);
-    show(adapter, mount, uiConfirm, ({ model, settle }) => <ConfirmView model={model} settle={settle} />);
+    show(adapter, mount, uiConfirm, ({ model, settle }) => (
+      <ConfirmView model={model} settle={settle} />
+    ));
     show(adapter, mount, uiNotify, ({ model, settle }) => (
       <NotifyView model={model} settle={settle} timeoutMs={options.notifyTimeoutMs} />
     ));
-    show(adapter, mount, uiShowMenu, ({ model, settle }) => <MenuView model={model} settle={settle} />);
+    show(adapter, mount, uiShowMenu, ({ model, settle }) => (
+      <MenuView model={model} settle={settle} />
+    ));
   });
 }
 

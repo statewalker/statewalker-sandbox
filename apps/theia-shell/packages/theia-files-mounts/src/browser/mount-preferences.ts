@@ -30,6 +30,10 @@ export const mountPreferenceSchema: PreferenceSchema = {
             description: "The mount type: memory, opfs, local-folder, s3, …",
           },
           config: { type: "object", additionalProperties: { type: "string" } },
+          mounted: {
+            type: "boolean",
+            description: "false: removed from the workspace but remembered.",
+          },
         },
       },
     },

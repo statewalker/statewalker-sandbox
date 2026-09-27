@@ -94,7 +94,10 @@ export async function expectReplacedNotMutated<T>(
   mutate: () => void | Promise<void>,
 ): Promise<void> {
   let observed = 0;
-  const stop = onChangeNotifier(model.onUpdate, read as () => unknown)(() => {
+  const stop = onChangeNotifier(
+    model.onUpdate,
+    read as () => unknown,
+  )(() => {
     observed++;
   });
   try {

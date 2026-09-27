@@ -15,6 +15,7 @@ import { s3ClientOptions } from "../common/s3-options";
 export class S3MountType implements MountType {
   readonly id = "s3";
   readonly label = "S3 Bucket";
+  readonly newLabel = "New S3 Bucket…";
   readonly fields: MountField[] = [
     { name: "endpoint", label: "Endpoint URL", kind: "url", required: true },
     { name: "region", label: "Region", kind: "text", default: "us-east-1" },

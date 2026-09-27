@@ -6,7 +6,7 @@
 // the comment at its site and README.md.
 import { beforeEach, describe, expect, it } from "vitest";
 import { shellCatalog } from "../../lib/catalog.js";
-import { createRenderer, type A2uiMessage } from "../../lib/renderer.js";
+import { type A2uiMessage, createRenderer } from "../../lib/renderer.js";
 
 /**
  * PROTOTYPE 2 — can a JSON spec render into one DOM root against a
@@ -230,9 +230,7 @@ describe("the catalogue constrains what may be rendered", () => {
       version: "v0.9.1",
       updateComponents: {
         surfaceId: "dialog",
-        components: [
-          { id: "root", component: "Text", text: "<img src=x onerror=alert(1)>" },
-        ],
+        components: [{ id: "root", component: "Text", text: "<img src=x onerror=alert(1)>" }],
       },
     });
     expect(root.querySelector("img")).toBeNull();
@@ -249,8 +247,13 @@ describe("shell components", () => {
       updateComponents: {
         surfaceId: "dialog",
         components: [
-          { id: "root", component: "Button", child: "lbl", variant: "primary",
-            action: { event: { name: "confirm" } } },
+          {
+            id: "root",
+            component: "Button",
+            child: "lbl",
+            variant: "primary",
+            action: { event: { name: "confirm" } },
+          },
           { id: "lbl", component: "Text", text: "OK" },
         ],
       },

@@ -5,14 +5,10 @@
 //
 // Rung 7: does Dockview host one A2UI surface per pane, and on what contract?
 
+import { DockviewComponent, type GroupPanelPartInitParameters, themeLight } from "dockview-core";
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  DockviewComponent,
-  type GroupPanelPartInitParameters,
-  themeLight,
-} from "dockview-core";
-import { createShellDock, type PaneSpec } from "../../lib/dock.js";
 import { shellCatalog } from "../../lib/catalog.js";
+import { createShellDock, type PaneSpec } from "../../lib/dock.js";
 import type { A2uiMessage } from "../../lib/renderer.js";
 
 /** A minimal surface: one root Text node carrying a recognisable string. */
@@ -70,12 +66,7 @@ describe("the IContentRenderer contract (rung 7's expensive finding)", () => {
     dockview.addPanel({ id: "p", component: "surface" });
 
     expect(seen).toBeDefined();
-    expect(Object.keys(seen as object).sort()).toEqual([
-      "api",
-      "containerApi",
-      "params",
-      "title",
-    ]);
+    expect(Object.keys(seen as object).sort()).toEqual(["api", "containerApi", "params", "title"]);
     expect("containerElement" in (seen as object)).toBe(false);
   });
 
@@ -116,7 +107,12 @@ describe("the IContentRenderer contract (rung 7's expensive finding)", () => {
 
 describe("one surface per pane", () => {
   const specs: PaneSpec[] = [
-    { id: "notes", title: "Notes", origin: "https://notes.example/", messages: surfaceMessages("notes", "NOTES-CONTENT") },
+    {
+      id: "notes",
+      title: "Notes",
+      origin: "https://notes.example/",
+      messages: surfaceMessages("notes", "NOTES-CONTENT"),
+    },
     {
       id: "sql",
       title: "SQL Console",
