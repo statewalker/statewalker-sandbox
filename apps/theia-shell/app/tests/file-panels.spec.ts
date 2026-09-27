@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { explorer, openMain, readFile, runFromPalette, start, toast } from "./helpers";
+import { explorer, mountNew, openMain, readFile, runFromPalette, start, toast } from "./helpers";
 
 export const panels = (page: Page) => page.locator(".file-panel");
 export const row = (panel: Locator, name: string) =>
@@ -17,8 +17,8 @@ export async function openPanel(page: Page) {
 test("a panel lists a folder flat, navigates into folders and back up", async ({ page }) => {
   const errors = await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await expect(row(panel, "Browser Storage")).toBeVisible();
-  await row(panel, "Browser Storage").dblclick();
+  // A new panel opens at the first workspace root: the main storage.
+  await expect(panel.locator(".file-panel-crumb")).toHaveText(["Browser Storage"]);
   await expect(row(panel, "welcome.md")).toBeVisible();
   await expect(row(panel, "notes")).toBeVisible();
   await row(panel, "notes").dblclick();
@@ -27,6 +27,11 @@ test("a panel lists a folder flat, navigates into folders and back up", async ({
   // Backspace goes up (tree-local key, not a keybinding).
   await row(panel, "ideas.md").click();
   await page.keyboard.press("Backspace");
+  await expect(row(panel, "welcome.md")).toBeVisible();
+  // A workspace root is the top: nothing above the mounts is a workspace folder.
+  await row(panel, "welcome.md").click();
+  await page.keyboard.press("Backspace");
+  await expect(panel.locator(".file-panel-crumb")).toHaveText(["Browser Storage"]);
   await expect(row(panel, "welcome.md")).toBeVisible();
   // Folders never expand in place.
   await expect(panel.locator(".theia-ExpansionToggle")).toHaveCount(0);
@@ -38,7 +43,6 @@ test("Backspace inside the type-to-filter box edits the filter, not the folder",
 }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await row(panel, "notes").dblclick();
   await row(panel, "ideas.md").click();
   await page.keyboard.press("i");
@@ -52,7 +56,6 @@ test("Backspace inside the type-to-filter box edits the filter, not the folder",
 test("the panel shows size and date columns and sorts by clicking a header", async ({ page }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await row(panel, "docs").dblclick();
   await expect(row(panel, "sample.pdf").locator(".file-panel-size")).not.toHaveText("");
   const order = () => panel.locator(".theia-TreeNode .theia-TreeNodeSegmentGrow").allTextContents();
@@ -64,7 +67,6 @@ test("the panel shows size and date columns and sorts by clicking a header", asy
 test("a file opens from the panel", async ({ page }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await row(panel, "welcome.md").dblclick();
   await expect(page.locator(".theia-editor .monaco-editor").last()).toBeVisible();
 });
@@ -78,7 +80,6 @@ test("an empty folder says so", async ({ page }) => {
     await files.mkdir("/browser/empty");
   });
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await row(panel, "empty").dblclick();
   await expect(panel.getByText("This folder is empty")).toBeVisible();
 });
@@ -86,7 +87,6 @@ test("an empty folder says so", async ({ page }) => {
 test("the breadcrumb navigates to an ancestor", async ({ page }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await row(panel, "notes").dblclick();
   await expect(crumb(panel, "notes")).toBeVisible();
   await crumb(panel, "Browser Storage").locator(".file-panel-crumb-label").click();
@@ -96,7 +96,6 @@ test("the breadcrumb navigates to an ancestor", async ({ page }) => {
 test("a crumb's dropdown lists its sibling folders and jumps to one", async ({ page }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await row(panel, "notes").dblclick();
   await crumb(panel, "notes").locator(".file-panel-crumb-toggle").click();
   const list = page.locator(".file-panel-siblings");
@@ -107,14 +106,32 @@ test("a crumb's dropdown lists its sibling folders and jumps to one", async ({ p
   await expect(list).toHaveCount(0);
 });
 
-test("the first crumb's dropdown lists the workspace roots", async ({ page }) => {
+test("the first crumb's dropdown lists the workspace roots — the mounts", async ({ page }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await panel.locator(".file-panel-crumb").first().locator(".file-panel-crumb-toggle").click();
-  await expect(page.locator(".file-panel-siblings .file-panel-sibling")).toHaveText(["Files"]);
+  await row(panel, "notes").dblclick();
+  const first = panel.locator(".file-panel-crumb").first();
+  await expect(first.locator(".file-panel-crumb-label")).toHaveText("Browser Storage");
+  await first.locator(".file-panel-crumb-toggle").click();
+  const list = page.locator(".file-panel-siblings");
+  await expect(list.locator(".file-panel-sibling")).toHaveText(["Browser Storage", "Temporary"]);
+  await expect(list.locator(".file-panel-sibling.current")).toHaveText("Browser Storage");
   await page.keyboard.press("Escape");
-  await expect(page.locator(".file-panel-siblings")).toHaveCount(0);
+  await expect(list).toHaveCount(0);
+  // Choosing another root takes the panel there.
+  await first.locator(".file-panel-crumb-toggle").click();
+  await list.locator(".file-panel-sibling", { hasText: "Temporary" }).click();
+  await expect(panel.locator(".file-panel-crumb")).toHaveText(["Temporary"]);
+  await expect(panel.getByText("This folder is empty")).toBeVisible();
 });
+
+/** Takes `panel` to another workspace root through its first crumb's dropdown. */
+async function toRoot(panel: Locator, name: string) {
+  await panel.locator(".file-panel-crumb").first().locator(".file-panel-crumb-toggle").click();
+  await panel.page().locator(".file-panel-siblings .file-panel-sibling", { hasText: name }).click();
+  await expect(panel.locator(".file-panel-crumb")).toHaveCount(1);
+  await expect(panel.locator(".file-panel-crumb-label")).toContainText(name);
+}
 
 async function contextMenu(panel: Locator, name: string, item: string) {
   await row(panel, name).click({ button: "right" });
@@ -124,7 +141,6 @@ async function contextMenu(panel: Locator, name: string, item: string) {
 test("rename and delete from the panel's context menu reach the explorer", async ({ page }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await row(panel, "notes").dblclick();
   await contextMenu(panel, "ideas.md", "Rename");
   const input = page.locator(".dialogContent input");
@@ -145,7 +161,6 @@ test("the panel's Open opens a file; the explorer's Open in Files Panel opens a 
 }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await contextMenu(panel, "welcome.md", "Open");
   await expect(page.locator(".theia-editor .monaco-editor").last()).toBeVisible();
 
@@ -178,7 +193,7 @@ async function twoPanels(page: Page, left: string[], right: string[]) {
 
 test("dragging between panels asks, and Copy copies", async ({ page }) => {
   await start(page, "?storage=memory");
-  const [a, b] = await twoPanels(page, ["Browser Storage"], ["Browser Storage", "docs"]);
+  const [a, b] = await twoPanels(page, [], ["docs"]);
   await row(a, "welcome.md").dragTo(b.locator(".file-panel-tree"));
   await expect(dialog(page)).toBeVisible();
   await expect(dialog(page).locator("input[name=file-panels-op]")).toHaveCount(2); // Copy, Move
@@ -190,7 +205,7 @@ test("dragging between panels asks, and Copy copies", async ({ page }) => {
 
 test("Move moves", async ({ page }) => {
   await start(page, "?storage=memory");
-  const [a, b] = await twoPanels(page, ["Browser Storage"], ["Browser Storage", "docs"]);
+  const [a, b] = await twoPanels(page, [], ["docs"]);
   await row(a, "welcome.md").dragTo(b.locator(".file-panel-tree"));
   await dialog(page).locator("input[name=file-panels-op][value=move]").check();
   await dialog(page).locator(".theia-button.main").click();
@@ -198,12 +213,25 @@ test("Move moves", async ({ page }) => {
   await expect(row(a, "welcome.md")).toHaveCount(0);
 });
 
+test("Move to Other Panel moves across workspace roots (mounts)", async ({ page }) => {
+  await start(page, "?storage=memory");
+  const [a, b] = await twoPanels(page, [], []);
+  await toRoot(b, "Temporary");
+  await row(a, "welcome.md").click({ button: "right" });
+  await page.locator(".lm-Menu-item", { hasText: "Move to Other Panel…" }).click();
+  await expect(dialog(page).locator("input[name=file-panels-op][value=move]")).toBeChecked();
+  await dialog(page).locator(".theia-button.main").click();
+  await expect(row(b, "welcome.md")).toBeVisible();
+  await expect(row(a, "welcome.md")).toHaveCount(0);
+  await expect.poll(() => readText(page, "/temp/welcome.md")).toBe(true);
+  await expect.poll(() => readText(page, "/browser/welcome.md")).toBe(false);
+});
+
 test("a drop into the same folder offers only Copy or Rename; Copy makes a free name", async ({
   page,
 }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await row(panel, "notes").dblclick();
   await row(panel, "ideas.md").dragTo(panel.locator(".file-panel-tree"), {
     targetPosition: { x: 20, y: 200 },
@@ -246,7 +274,7 @@ for (const [policy, label] of [
     // notes gets its own cheatsheet.md, so copying docs/{cheatsheet.md, sample.pdf} clashes once.
     await writeText(page, "/browser/notes/cheatsheet.md", "the old one");
     const source = await readFile(page, "/browser/docs/cheatsheet.md");
-    const [a, b] = await twoPanels(page, ["Browser Storage", "docs"], ["Browser Storage", "notes"]);
+    const [a, b] = await twoPanels(page, ["docs"], ["notes"]);
     await row(a, "cheatsheet.md").click();
     await row(a, "sample.pdf").click({ modifiers: ["Control"] });
     await row(a, "sample.pdf").dragTo(b.locator(".file-panel-tree"));
@@ -271,7 +299,6 @@ for (const [policy, label] of [
 test("dropping a folder into itself is refused", async ({ page }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await row(panel, "notes").click();
   await row(panel, "welcome.md").click({ modifiers: ["Control"] });
   await row(panel, "welcome.md").dragTo(row(panel, "notes"));
@@ -297,7 +324,7 @@ test("names with spaces, # and % survive a copy", async ({ page }) => {
       })(),
     );
   });
-  const [a, b] = await twoPanels(page, ["Browser Storage"], ["Browser Storage", "docs"]);
+  const [a, b] = await twoPanels(page, [], ["docs"]);
   await row(a, "my #1 100%.txt").dragTo(b.locator(".file-panel-tree"));
   await dialog(page).locator("input[name=file-panels-op][value=copy]").check();
   await dialog(page).locator(".theia-button.main").click();
@@ -306,7 +333,21 @@ test("names with spaces, # and % survive a copy", async ({ page }) => {
 
 test("the explorer drags into a panel with the dialog; failures are reported", async ({ page }) => {
   await start(page, "?storage=memory");
-  const panel = await openPanel(page); // at the "Files" root, which is read-only
+  // A mount that cannot be reached is an empty, read-only placeholder root: writes to it fail.
+  await mountNew(page, "New S3 Bucket…", {
+    name: "Cloud",
+    fields: {
+      endpoint: "http://127.0.0.1:1",
+      region: "us-east-1",
+      bucket: "b",
+      prefix: "",
+      accessKeyId: "a",
+      secretAccessKey: "s",
+    },
+  });
+  await expect(explorer(page).getByText(/^Cloud \(/)).toBeVisible();
+  const panel = await openPanel(page);
+  await toRoot(panel, "Cloud");
   await explorer(page)
     .getByText("welcome.md", { exact: true })
     .dragTo(panel.locator(".file-panel-tree"), { targetPosition: { x: 20, y: 200 } });
@@ -318,7 +359,6 @@ test("the explorer drags into a panel with the dialog; failures are reported", a
 test("an operating-system file dropped on a panel is uploaded", async ({ page }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   // Theia's TreeWidget wires onDragOver/onDrop onto the inner ".theia-TreeContainer" div, not
   // onto ".file-panel-tree" (the widget's own outer node) — a dispatchEvent on the outer node
   // never reaches that descendant listener, since native events bubble up, not down.
@@ -341,7 +381,6 @@ test("an operating-system file dropped on a panel is uploaded", async ({ page })
 test("panel → explorer: a plain drop moves, Ctrl copies, no dialog", async ({ page }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   const notes = explorer(page).getByText("notes", { exact: true });
 
   await row(panel, "welcome.md").dragTo(notes);
@@ -368,7 +407,7 @@ test("explorer → explorer still moves without a dialog", async ({ page }) => {
 
 test("Copy to Other Panel copies the selection into the other panel's folder", async ({ page }) => {
   await start(page, "?storage=memory");
-  const [a, b] = await twoPanels(page, ["Browser Storage"], ["Browser Storage", "media"]);
+  const [a, b] = await twoPanels(page, [], ["media"]);
   await row(a, "welcome.md").click({ button: "right" });
   await page.locator(".lm-Menu-item", { hasText: "Copy to Other Panel…" }).click();
   await expect(dialog(page).locator("input[name=file-panels-op][value=copy]")).toBeChecked();
@@ -380,7 +419,7 @@ test("Copy to Other Panel copies the selection into the other panel's folder", a
 
 test("panels come back after a reload, at their folders and sort", async ({ page }) => {
   await start(page, "?storage=memory");
-  const [a] = await twoPanels(page, ["Browser Storage", "docs"], ["Browser Storage", "notes"]);
+  const [a] = await twoPanels(page, ["docs"], ["notes"]);
   await a.locator(".file-panel-column", { hasText: "Name" }).click();
   // Theia stores the layout on unload.
   await page.reload();
@@ -396,7 +435,6 @@ test("panels come back after a reload, at their folders and sort", async ({ page
 test("a panel whose folder is deleted moves up and says so", async ({ page }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await row(panel, "notes").dblclick();
   await explorer(page).getByText("notes", { exact: true }).click();
   await page.keyboard.press("Delete");
@@ -407,9 +445,25 @@ test("a panel whose folder is deleted moves up and says so", async ({ page }) =>
   ).toBeVisible();
 });
 
+test("a panel on a removed mount falls back to the first root, not above the roots", async ({
+  page,
+}) => {
+  await start(page, "?storage=memory");
+  await mountNew(page, "New In-Memory Folder…", { name: "Scratch" });
+  const panel = await openPanel(page);
+  await toRoot(panel, "Scratch");
+  await explorer(page).getByText("Scratch", { exact: true }).click({ button: "right" });
+  await page.locator(".lm-Menu-itemLabel", { hasText: "Remove Folder from Workspace" }).click();
+  await expect(row(panel, "welcome.md")).toBeVisible();
+  await expect(panel.locator(".file-panel-crumb")).toHaveText(["Browser Storage"]);
+  await expect(
+    panel.getByText("“scratch” no longer exists — showing “Browser Storage”"),
+  ).toBeVisible();
+});
+
 test("a drop on a breadcrumb segment copies there and opens no editor", async ({ page }) => {
   await start(page, "?storage=memory");
-  const [a, b] = await twoPanels(page, ["Browser Storage", "docs"], ["Browser Storage", "notes"]);
+  const [a, b] = await twoPanels(page, ["docs"], ["notes"]);
   const editors = await page.locator(".theia-editor").count();
   await row(a, "cheatsheet.md").dragTo(
     crumb(b, "Browser Storage").locator(".file-panel-crumb-label"),
@@ -450,7 +504,6 @@ test("a panel whose creation folder is gone after a reload comes back at its par
 test("a folder that cannot be read says so, and Retry opens it once it can", async ({ page }) => {
   const errors = await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await expect(row(panel, "notes")).toBeVisible();
   // Make /browser/notes unreadable (not missing): the provider's stats throws a plain error.
   await page.evaluate(() => {
@@ -481,19 +534,21 @@ test("a folder that cannot be read says so, and Retry opens it once it can", asy
 test("the toolbar's Go Up acts on its panel while the focus is elsewhere", async ({ page }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await row(panel, "notes").dblclick();
   await expect(row(panel, "ideas.md")).toBeVisible();
   // The explorer takes the focus; the panel's tab-bar toolbar stays on screen.
   await explorer(page).getByText("media", { exact: true }).click();
   await page.locator('[id="file-panels.goUp"]').click();
   await expect(row(panel, "welcome.md")).toBeVisible();
+  // At the workspace root there is nowhere further up.
+  await page.locator('[id="file-panels.goUp"]').click();
+  await expect(panel.locator(".file-panel-crumb")).toHaveText(["Browser Storage"]);
+  await expect(row(panel, "welcome.md")).toBeVisible();
 });
 
 test("dragging over a folder row does not change the panel's selection", async ({ page }) => {
   await start(page, "?storage=memory");
   const panel = await openPanel(page);
-  await row(panel, "Browser Storage").dblclick();
   await row(panel, "welcome.md").click();
   await row(panel, "welcome.md").dragTo(row(panel, "notes"));
   await expect(dialog(page)).toBeVisible();
