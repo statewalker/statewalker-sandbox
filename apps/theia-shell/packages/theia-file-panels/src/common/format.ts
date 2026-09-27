@@ -18,6 +18,11 @@ export function formatSize(bytes: number, locale = currentLocale()): string {
   }).format(value);
 }
 
+/** A count (of items, of steps) as the locale writes numbers: `1,200` in English. */
+export function formatCount(count: number, locale = currentLocale()): string {
+  return new Intl.NumberFormat(locale).format(count);
+}
+
 /** A modification time (ms since the epoch), short date and time. */
 export function formatDate(mtime: number, locale = currentLocale()): string {
   return new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }).format(mtime);

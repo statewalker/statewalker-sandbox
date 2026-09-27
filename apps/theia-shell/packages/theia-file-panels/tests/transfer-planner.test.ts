@@ -132,6 +132,25 @@ describe("planTransfer", () => {
     expect(paths(plan)).toEqual(["move /b/a.md -> /b/docs/b.md !"]);
   });
 
+  it("copies one item in its own folder onto an existing other name, overwriting it", () => {
+    const plan = planTransfer(
+      req({
+        sources: [file("/b/docs/a.md")],
+        op: "copy",
+        name: "b.md",
+        existing: new Set(["a.md", "b.md"]),
+      }),
+    );
+    expect(paths(plan)).toEqual(["copy /b/docs/a.md -> /b/docs/b.md !"]);
+  });
+
+  it("copies one item from elsewhere onto the same existing name, overwriting it", () => {
+    const plan = planTransfer(
+      req({ sources: [file("/b/a.md")], op: "copy", name: "a.md", existing: new Set(["a.md"]) }),
+    );
+    expect(paths(plan)).toEqual(["copy /b/a.md -> /b/docs/a.md !"]);
+  });
+
   it("applies the clash policy to several items", () => {
     const sources = [file("/b/a.md"), file("/b/c.md")];
     const existing = new Set(["a.md"]);

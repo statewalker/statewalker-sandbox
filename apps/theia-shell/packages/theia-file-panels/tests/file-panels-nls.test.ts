@@ -14,9 +14,10 @@ describe("the message catalog", () => {
   });
 
   it("renders every argument and leaves no placeholder", () => {
-    const PLURAL = new Set(["transferTitle", "sameFolderTitle", "clashCount"]);
+    const PLURAL = new Set(["transferTitle", "sameFolderTitle", "clashCount", "itemsFailed"]);
+    const COUNTS = new Set(["progressStep"]);
     for (const [name, fn] of Object.entries(Messages)) {
-      if (PLURAL.has(name)) continue;
+      if (PLURAL.has(name) || COUNTS.has(name)) continue;
       const args = Array.from({ length: fn.length }, (_, i) => (i === 0 ? 7 : `‹${i}›`));
       const text = (fn as (...a: unknown[]) => string)(...args);
       expect(text, name).not.toMatch(/\{\d\}/);
@@ -40,6 +41,21 @@ describe("the message catalog", () => {
     expect(Messages.clashCount(1, "en")).not.toMatch(/\{\d\}/);
     expect(Messages.clashCount(7, "en")).toContain("7");
     expect(Messages.clashCount(7, "en")).not.toMatch(/\{\d\}/);
+  });
+
+  it("says how many items failed, plural on the total, counts formatted", () => {
+    expect(Messages.itemsFailed(1, 1, "en")).toBe("1 of 1 item failed");
+    expect(Messages.itemsFailed(1, 7, "en")).toBe("1 of 7 items failed");
+    expect(Messages.itemsFailed(1200, 1500, "en")).toBe("1,200 of 1,500 items failed");
+    expect(Messages.itemsFailed(1200, 1500, "de")).toBe("1.200 of 1.500 items failed");
+    for (const total of [1, 3, 5, 21]) {
+      expect(Messages.itemsFailed(1, total, "ru")).toContain(String(total));
+    }
+  });
+
+  it("formats the counts of a progress step and a failure line", () => {
+    expect(Messages.progressStep(1200, 1500, "en")).toBe("1,200 of 1,500");
+    expect(Messages.failureLine("‹a›", "‹b›")).toBe("‹a›: ‹b›");
   });
 
   it("gives plural messages a text for every Russian category", () => {

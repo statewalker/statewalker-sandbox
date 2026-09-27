@@ -122,8 +122,10 @@ export function planTransfer(request: TransferRequest): TransferPlan {
   }
 
   if (sources.length === 1 && request.name !== undefined) {
+    // A typed name that exists is replaced — the dialog says so. The one name that exists and
+    // must not be replaced is the source itself, and `add` drops that step.
     const [source] = sources;
-    add(source, op, request.name, existing.has(request.name) && !isIn(source, target));
+    add(source, op, request.name, existing.has(request.name));
     return { steps, skipped };
   }
 

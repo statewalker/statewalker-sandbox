@@ -1,5 +1,5 @@
 import { nls } from "@theia/core/lib/common/nls";
-import { pluralCategory } from "./format";
+import { formatCount, pluralCategory } from "./format";
 import { currentLocale } from "./locale";
 
 /*
@@ -46,134 +46,137 @@ export const Messages = {
   retry: () => nls.localize("theia-shell/file-panels/retry", "Retry"),
 
   transferTitle: (count: number, name: string, locale = currentLocale()) => {
+    const n = formatCount(count, locale);
     switch (pluralCategory(count, locale)) {
       case "one":
         return nls.localize(
           "theia-shell/file-panels/transferTitle.one",
           "Copy or move “{1}”",
-          count,
+          n,
           name,
         );
       case "zero":
         return nls.localize(
           "theia-shell/file-panels/transferTitle.zero",
           "Copy or move {0} items",
-          count,
+          n,
           name,
         );
       case "two":
         return nls.localize(
           "theia-shell/file-panels/transferTitle.two",
           "Copy or move {0} items",
-          count,
+          n,
           name,
         );
       case "few":
         return nls.localize(
           "theia-shell/file-panels/transferTitle.few",
           "Copy or move {0} items",
-          count,
+          n,
           name,
         );
       case "many":
         return nls.localize(
           "theia-shell/file-panels/transferTitle.many",
           "Copy or move {0} items",
-          count,
+          n,
           name,
         );
       default:
         return nls.localize(
           "theia-shell/file-panels/transferTitle.other",
           "Copy or move {0} items",
-          count,
+          n,
           name,
         );
     }
   },
   sameFolderTitle: (count: number, name: string, locale = currentLocale()) => {
+    const n = formatCount(count, locale);
     switch (pluralCategory(count, locale)) {
       case "one":
         return nls.localize(
           "theia-shell/file-panels/sameFolderTitle.one",
           "Copy or rename “{1}”",
-          count,
+          n,
           name,
         );
       case "zero":
         return nls.localize(
           "theia-shell/file-panels/sameFolderTitle.zero",
           "Copy {0} items",
-          count,
+          n,
           name,
         );
       case "two":
         return nls.localize(
           "theia-shell/file-panels/sameFolderTitle.two",
           "Copy {0} items",
-          count,
+          n,
           name,
         );
       case "few":
         return nls.localize(
           "theia-shell/file-panels/sameFolderTitle.few",
           "Copy {0} items",
-          count,
+          n,
           name,
         );
       case "many":
         return nls.localize(
           "theia-shell/file-panels/sameFolderTitle.many",
           "Copy {0} items",
-          count,
+          n,
           name,
         );
       default:
         return nls.localize(
           "theia-shell/file-panels/sameFolderTitle.other",
           "Copy {0} items",
-          count,
+          n,
           name,
         );
     }
   },
   clashCount: (count: number, locale = currentLocale()) => {
+    const n = formatCount(count, locale);
     switch (pluralCategory(count, locale)) {
       case "one":
         return nls.localize(
           "theia-shell/file-panels/clashCount.one",
           "{0} item already exists in the target:",
-          count,
+          n,
         );
       case "zero":
         return nls.localize(
           "theia-shell/file-panels/clashCount.zero",
           "{0} items already exist in the target:",
-          count,
+          n,
         );
       case "two":
         return nls.localize(
           "theia-shell/file-panels/clashCount.two",
           "{0} items already exist in the target:",
-          count,
+          n,
         );
       case "few":
         return nls.localize(
           "theia-shell/file-panels/clashCount.few",
           "{0} items already exist in the target:",
-          count,
+          n,
         );
       case "many":
         return nls.localize(
           "theia-shell/file-panels/clashCount.many",
           "{0} items already exist in the target:",
-          count,
+          n,
         );
       default:
         return nls.localize(
           "theia-shell/file-panels/clashCount.other",
           "{0} items already exist in the target:",
-          count,
+          n,
         );
     }
   },
@@ -204,8 +207,66 @@ export const Messages = {
     nls.localize("theia-shell/file-panels/intoItself", "Cannot put “{0}” inside itself", name),
   transferring: () =>
     nls.localize("theia-shell/file-panels/transferring", "Copying and moving files"),
-  progressStep: (done: number, total: string) =>
-    nls.localize("theia-shell/file-panels/progressStep", "{0} of {1}", done, total),
-  itemsFailed: (failed: number, total: string) =>
-    nls.localize("theia-shell/file-panels/itemsFailed", "{0} of {1} items failed", failed, total),
+  progressStep: (done: number, total: number, locale = currentLocale()) =>
+    nls.localize(
+      "theia-shell/file-panels/progressStep",
+      "{0} of {1}",
+      formatCount(done, locale),
+      formatCount(total, locale),
+    ),
+  /** Plural on `total`: "1 of 1 item failed", "1 of 7 items failed". */
+  itemsFailed: (failed: number, total: number, locale = currentLocale()) => {
+    const f = formatCount(failed, locale);
+    const t = formatCount(total, locale);
+    switch (pluralCategory(total, locale)) {
+      case "one":
+        return nls.localize(
+          "theia-shell/file-panels/itemsFailed.one",
+          "{0} of {1} item failed",
+          f,
+          t,
+        );
+      case "zero":
+        return nls.localize(
+          "theia-shell/file-panels/itemsFailed.zero",
+          "{0} of {1} items failed",
+          f,
+          t,
+        );
+      case "two":
+        return nls.localize(
+          "theia-shell/file-panels/itemsFailed.two",
+          "{0} of {1} items failed",
+          f,
+          t,
+        );
+      case "few":
+        return nls.localize(
+          "theia-shell/file-panels/itemsFailed.few",
+          "{0} of {1} items failed",
+          f,
+          t,
+        );
+      case "many":
+        return nls.localize(
+          "theia-shell/file-panels/itemsFailed.many",
+          "{0} of {1} items failed",
+          f,
+          t,
+        );
+      default:
+        return nls.localize(
+          "theia-shell/file-panels/itemsFailed.other",
+          "{0} of {1} items failed",
+          f,
+          t,
+        );
+    }
+  },
+  /** One line of a failure report: the item's name and why it failed. */
+  failureLine: (name: string, reason: string) =>
+    nls.localize("theia-shell/file-panels/failureLine", "{0}: {1}", name, reason),
+  /** A drop or transfer that failed as a whole (not one step of it). */
+  transferFailed: (reason: string) =>
+    nls.localize("theia-shell/file-panels/transferFailed", "Copy or move failed: {0}", reason),
 } as const;
