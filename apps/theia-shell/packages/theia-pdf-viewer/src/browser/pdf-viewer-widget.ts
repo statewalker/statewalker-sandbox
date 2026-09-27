@@ -10,6 +10,7 @@ import { Disposable } from "@theia/core/lib/common/disposable";
 import URI from "@theia/core/lib/common/uri";
 import { inject, injectable } from "@theia/core/shared/inversify";
 import { FileService } from "@theia/filesystem/lib/browser/file-service";
+import { touchesFile } from "../common/file-changes";
 
 export const PdfViewerOptions = Symbol("PdfViewerOptions");
 /** Navigatable options, so Theia can re-open the viewer when its file is moved or renamed. */
@@ -71,7 +72,7 @@ export class PdfViewerWidget extends BaseWidget implements Navigatable {
     );
     this.toDispose.push(
       this.files.onDidFilesChange((event) => {
-        if (event.contains(uri)) void this.load();
+        if (touchesFile(event.changes, uri)) void this.load();
       }),
     );
     await this.load();
@@ -86,8 +87,16 @@ export class PdfViewerWidget extends BaseWidget implements Navigatable {
       if (ticket !== this.loads || this.isDisposed) return;
       this.clear();
       const message = document.createElement("div");
-      message.className = "pdf-viewer-message text-muted-foreground m-auto text-sm";
-      message.textContent = `${this.uri.path.base} cannot be read (deleted or moved?)`;
+      message.className =
+        "pdf-viewer-message text-muted-foreground m-auto flex flex-col items-center gap-2 text-sm";
+      const text = document.createElement("span");
+      text.textContent = `${this.uri.path.base} cannot be read (deleted or moved?)`;
+      const reload = document.createElement("button");
+      reload.type = "button";
+      reload.className = "pdf-viewer-reload theia-button";
+      reload.textContent = "Reload";
+      reload.addEventListener("click", () => void this.load());
+      message.append(text, reload);
       this.node.appendChild(message);
       this.shown = Disposable.create(() => message.remove());
       return;

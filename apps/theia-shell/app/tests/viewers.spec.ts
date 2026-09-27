@@ -32,6 +32,49 @@ async function deleteFromExplorer(page: Page, file: string) {
 
 const tab = (page: Page, label: string) => page.locator(".lm-TabBar-tab", { hasText: label });
 
+/**
+ * Makes reads of `path` (a FilesApi path, e.g. "/browser/media/gradient.png")
+ * fail until `unpatchRead` runs. This never touches `FilesApiFileSystemProvider`'s
+ * mutating methods, so no `onDidFilesChange` event fires — the same technique
+ * `file-panels.spec.ts` uses for "a folder that cannot be read".
+ */
+async function patchRead(page: Page, path: string) {
+  await page.evaluate((p) => {
+    const files = (window as unknown as { theiaShell: { filesApi: Record<string, unknown> } })
+      .theiaShell.filesApi;
+    const read = files.read as (candidate: string) => AsyncIterable<Uint8Array>;
+    (window as unknown as { __unpatchRead?: () => void }).__unpatchRead = () => {
+      files.read = read;
+    };
+    files.read = (candidate: string) => {
+      if (candidate === p) throw new Error("cannot be read for the test");
+      return read.call(files, candidate);
+    };
+  }, path);
+}
+
+async function unpatchRead(page: Page) {
+  await page.evaluate(() => {
+    (window as unknown as { __unpatchRead?: () => void }).__unpatchRead?.();
+  });
+}
+
+/**
+ * Changes `files.hidden` live, through the Settings editor. `MountService`
+ * reports this as `{ type: "updated", path: "/" }` — a real ancestor-only
+ * change event (the same shape a mount re-created after a vault unlock
+ * announces), reaching every open viewer through the real
+ * MountService → FilesApiChanges → FileService pipeline (no mocking).
+ */
+async function touchRootLive(page: Page) {
+  await runFromPalette(page, "Preferences: Open Settings (JSON)");
+  const editor = page.locator(".theia-editor .monaco-editor").last();
+  await editor.click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.insertText('{ "files.hidden": ["**/__touch-root-live__"] }');
+  await page.keyboard.press("Control+s");
+}
+
 test.describe("image viewer", () => {
   test("an image opens in the viewer, not in the text editor", async ({ page }) => {
     const errors = await start(page);
@@ -99,6 +142,51 @@ test.describe("image viewer", () => {
     await expect(page.locator(".image-viewer-widget")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
+
+  test("a Reload button appears when the image cannot be read; it stays until clicked", async ({
+    page,
+  }) => {
+    const errors = await start(page, "?storage=memory");
+    await patchRead(page, "/browser/media/gradient.png");
+    await open(page, "media", "gradient.png");
+
+    const viewer = page.locator(".image-viewer-widget");
+    const reload = viewer.locator(".image-viewer-reload");
+    await expect(viewer).toContainText("gradient.png cannot be read");
+    await expect(reload).toBeVisible();
+
+    // Clicking Reload while it still cannot be read: the message stays.
+    await reload.click();
+    await expect(viewer).toContainText("gradient.png cannot be read");
+
+    // Fixed, but not through Theia's FileService: no change event arrives,
+    // so the viewer stays stuck until Reload is clicked by hand.
+    await unpatchRead(page);
+    await expect(viewer).toContainText("gradient.png cannot be read");
+    await reload.click();
+    await expect(viewer.locator(".image-viewer-status")).toContainText("320 × 200");
+    await expect(reload).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
+  test("the image viewer reloads by itself when an ancestor (a mount) changes", async ({
+    page,
+  }) => {
+    const errors = await start(page, "?storage=memory");
+    await patchRead(page, "/browser/media/gradient.png");
+    await open(page, "media", "gradient.png");
+
+    const viewer = page.locator(".image-viewer-widget");
+    await expect(viewer).toContainText("gradient.png cannot be read");
+
+    await unpatchRead(page);
+    await touchRootLive(page);
+    await tab(page, "gradient.png").first().click();
+
+    await expect(viewer.locator(".image-viewer-status")).toContainText("320 × 200");
+    await expect(viewer.locator(".image-viewer-reload")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
 });
 
 test.describe("PDF viewer", () => {
@@ -144,6 +232,49 @@ test.describe("PDF viewer", () => {
     await deleteFromExplorer(page, "sample.pdf");
     await expect(tab(page, "sample.pdf")).toHaveCount(0);
     await expect(viewer).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
+  test("a Reload button appears when the PDF cannot be read; it stays until clicked", async ({
+    page,
+  }) => {
+    const errors = await start(page, "?storage=memory");
+    await patchRead(page, "/browser/docs/sample.pdf");
+    await open(page, "docs", "sample.pdf");
+
+    const viewer = page.locator(".pdf-viewer-widget");
+    const reload = viewer.locator(".pdf-viewer-reload");
+    await expect(viewer).toContainText("sample.pdf cannot be read");
+    await expect(reload).toBeVisible();
+
+    // Clicking Reload while it still cannot be read: the message stays.
+    await reload.click();
+    await expect(viewer).toContainText("sample.pdf cannot be read");
+
+    // Fixed, but not through Theia's FileService: no change event arrives,
+    // so the viewer stays stuck until Reload is clicked by hand.
+    await unpatchRead(page);
+    await expect(viewer).toContainText("sample.pdf cannot be read");
+    await reload.click();
+    await expect(viewer.locator("img[src^='blob:']").first()).toBeVisible({ timeout: 30_000 });
+    await expect(viewer.locator(".pdf-viewer-reload")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
+  test("the PDF viewer reloads by itself when an ancestor (a mount) changes", async ({ page }) => {
+    const errors = await start(page, "?storage=memory");
+    await patchRead(page, "/browser/docs/sample.pdf");
+    await open(page, "docs", "sample.pdf");
+
+    const viewer = page.locator(".pdf-viewer-widget");
+    await expect(viewer).toContainText("sample.pdf cannot be read");
+
+    await unpatchRead(page);
+    await touchRootLive(page);
+    await tab(page, "sample.pdf").first().click();
+
+    await expect(viewer.locator("img[src^='blob:']").first()).toBeVisible({ timeout: 30_000 });
+    await expect(viewer.locator(".pdf-viewer-reload")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 });

@@ -8,6 +8,7 @@ import { Emitter } from "@theia/core/lib/common/event";
 import URI from "@theia/core/lib/common/uri";
 import { inject, injectable } from "@theia/core/shared/inversify";
 import { FileService } from "@theia/filesystem/lib/browser/file-service";
+import { touchesFile } from "../common/file-changes";
 import { fitScale, formatZoom, imageMimeType, stepZoom } from "../common/image-view";
 
 export const ImageViewerOptions = Symbol("ImageViewerOptions");
@@ -32,6 +33,8 @@ export class ImageViewerWidget extends BaseWidget implements Navigatable {
   protected readonly canvas = document.createElement("div");
   protected readonly image = document.createElement("img");
   protected readonly status = document.createElement("div");
+  /** Shown next to the "cannot be read" message; re-reads the file by hand. */
+  protected readonly reloadButton = document.createElement("button");
   protected objectUrl: string | undefined;
   protected byteSize = 0;
   /** Set while the file cannot be read (deleted, moved); shown instead of the image. */
@@ -92,17 +95,21 @@ export class ImageViewerWidget extends BaseWidget implements Navigatable {
     this.status.className =
       "image-viewer-status border-border text-muted-foreground flex-none border-t px-2 py-0.5 text-xs";
     this.canvas.appendChild(this.image);
+    this.reloadButton.type = "button";
+    this.reloadButton.className = "image-viewer-reload theia-button ml-2";
+    this.reloadButton.textContent = "Reload";
     this.node.append(this.canvas, this.status);
 
     this.image.addEventListener("load", () => this.applyZoom());
     // A click toggles between fitting the view and actual size.
     this.image.addEventListener("click", () => this.setZoom(this.zoomMode === "fit" ? 1 : "fit"));
+    this.reloadButton.addEventListener("click", () => void this.load());
 
     this.toDispose.push(this.onDidChangeZoomEmitter);
     this.toDispose.push(Disposable.create(() => this.revoke()));
     this.toDispose.push(
       this.files.onDidFilesChange((event) => {
-        if (event.contains(uri)) void this.load();
+        if (touchesFile(event.changes, uri)) void this.load();
       }),
     );
     await this.load();
@@ -159,7 +166,8 @@ export class ImageViewerWidget extends BaseWidget implements Navigatable {
 
   protected applyZoom(): void {
     if (this.readError) {
-      this.status.textContent = this.readError;
+      this.status.textContent = "";
+      this.status.append(this.readError, this.reloadButton);
       return;
     }
     const { naturalWidth: width, naturalHeight: height } = this.image;
