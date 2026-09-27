@@ -38,6 +38,13 @@ over Theia's own tree rows, not a literal `<table>`.
   deleted or renamed from elsewhere, the panel falls back to its nearest existing ancestor within
   its workspace root (or the first workspace root) and shows a short notice. A panel on a mount
   that is removed from the workspace goes to the first root, never above the roots.
+- **Returning to the requested folder**: a fallback remembers the folder it could not reach and
+  watches for it to exist again (a mount recreated after a vault unlock, a Reconnect) — once it
+  does, the panel returns there by itself, clearing the notice. Navigating elsewhere by hand (a
+  breadcrumb click, opening a folder in the list, Go Up, …) forgets it instead.
+- **Live labels**: the breadcrumb, the tab title and the notice follow `LabelProvider.onDidChange`
+  — a mount's "(locked)" / "(click Reconnect)" / "(unavailable: …)" suffix updates in place, with
+  no navigation needed.
 - **A folder that cannot be opened** (a locked mount, a read error — anything but "does not
   exist") never throws out of a navigation: the panel stays at that folder with an empty list and
   shows “{folder}” is not available: {reason} with **Retry**, which opens the same folder again.

@@ -1,5 +1,16 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { explorer, mountNew, openMain, readFile, runFromPalette, start, toast } from "./helpers";
+// @ts-expect-error — plain JS module
+import { hasDocker, startRustFs } from "../../tools/rustfs.mjs";
+import {
+  explorer,
+  mountNew,
+  openMain,
+  readFile,
+  runFromPalette,
+  start,
+  toast,
+  unlockVault,
+} from "./helpers";
 
 export const panels = (page: Page) => page.locator(".file-panel");
 export const row = (panel: Locator, name: string) =>
@@ -591,4 +602,79 @@ test("dragging over a folder row does not change the panel's selection", async (
   await expect(dialog(page)).toHaveCount(0);
   await expect(row(panel, "welcome.md")).toHaveClass(/theia-mod-selected/);
   await expect(row(panel, "notes")).not.toHaveClass(/theia-mod-selected/);
+});
+
+test.describe("labels and returning to a folder after a mount recovers", () => {
+  test.skip(!hasDocker(), "Docker is not available: the S3 tests need RustFS");
+  test.setTimeout(120_000);
+
+  let s3: Awaited<ReturnType<typeof startRustFs>>;
+  test.beforeAll(async () => {
+    // The bucket's CORS must allow the app's own origin, which follows E2E_PORT.
+    const origin = new URL(test.info().project.use.baseURL as string).origin;
+    s3 = await startRustFs({ port: 19111, origin, bucket: "panels" });
+  });
+  test.afterAll(() => s3?.stop());
+
+  test("a panel's breadcrumb follows label changes; one that fell back returns to its folder", async ({
+    page,
+  }) => {
+    await start(page, "", { password: "pw" });
+    await mountNew(page, "New S3 Bucket…", {
+      name: "Cloud",
+      fields: {
+        endpoint: s3.endpoint,
+        region: "us-east-1",
+        bucket: s3.bucket,
+        prefix: "",
+        accessKeyId: s3.accessKeyId,
+        secretAccessKey: s3.secretAccessKey,
+      },
+    });
+    await expect(explorer(page).getByText("Cloud", { exact: true })).toBeVisible();
+    await expect(async () => {
+      await page.evaluate(async () => {
+        const files = (
+          window as unknown as {
+            theiaShell: { filesApi: { write(p: string, c: Uint8Array[]): Promise<void> } };
+          }
+        ).theiaShell.filesApi;
+        await files.write("/cloud/Docs/notes.md", [new TextEncoder().encode("# Docs")]);
+      });
+    }).toPass({ timeout: 30_000 });
+
+    // Panel A stays at the mount root: a pure label re-render, no fallback involved.
+    const panelA = await openPanel(page);
+    await toRoot(panelA, "Cloud");
+    await expect(panelA.locator(".file-panel-crumb")).toHaveText(["Cloud"]);
+
+    // Panel B goes into Docs — the folder it must return to once the mount is back.
+    const panelB = await openPanel(page);
+    await toRoot(panelB, "Cloud");
+    await row(panelB, "Docs").dblclick();
+    await expect(panelB.locator(".file-panel-crumb")).toHaveText(["Cloud", "Docs"]);
+
+    await page.reload();
+    await page.locator(".vault-dialog .theia-button.secondary").click(); // Skip
+    await expect(page.locator(".vault-dialog")).toHaveCount(0);
+    await openMain(page);
+    await expect(panels(page)).toHaveCount(2);
+    const [a, b] = [panels(page).first(), panels(page).last()];
+    await expect(a.locator(".file-panel-crumb")).toHaveText(["Cloud (locked)"]);
+    await expect(b.locator(".file-panel-crumb")).toHaveText(["Cloud (locked)"]);
+    await expect(b.getByText("“Docs” no longer exists — showing “Cloud (locked)”")).toBeVisible();
+
+    await runFromPalette(page, "Secrets: Unlock");
+    await unlockVault(page, "pw");
+
+    // Panel A: same folder throughout — the label alone updates, no navigation.
+    await expect(a.locator(".file-panel-crumb")).toHaveText(["Cloud"], { timeout: 30_000 });
+    // Panel B: returns to Docs by itself, clearing the notice.
+    await expect(b.locator(".file-panel-crumb")).toHaveText(["Cloud", "Docs"], {
+      timeout: 30_000,
+    });
+    await expect(row(b, "notes.md")).toBeVisible();
+    await expect(page.getByText(/locked/)).toHaveCount(0);
+    await expect(page.getByText(/no longer exists/)).toHaveCount(0);
+  });
 });

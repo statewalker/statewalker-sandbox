@@ -2,7 +2,7 @@ import {
   type BreadcrumbPopupContainer,
   BreadcrumbPopupContainerFactory,
 } from "@theia/core/lib/browser/breadcrumbs/breadcrumb-popup-container";
-import { LabelProvider } from "@theia/core/lib/browser/label-provider";
+import { type DidChangeLabelEvent, LabelProvider } from "@theia/core/lib/browser/label-provider";
 import type { StatefulWidget } from "@theia/core/lib/browser/shell/shell-layout-restorer";
 import { SelectableTreeNode } from "@theia/core/lib/browser/tree/tree-selection";
 import { BaseWidget, type Message } from "@theia/core/lib/browser/widgets/widget";
@@ -14,7 +14,11 @@ import * as React from "@theia/core/shared/react";
 import { createRoot } from "@theia/core/shared/react-dom/client";
 import { FileService } from "@theia/filesystem/lib/browser/file-service";
 import { createFileTreeContainer } from "@theia/filesystem/lib/browser/file-tree";
-import { FileOperationError, FileOperationResult } from "@theia/filesystem/lib/common/files";
+import {
+  type FileChangesEvent,
+  FileOperationError,
+  FileOperationResult,
+} from "@theia/filesystem/lib/common/files";
 import { WorkspaceService } from "@theia/workspace/lib/browser/workspace-service";
 import {
   type Crumb,
@@ -23,6 +27,7 @@ import {
   parentWithin,
   siblingSource,
 } from "../common/breadcrumb-model";
+import { touchesFile } from "../common/file-changes";
 import { Messages } from "../common/file-panels-nls";
 import { compareEntries, type SortState, toggleSort } from "../common/panel-sorting";
 import { FilePanelHeader, type FilePanelHeaderState } from "./file-panel-header";
@@ -66,8 +71,14 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
   /** The open sibling / hidden-folder popup, if any. */
   protected popup: BreadcrumbPopupContainer | undefined;
 
-  /** A notice shown until the next navigation (a folder that disappeared). */
-  protected notice: string | undefined;
+  /**
+   * A fallback still in effect: `gone` is the folder that was requested and could not be
+   * reached, `shown` is where the panel stands instead. Cleared by the next navigation
+   * (`onNavigated`); until then, the files-change watcher returns to `gone` once it exists
+   * again. The notice text is computed from these URIs on every render (`status()`), through
+   * the current labels — not frozen at the time of the fallback.
+   */
+  protected notice: { gone: URI; shown: URI } | undefined;
 
   get model(): FilePanelModel {
     return this.tree.model;
@@ -105,17 +116,8 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
       this.workspace.onWorkspaceChanged(() => this.renderBreadcrumb()),
       this.tree.onDidDrop.event((uris) => void this.selectWritten(uris)),
       Disposable.create(() => this.popup?.dispose()),
-      this.files.onDidFilesChange((event) => {
-        const folder = this.folder;
-        if (folder && event.changes.some((change) => change.resource.isEqualOrParent(folder))) {
-          void this.files
-            .exists(folder)
-            .catch(() => false)
-            .then((exists) => {
-              if (!exists && this.folder?.isEqual(folder)) void this.navigateToExisting(folder);
-            });
-        }
-      }),
+      this.labels.onDidChange((event) => this.onLabelsChanged(event)),
+      this.files.onDidFilesChange((event) => this.onFilesChanged(event)),
     ]);
     // Never throws: a creation folder that is gone falls back like a restored one, so Theia's
     // layout restore never drops the panel.
@@ -155,16 +157,58 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
 
   protected async showInstead(gone: URI, shown: URI): Promise<void> {
     if ((await this.navigateTo(shown)).kind !== "shown") return;
-    // `file:///` has no basename: name it by its label.
-    const name = gone.path.base || this.labels.getName(gone);
-    this.notice = Messages.folderGone(name, this.labels.getName(shown));
+    this.notice = { gone, shown };
     this.updateEmptyState();
   }
 
   /** Never throws; see `FilePanelModel.navigateToFolder`. */
   navigateTo(uri: URI): Promise<NavigationOutcome> {
-    this.notice = undefined;
     return this.model.navigateToFolder(uri);
+  }
+
+  /**
+   * Breadcrumb, title and notice follow label changes (e.g. a mount's "(locked)" suffix
+   * clearing on unlock) without a navigation: the affected URIs are the current folder, the
+   * workspace roots the breadcrumb's first segment can name, and — while a fallback notice is
+   * shown — the folders it names.
+   */
+  protected onLabelsChanged(event: DidChangeLabelEvent): void {
+    const uris = [this.folder, this.notice?.gone, this.notice?.shown, ...this.roots()].filter(
+      (uri): uri is URI => uri !== undefined,
+    );
+    if (!uris.some((uri) => event.affects(uri))) return;
+    if (this.folder) {
+      this.title.label = this.labels.getName(this.folder);
+      this.title.caption = this.labels.getLongName(this.folder);
+    }
+    this.renderBreadcrumb();
+    this.updateEmptyState();
+  }
+
+  /**
+   * The current folder disappearing (falls back, as `navigateToExisting` already does), and —
+   * new here — a fallback's requested folder (`notice.gone`) becoming reachable again (a vault
+   * unlock, a Reconnect): the panel returns to it by itself, clearing the notice.
+   */
+  protected onFilesChanged(event: FileChangesEvent): void {
+    const folder = this.folder;
+    if (folder && touchesFile(event.changes, folder)) {
+      void this.files
+        .exists(folder)
+        .catch(() => false)
+        .then((exists) => {
+          if (!exists && this.folder?.isEqual(folder)) void this.navigateToExisting(folder);
+        });
+    }
+    const gone = this.notice?.gone;
+    if (gone && touchesFile(event.changes, gone)) {
+      void this.files
+        .exists(gone)
+        .catch(() => false)
+        .then((exists) => {
+          if (exists && this.notice?.gone.isEqual(gone)) void this.navigateToExisting(gone);
+        });
+    }
   }
 
   /** The folder Go Up leads to; none at a workspace root. */
@@ -212,6 +256,10 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
   }
 
   protected onNavigated(uri: URI): void {
+    // Every navigation forgets a fallback still in effect — whether by hand (a breadcrumb
+    // click, a double-click in the tree) or the return `onFilesChanged` triggers; the latter
+    // sets a fresh one instead when the return itself fails again (see `showInstead`).
+    this.notice = undefined;
     this.title.label = this.labels.getName(uri);
     this.title.caption = this.labels.getLongName(uri);
     this.updateEmptyState();
@@ -296,6 +344,13 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
     this.header.setState({ status: this.status() });
   }
 
+  /** Computed fresh from the current labels every time — never frozen at fallback time. */
+  protected noticeText(notice: { gone: URI; shown: URI }): string {
+    // `file:///` has no basename: name it by its label.
+    const name = notice.gone.path.base || this.labels.getName(notice.gone);
+    return Messages.folderGone(name, this.labels.getName(notice.shown));
+  }
+
   /** The status line: a folder that could not be opened, a failed listing, a notice, or empty. */
   protected status(): FilePanelHeaderState["status"] {
     const { failure } = this.model;
@@ -313,7 +368,7 @@ export class FilePanelWidget extends BaseWidget implements StatefulWidget {
         retry: () => void this.refresh(),
       };
     }
-    if (this.notice) return { text: this.notice };
+    if (this.notice) return { text: this.noticeText(this.notice) };
     const root = this.model.root;
     const empty = root && "children" in root && (root.children as unknown[]).length === 0;
     return empty ? { text: Messages.emptyFolder() } : undefined;

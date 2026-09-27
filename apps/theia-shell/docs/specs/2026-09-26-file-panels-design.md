@@ -108,7 +108,7 @@ src/browser/
 
 | Unit | Responsibility | Depends on |
 |---|---|---|
-| `FilePanelWidget` | Holds the current folder URI; `navigateTo(uri)` swaps the tree root; composes the header and tree, renders the breadcrumb into the header; stores/restores state; on a vanished folder, falls back to the nearest existing ancestor. Title = folder label, tooltip = full path. | `FilePanelHeader`, `FilePanelTreeWidget`, `FolderBreadcrumb`, `WorkspaceService`, `LabelProvider` |
+| `FilePanelWidget` | Holds the current folder URI; `navigateTo(uri)` swaps the tree root; composes the header and tree, renders the breadcrumb into the header; stores/restores state; on a vanished folder, falls back to the nearest existing ancestor and remembers the folder it could not reach, returning to it once it exists again. Title, breadcrumb and notice follow `LabelProvider.onDidChange`. Title = folder label, tooltip = full path. | `FilePanelHeader`, `FilePanelTreeWidget`, `FolderBreadcrumb`, `WorkspaceService`, `LabelProvider` |
 | `FilePanelHeader` | A `ReactWidget`: the column headings (name / size / modified) as an ARIA table (`role="table"` > `role="row"` > `role="columnheader"` with `aria-sort`, a `<button>` inside each), a status/retry line, and the breadcrumb the widget passes in. | `FilePanelWidget` |
 | `FilePanelTree` / `FilePanelModel` | The one-level `FileTree`/`FileTreeModel`: children sorted by the active column; opening a folder navigates (`FilePanelModel.doOpenNode`) instead of expanding; opening a file uses Theia's open handler. | `FileTree`, `FileTreeModel`, `panel-sorting` |
 | `FilePanelTreeWidget` | The `FileTreeWidget` subclass: folders never expand, renders the size/modified cells, publishes selection, writes `theia-editor-dnd` and the panel drag marker on drag start, delegates every drop to `FileDropHandler`. | `FileTreeWidget`, `FileDropHandler`, `panel-drag` |
@@ -150,6 +150,16 @@ dialog — natively for explorer drags, through `PanelAwareNavigatorWidget` for 
   renamed, the panel moves to the nearest existing ancestor within its workspace root (a removed
   mount: the first root) and shows a short localized notice in its status line. Refresh covers
   backends that emit no changes.
+- **Returning to the requested folder.** A fallback keeps the folder it could not reach (`notice.
+  gone`) alongside where it is showing instead (`notice.shown`). The same file-change watcher —
+  matching the folder itself or any of its ancestors, as a mount root re-created announces only
+  `updated`, not `deleted` (`MountTable.apply`) — checks whether `gone` exists again and, if so,
+  navigates back to it, clearing the notice. Navigating anywhere by hand (`onNavigated`, fired for
+  every navigation regardless of origin) forgets the fallback instead.
+- **Live labels.** Breadcrumb, tab title and notice re-render on `LabelProvider.onDidChange` —
+  e.g. a mount's "(locked)" suffix clearing on unlock — without a navigation. The notice's text is
+  computed from the `gone`/`shown` URIs through the current labels on every render, never frozen
+  at fallback time.
 
 ## Breadcrumb
 
@@ -285,6 +295,9 @@ the explorer's menu layout.
   its state: creating a panel never fails. A folder that exists but cannot be read (vault locked,
   local folder awaiting permission — any other error) stays: **Not available** with **Retry** —
   the panel is not closed, so the layout survives an unlock.
+- A fallback is not the end of the story: the panel remembers the folder it requested and returns
+  to it, clearing the notice, once that folder exists again — a vault unlocked later (*Secrets:
+  Unlock*, prompt dismissed or not), a mount Reconnected. Navigating elsewhere by hand forgets it.
 - A navigation never throws. A folder that cannot be resolved still becomes the panel's folder —
   breadcrumb, Go Up and the stored state keep it — with an empty list and "“{0}” is not
   available: {1}" with **Retry**, which navigates to that same folder again.
