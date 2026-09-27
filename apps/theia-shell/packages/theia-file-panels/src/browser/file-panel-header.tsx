@@ -31,7 +31,7 @@ export class FilePanelHeader extends ReactWidget {
   protected render(): React.ReactNode {
     const { sort, status, breadcrumb } = this.state;
     const column = (id: SortColumn, label: string, className: string) => (
-      // biome-ignore lint/a11y/useSemanticElements: an ARIA grid-pattern columnheader (div-based flex layout, not a literal <table>), matching the row below.
+      // biome-ignore lint/a11y/useSemanticElements: ARIA grid-pattern columnheader (div-based flex layout, not a literal <table>).
       <span
         role="columnheader"
         tabIndex={-1}
@@ -49,11 +49,14 @@ export class FilePanelHeader extends ReactWidget {
     return (
       <>
         {breadcrumb}
-        {/* biome-ignore lint/a11y/useSemanticElements: an ARIA grid-pattern header row (div-based flex layout, not a literal <table>). */}
-        <div className="file-panel-columns" role="row" tabIndex={-1}>
-          {column("name", Messages.columnName(), "file-panel-name")}
-          {column("size", Messages.columnSize(), "file-panel-size")}
-          {column("modified", Messages.columnModified(), "file-panel-modified")}
+        {/* biome-ignore lint/a11y/useSemanticElements: ARIA grid-pattern header (div-based flex layout, not a literal <table>); its role="row" child needs this role as its required ARIA parent. */}
+        <div className="file-panel-column-bar" role="table">
+          {/* biome-ignore lint/a11y/useSemanticElements: ARIA grid-pattern header row (div-based flex layout, not a literal <table>). */}
+          <div className="file-panel-columns" role="row" tabIndex={-1}>
+            {column("name", Messages.columnName(), "file-panel-name")}
+            {column("size", Messages.columnSize(), "file-panel-size")}
+            {column("modified", Messages.columnModified(), "file-panel-modified")}
+          </div>
         </div>
         {status && (
           <div className="file-panel-status" role="status">

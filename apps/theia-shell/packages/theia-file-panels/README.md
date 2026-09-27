@@ -145,3 +145,16 @@ copy/move by drag and drop and by menu commands. Design:
     user could navigate the panel elsewhere while it was pending; the `.then` now re-checks
     `this.folder?.isEqual(folder)` before calling `navigateToExisting`, so a stale check can no
     longer undo a navigation made in the meantime.
+  - **Fix round 2 (code review):** ARIA's `row` role requires an ancestor with role
+    `table`/`grid`/`treegrid`/`rowgroup` (axe's `aria-required-parent`), which
+    `.file-panel-columns` (`role="row"`) didn't have. Wrapped it in a new
+    `.file-panel-column-bar` div with `role="table"`, giving the row its required table context —
+    the smallest valid structure, still no literal `<table>` (this stays a flex-laid-out bar, not
+    tabular markup). The new wrapper needed no CSS: an unstyled block div around the existing flex
+    row doesn't change layout. Re-tested whether `tabIndex={-1}` on the row/columnheaders was still
+    needed now that they have valid ARIA parents: Biome's `useFocusableInteractive` still fires
+    without it (the table ancestor doesn't change that rule's requirement), so both attributes
+    stayed, each with a one-line rationale where a `biome-ignore` is used. Three
+    `biome-ignore lint/a11y/useSemanticElements` comments now stand — table wrapper, row, and each
+    columnheader — one per div/span Biome would rather see as `<table>`/`<tr>`/`<th scope="col">`;
+    none needed for `useFocusableInteractive` since `tabIndex={-1}` resolves that rule outright.
