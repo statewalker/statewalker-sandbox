@@ -10,7 +10,7 @@ import { Disposable } from "@theia/core/lib/common/disposable";
 import URI from "@theia/core/lib/common/uri";
 import { inject, injectable } from "@theia/core/shared/inversify";
 import { FileService } from "@theia/filesystem/lib/browser/file-service";
-import { touchesFile } from "../common/file-changes";
+import { reloadsOn } from "../common/file-changes";
 
 export const PdfViewerOptions = Symbol("PdfViewerOptions");
 /** Navigatable options, so Theia can re-open the viewer when its file is moved or renamed. */
@@ -26,7 +26,8 @@ type EmbedPdfElement = ReturnType<typeof EmbedPDF.init>;
  * viewer as a blob: URL. PDFium's wasm is embedded in the bundle (Theia's
  * esbuild loads `.wasm` as a data: URL), and EmbedPDF's CDN fonts, Google
  * Fonts and stamp library are switched off, so the viewer makes no request outside the app.
- * Reloads when the file changes, and says so when it can no longer be read.
+ * Reloads when the file changes, and says so when it can no longer be read;
+ * while it cannot, a change to an ancestor (a mount re-created) reloads too.
  */
 @injectable()
 export class PdfViewerWidget extends BaseWidget implements Navigatable {
@@ -41,6 +42,8 @@ export class PdfViewerWidget extends BaseWidget implements Navigatable {
   protected shown: Disposable | undefined;
   /** Bumped by every load, so a slower, older read never overwrites a newer one. */
   protected loads = 0;
+  /** Set while the file cannot be read: the "cannot be read" message is shown. */
+  protected unreadable = false;
 
   get uri(): URI {
     return new URI(this.options.uri);
@@ -72,7 +75,7 @@ export class PdfViewerWidget extends BaseWidget implements Navigatable {
     );
     this.toDispose.push(
       this.files.onDidFilesChange((event) => {
-        if (touchesFile(event.changes, uri)) void this.load();
+        if (reloadsOn(event, uri, this.unreadable)) void this.load();
       }),
     );
     await this.load();
@@ -86,6 +89,7 @@ export class PdfViewerWidget extends BaseWidget implements Navigatable {
     } catch {
       if (ticket !== this.loads || this.isDisposed) return;
       this.clear();
+      this.unreadable = true;
       const message = document.createElement("div");
       message.className =
         "pdf-viewer-message text-muted-foreground m-auto flex flex-col items-center gap-2 text-sm";
@@ -103,6 +107,7 @@ export class PdfViewerWidget extends BaseWidget implements Navigatable {
     }
     if (ticket !== this.loads || this.isDisposed) return;
     this.clear();
+    this.unreadable = false;
 
     const src = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" }));
     const target = document.createElement("div");

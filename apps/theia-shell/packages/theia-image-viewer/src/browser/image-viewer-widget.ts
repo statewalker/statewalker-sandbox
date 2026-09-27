@@ -8,7 +8,7 @@ import { Emitter } from "@theia/core/lib/common/event";
 import URI from "@theia/core/lib/common/uri";
 import { inject, injectable } from "@theia/core/shared/inversify";
 import { FileService } from "@theia/filesystem/lib/browser/file-service";
-import { touchesFile } from "../common/file-changes";
+import { reloadsOn } from "../common/file-changes";
 import { fitScale, formatZoom, imageMimeType, stepZoom } from "../common/image-view";
 
 export const ImageViewerOptions = Symbol("ImageViewerOptions");
@@ -21,7 +21,8 @@ export type ImageZoom = "fit" | number;
 /**
  * Shows an image file read through Theia's FileService (so: the FilesApi) as a
  * blob: URL in an <img>. SVG is shown the same way, so scripts in it never run.
- * Reloads when the file changes, and says so when it can no longer be read.
+ * Reloads when the file changes, and says so when it can no longer be read;
+ * while it cannot, a change to an ancestor (a mount re-created) reloads too.
  */
 @injectable()
 export class ImageViewerWidget extends BaseWidget implements Navigatable {
@@ -109,7 +110,7 @@ export class ImageViewerWidget extends BaseWidget implements Navigatable {
     this.toDispose.push(Disposable.create(() => this.revoke()));
     this.toDispose.push(
       this.files.onDidFilesChange((event) => {
-        if (touchesFile(event.changes, uri)) void this.load();
+        if (reloadsOn(event, uri, this.readError !== undefined)) void this.load();
       }),
     );
     await this.load();

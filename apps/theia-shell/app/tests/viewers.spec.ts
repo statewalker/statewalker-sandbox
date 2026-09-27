@@ -75,6 +75,24 @@ async function touchRootLive(page: Page) {
   await page.keyboard.press("Control+s");
 }
 
+/**
+ * Like `touchRootLive`, but proves the change went through: hiding welcome.md
+ * fires the same `updated /` (an ancestor of every file), and the explorer
+ * dropping welcome.md shows it has been delivered.
+ */
+async function touchRootVisibly(page: Page) {
+  await expect(explorer(page).getByText("welcome.md", { exact: true })).toBeVisible();
+  await runFromPalette(page, "Preferences: Open Settings (JSON)");
+  const editor = page.locator(".theia-editor .monaco-editor").last();
+  await editor.click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.insertText('{ "files.hidden": ["**/welcome.md"] }');
+  await page.keyboard.press("Control+s");
+  await expect(explorer(page).getByText("welcome.md", { exact: true })).toHaveCount(0);
+  // Give a (wrong) reload the time to land.
+  await page.waitForTimeout(1_000);
+}
+
 test.describe("image viewer", () => {
   test("an image opens in the viewer, not in the text editor", async ({ page }) => {
     const errors = await start(page);
@@ -187,6 +205,19 @@ test.describe("image viewer", () => {
     await expect(viewer.locator(".image-viewer-reload")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
+  test("a readable image does not reload when only an ancestor changes", async ({ page }) => {
+    const errors = await start(page, "?storage=memory");
+    await open(page, "media", "gradient.png");
+    const viewer = page.locator(".image-viewer-widget");
+    await expect(viewer.locator(".image-viewer-status")).toContainText("320 × 200");
+    const before = await viewer.locator("img").getAttribute("src");
+    expect(before).toMatch(/^blob:/);
+
+    await touchRootVisibly(page);
+    // The same blob: URL — a reload would have read the file again into a new one.
+    expect(await viewer.locator("img").getAttribute("src")).toBe(before);
+    expect(errors).toEqual([]);
+  });
 });
 
 test.describe("PDF viewer", () => {
@@ -275,6 +306,20 @@ test.describe("PDF viewer", () => {
 
     await expect(viewer.locator("img[src^='blob:']").first()).toBeVisible({ timeout: 30_000 });
     await expect(viewer.locator(".pdf-viewer-reload")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+  test("a readable PDF does not reload when only an ancestor changes", async ({ page }) => {
+    const errors = await start(page, "?storage=memory");
+    await open(page, "docs", "sample.pdf");
+    const viewer = page.locator(".pdf-viewer-widget");
+    await expect(viewer.locator("img[src^='blob:']").first()).toBeVisible({ timeout: 30_000 });
+    // A reload replaces the viewer's container (and so the page and zoom): mark this one.
+    await viewer.locator(".pdf-viewer").evaluate((el: HTMLElement) => {
+      el.dataset.probe = "kept";
+    });
+
+    await touchRootVisibly(page);
+    await expect(viewer.locator(".pdf-viewer[data-probe=kept]")).toHaveCount(1);
     expect(errors).toEqual([]);
   });
 });

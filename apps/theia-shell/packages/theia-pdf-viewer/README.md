@@ -18,10 +18,12 @@ independent of the other packages; add it to a Theia app's dependencies.
 Other behaviour:
 
 - Priority 500 for `.pdf` (the text editor has 100).
-- It reloads when the file itself changes, or an ancestor folder does (a new
-  EmbedPDF instance; page and zoom reset) — e.g. a mount re-created after a
-  vault unlock. If the file can no longer be read, it says so, next to a
-  *Reload* button that re-reads it by hand.
+- It reloads when the file itself changes, or an ancestor folder is deleted (a
+  new EmbedPDF instance; page and zoom reset). If the file can no longer be
+  read, it says so, next to a *Reload* button that re-reads it by hand; while
+  it cannot, a change to an ancestor folder (e.g. a mount re-created after a
+  vault unlock) reloads it too. A readable PDF ignores such changes (a
+  `files.hidden` edit), so its page and zoom stay.
 - It is `Navigatable`, like a text editor. *Open Editors* lists it, the
   explorer reveals its file when it becomes active, a rename or move re-opens
   it at the new name, and deleting the file from the explorer closes it.
@@ -39,5 +41,5 @@ Styling is Tailwind utility classes coloured by the shadcn/ui tokens. The app
 compiles them, as [`app/style`](../../app/style) does. In an app without that
 build, the classes have no CSS and the layout falls apart.
 
-Tests: `pnpm test` runs 12 unit tests. The e2e tests are in P7 and in
+Tests: `pnpm test` runs 17 unit tests. The e2e tests are in P7 and in
 [`app/tests/viewers.spec.ts`](../../app/tests/viewers.spec.ts).
