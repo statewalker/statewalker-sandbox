@@ -11,10 +11,10 @@
     "build:css": "tailwindcss -i 06a-tailwind-build/input.css -o 06a-tailwind-build/dist/shell.css --minify"
   },
   "dependencies": {
-    "@biscuit-auth/biscuit-wasm": "0.6.0",
     "@statewalker/shared-adapters": "0.1.1",
     "@statewalker/shared-commands": "0.2.1",
     "@statewalker/shared-slots": "0.2.1",
+    "@statewalker/webrun-biscuit": "0.2.1",
     "basecoat-css": "1.0.2",
     "dockview-core": "8.2.0",
     "typescript": "5.9.3",

@@ -2,12 +2,12 @@
   "name": "@theia-shell/app",
   "version": "0.0.0",
   "private": true,
-  "description": "A browser-only Theia Markdown editor over a FilesApi.",
+  "description": "A browser-only Theia workbench over a FilesApi: Markdown, image and PDF viewers, and an httpeers mesh member with peers, invitations, a proxy and an LLM chat.",
   "theia": {
     "target": "browser-only",
     "frontend": {
       "config": {
-        "applicationName": "Theia Shell — Markdown",
+        "applicationName": "Theia Shell",
         "preferences": {
           "security.workspace.trust.enabled": false
         }
@@ -15,8 +15,8 @@
     }
   },
   "scripts": {
-    "build": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-shadcn --filter @theia-shell/theia-markdown --filter @theia-shell/theia-image-viewer --filter @theia-shell/theia-pdf-viewer --filter @theia-shell/theia-secret-vault --filter @theia-shell/theia-files-mounts --filter @theia-shell/theia-files-s3 --filter @theia-shell/theia-file-panels --filter @theia-shell/app-files --filter @theia-shell/app-style build && theia build --mode development",
-    "build:prod": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-shadcn --filter @theia-shell/theia-markdown --filter @theia-shell/theia-image-viewer --filter @theia-shell/theia-pdf-viewer --filter @theia-shell/theia-secret-vault --filter @theia-shell/theia-files-mounts --filter @theia-shell/theia-files-s3 --filter @theia-shell/theia-file-panels --filter @theia-shell/app-files --filter @theia-shell/app-style build && theia build --mode production",
+    "build": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-shadcn --filter @theia-shell/theia-markdown --filter @theia-shell/theia-image-viewer --filter @theia-shell/theia-pdf-viewer --filter @theia-shell/theia-secret-vault --filter @theia-shell/theia-files-mounts --filter @theia-shell/theia-files-s3 --filter @theia-shell/theia-file-panels --filter @theia-shell/app-files --filter @theia-shell/theia-httpeers --filter @theia-shell/theia-httpeers-proxy --filter @theia-shell/theia-llm-chat --filter @theia-shell/app-style build && theia build --mode development",
+    "build:prod": "pnpm --filter @theia-shell/theia-files-api --filter @theia-shell/theia-shadcn --filter @theia-shell/theia-markdown --filter @theia-shell/theia-image-viewer --filter @theia-shell/theia-pdf-viewer --filter @theia-shell/theia-secret-vault --filter @theia-shell/theia-files-mounts --filter @theia-shell/theia-files-s3 --filter @theia-shell/theia-file-panels --filter @theia-shell/app-files --filter @theia-shell/theia-httpeers --filter @theia-shell/theia-httpeers-proxy --filter @theia-shell/theia-llm-chat --filter @theia-shell/app-style build && theia build --mode production",
     "start": "node ../tools/serve.mjs lib/frontend 3000",
     "test:e2e": "playwright test"
   },
@@ -27,11 +27,14 @@
     "@theia-shell/theia-files-api": "workspace:*",
     "@theia-shell/theia-files-mounts": "workspace:*",
     "@theia-shell/theia-files-s3": "workspace:*",
+    "@theia-shell/theia-httpeers": "workspace:*",
+    "@theia-shell/theia-httpeers-proxy": "workspace:*",
     "@theia-shell/theia-image-viewer": "workspace:*",
+    "@theia-shell/theia-llm-chat": "workspace:*",
     "@theia-shell/theia-markdown": "workspace:*",
     "@theia-shell/theia-pdf-viewer": "workspace:*",
-    "@theia-shell/theia-shadcn": "workspace:*",
     "@theia-shell/theia-secret-vault": "workspace:*",
+    "@theia-shell/theia-shadcn": "workspace:*",
     "@theia/core": "1.76.0",
     "@theia/editor": "1.76.0",
     "@theia/file-search": "1.76.0",

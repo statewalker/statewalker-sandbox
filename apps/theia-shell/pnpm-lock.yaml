@@ -44,9 +44,18 @@ importers:
       '@theia-shell/theia-files-s3':
         specifier: workspace:*
         version: link:../packages/theia-files-s3
+      '@theia-shell/theia-httpeers':
+        specifier: workspace:*
+        version: link:../packages/theia-httpeers
+      '@theia-shell/theia-httpeers-proxy':
+        specifier: workspace:*
+        version: link:../packages/theia-httpeers-proxy
       '@theia-shell/theia-image-viewer':
         specifier: workspace:*
         version: link:../packages/theia-image-viewer
+      '@theia-shell/theia-llm-chat':
+        specifier: workspace:*
+        version: link:../packages/theia-llm-chat
       '@theia-shell/theia-markdown':
         specifier: workspace:*
         version: link:../packages/theia-markdown
@@ -230,6 +239,45 @@ importers:
         specifier: 1.76.0
         version: 1.76.0(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
 
+  packages/theia-httpeers:
+    dependencies:
+      '@statewalker/httpeers-access':
+        specifier: link:../../../../../httpeers/packages/httpeers-access
+        version: link:../../../../../httpeers/packages/httpeers-access
+      '@statewalker/httpeers-core':
+        specifier: link:../../../../../httpeers/packages/httpeers-core
+        version: link:../../../../../httpeers/packages/httpeers-core
+      '@statewalker/httpeers-join':
+        specifier: link:../../../../../httpeers/packages/httpeers-join
+        version: link:../../../../../httpeers/packages/httpeers-join
+      '@statewalker/httpeers-member':
+        specifier: link:../../../../../httpeers/packages/httpeers-member
+        version: link:../../../../../httpeers/packages/httpeers-member
+      '@theia/core':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+
+  packages/theia-httpeers-proxy:
+    dependencies:
+      '@statewalker/httpeers-core':
+        specifier: link:../../../../../httpeers/packages/httpeers-core
+        version: link:../../../../../httpeers/packages/httpeers-core
+      '@statewalker/httpeers-join':
+        specifier: link:../../../../../httpeers/packages/httpeers-join
+        version: link:../../../../../httpeers/packages/httpeers-join
+      '@statewalker/webrun-http-proxy':
+        specifier: 0.2.0
+        version: 0.2.0
+      '@theia-shell/theia-httpeers':
+        specifier: workspace:*
+        version: link:../theia-httpeers
+      '@theia/core':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      hono:
+        specifier: 4.13.9
+        version: 4.13.9
+
   packages/theia-image-viewer:
     dependencies:
       '@theia/core':
@@ -238,6 +286,22 @@ importers:
       '@theia/filesystem':
         specifier: 1.76.0
         version: 1.76.0(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
+
+  packages/theia-llm-chat:
+    dependencies:
+      '@theia-shell/theia-httpeers':
+        specifier: workspace:*
+        version: link:../theia-httpeers
+      '@theia-shell/theia-markdown':
+        specifier: workspace:*
+        version: link:../theia-markdown
+      '@theia/core':
+        specifier: 1.76.0
+        version: 1.76.0(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+    devDependencies:
+      fake-indexeddb:
+        specifier: 6.2.5
+        version: 6.2.5
 
   packages/theia-markdown:
     dependencies:
@@ -1734,6 +1798,9 @@ packages:
   '@statewalker/webrun-files@0.10.0':
     resolution: {integrity: sha512-ekVDzOdRcH2aQi2NCdB7Nk/xpAL4vS+ZkN5PZqgDeiMDEi7usG3MEz4c+VpSNfTlC+sFSzKnud0DNPbv9R/AtQ==}
 
+  '@statewalker/webrun-http-proxy@0.2.0':
+    resolution: {integrity: sha512-yt9CaY8dyO5ZNUs2DprFElQbQ9r3VR6XY/9MJv3poAJGM9xPyz6mHsrjtsAWI90pciM1XhQormmACE94579pow==}
+
   '@stroncium/procfs@1.2.1':
     resolution: {integrity: sha512-X1Iui3FUNZP18EUvysTHxt+Avu2nlVzyf90YM8OYgP6SGzTzzX/0JgObfO1AQQDzuZtNNz29bVh8h5R97JrjxA==}
     engines: {node: '>=8'}
@@ -3077,6 +3144,10 @@ packages:
 
   exsolve@1.1.1:
     resolution: {integrity: sha512-9U/jZUgjnSGyntRr6y5Muu1MJcwFl6kPu7k8qLF0IMNfLqvw0NZ4nnVDq0RVoZ0RvCyumib4Ez3KYrVfilrw+g==}
+
+  fake-indexeddb@6.2.5:
+    resolution: {integrity: sha512-CGnyrvbhPlWYMngksqrSSUT1BAVP49dZocrHuK0SvtR0D5TMs5wP0o3j7jexDJW01KSadjBp1M/71o/KR3nD1w==}
+    engines: {node: '>=18'}
 
   fast-deep-equal@3.1.3:
     resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
@@ -6382,6 +6453,8 @@ snapshots:
 
   '@statewalker/webrun-files@0.10.0': {}
 
+  '@statewalker/webrun-http-proxy@0.2.0': {}
+
   '@stroncium/procfs@1.2.1': {}
 
   '@sveltejs/acorn-typescript@1.0.13(acorn@8.18.0)':
@@ -8701,6 +8774,8 @@ snapshots:
       - supports-color
 
   exsolve@1.1.1: {}
+
+  fake-indexeddb@6.2.5: {}
 
   fast-deep-equal@3.1.3: {}
 

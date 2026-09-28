@@ -1,11 +1,18 @@
-# Theia Shell: Markdown
+# Theia Shell
 
-A Markdown editor with image and PDF viewers, built on **Eclipse Theia 1.76**,
-that runs entirely in the browser. There is no backend: the build output is static files. Files come from
+A Markdown editor with image and PDF viewers, and a member of an
+[httpeers](https://github.com/statewalker/httpeers) mesh, built on **Eclipse
+Theia 1.76**, that runs entirely in the browser. There is no backend: the build
+output is static files. Files come from
 [`FilesApi`](https://github.com/statewalker/webrun-files) instances
 (`@statewalker/webrun-files`) **mounted** as the top-level folders of the
 explorer: browser storage, memory, folders on your computer, S3 buckets.
 Secrets such as S3 keys live in a password-protected, encrypted vault.
+
+On the mesh, the app joins from an invitation, shows the peers and what they
+serve, lets an admin invite others, chats with the mesh's LLM service (or any
+OpenAI-compatible endpoint), and can expose outside HTTP origins to the other
+members through a proxy.
 
 ![The app: explorer over the FilesApi, the editor, the live preview and the outline](docs/screenshot.png)
 
@@ -15,7 +22,23 @@ The screenshots show the opt-in shadcn/ui style (*Appearance: Toggle shadcn/ui S
 |---|---|
 | ![Image viewer](docs/image-viewer.png) | ![PDF viewer](docs/pdf-viewer.png) |
 
+| The Mesh view and the LLM chat, as an admin | A member calling the admin's proxy over the mesh |
+|---|---|
+| ![The Mesh view: the join widget, Invite someone, and the peers with what they serve; the chat over the hub's LLM](docs/mesh-chat.png) | ![The Mesh Proxy view: a request to another peer's proxy route, answered by the outside origin](docs/mesh-proxy.png) |
+
 ## Run it
+
+The mesh packages are not on npm yet: they are linked from an
+[httpeers](https://github.com/statewalker/httpeers) checkout next to this
+repository (`../httpeers`, beside `statewalker-sandbox`), which must be built
+first:
+
+```bash
+git clone https://github.com/statewalker/httpeers ../httpeers   # from the statewalker-sandbox root's parent
+(cd ../httpeers && pnpm install && pnpm -r build)
+```
+
+Then:
 
 ```bash
 cd apps/theia-shell
@@ -32,6 +55,22 @@ Any static file server works: `app/lib/frontend/` is the whole app.
   *Remember on this device* to not be asked again).
 - `http://127.0.0.1:3000/?storage=memory` keeps everything in memory, fresh on
   every load, with no password prompt.
+
+### On a mesh
+
+Open an invitation link whose page is this app (`http://127.0.0.1:3000/?join=…`),
+or paste an invitation into the **Mesh** view. For a whole mesh on this
+machine (a relay, the httpeers hub daemon with its `llm` service over a fake
+LiteLLM, and an outside origin to proxy):
+
+```bash
+node tools/mesh-stack.mjs http://127.0.0.1:3000/   # prints admin and member invitations, and a URL minting more
+```
+
+Each browser profile is one member. Open a member invitation in a second
+profile (or a private window) to see two peers.
+
+### Files
 
 An empty main storage ("Browser Storage") is seeded with `welcome.md`, `notes/ideas.md`,
 `docs/cheatsheet.md`, `docs/sample.pdf`, `media/gradient.png` and
@@ -89,6 +128,9 @@ The design is in
 | [`packages/theia-secret-vault`](../packages/theia-secret-vault) | **Secrets.** A WebCrypto vault behind Theia's `KeyStoreService` / `CredentialsService`, its password dialog and commands. |
 | [`packages/theia-files-s3`](../packages/theia-files-s3) | **The S3 mount type** (`webrun-files-s3`); separate because the AWS SDK is large. |
 | [`packages/theia-file-panels`](../packages/theia-file-panels) | **File panels.** Midnight-Commander-style one-folder views opened as main-area tabs, with a sibling-aware breadcrumb, sortable columns, and copy/move between panels and the explorer by drag and drop or context menu. |
+| [`packages/theia-httpeers`](../packages/theia-httpeers) | **The mesh member.** `MeshService` (the app's one httpeers `PeerSession`), the **Mesh** view (join widget, invitations, peers), the status-bar item, and `MeshContribution` for extensions that serve on the mesh. |
+| [`packages/theia-httpeers-proxy`](../packages/theia-httpeers-proxy) | **The proxy.** Serves `/proxy` on the mesh from a route table; the **Mesh Proxy** view edits it and calls this or another member's proxy. |
+| [`packages/theia-llm-chat`](../packages/theia-llm-chat) | **The chat.** The **LLM Chat** view over the mesh hub's LLM service or a custom OpenAI-compatible endpoint, on llm-chat's own core. |
 | [`app/files`](files) | **The app's defaults**: the Temporary mount, the hidden paths, the demo files seeded into the main storage, and *New Markdown File* writing there. |
 | [`app/style`](style) | **The app's stylesheet**: Tailwind v4 without preflight over the extensions' sources, plus the shadcn theme. The extensions are styled with Tailwind classes, so an app that uses them must compile those classes too. |
 | `app` | The browser-only Theia application (`"theia": { "target": "browser-only" }`). It also includes `@theia/search-in-workspace` (*Find in Files*, `Ctrl+Shift+F`) and `@theia/file-search` (*Quick Open*, `Ctrl+P`). Both use their browser-only modules, which walk the workspace through Theia's `FileService`, and so the `FilesApi`. |
@@ -152,9 +194,12 @@ pnpm --filter @theia-shell/theia-secret-vault test # 19 unit tests: the vault, t
 pnpm --filter @theia-shell/theia-files-mounts test # 64 unit tests: keys, configs, layers, mount table, workspace file, folder list, form, restore
 pnpm --filter @theia-shell/theia-files-s3 test     # 4 unit tests: client options, the RustFS fixture's CORS
 pnpm --filter @theia-shell/theia-file-panels test  # 63 unit tests: breadcrumb, sorting, formats, transfers, messages, file changes
+pnpm --filter @theia-shell/theia-httpeers test     # 8 unit tests: the peers list, status text, rules
+pnpm --filter @theia-shell/theia-httpeers-proxy test # 15 unit tests: routing, header hygiene, secrets
+pnpm --filter @theia-shell/theia-llm-chat test     # 111 unit tests: llm-chat's core (97, ported) and the setup flow
 pnpm --filter @theia-shell/app-files test          # 8 unit tests: seeding, the PNG encoder
 pnpm --filter @theia-shell/app-style test          # 6 unit tests on the compiled CSS (build first)
-pnpm --filter @theia-shell/app test:e2e            # 115 Playwright tests against the static build
+pnpm --filter @theia-shell/app test:e2e            # 119 Playwright tests against the static build
 E2E_PORT=3110 pnpm --filter @theia-shell/app test:e2e  # the same, on another port
 ```
 
@@ -218,7 +263,16 @@ Chromium:
   its sibling popups, copy/move by drag and drop and by command (across
   mounts too), restore after a reload, falling back from a vanished folder
   and returning to it once it is back (a mount unlocked, or added back to the
-  workspace), and live labels.
+  workspace), and live labels;
+- **on a real mesh** (`tools/mesh-stack.mjs`, started by the tests): an admin
+  joins from an invitation link and sees the hub and its LLM service; requests
+  a key and chats with the hub's LLM; adds a proxy route; invites a member from
+  the Mesh view. The member joins with that link in a browser profile of its
+  own, reaches the outside origin through the admin's proxy over the mesh (the
+  membership token does not leave the mesh), and is refused a key;
+- without a mesh: the Mesh view offers to join; the chat against a custom
+  endpoint (a wrong key reported, Markdown rendered, the chat and its settings
+  kept across a reload); a proxy route kept across a reload, its credential not.
 
 Every test also asserts that the page raised no errors.
 
@@ -291,3 +345,28 @@ Every test also asserts that the page raised no errors.
     navigatable widget on the deleted file. The two delete tests were changed
     from "the viewer says the file cannot be read" to "the viewer closes".
   - The full suite is 56 of 56 (with the mounts work).
+- **The mesh (unit).**
+  - `theia-httpeers`: 7 of 7 red against an empty module, then green. A
+    further red came from the first live run: the hub is not a member, so the
+    mesh view does not list it, and the peers list lost it and its LLM advert.
+    1 red, then 8 of 8 green.
+  - `theia-httpeers-proxy`: 9 of 9 red, then green. A further 3 of 3 red, then
+    green, for `underMount` (see below).
+  - `theia-llm-chat`: the 97 tests ported from llm-chat passed unchanged on
+    their first run. The setup flow: 14 of 14 red, then green. One red was a
+    wrong expectation: `listModels` sorts the ids.
+- **The mesh (end to end).** Red against the real mesh found four defects the
+  unit tests could not:
+  1. The edge never started: `Invalid URL`. `webrun-http-browser` resolved
+     its worker scope against `import.meta.url`, which is empty in Theia's
+     non-ESM bundle. It is fixed upstream in webrun-wire, with a red test
+     first, and patched in `app/esbuild.mjs` until a release carries it.
+  2. The hub was missing from the peers list (above).
+  3. The *Invite someone* panel never appeared. The join widget reads the
+     member's roles from the mesh view, which arrives after the session goes
+     live, and it was only updated on session changes.
+  4. A peer's call to the proxy answered `404 no route`. The member's mount
+     table hands the handler the full path (`/proxy/out/x`); the table now
+     sees it re-rooted below the mount.
+
+  Green: 3 of 3 on the mesh and 3 of 3 without one. The full suite is 24 of 24.
