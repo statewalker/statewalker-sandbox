@@ -149,16 +149,16 @@ pnpm --filter @theia-shell/theia-image-viewer test # 22 unit tests: MIME types, 
 pnpm --filter @theia-shell/theia-pdf-viewer test   # 17 unit tests: the generated PDF, which changes reload
 pnpm --filter @theia-shell/theia-shadcn test       # 6 unit tests: cn, the button variants, data-slots
 pnpm --filter @theia-shell/theia-secret-vault test # 19 unit tests: the vault, the KeyStoreService contract
-pnpm --filter @theia-shell/theia-files-mounts test # 60 unit tests: keys, configs, layers, mount table, workspace file, folder list, form, restore
+pnpm --filter @theia-shell/theia-files-mounts test # 64 unit tests: keys, configs, layers, mount table, workspace file, folder list, form, restore
 pnpm --filter @theia-shell/theia-files-s3 test     # 4 unit tests: client options, the RustFS fixture's CORS
 pnpm --filter @theia-shell/theia-file-panels test  # 63 unit tests: breadcrumb, sorting, formats, transfers, messages, file changes
 pnpm --filter @theia-shell/app-files test          # 8 unit tests: seeding, the PNG encoder
 pnpm --filter @theia-shell/app-style test          # 6 unit tests on the compiled CSS (build first)
-pnpm --filter @theia-shell/app test:e2e            # 114 Playwright tests against the static build
+pnpm --filter @theia-shell/app test:e2e            # 115 Playwright tests against the static build
 E2E_PORT=3110 pnpm --filter @theia-shell/app test:e2e  # the same, on another port
 ```
 
-The 11 e2e tests of `s3.spec.ts`, `restore.spec.ts` and the panels' mount-recovery case, and one
+The 12 e2e tests of `s3.spec.ts`, `restore.spec.ts` and the panels' mount-recovery case, and one
 unit test, run against RustFS in Docker
 ([`tools/rustfs.mjs`](../tools/rustfs.mjs)) and are skipped without Docker.
 
@@ -208,7 +208,8 @@ Chromium:
 - restore after mount (`restore.spec.ts`): files open on an S3 mount come back
   after a reload once the vault is unlocked — in place when the start-up prompt
   is answered, however long that takes, and reopened later when it is skipped,
-  also across a second reload; a mount no restored tab uses does not delay
+  also across a second reload; a files panel alone on the mount restores
+  straight into its folder; a mount no restored tab uses does not delay
   startup;
 - the viewers' *Reload* button when a file cannot be read, recovery when an
   ancestor (a mount) changes, and no reload of a readable viewer on such a

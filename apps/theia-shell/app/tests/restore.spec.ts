@@ -169,3 +169,39 @@ test("a mount no restored tab uses does not delay startup", async ({ page }) => 
     timeout: 30_000,
   });
 });
+
+test("a files panel on a mount, with no other tab there, restores straight into its folder", async ({
+  page,
+}) => {
+  await openS3Files(page);
+  // Only a panel stays on the mount: close the files' tabs.
+  for (const label of ["notes.md", "sample.pdf"]) {
+    await tab(page, label).hover();
+    await tab(page, label).locator(".lm-TabBar-tabCloseIcon").click();
+    await expect(tab(page, label)).toHaveCount(0);
+  }
+  await runFromPalette(page, "Open Files Panel");
+  const panel = page.locator(".file-panel").last();
+  await panel.locator(".file-panel-crumb").first().locator(".file-panel-crumb-toggle").click();
+  await page.locator(".file-panel-siblings .file-panel-sibling", { hasText: "Cloud" }).click();
+  await panel.locator(".theia-TreeNode", { hasText: "Docs" }).dblclick();
+  await expect(panel.locator(".file-panel-crumb")).toHaveText(["Cloud", "Docs"]);
+  // Any fallback notice shown at any time during the next start counts.
+  await page.addInitScript(() => {
+    const w = window as unknown as { sawFallback: boolean };
+    w.sawFallback = false;
+    new MutationObserver(() => {
+      if (document.body?.textContent?.includes("no longer exists")) w.sawFallback = true;
+    }).observe(document, { childList: true, subtree: true, characterData: true });
+  });
+  await page.reload();
+  await unlockVault(page, "pw");
+  const restored = page.locator(".file-panel").last();
+  await expect(restored.locator(".file-panel-crumb")).toHaveText(["Cloud", "Docs"], {
+    timeout: 30_000,
+  });
+  await expect(restored.locator(".theia-TreeNode", { hasText: "sample.pdf" })).toBeVisible();
+  expect(
+    await page.evaluate(() => (window as unknown as { sawFallback: boolean }).sawFallback),
+  ).toBe(false);
+});

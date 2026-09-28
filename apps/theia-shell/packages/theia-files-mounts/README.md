@@ -126,18 +126,24 @@ reported changes once preferences are ready.
 
 Theia restores the layout (the open editors and viewers) right after every
 contribution's `onStart`. `MountsRestore.onStart` holds that until the mounts
-the restore needs are up — those the stored layout's widgets live on (their
-`file:` `uri`, read from the stored layout through `MountsLayoutRestorer`)
-plus those of the pending reopens below. `MountService` applies exactly those
-first; the other mounts follow at once and do not delay startup. So the gate
+the restore needs are up — those the stored layout's widgets live on (a
+`file:` URI as a top-level value of a widget's options or stored state: an
+editor's `uri`, a files panel's `folder`; read from the stored layout through
+`MountsLayoutRestorer`) plus those of the pending reopens below. `MountService`
+applies exactly those first; the other mounts follow at once and do not delay
+the start-up apply. (After an unlock, though, the re-creation of a locked mount
+queues behind them, and the gate waits for that queue: a slow mount no tab
+uses can then add up to its create timeout.) So the gate
 costs nothing when no restored tab is on a mount, and otherwise what those
 mounts take to come up: an S3 mount's first listing (one round trip), up to
 its create timeout (15 s) for a host that does not answer. A mount that
 fails, or needs a click (`needs-access`), is not waited for. One locked behind
 the vault waits for the vault's start-up prompt (`VaultService.startupUnlock`)
-and, after an unlock, for its re-creation. Each non-interactive wait is
-bounded (30 s, restarted after the prompt is answered); the user's own time is
-not — the boot gate's click and a shown vault prompt, which has Skip. Nothing
+and, after an unlock, for its re-creation. The waits for the mounts are
+bounded (30 s each, restarted after the prompt is answered); the user's own
+time is not — a shown vault prompt, which has Skip. Opening the main storage
+(`MountService.start()`) is awaited unbounded: it holds the boot gate's click,
+and the main storage's own opening with it. Nothing
 the mounts need (the main storage, the preferences) awaits this gate, so it
 cannot deadlock.
 
@@ -157,8 +163,11 @@ The pending reopens outlive a reload: Theia stores the layout on unload without
 them, so `MountsRestore` keeps them (description and area) in Theia's
 `StorageService` under `theia-shell.mounts.pending-reopens`, merges them with
 the next restore's failures (each widget once; one open by then is skipped),
-drops those of a mount removed from `files.mounts`, and forgets each once it is
-reopened or dropped. One is re-created in a fresh restore context (no layout
+and forgets each once it is reopened or dropped. Stored entries are dropped at
+start-up when their mount is no longer in the workspace (removed from
+`files.mounts`, or `mounted: false`), and after the start-up apply when their
+mount failed — otherwise every start would wait for that mount and the tab
+would resurface much later. One is re-created in a fresh restore context (no layout
 migrations): a layout version change in between is not accounted for.
 
 The app has one perspective, and this relies on it: Theia inflates every
@@ -235,6 +244,12 @@ Storage…*.
   after 30 s), and a mount no restored tab uses — an S3 host that never
   answers — no longer delays startup (red: `MountsRestore.onStart` took 15 s;
   green: 0.6 s). The package's 60 of 60.
+- **Restore, re-review**, each seen red first: `tests/restore.test.ts` (+4: a
+  files panel's folder counts toward the start-up mounts, deeper values do
+  not; stale stored reopens expire — removed, `mounted: false`, failed); end
+  to end, a files panel alone on an S3 mount restores straight into its folder
+  (red: the "no longer exists" notice showed until the mount came up). The
+  package's 64 of 64.
 - **After the final review**, each seen red first: a failed step no longer
   blocks later mount changes (`SerialQueue`, 2 tests); a glob that does not
   compile is skipped and reported (1); a mount that never answers is failed

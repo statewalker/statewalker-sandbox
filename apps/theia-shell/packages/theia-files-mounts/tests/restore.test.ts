@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
+import type { MountStatus } from "../src/common/mount-types";
 import {
   descriptionKey,
   layoutAreas,
   layoutMountKeys,
+  livePending,
   mergePending,
   mountKeyOf,
   type PendingReopen,
   startupWait,
   storedPending,
+  unfailedPending,
   within,
 } from "../src/common/restore";
 
@@ -145,5 +148,75 @@ describe("storedPending and mergePending", () => {
     const aAgain = pending("file:///cloud/a.md", "bottom");
     expect(mergePending([a], [aAgain, b])).toEqual([a, b]);
     expect(mergePending([], [b, b])).toEqual([b]);
+  });
+});
+
+describe("layoutMountKeys and other widgets", () => {
+  it("counts a file: URI among a widget's top-level options or stored state (a files panel)", () => {
+    const panel = (options: object, state: object) => ({
+      constructionOptions: { factoryId: "file-panel", options },
+      innerWidgetState: JSON.stringify(state),
+    });
+    const layout = {
+      mainPanel: {
+        widgets: [
+          panel({ id: "p1" }, { folder: "file:///cloud/Docs", sort: { column: "name" } }),
+          panel({ id: "p2", folder: "file:///local/x" }, {}),
+        ],
+      },
+    };
+    expect([...layoutMountKeys(JSON.parse(JSON.stringify(layout)))].sort()).toEqual([
+      "cloud",
+      "local",
+    ]);
+  });
+
+  it("does not look deeper (an explorer's expanded folders do not count)", () => {
+    const explorer = {
+      constructionOptions: { factoryId: "files" },
+      innerWidgetState: JSON.stringify({ model: { expanded: ["file:///slow/a"] } }),
+    };
+    expect(layoutMountKeys({ leftPanel: { items: [{ widget: explorer }] } }).size).toBe(0);
+  });
+});
+
+describe("livePending and unfailedPending", () => {
+  const pending = (uri: string): PendingReopen => ({
+    description: desc(editor(uri)),
+    area: "main",
+  });
+  const mount = (key: string, mounted?: boolean) => ({
+    key,
+    name: key,
+    type: "memory",
+    config: {},
+    ...(mounted === undefined ? {} : { mounted }),
+  });
+
+  it("keeps those on a mount in the workspace; drops removed and remembered (mounted: false)", () => {
+    const [cloud, kept, gone] = [
+      pending("file:///cloud/a.md"),
+      pending("file:///kept/b.md"),
+      pending("file:///gone/c.md"),
+    ];
+    expect(
+      livePending([cloud, kept, gone], [mount("cloud"), mount("kept", false), mount("x", true)]),
+    ).toEqual([cloud]);
+  });
+
+  it("drops those whose mount failed; keeps locked, needs-access, mounted, not yet applied", () => {
+    const entries = ["failed", "locked", "access", "up", "later"].map((k) =>
+      pending(`file:///${k}/f.md`),
+    );
+    const status = (key: string) =>
+      (
+        ({
+          failed: { state: "failed", message: "x" },
+          locked: { state: "locked" },
+          access: { state: "needs-access" },
+          up: { state: "mounted" },
+        }) as Record<string, MountStatus>
+      )[key];
+    expect(unfailedPending(entries, status)).toEqual(entries.slice(1));
   });
 });

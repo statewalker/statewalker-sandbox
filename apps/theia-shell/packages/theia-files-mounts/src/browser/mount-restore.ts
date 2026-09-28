@@ -20,10 +20,12 @@ import {
   descriptionKey,
   layoutAreas,
   layoutMountKeys,
+  livePending,
   mergePending,
   mountKeyOf,
   type RestoreArea,
   storedPending,
+  unfailedPending,
   within,
 } from "../common/restore";
 import { SerialQueue } from "../common/serial-queue";
@@ -210,15 +212,24 @@ export class MountsRestore implements FrontendApplicationContribution {
     const failures = this.restorer
       .takeFailures()
       .filter((failure) => mountKeyOf(failure.description.constructionOptions.options));
-    this.pending = mergePending<RestoreFailure>(failures, await this.storedPending());
+    await this.mounts.whenStartupApplied();
+    // A stored one whose mount failed to come up is forgotten (it would hold up every start).
+    const stored = unfailedPending(await this.storedPending(), (key) => this.mounts.status(key));
+    this.pending = mergePending<RestoreFailure>(failures, stored);
     this.store();
     if (!this.pending.length) return;
     this.listener = this.mounts.onDidChangeStatus(() => this.reopenQueued());
     void this.reopenQueued();
   }
 
+  /**
+   * The stored pending reopens on mounts in the workspace (see `livePending`).
+   * Reads `files.mounts`: only once the preferences are ready — true while
+   * `MountService` asks for the start-up keys, and once the start-up apply is done.
+   */
   protected async storedPending(): Promise<RestoreFailure[]> {
-    return storedPending(await this.storage.getData(this.storageKey)) as RestoreFailure[];
+    const stored = storedPending(await this.storage.getData(this.storageKey)) as RestoreFailure[];
+    return livePending(stored, this.mounts.configuredMounts());
   }
 
   /** Keeps the pending reopens for the next session (nothing once none is left). */

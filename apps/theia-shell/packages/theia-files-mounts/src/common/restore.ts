@@ -1,4 +1,4 @@
-import type { MountStatus } from "./mount-types";
+import type { MountConfig, MountStatus } from "./mount-types";
 
 /** The shell areas a stored layout keeps widgets in. */
 export type RestoreArea = "main" | "bottom" | "left" | "right";
@@ -25,28 +25,53 @@ export function descriptionKey(constructionOptions: {
  */
 export function layoutAreas(layout: unknown): Map<string, RestoreArea> {
   const areas = new Map<string, RestoreArea>();
-  for (const [options, area] of layoutDescriptions(layout))
-    areas.set(descriptionKey(options), area);
+  for (const [desc, area] of layoutDescriptions(layout)) {
+    areas.set(descriptionKey(desc.constructionOptions), area);
+  }
   return areas;
 }
 
 /**
- * The mounts the shell's widgets in a stored layout live on (see `mountKeyOf`):
- * the ones restoring that layout needs.
+ * The mounts the shell's widgets in a stored layout live on: the ones
+ * restoring that layout needs. Generic, so that any kind of widget counts: a
+ * `file:` URI as a top-level value of a widget's options (an editor's `uri`,
+ * a files panel's `folder`) or of its stored state (a files panel's `folder`)
+ * names the mount (its first path segment). Deeper values are not looked at —
+ * an explorer's expanded folders, say, do not make start-up wait.
  */
 export function layoutMountKeys(layout: unknown): Set<string> {
   const keys = new Set<string>();
-  for (const [options] of layoutDescriptions(layout)) {
-    const key = mountKeyOf(options.options);
-    if (key !== undefined) keys.add(key);
+  for (const [desc] of layoutDescriptions(layout)) {
+    for (const value of [
+      ...topLevelValues(desc.constructionOptions.options),
+      ...stateValues(desc),
+    ]) {
+      const key = fileMountKey(value);
+      if (key !== undefined) keys.add(key);
+    }
   }
   return keys;
 }
 
-type ConstructionOptions = { factoryId: string; options?: unknown };
+function topLevelValues(value: unknown): unknown[] {
+  return typeof value === "object" && value !== null ? Object.values(value) : [];
+}
 
-function layoutDescriptions(layout: unknown): [ConstructionOptions, RestoreArea][] {
-  const found: [ConstructionOptions, RestoreArea][] = [];
+function stateValues(desc: StoredDescription): unknown[] {
+  const state = desc.innerWidgetState;
+  if (typeof state !== "string") return topLevelValues(state);
+  try {
+    return topLevelValues(JSON.parse(state));
+  } catch {
+    return [];
+  }
+}
+
+type ConstructionOptions = { factoryId: string; options?: unknown };
+type StoredDescription = { constructionOptions: ConstructionOptions; innerWidgetState?: unknown };
+
+function layoutDescriptions(layout: unknown): [StoredDescription, RestoreArea][] {
+  const found: [StoredDescription, RestoreArea][] = [];
   const visit = (value: unknown, area: RestoreArea) => {
     if (Array.isArray(value)) {
       for (const item of value) visit(item, area);
@@ -55,7 +80,7 @@ function layoutDescriptions(layout: unknown): [ConstructionOptions, RestoreArea]
     if (typeof value !== "object" || value === null) return;
     const options = (value as { constructionOptions?: unknown }).constructionOptions;
     if (isConstructionOptions(options)) {
-      found.push([options, area]);
+      found.push([value as StoredDescription, area]);
       return;
     }
     for (const child of Object.values(value)) visit(child, area);
@@ -89,6 +114,34 @@ export function storedPending(stored: unknown): PendingReopen[] {
   );
 }
 
+/**
+ * The stored pending reopens still worth keeping at start-up: those on a
+ * configured mount that is in the workspace. One on a mount removed, or taken
+ * out of the workspace (`mounted: false`, remembered), is forgotten — it would
+ * make every start wait for that mount, and resurface much later.
+ */
+export function livePending<T extends PendingReopen>(
+  entries: readonly T[],
+  configured: readonly MountConfig[],
+): T[] {
+  const inWorkspace = new Set(configured.filter((m) => m.mounted !== false).map((m) => m.key));
+  return entries.filter((entry) => {
+    const key = mountKeyOf(entry.description.constructionOptions.options);
+    return key !== undefined && inWorkspace.has(key);
+  });
+}
+
+/** Those whose mount has not settled as `failed` (after the start-up apply). */
+export function unfailedPending<T extends PendingReopen>(
+  entries: readonly T[],
+  status: (key: string) => MountStatus | undefined,
+): T[] {
+  return entries.filter((entry) => {
+    const key = mountKeyOf(entry.description.constructionOptions.options);
+    return key === undefined || status(key)?.state !== "failed";
+  });
+}
+
 /** `first`, then those of `then` not already in it (by `descriptionKey`). */
 export function mergePending<T extends PendingReopen>(
   first: readonly T[],
@@ -118,7 +171,11 @@ function isConstructionOptions(value: unknown): value is ConstructionOptions {
  * `file:` URI in its options' `uri` (editors, viewers). Undefined otherwise.
  */
 export function mountKeyOf(options: unknown): string | undefined {
-  const uri = (options as { uri?: unknown } | undefined)?.uri;
+  return fileMountKey((options as { uri?: unknown } | undefined)?.uri);
+}
+
+/** The mount a `file:` URI string is on: its first path segment. Undefined otherwise. */
+function fileMountKey(uri: unknown): string | undefined {
   if (typeof uri !== "string") return undefined;
   let url: URL;
   try {
