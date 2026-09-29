@@ -997,6 +997,9 @@ importers:
       '@sparticuz/chromium':
         specifier: ^153.0.0
         version: 153.0.0
+      '@statewalker/webrun-files-browser':
+        specifier: ^0.10.0
+        version: 0.10.0
       '@statewalker/webrun-files-mem':
         specifier: ^0.10.0
         version: 0.10.0
@@ -1004,7 +1007,7 @@ importers:
         specifier: ^0.6.0
         version: 0.6.0
       '@statewalker/webrun-modules':
-        specifier: ^0.2.1
+        specifier: 'catalog:'
         version: 0.2.1
       '@types/node':
         specifier: 'catalog:'
@@ -3590,6 +3593,9 @@ packages:
 
   '@statewalker/webrun-dataflow@0.1.1':
     resolution: {integrity: sha512-gSzZ43QUpK0YhALT4w678mseO7gQDeF/a8UElU/CZ3eQfcGkVdWXIG0YX73//PCpcIsmnjrptKqRNK++wHmq2Q==}
+
+  '@statewalker/webrun-files-browser@0.10.0':
+    resolution: {integrity: sha512-QW4QngeLfLcjxvcKcVRwsg5x/7WhTw1jY1C/jABt9491rJmbOk8hM3TWClihF7ZHwwjGo65mJFz2a9/Lqn9BCA==}
 
   '@statewalker/webrun-files-browser@0.9.0':
     resolution: {integrity: sha512-jy7ninc2KZQ7nBN+GLAbR9O9U6i72noc+a/OJwo2q4mleqmKahD2il5bgEI3lzxNI5WBRKcTTbbMDrPVaQRSVA==}
@@ -9666,6 +9672,10 @@ snapshots:
       '@statewalker/webrun-files': 0.7.0
 
   '@statewalker/webrun-dataflow@0.1.1': {}
+
+  '@statewalker/webrun-files-browser@0.10.0':
+    dependencies:
+      '@statewalker/webrun-files': 0.10.0
 
   '@statewalker/webrun-files-browser@0.9.0':
     dependencies:
