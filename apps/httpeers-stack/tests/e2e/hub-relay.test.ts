@@ -18,6 +18,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPair } from "@libp2p/crypto/keys";
+import type { Connection } from "@libp2p/interface";
 import { multiaddr } from "@multiformats/multiaddr";
 import type { Libp2p } from "@statewalker/httpeers.core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -173,8 +174,17 @@ describe("superviseHubReservation", () => {
       maxRetryDelayMs: 1_000,
     });
 
+    // The link drop is the hub's connection closing. Its relay address is not a reliable
+    // signal: from libp2p 3.3.9 the address can outlive the connection until the
+    // supervisor has already re-reserved, so "not on the hub" may never be observable.
+    let dropped = false;
+    const onClose = (evt: CustomEvent<Connection>): void => {
+      if (evt.detail.remotePeer.toString() === hubId) dropped = true;
+    };
+    a.addEventListener("connection:close", onClose);
     await hub.hangUp(a.peerId);
-    expect(await eventually(() => !onHub(a), 5_000)).toBe(true);
+    expect(await eventually(() => dropped, 5_000)).toBe(true);
+    a.removeEventListener("connection:close", onClose);
 
     expect(await eventually(() => onHub(a), 15_000)).toBe(true);
   }, 40_000);
