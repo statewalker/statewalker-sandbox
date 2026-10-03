@@ -91,7 +91,7 @@ catalog:
   idb-keyval: ^6.3.0
   isomorphic-ws: ^5.0.0
   lucide-react: ^1.51.0
-  openai: ^6.49.0
+  openai: ^7.27.0
   pg: ^8.23.1
   radix-ui: ^1.6.7
   react: ^19.3.0
