@@ -17,7 +17,7 @@
     "@statewalker/webrun-biscuit": "catalog:",
     "basecoat-css": "catalog:",
     "dockview-core": "catalog:",
-    "typescript": "catalog:",
+    "typescript": "catalog:ts-api",
     "zod": "catalog:"
   },
   "devDependencies": {
