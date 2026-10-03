@@ -24,7 +24,7 @@
   "dependencies": {
     "@libp2p/interface": "catalog:",
     "@libp2p/peer-id": "catalog:",
-    "@statewalker/httpeers.core": "workspace:*",
+    "@statewalker/httpeers.core": "workspace:^",
     "@statewalker/webrun-biscuit": "catalog:"
   },
   "devDependencies": {

@@ -46,7 +46,7 @@
     "@libp2p/webrtc": "catalog:",
     "@libp2p/websockets": "catalog:",
     "@multiformats/multiaddr": "catalog:",
-    "@statewalker/httpeers.core": "workspace:*",
+    "@statewalker/httpeers.core": "workspace:^",
     "@statewalker/webrun-files": "catalog:",
     "@statewalker/webrun-files-mem": "catalog:",
     "@statewalker/webrun-http-browser": "catalog:",
