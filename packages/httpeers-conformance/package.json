@@ -22,10 +22,10 @@
     "report:gap": "vitest run --config vitest.gap.config.ts"
   },
   "dependencies": {
-    "@libp2p/interface": "3.2.5",
-    "@libp2p/peer-id": "6.0.14",
+    "@libp2p/interface": "catalog:",
+    "@libp2p/peer-id": "catalog:",
     "@statewalker/httpeers.core": "workspace:*",
-    "@statewalker/webrun-biscuit": "^0.2.1"
+    "@statewalker/webrun-biscuit": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

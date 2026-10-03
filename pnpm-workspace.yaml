@@ -10,17 +10,63 @@ onlyBuiltDependencies:
   - node-datachannel
 
 catalog:
-  "@statewalker/ai-openai-compat.core": ^0.1.1
+  "@biscuit-auth/biscuit-wasm": 0.6.0
+  "@chainsafe/libp2p-noise": 17.0.0
+  "@chainsafe/libp2p-yamux": 8.0.1
+  "@changesets/cli": "^2.30.0"
+  "@earendil-works/pi-agent-core": "^0.75.4"
+  "@earendil-works/pi-ai": "^0.75.4"
+  "@flue/runtime": "^0.7.0"
+  "@just-bash/executor": "^1.0.2"
+  "@libp2p/circuit-relay-v2": 4.2.11
+  "@libp2p/crypto": 5.1.22
+  "@libp2p/identify": 4.1.12
+  "@libp2p/interface": 3.3.0
+  "@libp2p/peer-id": 6.0.14
+  "@libp2p/tcp": 11.0.26
+  "@libp2p/webrtc": 6.0.29
+  "@libp2p/websockets": 10.1.19
+  "@multiformats/multiaddr": 13.0.3
+  "@preact/signals-core": 1.14.4
+  "@statewalker/shared-baseclass": ^0.1.1
+  "@statewalker/shared-commands": ^0.2.1
+  "@statewalker/shared-slots": ^0.2.1
+  "@statewalker/webrun-biscuit": "^0.2.1"
+  "@statewalker/webrun-msgpack": "^0.3.0"
+  "@statewalker/webrun-rpc": "^0.4.0"
+  "@statewalker/webrun-site-builder": "^0.2.0"
+  "@statewalker/webrun-site-host": "^0.2.1"
+  "@statewalker/webrun-streams": "^0.2.0"
+  "@tailwindcss/cli": 4.3.3
+  "@vitest/browser-playwright": "^5.0.0"
+  "@xterm/addon-fit": "^0.10.0"
+  "@xterm/addon-web-links": "^0.11.0"
+  "@xterm/xterm": "^5.5.0"
+  "alien-signals": 3.2.1
+  "basecoat-css": 1.0.2
+  "dockview-core": 8.2.0
+  "happy-dom": 20.14.0
+  "hightable": 0.26.4
+  "html5-qrcode": "^2.3.8"
+  "jsqr": "^1.4.0"
+  "just-bash": "^3.0.1"
+  "libp2p": 3.3.8
+  "multiformats": 14.0.5
+  "playwright": 1.58.0
+  "qrcode-generator": "^2.0.4"
+  "sharp": "^0.35.4"
+  "zod": 4.5.4
+  "@statewalker/ai-openai-compat.core": "^0.2.0"
   "@statewalker/webrun-modules-build": ^0.1.2
   "@statewalker/webrun-modules": ^0.2.1
-  "@statewalker/webrun-files-node": ^0.9.0
-  "@statewalker/webrun-http-browser": ^0.3.4
+  "@statewalker/webrun-files-node": "^0.10.0"
+  "@statewalker/webrun-http-browser": "^0.6.0"
   "@statewalker/webrun-streams-libp2p": ^0.1.1
   "@statewalker/webrun-http-streams": ^0.2.1
-  "@statewalker/webrun-files-mem": ^0.9.0
-  "@statewalker/webrun-files-composite": ^0.9.0
-  "@statewalker/webrun-files-browser": ^0.9.0
-  "@statewalker/webrun-files": ^0.9.0
+  "@statewalker/webrun-files-mem": "^0.10.0"
+  "@statewalker/webrun-files-composite": "^0.10.0"
+  "@statewalker/webrun-files-browser": "^0.10.0"
+  "@statewalker/webrun-files": "^0.10.0"
   "@statewalker/ui.view.shadcn": ^0.1.1
   "@ai-sdk/openai": ^3.0.53
   "@ai-sdk/provider": ^3.0.10
@@ -39,7 +85,6 @@ catalog:
   "@types/react-dom": ^19.2.4
   "@types/ws": ^8.18.1
   "@vitejs/plugin-react": ^6.0.5
-  "@vitest/coverage-v8": ^4.1.4
   ai: ^6.0.168
   comlink: ^4.4.2
   hono: ^4.12.14

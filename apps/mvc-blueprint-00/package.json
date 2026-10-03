@@ -21,13 +21,13 @@
     "test:B6": "vitest run B6-app && vitest run --config vitest.browser.config.ts B6-app"
   },
   "dependencies": {
-    "@statewalker/shared-baseclass": "0.1.1",
-    "@statewalker/shared-commands": "0.2.1",
+    "@statewalker/shared-baseclass": "catalog:",
+    "@statewalker/shared-commands": "catalog:",
     "@statewalker/shared-registry": "catalog:",
     "@statewalker/ui.view.shadcn": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "zod": "4.5.4"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@tailwindcss/vite": "catalog:",
@@ -35,11 +35,11 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
-    "@vitest/browser-playwright": "^5.0.0",
-    "playwright": "1.58.0",
+    "@vitest/browser-playwright": "catalog:",
+    "playwright": "catalog:",
     "tailwindcss": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
-    "vitest": "^5.0.0"
+    "vitest": "catalog:"
   }
 }
