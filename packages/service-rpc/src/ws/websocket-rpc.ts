@@ -155,16 +155,22 @@ export async function createWebSocketRpcClient<T = Record<string, unknown>>(
 ): Promise<[T, () => void]> {
   const { onConnect, onDisconnect, onError, connectionTimeout = 5000 } = options;
 
-  // Wait for WebSocket to open if needed
-  if (ws.readyState === WS_READY_STATE.CONNECTING) {
-    await waitForWebSocketOpen(ws, connectionTimeout);
-  }
-
-  // Create MessageChannel
+  // Bind BEFORE waiting for the socket to open. The server sends its service descriptor as soon
+  // as a client connects, and `ws` can emit that first message in the same tick as "open" (when
+  // it arrives with the upgrade response): a listener attached after awaiting "open" misses it,
+  // and the client then times out waiting for the descriptor. port2 queues it until
+  // getServiceClient starts it.
   const { port1, port2 } = new MessageChannel();
-
-  // Bind WebSocket to port1
   const cleanupBinding = bindWebSocketToPort(ws, port1);
+
+  if (ws.readyState === WS_READY_STATE.CONNECTING) {
+    try {
+      await waitForWebSocketOpen(ws, connectionTimeout);
+    } catch (err) {
+      cleanupBinding();
+      throw err;
+    }
+  }
 
   // Create service client from port2 (descriptor is received automatically)
   const [service, closeClient] = await getServiceClient<T>(port2);
