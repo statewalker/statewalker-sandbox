@@ -95,7 +95,8 @@ interface Derived {
 /** `a.b` (not `a[b]`): the property name, or undefined. */
 function memberName(node: Node): string | undefined {
   const n = node as AcornAst.AnyNode;
-  if (n.type !== "MemberExpression" || n.computed || n.property.type !== "Identifier") return undefined;
+  if (n.type !== "MemberExpression" || n.computed || n.property.type !== "Identifier")
+    return undefined;
   return n.property.name;
 }
 

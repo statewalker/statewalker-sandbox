@@ -78,7 +78,8 @@ function numberLiteral(node: Node | null | undefined): number | undefined {
 /** `a.b` (not `a[b]`): the property name, or undefined. */
 function memberName(node: Node): string | undefined {
   const n = node as AcornAst.AnyNode;
-  if (n.type !== "MemberExpression" || n.computed || n.property.type !== "Identifier") return undefined;
+  if (n.type !== "MemberExpression" || n.computed || n.property.type !== "Identifier")
+    return undefined;
   return n.property.name;
 }
 
@@ -190,7 +191,11 @@ export async function generateManifest(modulePath: string): Promise<Manifest> {
     }
 
     // --- menu contributions ---
-    if (n.type === "CallExpression" && n.callee.type === "Identifier" && n.callee.name === "contributeMenu") {
+    if (
+      n.type === "CallExpression" &&
+      n.callee.type === "Identifier" &&
+      n.callee.name === "contributeMenu"
+    ) {
       const arg = n.arguments[0] as AcornAst.AnyNode | undefined;
       if (!arg || arg.type !== "ObjectExpression") {
         diagnostics.push({
