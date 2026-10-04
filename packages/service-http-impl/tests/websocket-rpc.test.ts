@@ -55,12 +55,6 @@ describe("WebSocket RPC Integration with Real Server", () => {
 
       // Connect WebSocket client
       const ws = new WebSocket(wsUrl);
-      await new Promise((resolve, reject) => {
-        ws.on("open", resolve);
-        ws.on("error", reject);
-        setTimeout(() => reject(new Error("WebSocket connection timeout")), 5000);
-      });
-
       try {
         // Create RPC client
         const [service, cleanup] = await createWebSocketRpcClient<{
@@ -119,12 +113,6 @@ describe("WebSocket RPC Integration with Real Server", () => {
 
       // Connect client
       const ws = new WebSocket(wsUrl);
-      await new Promise((resolve, reject) => {
-        ws.on("open", resolve);
-        ws.on("error", reject);
-        setTimeout(() => reject(new Error("WebSocket connection timeout")), 5000);
-      });
-
       try {
         const [service, cleanup] = await createWebSocketRpcClient<{
           calculator: { multiply: (a: number, b: number) => number };
@@ -176,12 +164,6 @@ describe("WebSocket RPC Integration with Real Server", () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
 
       const ws = new WebSocket(wsUrl);
-      await new Promise((resolve, reject) => {
-        ws.on("open", resolve);
-        ws.on("error", reject);
-        setTimeout(() => reject(new Error("WebSocket connection timeout")), 5000);
-      });
-
       try {
         const [service, cleanup] = await createWebSocketRpcClient<{
           async: {
@@ -227,12 +209,6 @@ describe("WebSocket RPC Integration with Real Server", () => {
       // First connection
       {
         const ws = new WebSocket(wsUrl);
-        await new Promise((resolve, reject) => {
-          ws.on("open", resolve);
-          ws.on("error", reject);
-          setTimeout(() => reject(new Error("WebSocket connection timeout")), 5000);
-        });
-
         const [service, cleanup] = await createWebSocketRpcClient<{
           calculator: { add: (a: number, b: number) => number };
         }>(ws);
@@ -250,12 +226,6 @@ describe("WebSocket RPC Integration with Real Server", () => {
       // Second connection
       {
         const ws = new WebSocket(wsUrl);
-        await new Promise((resolve, reject) => {
-          ws.on("open", resolve);
-          ws.on("error", reject);
-          setTimeout(() => reject(new Error("WebSocket connection timeout")), 5000);
-        });
-
         const [service, cleanup] = await createWebSocketRpcClient<{
           calculator: { add: (a: number, b: number) => number };
         }>(ws);
@@ -303,12 +273,6 @@ describe("WebSocket RPC Integration with Real Server", () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
 
       const ws = new WebSocket(wsUrl);
-      await new Promise((resolve, reject) => {
-        ws.on("open", resolve);
-        ws.on("error", reject);
-        setTimeout(() => reject(new Error("WebSocket connection timeout")), 5000);
-      });
-
       try {
         const [service, cleanup] = await createWebSocketRpcClient<{
           calculator: {
@@ -374,12 +338,6 @@ describe("WebSocket RPC Integration with Real Server", () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
 
       const ws = new WebSocket(wsUrl);
-      await new Promise((resolve, reject) => {
-        ws.on("open", resolve);
-        ws.on("error", reject);
-        setTimeout(() => reject(new Error("WebSocket connection timeout")), 5000);
-      });
-
       try {
         const [service, cleanup] = await createWebSocketRpcClient<{
           calculator: { divide: (a: number, b: number) => number };
@@ -442,12 +400,6 @@ describe("WebSocket RPC Integration with Real Server", () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
 
       const ws = new WebSocket(wsUrl);
-      await new Promise((resolve, reject) => {
-        ws.on("open", resolve);
-        ws.on("error", reject);
-        setTimeout(() => reject(new Error("WebSocket connection timeout")), 5000);
-      });
-
       try {
         const [service, cleanup] = await createWebSocketRpcClient<{
           userService: {
