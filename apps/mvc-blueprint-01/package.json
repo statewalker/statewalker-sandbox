@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "The MVC blueprint on signals — the same architecture, with its model substrate behind one signals contract.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/mvc-blueprint-01"
+  },
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/apps/mvc-blueprint-01#readme",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

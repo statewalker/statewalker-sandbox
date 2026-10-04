@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "description": "One test per numbered criterion of the httpeers block API. Measures an implementation against the spec.",
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/packages/httpeers-conformance#readme",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "packages/httpeers-conformance"
   },
   "main": "src/index.ts",
   "exports": {

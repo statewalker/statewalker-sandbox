@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "description": "Legacy PostgreSQL service adapter. Scheduled for replacement by direct drizzle/pg usage.",
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/packages/service-pg#readme",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "packages/service-pg"
   },
   "main": "src/index.ts",
   "exports": {

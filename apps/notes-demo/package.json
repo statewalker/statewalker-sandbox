@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "Browser React note-taking demo served no-bundle through @statewalker/webrun-modules-build: Tailwind (v4) styling, a plain @import CSS chain (F2 runtime) + url() asset (F3), React served from npm, and a swappable FilesApi store (persistent by default, in-memory via ?mem for tests).",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/notes-demo"
+  },
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/apps/notes-demo#readme",
   "license": "MIT",
   "scripts": {
     "build": "tsx build.ts",

@@ -4,7 +4,10 @@
   "type": "module",
   "packageManager": "pnpm@10.16.1",
   "description": "Experimental / scheduled-for-refactor packages — internal use only.",
-  "homepage": "https://github.com/statewalker/statewalker-sandbox",
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox#readme",
   "author": {
     "name": "Mikhail Kotelnikov",
     "email": "mikhail.kotelnikov@gmail.com"
@@ -12,7 +15,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git"
   },
   "scripts": {
     "build": "pnpm -r run build",
