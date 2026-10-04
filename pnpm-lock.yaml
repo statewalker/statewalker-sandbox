@@ -148,8 +148,8 @@ catalogs:
       specifier: ^0.2.0
       version: 0.2.1
     '@statewalker/webrun-streams-libp2p':
-      specifier: ^0.1.1
-      version: 0.1.4
+      specifier: ^0.1.6
+      version: 0.1.6
     '@tailwindcss/cli':
       specifier: ^4.3.3
       version: 4.3.3
@@ -562,7 +562,7 @@ importers:
         version: 0.2.1
       '@statewalker/webrun-streams-libp2p':
         specifier: 'catalog:'
-        version: 0.1.4(@libp2p/interface@3.3.0)(@multiformats/multiaddr@13.0.3)(libp2p@3.3.11)
+        version: 0.1.6(@libp2p/interface@3.3.0)(@multiformats/multiaddr@13.0.3)(libp2p@3.3.11)
       hono:
         specifier: 'catalog:'
         version: 4.13.13
@@ -626,7 +626,7 @@ importers:
         version: 0.2.4
       '@statewalker/webrun-streams-libp2p':
         specifier: 'catalog:'
-        version: 0.1.4(@libp2p/interface@3.3.0)(@multiformats/multiaddr@13.0.3)(libp2p@3.3.11)
+        version: 0.1.6(@libp2p/interface@3.3.0)(@multiformats/multiaddr@13.0.3)(libp2p@3.3.11)
       libp2p:
         specifier: 'catalog:'
         version: 3.3.11
@@ -1170,7 +1170,7 @@ importers:
         version: 0.2.4
       '@statewalker/webrun-streams-libp2p':
         specifier: 'catalog:'
-        version: 0.1.4(@libp2p/interface@3.3.0)(@multiformats/multiaddr@13.0.3)(libp2p@3.3.11)
+        version: 0.1.6(@libp2p/interface@3.3.0)(@multiformats/multiaddr@13.0.3)(libp2p@3.3.11)
       libp2p:
         specifier: 'catalog:'
         version: 3.3.11
@@ -3431,8 +3431,8 @@ packages:
     peerDependencies:
       '@statewalker/webrun-files': ^0.9.0 || ^0.10.0
 
-  '@statewalker/webrun-streams-libp2p@0.1.4':
-    resolution: {integrity: sha512-Kqir4S9AZfoe6AL0p/gXVFPs1z+DYavitCI1MfHgsbeJsYX5VFwb/s2YwM/f+jnR9MEsXjzWrGrDhcIgHf9Kdg==}
+  '@statewalker/webrun-streams-libp2p@0.1.6':
+    resolution: {integrity: sha512-frb6EiCYrktujnlzPYGweToUuxh5keNrwS8hJcXj4M4CD40zd8OnNH76yDKBiOrJqHitywWoklsb+uHvjHknhQ==}
     peerDependencies:
       '@libp2p/interface': ^3.0.0
       '@multiformats/multiaddr': ^13.0.0
@@ -8702,7 +8702,7 @@ snapshots:
       '@statewalker/webrun-http-browser': 0.6.3
       '@statewalker/webrun-site-builder': 0.2.1(@statewalker/webrun-files@0.10.1)
 
-  '@statewalker/webrun-streams-libp2p@0.1.4(@libp2p/interface@3.3.0)(@multiformats/multiaddr@13.0.3)(libp2p@3.3.11)':
+  '@statewalker/webrun-streams-libp2p@0.1.6(@libp2p/interface@3.3.0)(@multiformats/multiaddr@13.0.3)(libp2p@3.3.11)':
     dependencies:
       '@libp2p/interface': 3.3.0
       '@multiformats/multiaddr': 13.0.3
