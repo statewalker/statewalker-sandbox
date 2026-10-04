@@ -38,8 +38,8 @@ pnpm test 03-a2ui-binding         # one rung
 pnpm typecheck
 ```
 
-**Dependencies are pinned explicitly rather than through `catalog:`.** The app has
-to install and pass on its own, and two of its pins fight the workspace catalog:
-`typescript` is `5.9.3` because rung 04 uses the **compiler API**, which TypeScript 7
-does not ship (the catalog is on 6.x), and `vitest`/`happy-dom` match what the rungs
-were written against.
+**Dependencies come from the workspace catalog** (`catalog:`), like every other
+package in the repo. Rungs 04 and Z parse TypeScript source without executing it;
+they used the TypeScript compiler API, which TypeScript 7 no longer ships, and now
+use `parseSource` from `@statewalker/webrun-modules` (sucrase strips the types, acorn
+parses into an ESTree), so the app runs on the same TypeScript 7 as the rest.

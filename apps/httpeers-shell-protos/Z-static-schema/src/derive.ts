@@ -20,11 +20,21 @@
 //   2. Report, never guess. Anything outside the derivable subset throws
 //      `UnresolvableSchemaError` rather than producing an approximation.
 //
-// The TypeScript compiler API is the parser, as at rung 04 — hence the app's
-// `typescript@5.9.3` pin. TypeScript 7 ships no `createSourceFile`.
+// The parser is @statewalker/webrun-modules' parseSource (sucrase strips the types,
+// acorn parses), as at rung 04. PORTED (2026-10-04) from the TypeScript compiler API,
+// which TypeScript 7 no longer ships; the derivable subset and its errors are unchanged.
 
-import ts from "typescript";
+import { type AcornAst, parseSource } from "@statewalker/webrun-modules";
 import { UnresolvableSchemaError } from "./errors.js";
+
+type Node = AcornAst.Node;
+type Expression = AcornAst.Expression;
+type Arg = Expression | AcornAst.SpreadElement;
+
+/** The parsed expression's text: node offsets index into it. */
+interface Source {
+  readonly js: string;
+}
 
 export type { UnresolvableReason } from "./errors.js";
 export { UnresolvableSchemaError } from "./errors.js";
@@ -67,8 +77,8 @@ const REFINING = new Set(["refine", "superRefine", "check"]);
 
 interface Link {
   readonly name: string;
-  readonly args: ts.NodeArray<ts.Expression>;
-  readonly node: ts.CallExpression;
+  readonly args: Arg[];
+  readonly node: AcornAst.CallExpression;
 }
 
 interface Derived {
@@ -82,48 +92,66 @@ interface Derived {
  * `z.string().min(2).optional()` yields root `z` and
  * [string, min, optional].
  */
-function chainOf(node: ts.Expression): { links: Link[]; root: ts.Expression } {
+/** `a.b` (not `a[b]`): the property name, or undefined. */
+function memberName(node: Node): string | undefined {
+  const n = node as AcornAst.AnyNode;
+  if (n.type !== "MemberExpression" || n.computed || n.property.type !== "Identifier") return undefined;
+  return n.property.name;
+}
+
+function chainOf(node: Expression): { links: Link[]; root: Node } {
   const links: Link[] = [];
-  let current: ts.Expression = node;
-  while (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
-    links.push({ name: current.expression.name.text, args: current.arguments, node: current });
-    current = current.expression.expression;
+  let current: Node = node;
+  for (;;) {
+    const c = current as AcornAst.AnyNode;
+    if (c.type !== "CallExpression") break;
+    const name = memberName(c.callee);
+    if (name === undefined) break;
+    links.push({ name, args: c.arguments, node: c });
+    current = (c.callee as AcornAst.MemberExpression).object;
   }
   links.reverse();
   return { links, root: current };
 }
 
-function textOf(node: ts.Node, sf: ts.SourceFile): string {
-  return node.getText(sf).replace(/\s+/g, " ").slice(0, 120);
+function textOf(node: Node, src: Source): string {
+  return src.js.slice(node.start, node.end).replace(/\s+/g, " ").slice(0, 120);
 }
 
-function stringLiteral(node: ts.Node | undefined): string | undefined {
-  if (!node) return undefined;
-  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+function stringLiteral(node: Node | null | undefined): string | undefined {
+  const n = node as AcornAst.AnyNode | null | undefined;
+  if (!n) return undefined;
+  if (n.type === "Literal" && typeof n.value === "string") return n.value;
+  if (n.type === "TemplateLiteral" && n.expressions.length === 0) {
+    return n.quasis[0]?.value.cooked ?? undefined;
+  }
   return undefined;
 }
 
-function numericLiteral(node: ts.Node | undefined): number | undefined {
-  if (!node) return undefined;
-  if (ts.isNumericLiteral(node)) return Number(node.text);
+function numericLiteral(node: Node | null | undefined): number | undefined {
+  const n = node as AcornAst.AnyNode | null | undefined;
+  if (!n) return undefined;
+  if (n.type === "Literal" && typeof n.value === "number") return n.value;
   if (
-    ts.isPrefixUnaryExpression(node) &&
-    node.operator === ts.SyntaxKind.MinusToken &&
-    ts.isNumericLiteral(node.operand)
+    n.type === "UnaryExpression" &&
+    n.operator === "-" &&
+    n.argument.type === "Literal" &&
+    typeof n.argument.value === "number"
   ) {
-    return -Number(node.operand.text);
+    return -n.argument.value;
   }
   return undefined;
 }
 
 /** Derive one expression node. Recursive: objects and arrays derive their parts. */
-function deriveNode(node: ts.Expression, sf: ts.SourceFile): Derived {
+function deriveNode(node: Arg, sf: Source): Derived {
   const src = textOf(node, sf);
+  const n = node as AcornAst.AnyNode;
 
   // A bare symbol — `NotesInput`, `shared.Schema` — is a schema this rung
   // cannot see. Category 1.
-  if (!ts.isCallExpression(node)) {
-    if (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node)) {
+  if (n.type !== "CallExpression") {
+    if (n.type === "Identifier" || memberName(n) !== undefined) {
       throw new UnresolvableSchemaError(
         "imported-symbol",
         src,
@@ -133,9 +161,10 @@ function deriveNode(node: ts.Expression, sf: ts.SourceFile): Derived {
     throw new UnresolvableSchemaError("unsupported-type", src, "not a Zod expression");
   }
 
-  const { links, root } = chainOf(node);
+  const { links, root } = chainOf(n);
+  const r = root as AcornAst.AnyNode;
 
-  if (!ts.isIdentifier(root) || root.text !== "z") {
+  if (r.type !== "Identifier" || r.name !== "z") {
     // `NotesInput.extend({...})` — a chain rooted at an imported schema.
     throw new UnresolvableSchemaError(
       "imported-symbol",
@@ -175,7 +204,7 @@ function deriveNode(node: ts.Expression, sf: ts.SourceFile): Derived {
   return { schema, optional };
 }
 
-function deriveBase(base: Link, sf: ts.SourceFile): JsonSchema {
+function deriveBase(base: Link, sf: Source): JsonSchema {
   const src = textOf(base.node, sf);
 
   if (NON_SERIALISABLE.has(base.name)) {
@@ -214,7 +243,7 @@ function deriveBase(base: Link, sf: ts.SourceFile): JsonSchema {
   }
 }
 
-function deriveArray(base: Link, sf: ts.SourceFile): JsonSchema {
+function deriveArray(base: Link, sf: Source): JsonSchema {
   const item = base.args[0];
   if (!item) {
     throw new UnresolvableSchemaError(
@@ -226,10 +255,10 @@ function deriveArray(base: Link, sf: ts.SourceFile): JsonSchema {
   return { type: "array", items: deriveNode(item, sf).schema };
 }
 
-function deriveEnum(base: Link, sf: ts.SourceFile): JsonSchema {
-  const arg = base.args[0];
+function deriveEnum(base: Link, sf: Source): JsonSchema {
+  const arg = base.args[0] as AcornAst.AnyNode | undefined;
   const src = textOf(base.node, sf);
-  if (!arg || !ts.isArrayLiteralExpression(arg)) {
+  if (!arg || arg.type !== "ArrayExpression") {
     // `z.enum(KINDS)` — category 2. The members live in a value this rung
     // would have to execute the module to read.
     throw new UnresolvableSchemaError(
@@ -253,10 +282,10 @@ function deriveEnum(base: Link, sf: ts.SourceFile): JsonSchema {
   return { type: "string", enum: members };
 }
 
-function deriveObject(base: Link, sf: ts.SourceFile): JsonSchema {
-  const arg = base.args[0];
+function deriveObject(base: Link, sf: Source): JsonSchema {
+  const arg = base.args[0] as AcornAst.AnyNode | undefined;
   const src = textOf(base.node, sf);
-  if (!arg || !ts.isObjectLiteralExpression(arg)) {
+  if (!arg || arg.type !== "ObjectExpression") {
     throw new UnresolvableSchemaError(
       "imported-symbol",
       src,
@@ -268,7 +297,7 @@ function deriveObject(base: Link, sf: ts.SourceFile): JsonSchema {
   const required: string[] = [];
 
   for (const property of arg.properties) {
-    if (ts.isSpreadAssignment(property)) {
+    if (property.type === "SpreadElement") {
       // Category 6. The spread source could add or remove any key.
       throw new UnresolvableSchemaError(
         "object-spread",
@@ -276,14 +305,14 @@ function deriveObject(base: Link, sf: ts.SourceFile): JsonSchema {
         "object shape includes a spread of an unknown shape",
       );
     }
-    if (ts.isShorthandPropertyAssignment(property)) {
+    if (property.shorthand) {
       throw new UnresolvableSchemaError(
         "imported-symbol",
         textOf(property, sf),
         "shorthand property refers to a symbol this rung cannot read",
       );
     }
-    if (!ts.isPropertyAssignment(property)) {
+    if (property.kind !== "init" || property.method) {
       throw new UnresolvableSchemaError(
         "unsupported-type",
         textOf(property, sf),
@@ -291,7 +320,12 @@ function deriveObject(base: Link, sf: ts.SourceFile): JsonSchema {
       );
     }
 
-    const name = ts.isIdentifier(property.name) ? property.name.text : stringLiteral(property.name);
+    const name =
+      !property.computed && property.key.type === "Identifier"
+        ? property.key.name
+        : property.computed
+          ? undefined
+          : stringLiteral(property.key);
     if (name === undefined) {
       throw new UnresolvableSchemaError(
         "unsupported-type",
@@ -300,7 +334,7 @@ function deriveObject(base: Link, sf: ts.SourceFile): JsonSchema {
       );
     }
 
-    const derived = deriveNode(property.initializer, sf);
+    const derived = deriveNode(property.value as Expression, sf);
     properties[name] = derived.schema;
     if (!derived.optional) required.push(name);
   }
@@ -317,7 +351,7 @@ function applyModifier(
   schema: JsonSchema,
   link: Link,
   src: string,
-  sf: ts.SourceFile,
+  sf: Source,
   markOptional: () => void,
 ): JsonSchema {
   switch (link.name) {
@@ -359,7 +393,7 @@ function applyModifier(
   }
 }
 
-function applyBound(schema: JsonSchema, link: Link, src: string, sf: ts.SourceFile): JsonSchema {
+function applyBound(schema: JsonSchema, link: Link, src: string, sf: Source): JsonSchema {
   const value = numericLiteral(link.args[0]);
   if (value === undefined) {
     throw new UnresolvableSchemaError(
@@ -396,25 +430,24 @@ function applyBound(schema: JsonSchema, link: Link, src: string, sf: ts.SourceFi
  * @throws UnresolvableSchemaError for anything outside the derivable subset.
  */
 export function deriveJsonSchema(expression: string): JsonSchema {
-  const sf = ts.createSourceFile(
-    "<zod-expression>.ts",
-    `const __schema = (${expression});`,
-    ts.ScriptTarget.ES2022,
-    true,
-  );
-
-  const statement = sf.statements[0];
-  if (!statement || !ts.isVariableStatement(statement)) {
+  let parsed: ReturnType<typeof parseSource>;
+  try {
+    parsed = parseSource(`const __schema = (${expression});`, "ts", "<zod-expression>.ts");
+  } catch {
     throw new UnresolvableSchemaError("unsupported-type", expression, "not a single expression");
   }
-  const initializer = statement.declarationList.declarations[0]?.initializer;
+  const { js, ast } = parsed;
+
+  const statement = ast.body[0] as AcornAst.AnyNode | undefined;
+  if (!statement || statement.type !== "VariableDeclaration" || ast.body.length !== 1) {
+    throw new UnresolvableSchemaError("unsupported-type", expression, "not a single expression");
+  }
+  const initializer = statement.declarations[0]?.init;
   if (!initializer) {
     throw new UnresolvableSchemaError("unsupported-type", expression, "expression is empty");
   }
 
-  let node: ts.Expression = initializer;
-  while (ts.isParenthesizedExpression(node)) node = node.expression;
-
-  const { schema } = deriveNode(node, sf);
+  // acorn does not keep parentheses as nodes, so there is nothing to unwrap.
+  const { schema } = deriveNode(initializer, { js });
   return { $schema: DIALECT, ...schema };
 }

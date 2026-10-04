@@ -57,7 +57,7 @@ catalog:
   "zod": ^4.6.5
   "@statewalker/ai-openai-compat.core": "^0.4.0"
   "@statewalker/webrun-modules-build": ^0.1.2
-  "@statewalker/webrun-modules": ^0.2.1
+  "@statewalker/webrun-modules": ^0.3.0
   "@statewalker/webrun-files-node": "^0.10.0"
   "@statewalker/webrun-http-browser": "^0.6.0"
   "@statewalker/webrun-streams-libp2p": ^0.1.1
@@ -106,9 +106,3 @@ catalog:
   vitest: ^5.0.3
   ws: ^8.22.0
 
-catalogs:
-  # TypeScript 7's npm package has no stable compiler API (its root exports only the version;
-  # the parser is under typescript/unstable/*). httpeers-shell-protos parses source with it at
-  # runtime (04-manifest-generation, Z-static-schema), so it stays on the 6.x API.
-  ts-api:
-    typescript: ^6.0.3

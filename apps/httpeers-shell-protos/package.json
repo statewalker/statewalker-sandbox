@@ -15,9 +15,9 @@
     "@statewalker/shared-commands": "catalog:",
     "@statewalker/shared-slots": "catalog:",
     "@statewalker/webrun-biscuit": "catalog:",
+    "@statewalker/webrun-modules": "catalog:",
     "basecoat-css": "catalog:",
     "dockview-core": "catalog:",
-    "typescript": "catalog:ts-api",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -25,6 +25,7 @@
     "@types/node": "catalog:",
     "happy-dom": "catalog:",
     "tailwindcss": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

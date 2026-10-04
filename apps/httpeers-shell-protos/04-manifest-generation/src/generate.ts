@@ -1,8 +1,10 @@
 // RECOVERED-FROM-ARCHIVE: notes/drive/2026-09-02.Httpeers-Shell/13-prototype-04-manifest-generation.tar.gz
-// Unmodified.
+// PORTED (2026-10-04) from the TypeScript compiler API, which TypeScript 7 no longer
+// ships, to @statewalker/webrun-modules' parseSource (sucrase strips the types, acorn
+// parses). The analysis is unchanged: same nodes read, same diagnostics, same lines.
 
 import { readFileSync } from "node:fs";
-import ts from "typescript";
+import { type AcornAst, parseSource } from "@statewalker/webrun-modules";
 
 /**
  * PROTOTYPE 4 — can a manifest be derived from TypeScript source without
@@ -14,7 +16,7 @@ import ts from "typescript";
  * globals, hit the network, or simply throw. A manifest that requires
  * executing the thing it describes is not a build-time manifest.
  *
- * So this walks the TypeScript AST and reads the builder chain
+ * So this walks the module's syntax tree and reads the builder chain
  * syntactically. `Command.async("notes:new").label("New Note").build()` is
  * recovered by walking the call chain backwards from `.build()`.
  */
@@ -52,118 +54,156 @@ export interface Manifest {
 
 const POLICIES = new Set(["async", "required", "silent", "custom"]);
 
+type Node = AcornAst.Node;
+type Expression = AcornAst.Expression;
+
 /** Unwrap a string literal, or return undefined if it is not statically known. */
-function literal(node: ts.Node | undefined): string | undefined {
+function literal(node: Node | null | undefined): string | undefined {
   if (!node) return undefined;
-  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-    return node.text;
+  const n = node as AcornAst.AnyNode;
+  if (n.type === "Literal" && typeof n.value === "string") return n.value;
+  // A template literal without substitutions is as static as a string literal.
+  if (n.type === "TemplateLiteral" && n.expressions.length === 0) {
+    return n.quasis[0]?.value.cooked ?? undefined;
   }
   return undefined;
 }
 
-function numberLiteral(node: ts.Node | undefined): number | undefined {
-  if (node && ts.isNumericLiteral(node)) return Number(node.text);
+function numberLiteral(node: Node | null | undefined): number | undefined {
+  const n = node as AcornAst.AnyNode | undefined;
+  if (n?.type === "Literal" && typeof n.value === "number") return n.value;
   return undefined;
 }
+
+/** `a.b` (not `a[b]`): the property name, or undefined. */
+function memberName(node: Node): string | undefined {
+  const n = node as AcornAst.AnyNode;
+  if (n.type !== "MemberExpression" || n.computed || n.property.type !== "Identifier") return undefined;
+  return n.property.name;
+}
+
+type Link = { name: string; args: (Expression | AcornAst.SpreadElement)[] };
 
 /**
  * Walk a builder chain backwards collecting method calls.
  * `Command.async("k").label("L").icon("i").build()` yields
  * [["build"], ["icon","i"], ["label","L"], ["async","k"]].
  */
-function chain(node: ts.CallExpression): { name: string; args: ts.NodeArray<ts.Expression> }[] {
-  const links: { name: string; args: ts.NodeArray<ts.Expression> }[] = [];
-  let current: ts.Expression = node;
-  while (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
-    links.push({ name: current.expression.name.text, args: current.arguments });
-    current = current.expression.expression;
+function chain(node: AcornAst.CallExpression): Link[] {
+  const links: Link[] = [];
+  let current: Node = node;
+  for (;;) {
+    const c = current as AcornAst.AnyNode;
+    if (c.type !== "CallExpression") break;
+    const name = memberName(c.callee);
+    if (name === undefined) break;
+    links.push({ name, args: c.arguments });
+    current = (c.callee as AcornAst.MemberExpression).object;
   }
   return links;
 }
 
 /** True if the chain root is the `Command` identifier. */
-function rootsAtCommand(node: ts.CallExpression): boolean {
-  let current: ts.Expression = node;
-  while (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
-    current = current.expression.expression;
+function rootsAtCommand(node: AcornAst.CallExpression): boolean {
+  let current: Node = node;
+  for (;;) {
+    const c = current as AcornAst.AnyNode;
+    if (c.type !== "CallExpression" || memberName(c.callee) === undefined) break;
+    current = (c.callee as AcornAst.MemberExpression).object;
   }
-  return ts.isIdentifier(current) && current.text === "Command";
+  const root = current as AcornAst.AnyNode;
+  return root.type === "Identifier" && root.name === "Command";
+}
+
+/** Every child node of `node` (the ESTree equivalent of `ts.forEachChild`). */
+function children(node: Node): Node[] {
+  const out: Node[] = [];
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "loc") continue;
+    const items = Array.isArray(value) ? value : [value];
+    for (const item of items) {
+      if (item && typeof item === "object" && typeof (item as Node).type === "string") {
+        out.push(item as Node);
+      }
+    }
+  }
+  return out;
 }
 
 export async function generateManifest(modulePath: string): Promise<Manifest> {
   const source = readFileSync(modulePath, "utf8");
-  const sf = ts.createSourceFile(modulePath, source, ts.ScriptTarget.ES2022, true);
+  const format = modulePath.endsWith(".tsx") ? "tsx" : "ts";
+  const { js, ast } = parseSource(source, format, modulePath);
 
   const commands: ManifestCommand[] = [];
   const menus: ManifestMenuItem[] = [];
   const diagnostics: Diagnostic[] = [];
 
-  const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  // sucrase keeps line numbers, so these are the original source's lines.
+  const lineOf = (n: Node) => n.loc?.start.line ?? 0;
+  const textOf = (n: Node) => js.slice(n.start, n.end);
 
-  const visit = (node: ts.Node): void => {
+  const visit = (node: Node): void => {
+    const n = node as AcornAst.AnyNode;
+
     // --- exported command declarations ---
-    if (ts.isVariableStatement(node)) {
-      const exported = node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
-      if (exported) {
-        for (const decl of node.declarationList.declarations) {
-          const init = decl.initializer;
-          if (!init || !ts.isCallExpression(init) || !rootsAtCommand(init)) continue;
+    if (n.type === "ExportNamedDeclaration" && n.declaration?.type === "VariableDeclaration") {
+      for (const decl of n.declaration.declarations) {
+        const init = decl.init as AcornAst.AnyNode | null | undefined;
+        if (!init || init.type !== "CallExpression" || !rootsAtCommand(init)) continue;
 
-          const links = chain(init);
-          const policyLink = links[links.length - 1];
-          if (!policyLink || !POLICIES.has(policyLink.name)) {
-            diagnostics.push({
-              kind: "unknown-policy",
-              message: `Unrecognised dispatch policy on ${decl.name.getText(sf)}`,
-              line: lineOf(decl),
-            });
-            continue;
-          }
-
-          const key = literal(policyLink.args[0]);
-          if (key === undefined) {
-            // A template literal or computed key cannot be resolved without
-            // executing the module. Report rather than guess.
-            diagnostics.push({
-              kind: "non-literal-key",
-              message: `Command key is not a string literal on ${decl.name.getText(sf)}`,
-              line: lineOf(decl),
-            });
-            continue;
-          }
-
-          const meta = (name: string): string | undefined =>
-            literal(links.find((l) => l.name === name)?.args[0]);
-
-          commands.push({
-            key,
-            policy: policyLink.name as ManifestCommand["policy"],
-            label: meta("label"),
-            description: meta("description"),
-            icon: meta("icon"),
-            export: decl.name.getText(sf),
+        const links = chain(init);
+        const policyLink = links[links.length - 1];
+        if (!policyLink || !POLICIES.has(policyLink.name)) {
+          diagnostics.push({
+            kind: "unknown-policy",
+            message: `Unrecognised dispatch policy on ${textOf(decl.id)}`,
+            line: lineOf(decl),
           });
+          continue;
         }
+
+        const key = literal(policyLink.args[0]);
+        if (key === undefined) {
+          // A template literal or computed key cannot be resolved without
+          // executing the module. Report rather than guess.
+          diagnostics.push({
+            kind: "non-literal-key",
+            message: `Command key is not a string literal on ${textOf(decl.id)}`,
+            line: lineOf(decl),
+          });
+          continue;
+        }
+
+        const meta = (name: string): string | undefined =>
+          literal(links.find((l) => l.name === name)?.args[0]);
+
+        commands.push({
+          key,
+          policy: policyLink.name as ManifestCommand["policy"],
+          label: meta("label"),
+          description: meta("description"),
+          icon: meta("icon"),
+          export: textOf(decl.id),
+        });
       }
     }
 
     // --- menu contributions ---
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "contributeMenu"
-    ) {
-      const arg = node.arguments[0];
-      if (!arg || !ts.isObjectLiteralExpression(arg)) {
+    if (n.type === "CallExpression" && n.callee.type === "Identifier" && n.callee.name === "contributeMenu") {
+      const arg = n.arguments[0] as AcornAst.AnyNode | undefined;
+      if (!arg || arg.type !== "ObjectExpression") {
         diagnostics.push({
           kind: "non-literal-menu",
           message: "contributeMenu argument is not an object literal",
-          line: lineOf(node),
+          line: lineOf(n),
         });
       } else {
-        const prop = (name: string): ts.Expression | undefined => {
+        const prop = (name: string): Expression | undefined => {
           for (const p of arg.properties) {
-            if (ts.isPropertyAssignment(p) && p.name.getText(sf) === name) return p.initializer;
+            if (p.type !== "Property" || p.computed || p.shorthand || p.kind !== "init") continue;
+            // As before the port: identifier keys only (a quoted key never matched).
+            if (p.key.type === "Identifier" && p.key.name === name) return p.value as Expression;
           }
           return undefined;
         };
@@ -181,16 +221,16 @@ export async function generateManifest(modulePath: string): Promise<Manifest> {
           diagnostics.push({
             kind: "non-literal-menu",
             message: "contributeMenu location/command are not string literals",
-            line: lineOf(node),
+            line: lineOf(n),
           });
         }
       }
     }
 
-    ts.forEachChild(node, visit);
+    for (const child of children(node)) visit(child);
   };
 
-  visit(sf);
+  visit(ast);
 
   return { module: modulePath, commands, menus, diagnostics };
 }
