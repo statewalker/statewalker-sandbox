@@ -122,7 +122,7 @@ catalogs:
       version: 0.10.2
     '@statewalker/webrun-http-browser':
       specifier: ^0.6.0
-      version: 0.6.2
+      version: 0.6.3
     '@statewalker/webrun-http-streams':
       specifier: ^0.2.1
       version: 0.2.4
@@ -541,7 +541,7 @@ importers:
         version: 0.10.2
       '@statewalker/webrun-http-browser':
         specifier: 'catalog:'
-        version: 0.6.2
+        version: 0.6.3
       '@statewalker/webrun-http-streams':
         specifier: 'catalog:'
         version: 0.2.4
@@ -733,7 +733,7 @@ importers:
         version: 0.10.2
       '@statewalker/webrun-http-browser':
         specifier: 'catalog:'
-        version: 0.6.2
+        version: 0.6.3
       hono:
         specifier: 'catalog:'
         version: 4.13.13
@@ -3403,8 +3403,8 @@ packages:
   '@statewalker/webrun-files@0.10.1':
     resolution: {integrity: sha512-E2tQbiMHhGzRBHp3BK5zqsNSo7kUeg+kCUF2rZCxlWwFZrKorMAe5CEecWUqmyQffG7fWJgfNjyU9oEre2sKMA==}
 
-  '@statewalker/webrun-http-browser@0.6.2':
-    resolution: {integrity: sha512-JzvPffTu7cJ4BKiqd0oE8+tMNmbD1jAa2n/iHZDmiQKQYMdqd3hmX+/BIyIffGVI46MTYPxcQHgydDHIW9a5Qg==}
+  '@statewalker/webrun-http-browser@0.6.3':
+    resolution: {integrity: sha512-WTQtHxO5dMsBENX7Tpzdnr8IszfknR9qrunyFCYU7/nYh1LUhEzuUOy2itb5ASGFzPEMRERSMa6TZJCGm2zlPg==}
 
   '@statewalker/webrun-http-streams@0.2.4':
     resolution: {integrity: sha512-GnWD2PflO1b33y2NCwqoqUThB7vzbMTlFSWs+cBGfkcYycws3JlQ6INaxpHrriYuXGB3a/Flq69XVdHlyJwLaw==}
@@ -8649,7 +8649,7 @@ snapshots:
 
   '@statewalker/webrun-files@0.10.1': {}
 
-  '@statewalker/webrun-http-browser@0.6.2':
+  '@statewalker/webrun-http-browser@0.6.3':
     dependencies:
       '@statewalker/webrun-http-streams': 0.2.4
       '@statewalker/webrun-rpc': 0.4.2
@@ -8699,7 +8699,7 @@ snapshots:
     dependencies:
       '@statewalker/webrun-files': 0.10.1
       '@statewalker/webrun-files-mem': 0.10.2
-      '@statewalker/webrun-http-browser': 0.6.2
+      '@statewalker/webrun-http-browser': 0.6.3
       '@statewalker/webrun-site-builder': 0.2.1(@statewalker/webrun-files@0.10.1)
 
   '@statewalker/webrun-streams-libp2p@0.1.4(@libp2p/interface@3.3.0)(@multiformats/multiaddr@13.0.3)(libp2p@3.3.11)':
