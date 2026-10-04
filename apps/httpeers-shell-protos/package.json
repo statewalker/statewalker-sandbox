@@ -11,20 +11,21 @@
     "build:css": "tailwindcss -i 06a-tailwind-build/input.css -o 06a-tailwind-build/dist/shell.css --minify"
   },
   "dependencies": {
-    "@statewalker/shared-adapters": "0.1.1",
-    "@statewalker/shared-commands": "0.2.1",
-    "@statewalker/shared-slots": "0.2.1",
-    "@statewalker/webrun-biscuit": "0.2.1",
-    "basecoat-css": "1.0.2",
-    "dockview-core": "8.2.0",
-    "typescript": "5.9.3",
-    "zod": "4.5.4"
+    "@statewalker/shared-adapters": "catalog:",
+    "@statewalker/shared-commands": "catalog:",
+    "@statewalker/shared-slots": "catalog:",
+    "@statewalker/webrun-biscuit": "catalog:",
+    "@statewalker/webrun-modules": "catalog:",
+    "basecoat-css": "catalog:",
+    "dockview-core": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
-    "@tailwindcss/cli": "4.3.3",
-    "@types/node": "^25.6.0",
-    "happy-dom": "20.14.0",
-    "tailwindcss": "4.3.3",
-    "vitest": "4.1.11"
+    "@tailwindcss/cli": "catalog:",
+    "@types/node": "catalog:",
+    "happy-dom": "catalog:",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

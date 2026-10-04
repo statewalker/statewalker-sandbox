@@ -34,8 +34,8 @@ jobs:
       # - httpeers-conformance's coverage and parse-ids tests compare the suite
       #   with the specification in the umbrella's docs/ (HTTPEERS_SPEC).
       # Its other tests still run below.
-      - run: pnpm -r --filter '!@statewalker/httpeers-lib-protos' run typecheck
       - run: pnpm run build
+      - run: pnpm -r --filter '!@statewalker/httpeers-lib-protos' run typecheck
       - run: >-
           pnpm -r --filter '!@statewalker/httpeers-lib-protos'
           --filter '!@statewalker/httpeers-conformance' run test

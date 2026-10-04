@@ -1,4 +1,9 @@
-import type { FlueEvent } from "@flue/runtime";
+import {
+  type AgentReply,
+  AgentRunError,
+  type DispatchReceipt,
+  type FlueEvent,
+} from "@flue/runtime";
 import { describe, expect, it } from "vitest";
 import { newAgentCommand } from "../../src/lib/human-commands.js";
 import type { Terminal } from "../../src/lib/terminal-contract.js";
@@ -33,18 +38,34 @@ function makeFakeTerminal(): Terminal & {
   };
 }
 
+/** Decorate an event payload with the Flue 2 envelope fields (`v`, index, time). */
+let eventIndex = 0;
+function ev(payload: Record<string, unknown>): FlueEvent {
+  return {
+    v: 3,
+    eventIndex: eventIndex++,
+    timestamp: "2026-05-21T00:00:00.000Z",
+    instanceId: "workbench/x/main",
+    ...payload,
+  } as unknown as FlueEvent;
+}
+
 /**
- * A controllable stub session.
+ * A controllable stub of Flue 2's `AgentInstanceHandle` (`init(agent, { id })`).
  *
- * `prompt` returns a CallHandle that hangs until `resolvePrompt(text)` is
- * called from the test, or until aborted via its signal. `emit(event)`
+ * `dispatch` admits immediately; `read` hangs until `resolveReply(text)` /
+ * `rejectReply(err)` is called from the test, or until its signal aborts.
+ * `abort()` models the durable abort: the pending read settles with
+ * `AgentRunError` outcome `aborted`, as the runtime does. `emit(event)`
  * dispatches a FlueEvent to all subscribers. Lets us race timing between
- * stream events, abort signals, and prompt resolution deterministically.
+ * stream events, abort signals, and settlement deterministically.
  */
-function makeFakeSession() {
+function makeFakeInstance() {
   const subscribers: ((e: FlueEvent) => void)[] = [];
-  let resolvePrompt: ((text: string) => void) | null = null;
-  let rejectPrompt: ((err: unknown) => void) | null = null;
+  let resolveReply: ((text: string) => void) | null = null;
+  let rejectReply: ((err: unknown) => void) | null = null;
+  const dispatched: string[] = [];
+  let abortCalls = 0;
 
   return {
     subscribeEvent: (cb: (e: FlueEvent) => void) => {
@@ -58,30 +79,31 @@ function makeFakeSession() {
       for (const cb of subscribers) cb(event);
     },
     subscriberCount: () => subscribers.length,
-    resolvePrompt: (text: string) => resolvePrompt?.(text),
-    rejectPrompt: (err: unknown) => rejectPrompt?.(err),
-    prompt: (_text: string, options?: { signal?: AbortSignal }) => {
-      const controller = new AbortController();
-      const signal = controller.signal;
-      // Wire the external signal so abort() propagates.
-      if (options?.signal) {
-        options.signal.addEventListener("abort", () => controller.abort(options.signal?.reason), {
-          once: true,
-        });
-      }
-      const promise = new Promise<{ text: string }>((resolve, reject) => {
-        resolvePrompt = (text) => resolve({ text });
-        rejectPrompt = reject;
-        signal.addEventListener("abort", () => {
-          const e: Error & { name: string } = new Error("Aborted");
-          e.name = "AbortError";
-          reject(e);
-        });
-      });
-      return Object.assign(promise, {
-        signal,
-        abort: (reason?: unknown) => controller.abort(reason),
-      });
+    resolveReply: (text: string) => resolveReply?.(text),
+    rejectReply: (err: unknown) => rejectReply?.(err),
+    dispatched,
+    abortCalls: () => abortCalls,
+    dispatch: async (message: unknown): Promise<DispatchReceipt> => {
+      dispatched.push(String(message));
+      return { submissionId: `sub_${dispatched.length}`, acceptedAt: "now", uid: "uid-1" };
+    },
+    read: (receipt: DispatchReceipt, options?: { signal?: AbortSignal }) =>
+      new Promise<AgentReply>((resolve, reject) => {
+        if (options?.signal?.aborted) {
+          reject(options.signal.reason);
+          return;
+        }
+        resolveReply = (text) => resolve({ text, data: {}, submissionId: receipt.submissionId });
+        rejectReply = reject;
+        options?.signal?.addEventListener(
+          "abort",
+          () => reject(options.signal?.reason ?? new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      }),
+    abort: async () => {
+      abortCalls++;
+      rejectReply?.(new AgentRunError({ outcome: "aborted", submissionId: "sub_1" }));
     },
   };
 }
@@ -92,10 +114,10 @@ describe("newAgentCommand", () => {
   describe("Spec scenario: text deltas reach the terminal before resolution", () => {
     it("writes text_delta events incrementally via Terminal.write", async () => {
       const term = makeFakeTerminal();
-      const session = makeFakeSession();
+      const instance = makeFakeInstance();
       const cmd = newAgentCommand({
-        session: () => session as never,
-        subscribeEvent: session.subscribeEvent,
+        instance: () => instance,
+        subscribeEvent: instance.subscribeEvent,
         term,
       });
 
@@ -103,11 +125,11 @@ describe("newAgentCommand", () => {
       const running = cmd.execute(["hello"], {} as never);
 
       // Emit a sequence of deltas; each should be written immediately.
-      session.emit({ type: "text_delta", text: "Hel" });
+      instance.emit(ev({ type: "text_delta", text: "Hel" }));
       await Promise.resolve();
-      session.emit({ type: "text_delta", text: "lo" });
+      instance.emit(ev({ type: "text_delta", text: "lo" }));
       await Promise.resolve();
-      session.emit({ type: "text_delta", text: "!\n" });
+      instance.emit(ev({ type: "text_delta", text: "!\n" }));
       await Promise.resolve();
 
       // At this point the terminal should already have the text — before resolve.
@@ -115,23 +137,23 @@ describe("newAgentCommand", () => {
       expect(written).toContain("Hello!");
 
       // Now resolve so the running command can finish.
-      session.resolvePrompt("Hello!");
+      instance.resolveReply("Hello!");
       const result = await running;
       expect(result.exitCode).toBe(0);
     });
 
     it("newlines in deltas are normalized to CR-LF so xterm renders them correctly", async () => {
       const term = makeFakeTerminal();
-      const session = makeFakeSession();
+      const instance = makeFakeInstance();
       const cmd = newAgentCommand({
-        session: () => session as never,
-        subscribeEvent: session.subscribeEvent,
+        instance: () => instance,
+        subscribeEvent: instance.subscribeEvent,
         term,
       });
       const running = cmd.execute(["go"], {} as never);
-      session.emit({ type: "text_delta", text: "line1\nline2\n" });
+      instance.emit(ev({ type: "text_delta", text: "line1\nline2\n" }));
       await Promise.resolve();
-      session.resolvePrompt("done");
+      instance.resolveReply("done");
       await running;
 
       expect(term.writes.join("")).toContain("line1\r\nline2\r\n");
@@ -141,16 +163,16 @@ describe("newAgentCommand", () => {
   describe("Spec scenario: tool_start emits a decoration", () => {
     it("writes a label containing the tool name", async () => {
       const term = makeFakeTerminal();
-      const session = makeFakeSession();
+      const instance = makeFakeInstance();
       const cmd = newAgentCommand({
-        session: () => session as never,
-        subscribeEvent: session.subscribeEvent,
+        instance: () => instance,
+        subscribeEvent: instance.subscribeEvent,
         term,
       });
       const running = cmd.execute(["go"], {} as never);
-      session.emit({ type: "tool_start", toolName: "read", toolCallId: "tc1" });
+      instance.emit(ev({ type: "tool_start", toolName: "read", toolCallId: "tc1" }));
       await Promise.resolve();
-      session.resolvePrompt("done");
+      instance.resolveReply("done");
       await running;
 
       expect(term.writes.join("")).toContain("[read]");
@@ -160,10 +182,10 @@ describe("newAgentCommand", () => {
   describe("Spec scenario: usage and arg-empty edge cases", () => {
     it("exits 2 with a usage message when no prompt is supplied", async () => {
       const term = makeFakeTerminal();
-      const session = makeFakeSession();
+      const instance = makeFakeInstance();
       const cmd = newAgentCommand({
-        session: () => session as never,
-        subscribeEvent: session.subscribeEvent,
+        instance: () => instance,
+        subscribeEvent: instance.subscribeEvent,
         term,
       });
       const result = await cmd.execute([], {} as never);
@@ -175,10 +197,10 @@ describe("newAgentCommand", () => {
   describe("Spec scenario: cancellation via Ctrl-C", () => {
     it("aborts the in-flight prompt and returns exit code 130", async () => {
       const term = makeFakeTerminal();
-      const session = makeFakeSession();
+      const instance = makeFakeInstance();
       const cmd = newAgentCommand({
-        session: () => session as never,
-        subscribeEvent: session.subscribeEvent,
+        instance: () => instance,
+        subscribeEvent: instance.subscribeEvent,
         term,
       });
 
@@ -195,25 +217,97 @@ describe("newAgentCommand", () => {
 
     it("cleans up the event subscription after the call (even on abort)", async () => {
       const term = makeFakeTerminal();
-      const session = makeFakeSession();
+      const instance = makeFakeInstance();
       const cmd = newAgentCommand({
-        session: () => session as never,
-        subscribeEvent: session.subscribeEvent,
+        instance: () => instance,
+        subscribeEvent: instance.subscribeEvent,
         term,
       });
-      expect(session.subscriberCount()).toBe(0);
+      expect(instance.subscriberCount()).toBe(0);
 
       const controller = new AbortController();
       const running = cmd.execute(["go"], { signal: controller.signal } as never);
 
       // While running, there should be exactly one subscriber.
       await Promise.resolve();
-      expect(session.subscriberCount()).toBe(1);
+      expect(instance.subscriberCount()).toBe(1);
 
       controller.abort();
       await running;
       // After abort, cleanup must run — no leaked subscribers.
-      expect(session.subscriberCount()).toBe(0);
+      expect(instance.subscriberCount()).toBe(0);
+    });
+  });
+  describe("Spec scenario: Flue 2 instance handle semantics", () => {
+    it("dispatches the joined prompt text to the agent instance", async () => {
+      const term = makeFakeTerminal();
+      const instance = makeFakeInstance();
+      const cmd = newAgentCommand({
+        instance: () => instance,
+        subscribeEvent: instance.subscribeEvent,
+        term,
+      });
+      const running = cmd.execute(["list", "the", "files"], {} as never);
+      await Promise.resolve();
+      instance.resolveReply("done");
+      await running;
+      expect(instance.dispatched).toEqual(["list the files"]);
+    });
+
+    it("Ctrl-C requests a durable abort of the instance's work, not just a local cancel", async () => {
+      const term = makeFakeTerminal();
+      const instance = makeFakeInstance();
+      const cmd = newAgentCommand({
+        instance: () => instance,
+        subscribeEvent: instance.subscribeEvent,
+        term,
+      });
+      const controller = new AbortController();
+      const running = cmd.execute(["long"], { signal: controller.signal } as never);
+      // Let dispatch admit and read start waiting.
+      await new Promise((r) => setTimeout(r, 0));
+      controller.abort();
+      const result = await running;
+      expect(result.exitCode).toBe(130);
+      expect(instance.abortCalls()).toBeGreaterThanOrEqual(1);
+      expect(term.writes.join("")).toContain("[aborted]");
+    });
+
+    it("a run that settles aborted elsewhere (AgentRunError) also exits 130", async () => {
+      const term = makeFakeTerminal();
+      const instance = makeFakeInstance();
+      const cmd = newAgentCommand({
+        instance: () => instance,
+        subscribeEvent: instance.subscribeEvent,
+        term,
+      });
+      const running = cmd.execute(["go"], {} as never);
+      await new Promise((r) => setTimeout(r, 0));
+      instance.rejectReply(new AgentRunError({ outcome: "aborted", submissionId: "sub_1" }));
+      expect((await running).exitCode).toBe(130);
+    });
+
+    it("a failed run exits 1 and reports the error on stderr", async () => {
+      const term = makeFakeTerminal();
+      const instance = makeFakeInstance();
+      const cmd = newAgentCommand({
+        instance: () => instance,
+        subscribeEvent: instance.subscribeEvent,
+        term,
+      });
+      const running = cmd.execute(["go"], {} as never);
+      await new Promise((r) => setTimeout(r, 0));
+      instance.rejectReply(
+        new AgentRunError({
+          outcome: "failed",
+          submissionId: "sub_1",
+          cause: new Error("quota exceeded"),
+        }),
+      );
+      const result = await running;
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/^agent: /);
+      expect(instance.subscriberCount()).toBe(0);
     });
   });
 });

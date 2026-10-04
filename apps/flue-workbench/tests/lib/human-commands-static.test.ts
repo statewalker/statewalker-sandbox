@@ -70,23 +70,22 @@ describe("human-commands (secret + session)", () => {
 
   describe("session command", () => {
     it("reset wipes the persisted session for the configured id", async () => {
-      // Seed a fake session.
-      await sessions.save("workbench/repo-foo/main", {
-        version: 3,
-        entries: [],
-        leafId: null,
-        metadata: {},
-        createdAt: "x",
-        updatedAt: "y",
-      } as never);
-      expect(await sessions.load("workbench/repo-foo/main")).not.toBeNull();
+      // Seed a conversation the way Flue 2's runtime persists one: a
+      // canonical stream for the agent instance `workbench/repo-foo/main`.
+      const id = "workbench/repo-foo/main";
+      const path = `agents/flue-workbench/${id}`;
+      await sessions.migrate();
+      const { conversationStreamStore } = await sessions.connect();
+      await conversationStreamStore.createStream(path, {
+        agentName: "flue-workbench",
+        instanceId: id,
+      });
+      expect(await sessions.has(id)).toBe(true);
 
-      const bash = humanBash([
-        newSessionCommand({ sessions, sessionId: "workbench/repo-foo/main" }),
-      ]);
+      const bash = humanBash([newSessionCommand({ sessions, sessionId: id })]);
       const r = await bash.exec("session reset");
       expect(r.exitCode).toBe(0);
-      expect(await sessions.load("workbench/repo-foo/main")).toBeNull();
+      expect(await sessions.has(id)).toBe(false);
     });
 
     it("usage message when invoked without args", async () => {

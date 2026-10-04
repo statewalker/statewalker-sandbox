@@ -30,7 +30,7 @@ archive, not uploaded individually". Their code survives in `shell-core`; their
 | `01-headless-host` | reconstructed — notes 10, 11, 03, 06, 07 | written fresh | 85 |
 | `02-a2ui-renderer` | `lib/` | recovered (1 assertion corrected) | 16 |
 | `03-a2ui-binding` | `lib/` | recovered + 4 reconstructed | 21 |
-| `04-manifest-generation` | **recovered**, byte-for-byte | **recovered**, assertions unmodified | 9 |
+| `04-manifest-generation` | **recovered**, byte-for-byte; parser ported 2026-10-04 (TypeScript compiler API → webrun-modules `parseSource`), analysis unchanged | **recovered**, assertions unmodified | 9 |
 | `05-activation-events` | reconstructed — note 16 §3 | written fresh | 15 |
 | `06-same-module-any-host` | `lib/mount.ts` | written fresh | 14 |
 | `06a-tailwind-build` | **recovered**, byte-identical (sha-verified) | none — a build-and-measure rung | — |
@@ -38,7 +38,7 @@ archive, not uploaded individually". Their code survives in `shell-core`; their
 | `07-dockview-hosting` | `lib/dock.ts`, `lib/theme-bridge.ts` | written fresh | 41 |
 | `08-biscuit-enablement` | **recovered, then adapted** 2026-09-15 to webrun-biscuit (verbatim at `cd5bb00`) | **recovered**, all 23 unmodified, + 6 revised | 29 |
 | `09-apps-from-peers` | `lib/peer.ts` | written fresh | 22 |
-| `Z-static-schema` | reconstructed — note 29 | written fresh | 21 |
+| `Z-static-schema` | reconstructed — note 29; parser ported 2026-10-04 like rung 04 | written fresh | 21 |
 
 **297 tests, 24 files.** `lib/` is `code/shell-core/` verbatim and was not edited.
 
