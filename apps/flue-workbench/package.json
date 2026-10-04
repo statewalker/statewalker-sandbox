@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "Browser-first Flue agent workbench. Pick a local directory, talk to Gemini, edit files. Sandbox-tier.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/flue-workbench"
+  },
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/apps/flue-workbench#readme",
   "license": "MIT",
   "scripts": {
     "dev": "vite",

@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "The File Manager prototype ladder, restored as runnable code: twenty-one rungs over one cumulative fm-core / fm-app / fm-ui.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/fm-protos"
+  },
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/apps/fm-protos#readme",
   "scripts": {
     "test": "vitest run",
     "test:all": "npm run test && npm run test:browser",

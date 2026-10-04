@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "description": "Experimental HTTP service contract. Scheduled for refactor.",
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/packages/service-http#readme",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "packages/service-http"
   },
   "main": "src/index.ts",
   "exports": {

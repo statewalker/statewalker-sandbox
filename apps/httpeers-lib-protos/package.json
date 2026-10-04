@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "description": "Prototypes that answer the open questions of the httpeers library extraction.",
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/apps/httpeers-lib-protos#readme",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/statewalker/statewalker-sandbox.git"
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/httpeers-lib-protos"
   },
   "scripts": {
     "test": "pnpm run typecheck && vitest run --no-file-parallelism",

@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "The httpeers shell prototype ladder, restored as runnable code: twelve rungs over one consolidated shell-core.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/httpeers-shell-protos"
+  },
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/apps/httpeers-shell-protos#readme",
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",

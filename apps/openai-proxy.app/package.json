@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "HTTP proxy that exposes a local llama.cpp + Gemma model over the OpenAI v1 wire format, using @repo/openai-compat and Hono.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/openai-proxy.app"
+  },
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/apps/openai-proxy.app#readme",
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",

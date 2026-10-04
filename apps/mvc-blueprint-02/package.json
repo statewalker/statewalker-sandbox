@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "The MVC blueprint v2 — controllers on three substrates meeting through adapters, slots, commands and models.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/mvc-blueprint-02"
+  },
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/apps/mvc-blueprint-02#readme",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

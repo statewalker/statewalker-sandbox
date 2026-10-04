@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "Runnable httpeers prototypes: HTTP over libp2p with proven peer identity.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/httpeers-protos"
+  },
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/apps/httpeers-protos#readme",
   "scripts": {
     "demo:01-identity": "tsx 01-identity/main.ts",
     "demo:02-http-over-p2p": "tsx 02-http-over-p2p/main.ts",
