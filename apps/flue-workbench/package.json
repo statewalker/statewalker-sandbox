@@ -16,7 +16,6 @@
     "format": "biome format --write ."
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "catalog:",
     "@earendil-works/pi-ai": "catalog:",
     "@flue/runtime": "catalog:",
     "@just-bash/executor": "catalog:",
