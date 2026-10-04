@@ -14,10 +14,13 @@ catalog:
   "@chainsafe/libp2p-noise": ^17.0.0
   "@chainsafe/libp2p-yamux": ^8.0.1
   "@changesets/cli": "^3.0.3"
+  # flue-workbench stays on @flue/runtime 0.7 (flue 2 is a redesign: AgentConfig, SessionStore,
+  # FlueSession, @flue/runtime/app are gone; porting the prototype is a separate decision).
+  # flue 0.7 depends on pi-* at "*", so the app pins them to the line it was built with.
   "@earendil-works/pi-agent-core": "^0.75.5"
   "@earendil-works/pi-ai": "^0.75.5"
   "@flue/runtime": "^0.7.1"
-  "@just-bash/executor": "^1.0.4"
+  "@just-bash/executor": "^7.0.0"
   "@libp2p/circuit-relay-v2": ^4.2.13
   "@libp2p/crypto": ^5.1.23
   "@libp2p/identify": ^4.1.14
