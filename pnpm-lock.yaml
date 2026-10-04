@@ -130,8 +130,8 @@ catalogs:
       specifier: ^0.3.0
       version: 0.3.0
     '@statewalker/webrun-modules-build':
-      specifier: ^0.1.2
-      version: 0.1.2
+      specifier: ^0.2.0
+      version: 0.2.0
     '@statewalker/webrun-msgpack':
       specifier: ^0.3.0
       version: 0.3.0
@@ -1041,7 +1041,7 @@ importers:
         version: 0.3.0
       '@statewalker/webrun-modules-build':
         specifier: 'catalog:'
-        version: 0.1.2
+        version: 0.2.0
       react:
         specifier: 'catalog:'
         version: 19.3.0
@@ -1052,6 +1052,9 @@ importers:
       '@statewalker/webrun-files-mem':
         specifier: 'catalog:'
         version: 0.10.0
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.4
       '@types/react':
         specifier: 'catalog:'
         version: 19.3.0
@@ -3578,11 +3581,11 @@ packages:
   '@statewalker/webrun-biscuit@0.2.1':
     resolution: {integrity: sha512-Qv7Ax3rbnACBba7qKTzd/7ZnRRPh77aIMTqXkfSgfJrDkUYeQasIkG+oDkggGyfd46DnJjyL4saXYSQYFCQw7Q==}
 
-  '@statewalker/webrun-builder@0.1.1':
-    resolution: {integrity: sha512-gb+ynxW/a4VBDKGY1ttjZ4tJVk7fijxjqL7BVn6iMIY190gy3I6S/yijc52shOyxjBw+CUhGSb2Uu9O/hAxD6w==}
+  '@statewalker/webrun-builder@0.2.0':
+    resolution: {integrity: sha512-JxWBE7IiFHAvdqY6eKS35UaC7P5lWJNc/hDd7Rc5hh7FW6QgroRL9AT+5SSJPOnAMPDKcASlKOiK54dyEqtWqQ==}
 
-  '@statewalker/webrun-dataflow@0.1.1':
-    resolution: {integrity: sha512-gSzZ43QUpK0YhALT4w678mseO7gQDeF/a8UElU/CZ3eQfcGkVdWXIG0YX73//PCpcIsmnjrptKqRNK++wHmq2Q==}
+  '@statewalker/webrun-dataflow@0.1.2':
+    resolution: {integrity: sha512-VEvFSDTlNkUf43LPG2DG+racpwGFYbee/dmEATeIbVPMcWGemdr0I5Sf56ZEvQCKCuXwQdCqc04yQPAsnBkBfA==}
 
   '@statewalker/webrun-files-browser@0.10.0':
     resolution: {integrity: sha512-QW4QngeLfLcjxvcKcVRwsg5x/7WhTw1jY1C/jABt9491rJmbOk8hM3TWClihF7ZHwwjGo65mJFz2a9/Lqn9BCA==}
@@ -3593,17 +3596,11 @@ packages:
   '@statewalker/webrun-files-mem@0.10.0':
     resolution: {integrity: sha512-6e37MJhbl5JB4AZwyeRi0hmDLMODKKG2RICCIA3RuATH5n4U8d/FIEdWJNm+DeYwlTLivY0BOvzKLkOWn3hqww==}
 
-  '@statewalker/webrun-files-mem@0.7.2':
-    resolution: {integrity: sha512-OwbmkOJZx038lhABxJdL4dw7j2+u3lJeLN/n4G7S7E6pQfcwEV+LjQ9VKEaiK5CG2Y2ILmw2P1hkb5shCtdBHA==}
-
   '@statewalker/webrun-files-node@0.10.0':
     resolution: {integrity: sha512-LVrIXIGOido5XNHzAFag0DNYxjYXOz1Uu/8x2KwCrmQ290TsD5IKfqVK92trw27cAtAfqhOLyTZvTH9fLb82lQ==}
 
   '@statewalker/webrun-files@0.10.0':
     resolution: {integrity: sha512-ekVDzOdRcH2aQi2NCdB7Nk/xpAL4vS+ZkN5PZqgDeiMDEi7usG3MEz4c+VpSNfTlC+sFSzKnud0DNPbv9R/AtQ==}
-
-  '@statewalker/webrun-files@0.7.0':
-    resolution: {integrity: sha512-NHrlyRzcmzXQ3arf4OqDrVE+FJpLaiR/EwTJkcpPmcmfII9MKAcjV8DNmKDYcmHOYhcMmhdBtY8Yb41qR0TZAw==}
 
   '@statewalker/webrun-http-browser@0.6.0':
     resolution: {integrity: sha512-lzYAE83hGh7qdzmizahMMCvZ3ocz5In/cISMz4e+BmN9cerRf5KsrhfWIpKSUnbTbnnt7dkSGjozXgSMLyxOPg==}
@@ -3614,14 +3611,14 @@ packages:
   '@statewalker/webrun-http-streams@0.2.2':
     resolution: {integrity: sha512-efzpjSrod+nllRC3cpNkxdsX+SojBzoax4O8HfDrLeB0ONPac+0hULBemjsSW3Rd5fjhMVyqFcokZCsuSB1ZyQ==}
 
-  '@statewalker/webrun-modules-build@0.1.2':
-    resolution: {integrity: sha512-C9EGOgtop9UYgqglC84ocsgiU4kb/HE/vNq5+GL+6idT1zSLcNtlfLMi19gupfopfZOSbOxmZTycv/VU/V+yXg==}
-
-  '@statewalker/webrun-modules@0.2.1':
-    resolution: {integrity: sha512-1OqvW3Lp8xDoAn9M3Csiduwf989VSIWoeikEuUeKctju5aKUnUJ97Mbta3etLp2kGjMR58VA50yq+EZmzoM5YA==}
+  '@statewalker/webrun-modules-build@0.2.0':
+    resolution: {integrity: sha512-efnvm87VUjEdaWymqczHCn/+Ykc3MBXYUEXrQlGo6+zdQpE6eefCHqc7nzyCWWMDv+FSFx71e1C83d+SwgVu4A==}
 
   '@statewalker/webrun-modules@0.3.0':
     resolution: {integrity: sha512-SlHD1hXamx6RJCWQeuSsojyBnkrnJXYX01bj7aM2Ne6G1Sm8UgTGwIyAVVUc0TkJ+7lMlHU3AErivoPR6+o8cg==}
+
+  '@statewalker/webrun-modules@0.3.1':
+    resolution: {integrity: sha512-bc2JL+Nqc3Jmq8MYBykWdDmRXO+XvcxHDsvHsF+Vf2Qu6yC6VFcqakRPJOdtHhK8R1iQC1U36TmynzqxqsAY3A==}
 
   '@statewalker/webrun-msgpack@0.3.0':
     resolution: {integrity: sha512-jbbwxHLDxy+xysWpWcnbxkFWuKvizedy9J3ust572NpRruRKydhsltF4UUSLyGwaDRLljBnXwpMH8Iwu7R+JKw==}
@@ -3655,8 +3652,8 @@ packages:
   '@statewalker/webrun-streams@0.2.0':
     resolution: {integrity: sha512-v17qTkUAWEImFsNNv+lmlvE/pZOQnvFDf33hvNTuA2E/ME6MnjzTO+uIoL5Vg1OGn0P3InigN+fNsGVM2gBm6A==}
 
-  '@statewalker/webrun-tailwind@0.1.2':
-    resolution: {integrity: sha512-Pjis863On8xUWIyVcDErfDOJ46z4+gycCulyYIkZvE1nyz9oJlvcU8Z4sJA02btiisKqNnRNfL1YgzmIzac9vw==}
+  '@statewalker/webrun-tailwind@0.2.0':
+    resolution: {integrity: sha512-e8quW2YfBctcz267G3fS5rCCYt7CPE39+QaGYmX9M7z38pl+Q2rnjkbBY1D3Y8m1RWMCwuAV218B/+zvQC75jA==}
 
   '@tailwindcss/cli@4.3.3':
     resolution: {integrity: sha512-ZvS/n1ZHOBKcVlhkt8l5NNr1EDXk1NboYO5CYDOs6NUmvT9z6bzkwsosaJftY57T/3gWNzWMJzIXLodZC8ssdw==}
@@ -3812,9 +3809,6 @@ packages:
 
   '@types/json-schema@7.0.15':
     resolution: {integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==}
-
-  '@types/node@26.4.1':
-    resolution: {integrity: sha512-k97ENvZWtvA6yqz5/FS6a7duDgOPEeOQOc2iKS/nY6mX6qJUKtLnWzQS+Xj6tXweyj6ZcTAK2Qecetnvi9nCLA==}
 
   '@types/node@26.6.4':
     resolution: {integrity: sha512-ldVPDCzj7fsaGZrLB0NuHuTvJcsNasysBAqMolr/cgxrLd1xbqxIr3XJiPnHHJUCxj5sNF1vnRj9aWnrVh5Jcg==}
@@ -4436,9 +4430,6 @@ packages:
     resolution: {integrity: sha512-NIxF55hv4nSqQswkAeiOi1r83xy8JldOFDTWiug55KBu9Jnblncd2U6ViHmYgHf01TPZS77NJBhBMKdWj9HQMQ==}
     engines: {node: '>=8'}
 
-  cjs-module-lexer@1.4.3:
-    resolution: {integrity: sha512-9z8TZaGM1pfswYeXrUpzPrkx8UnWYdhJclsiYMm6x/w5+nN+8Tf/LnAgfLGQCm59qAOxU8WwHEq2vNwF6i4j+Q==}
-
   cjs-module-lexer@2.2.1:
     resolution: {integrity: sha512-Ca8swihM+/4yKecYHY52kgJd300hi2lADU/a1RxNTRe+RJ9jvqQlESpbz9DnG9mowez8qwXHB8qYdIUw9e+F5Q==}
 
@@ -4926,10 +4917,6 @@ packages:
     resolution: {integrity: sha512-DeOnSPAvOndYKfw075gt8yZzQ7S2hNztw34zBTfhIzLhmBTswIBg5/y+pqu/VD5cYWm5goAFTusDmUEmKZ0PEQ==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
-  hosted-git-info@8.1.0:
-    resolution: {integrity: sha512-Rw/B2DNQaPBICNXEm8balFz9a6WpZrkCGpcWFpy7nCj+NyhSdqXipmfvtmWt9xGfp0wZnBxB+iVpLmQMYt47Tw==}
-    engines: {node: ^18.17.0 || >=20.5.0}
-
   html5-qrcode@2.3.8:
     resolution: {integrity: sha512-jsr4vafJhwoLVEDW3n1KvPnCCXWaQfRng0/EEYk1vNcQGcG/htAdhJX0be8YyqMoSz7+hZvOZSTAepsabiuhiQ==}
 
@@ -5371,9 +5358,6 @@ packages:
     resolution: {integrity: sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q==}
     hasBin: true
 
-  lru-cache@10.4.3:
-    resolution: {integrity: sha512-JNAzZcXrCt42VGLuYz0zfAzDfAvJWW6AfYlDBQyDV5DClI2m5sAmK+OIO7s59XfsRsWHp02jAJrRadPRGTt6SQ==}
-
   lru-cache@11.5.2:
     resolution: {integrity: sha512-4pfM1Ff0x50o0tQwb5ucw/RzNyD0/YJME6IVcStalZuMWxdt3sR3huStTtxz4PUmvZfRguvDejasvQ2kifR11g==}
     engines: {node: 20 || >=22}
@@ -5619,10 +5603,6 @@ packages:
     resolution: {integrity: sha512-YHs7BmmcsdAI5Ozuf8JZo6PT0mv2GIWC9vMfvUC3dp65M8hn7Ux8CPL+2oBI7juNuj9d0ndhTcznq2ODBps9cQ==}
     engines: {node: '>=18'}
 
-  npm-package-arg@12.0.2:
-    resolution: {integrity: sha512-f1NpFjNI9O4VbKMOlA5QoBq/vSQPORHcTZ2feJpFkTHJ9eQkdlmZEKSjcAhxTGInC7RlEyScT9ui67NaOsjFWA==}
-    engines: {node: ^18.17.0 || >=20.5.0}
-
   npm-package-arg@14.0.0:
     resolution: {integrity: sha512-69XQh3k+dtGa1p+7RaR57IuG3rCko96xr/nUfN4yDYBXbTYICiWcOpsFKLN2GtGE9cyIljE+f1exnaYt9MvM+Q==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
@@ -5864,10 +5844,6 @@ packages:
   pretty-format@29.7.0:
     resolution: {integrity: sha512-Pdlw/oPxN+aXdmM9R00JVC9WVFoCLTKJvDVLgmJ+qAffBMxsV85l/Lu7sNx4zSzPyoL2euImuEwHhOXdEgNFZQ==}
     engines: {node: ^14.15.0 || ^16.10.0 || >=18.0.0}
-
-  proc-log@5.0.0:
-    resolution: {integrity: sha512-Azwzvl90HaF0aCz1JrDdXQykFakSSNPaPoiZ9fm5qJIMHioDZEi7OAdRwSm6rSoPtY3Qutnm3L7ogmg3dc+wbQ==}
-    engines: {node: ^18.17.0 || >=20.5.0}
 
   proc-log@7.0.0:
     resolution: {integrity: sha512-FYgfaA69XZ93zaXLoMNQ+ViDXGGBgR8aLh03txzcFhV+9xOXx7+8DLCULrKKpR9+GsH9ZfHm82aSUPpozX0Ztg==}
@@ -6519,9 +6495,6 @@ packages:
   unconfig-core@7.5.0:
     resolution: {integrity: sha512-Su3FauozOGP44ZmKdHy2oE6LPjk51M/TRRjHv2HNCWiDvfvCoxC2lno6jevMA91MYAdCdwP05QnWdWpSbncX/w==}
 
-  undici-types@8.3.0:
-    resolution: {integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==}
-
   undici-types@8.9.0:
     resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
 
@@ -6596,10 +6569,6 @@ packages:
     peerDependenciesMeta:
       typescript:
         optional: true
-
-  validate-npm-package-name@6.0.2:
-    resolution: {integrity: sha512-IUoow1YUtvoBBC06dXs8bR8B9vuA3aJfmQNKMoaPG/OFsPmoQvw8xh+6Ye25Gx9DQhoEom3Pcu9MKHerm/NpUQ==}
-    engines: {node: ^18.17.0 || >=20.5.0}
 
   validate-npm-package-name@8.0.0:
     resolution: {integrity: sha512-SCv6OOV6Xj2/3cXy3dGmADluJTNcL3o7hZAglNPTe+WYuEuvxgJzxPrSDLZhF+CwyQOubqgecjMmTJGMVLWjYQ==}
@@ -9422,12 +9391,12 @@ snapshots:
       '@noble/curves': 2.4.0
       '@noble/hashes': 2.4.0
 
-  '@statewalker/webrun-builder@0.1.1':
+  '@statewalker/webrun-builder@0.2.0':
     dependencies:
-      '@statewalker/webrun-dataflow': 0.1.1
-      '@statewalker/webrun-files': 0.7.0
+      '@statewalker/webrun-dataflow': 0.1.2
+      '@statewalker/webrun-files': 0.10.0
 
-  '@statewalker/webrun-dataflow@0.1.1': {}
+  '@statewalker/webrun-dataflow@0.1.2': {}
 
   '@statewalker/webrun-files-browser@0.10.0':
     dependencies:
@@ -9441,17 +9410,11 @@ snapshots:
     dependencies:
       '@statewalker/webrun-files': 0.10.0
 
-  '@statewalker/webrun-files-mem@0.7.2':
-    dependencies:
-      '@statewalker/webrun-files': 0.7.0
-
   '@statewalker/webrun-files-node@0.10.0':
     dependencies:
       '@statewalker/webrun-files': 0.10.0
 
   '@statewalker/webrun-files@0.10.0': {}
-
-  '@statewalker/webrun-files@0.7.0': {}
 
   '@statewalker/webrun-http-browser@0.6.0':
     dependencies:
@@ -9468,39 +9431,13 @@ snapshots:
     dependencies:
       '@statewalker/webrun-streams': 0.2.0
 
-  '@statewalker/webrun-modules-build@0.1.2':
+  '@statewalker/webrun-modules-build@0.2.0':
     dependencies:
-      '@statewalker/webrun-builder': 0.1.1
-      '@statewalker/webrun-dataflow': 0.1.1
-      '@statewalker/webrun-files': 0.7.0
-      '@statewalker/webrun-modules': 0.2.1
-      '@statewalker/webrun-tailwind': 0.1.2
-    transitivePeerDependencies:
-      - bare-abort-controller
-      - bare-buffer
-      - react-native-b4a
-      - supports-color
-
-  '@statewalker/webrun-modules@0.2.1':
-    dependencies:
-      '@jspm/core': 2.1.0
-      '@jspm/generator': 2.16.3
-      '@statewalker/webrun-files': 0.7.0
-      '@statewalker/webrun-files-mem': 0.7.2
-      acorn: 8.18.0
-      acorn-globals: 7.0.1
-      cjs-module-lexer: 1.4.3
-      fflate: 0.8.3
-      lightningcss-wasm: 1.33.0
-      npm-package-arg: 12.0.2
-      resolve.exports: 2.0.3
-      semver: 7.8.5
-      sucrase: 3.35.1
-    transitivePeerDependencies:
-      - bare-abort-controller
-      - bare-buffer
-      - react-native-b4a
-      - supports-color
+      '@statewalker/webrun-builder': 0.2.0
+      '@statewalker/webrun-dataflow': 0.1.2
+      '@statewalker/webrun-files': 0.10.0
+      '@statewalker/webrun-modules': 0.3.1
+      '@statewalker/webrun-tailwind': 0.2.0
 
   '@statewalker/webrun-modules@0.3.0':
     dependencies:
@@ -9522,6 +9459,21 @@ snapshots:
       - bare-buffer
       - react-native-b4a
       - supports-color
+
+  '@statewalker/webrun-modules@0.3.1':
+    dependencies:
+      '@jspm/core': 2.1.0
+      '@statewalker/webrun-files': 0.10.0
+      '@statewalker/webrun-files-mem': 0.10.0
+      acorn: 8.18.0
+      acorn-globals: 7.0.1
+      cjs-module-lexer: 2.2.1
+      fflate: 0.8.3
+      lightningcss-wasm: 1.33.0
+      npm-package-arg: 14.0.0
+      resolve.exports: 2.0.3
+      semver: 7.8.5
+      sucrase: 3.35.1
 
   '@statewalker/webrun-msgpack@0.3.0':
     dependencies:
@@ -9554,16 +9506,11 @@ snapshots:
 
   '@statewalker/webrun-streams@0.2.0': {}
 
-  '@statewalker/webrun-tailwind@0.1.2':
+  '@statewalker/webrun-tailwind@0.2.0':
     dependencies:
-      '@statewalker/webrun-files': 0.7.0
-      '@statewalker/webrun-modules': 0.2.1
+      '@statewalker/webrun-files': 0.10.0
+      '@statewalker/webrun-modules': 0.3.1
       tailwindcss: 4.3.3
-    transitivePeerDependencies:
-      - bare-abort-controller
-      - bare-buffer
-      - react-native-b4a
-      - supports-color
 
   '@tailwindcss/cli@4.3.3':
     dependencies:
@@ -9696,17 +9643,13 @@ snapshots:
 
   '@types/json-schema@7.0.15': {}
 
-  '@types/node@26.4.1':
-    dependencies:
-      undici-types: 8.3.0
-
   '@types/node@26.6.4':
     dependencies:
       undici-types: 8.9.0
 
   '@types/pg@8.23.1':
     dependencies:
-      '@types/node': 26.4.1
+      '@types/node': 26.6.4
       pg-protocol: 1.16.0
       pg-types: 2.2.0
 
@@ -10185,8 +10128,6 @@ snapshots:
   ci-info@2.0.0: {}
 
   ci-info@3.9.0: {}
-
-  cjs-module-lexer@1.4.3: {}
 
   cjs-module-lexer@2.2.1: {}
 
@@ -10714,10 +10655,6 @@ snapshots:
     dependencies:
       lru-cache: 11.5.2
 
-  hosted-git-info@8.1.0:
-    dependencies:
-      lru-cache: 10.4.3
-
   html5-qrcode@2.3.8: {}
 
   http-errors@2.0.1:
@@ -11183,8 +11120,6 @@ snapshots:
     dependencies:
       js-tokens: 4.0.0
 
-  lru-cache@10.4.3: {}
-
   lru-cache@11.5.2: {}
 
   lru-cache@5.1.1:
@@ -11517,13 +11452,6 @@ snapshots:
 
   node-releases@2.0.54: {}
 
-  npm-package-arg@12.0.2:
-    dependencies:
-      hosted-git-info: 8.1.0
-      proc-log: 5.0.0
-      semver: 7.8.5
-      validate-npm-package-name: 6.0.2
-
   npm-package-arg@14.0.0:
     dependencies:
       hosted-git-info: 10.1.1
@@ -11719,8 +11647,6 @@ snapshots:
       '@jest/schemas': 29.6.3
       ansi-styles: 5.2.0
       react-is: 18.3.1
-
-  proc-log@5.0.0: {}
 
   proc-log@7.0.0: {}
 
@@ -12585,8 +12511,6 @@ snapshots:
       '@quansync/fs': 1.0.0
       quansync: 1.0.0
 
-  undici-types@8.3.0: {}
-
   undici-types@8.9.0: {}
 
   undici@7.29.0: {}
@@ -12635,8 +12559,6 @@ snapshots:
   valibot@1.4.2(typescript@7.0.2):
     optionalDependencies:
       typescript: 7.0.2
-
-  validate-npm-package-name@6.0.2: {}
 
   validate-npm-package-name@8.0.0: {}
 
