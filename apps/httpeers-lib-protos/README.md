@@ -46,7 +46,8 @@ something and the worst prose survived every reading.
 | **15-ports** | Can a libp2p connection hand out MessagePorts? | **Yes — one stream is one port**, and webrun-rpc's stack runs over it unmodified. The dividing line for "isomorphic" turns out to be **transfer**, which `tsc` cannot see |
 | **16-ghost-containment** | Which ghost containment actually contains? | **A path-scoped CSP**, at no cost to the host app. The sandboxed-iframe candidate is **disqualified**: its opaque origin removes the document from the ServiceWorker's control |
 
-One hundred and two claims, all passing, ~50 s: `pnpm test`.
+One hundred and two claims, ~50 s: `pnpm test`. The script typechecks first, and the typecheck
+currently fails; the port-based rungs fail at runtime too (see [Conventions](#conventions)).
 
 ## What came out that no rung asked for
 
@@ -115,14 +116,17 @@ A claim with no test is not a claim. A claim that turns out to be wrong is
 claim that used to assert the opposite.
 
 ServiceWorker rungs (02, 06, 14, 16) use
-[`@statewalker/webrun-http-browser`](https://github.com/statewalker/webrun-wire/tree/main/packages/webrun-http-browser)
-and [`webrun-site-host`](https://github.com/statewalker/webrun-wire/tree/main/packages/webrun-site-host)
+`@statewalker/webrun-http-browser`
+and `@statewalker/webrun-site-host`
 — `SwHttpAdapter` / `HostedSiteBuilder` on the page side, `startHttpDispatcher`
 in the worker. No hand-written ServiceWorker plumbing.
 
-Unpublished `webrun-wire` packages are consumed with `link:` from a sibling
-worktree. **They export `dist/`, so a source fix that is not rebuilt does
-nothing** — rebuild before concluding a fix failed.
+The `webrun-*` packages come from npm through the workspace catalog
+(`pnpm-workspace.yaml`); they ship built `dist/`. Rungs 11, 12, 13 and 15 pass
+`{ port }` to `@statewalker/webrun-rpc`'s port `connect`/`serve`, but its
+`PortParams` has no `port` field, so `pnpm typecheck` fails with
+`TS2353: ... 'port' does not exist in type 'PortParams'`. CI skips this app's
+`typecheck` and `test`.
 
 ```bash
 pnpm test              # every rung

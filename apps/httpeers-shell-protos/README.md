@@ -32,8 +32,8 @@ Each rung is a folder: `README.md` (the question and the answer), `tests/`, and
 ## Running it
 
 ```bash
-pnpm install --ignore-workspace   # the app is self-contained; see below
-pnpm test                         # every rung
+pnpm install                      # at the repo root
+pnpm test                         # in this folder: every rung
 pnpm test 03-a2ui-binding         # one rung
 pnpm typecheck
 ```

@@ -15,12 +15,23 @@ Two motivations:
 
 What it explicitly does *not* replace: `chat.app`, `@statewalker/ai-agent`, or the production agent runtime in `statewalker-apps`. This is a sandbox-tier workbench, hosted in `statewalker-sandbox`, until the design proves itself.
 
+## Run it
+
+```sh
+pnpm install                                   # at the repo root
+pnpm --filter @statewalker/flue-workbench dev  # Vite dev server
+pnpm --filter @statewalker/flue-workbench test
+pnpm --filter @statewalker/flue-workbench build && pnpm --filter @statewalker/flue-workbench preview
+```
+
+The app needs a browser with the File System Access API (`showDirectoryPicker`) and a Gemini API key.
+
 ## How to use
 
 The library at `src/lib/` exposes two layers:
 
 - A **convenience factory** — `createWorkbench(opts)` — composes everything with defaults. Use this in the app entry.
-- **Piecewise factories** — `buildFilesViews`, `FilesApiSecretStore`, `FilesApiSessionStore` (a Flue 2 `PersistenceAdapter`), `filesApiBashFactory`, `buildBash`, `createWorkbenchAgent`, `mountXtermTerminal`, `newAgentCommand`, `newSecretCommand`, `newSessionCommand`, `gateSecret`, `configureGemini` / `createGeminiProvider`. Use these to compose a workbench with non-default wiring (e.g. a custom secret prompt UI, an alternate terminal emulator, a different default model).
+- **Piecewise factories** — `buildFilesViews`, `FilesApiSecretStore`, `FilesApiSessionStore` (a Flue 2 `PersistenceAdapter`), `filesApiBashFactory`, `buildBash`, `createWorkbenchAgent`, `newAgentCommand`, `newSecretCommand`, `newSessionCommand`, `gateSecret`, `configureGemini` / `createGeminiProvider`. The host side (`src/lib-host/`) adds `mountXtermTerminal`. Use these to compose a workbench with non-default wiring (e.g. a custom secret prompt UI, an alternate terminal emulator, a different default model).
 
 The convenience factory is the canonical entry; piecewise exports are documented but the surface is owned by `createWorkbench` for v1 — see `## Internals` for the drift-risk note.
 

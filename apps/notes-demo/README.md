@@ -1,7 +1,7 @@
 # @statewalker/webrun-notes-demo
 
 A browser note-taking app served **with no bundler** — it dogfoods the
-[`@statewalker/webrun-modules-build`](../../../webrun-files/packages/webrun-modules-build)
+`@statewalker/webrun-modules-build`
 no-bundle pipeline end to end, and validates its Phase-3 CSS features in a real browser.
 
 `newProjectBuild({ project, cache })` scans the TS/TSX + CSS sources under `src/`
@@ -16,7 +16,7 @@ end-to-end (createRoot, hooks, state).
 > didn't: the JSX runtime must match the globals' `NODE_ENV` (browser → production
 > `jsx`), and React's `process.env.NODE_ENV`-gated package entry must be dead-code-
 > eliminated to a **single** react instance (else react-dom's `ReactSharedInternals`
-> is undefined and it crashes at render). Both landed in webrun-modules.
+> is undefined and it crashes at render). `@statewalker/webrun-modules` does both.
 
 ## What it proves (Phase-3 features, verified in-browser)
 
@@ -39,8 +39,8 @@ end-to-end (createRoot, hooks, state).
 ## Run it
 
 ```sh
-pnpm build     # newProjectBuild: src/ → dist/
-pnpm serve     # node:http static server for the dist/ tree
+pnpm --filter @statewalker/webrun-notes-demo build   # newProjectBuild: src/ → dist/
+pnpm --filter @statewalker/webrun-notes-demo serve   # node:http static server for the dist/ tree
 ```
 
 Then open <http://localhost:8899> (`PORT` overrides the port).
@@ -64,7 +64,7 @@ graph (module imports resolve by module URL). Drop the `<base>` and the injected
 ## Test
 
 ```sh
-npx vitest run   # from this directory
+pnpm --filter @statewalker/webrun-notes-demo test
 ```
 
 `test/build.test.ts` runs `newProjectBuild` with a `MemFilesApi` project + cache

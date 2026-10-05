@@ -3,7 +3,9 @@
 One test per numbered criterion of the httpeers block API, and a measurement of any
 implementation against it.
 
-**Spec:** `docs/superpowers/specs/2026-08-20-httpeers-api-design.md` · ADR-0003
+**Spec:** `docs/superpowers/specs/2026-08-20-httpeers-api-design.md`. The file is not in this
+repository: the scripts and the drift check look for it five levels above this folder, or at
+the path in `HTTPEERS_SPEC`.
 
 ```bash
 pnpm test          # the suite's own health: the reference adapter + integrity. GREEN.
@@ -42,7 +44,9 @@ it. §13's divergence list is precisely the set of `missing` outcomes.
 
 `src/criteria.ts` is **generated** from the spec by `scripts/sync-criteria.mjs`, and
 `tests/coverage.test.ts` fails if the checked-in copy differs from what the spec would
-produce today. Every criterion must have a check or an explicit skip reason, and every
+produce today. When the spec file cannot be found, `tests/coverage.test.ts` and `tests/parse-ids.test.ts` fail
+at load with `sync-criteria: could not find docs/superpowers/specs/... Set HTTPEERS_SPEC to point at it.`
+(`scripts/sync-criteria.mjs` throws on import). CI excludes both files. Every criterion must have a check or an explicit skip reason, and every
 skip must state one — a criterion with no outcome is how a suite quietly stops testing.
 
 ## Measured, 2026-08-23 — after the httpeers-stack line landed

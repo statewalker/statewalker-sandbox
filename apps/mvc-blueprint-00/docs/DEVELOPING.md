@@ -195,8 +195,8 @@ To see console output from **passing** tests — warnings you want to audit — 
 
 ## Dependencies
 
-- `vitest` is pinned to **v5** in this app, not the workspace catalog's v4, because
-  `@vitest/browser-playwright` requires it.
+- `vitest` and `@vitest/browser-playwright` come from the workspace catalog (vitest 5);
+  `@vitest/browser-playwright` requires vitest 5.
 - `@statewalker/ui.view.shadcn` is published; import its `./styles`, never a path into its source.
 - If `pnpm add` rewrites `pnpm-workspace.yaml` — reordering it, stripping its comments — revert that
   file. It has happened more than once in this repository, and it destroyed a documenting comment.

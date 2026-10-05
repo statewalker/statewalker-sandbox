@@ -1,377 +1,166 @@
-# @repo/rpc
+# @statewalker/service-rpc
 
-RPC (Remote Procedure Call) service library with WebSocket support, built on Comlink and MessageChannel.
+> **Experimental / internal.** Private package in `statewalker-sandbox`; not published to npm. Future uncertain.
 
-## Features
+## What it is
 
-- ✅ **Type-Safe RPC** - Full TypeScript support with type inference
-- ✅ **Async Methods** - Support for async functions
-- ✅ **Async Generators** - Streaming data with async generators
-- ✅ **WebSocket Bridge** - Connect WebSocket to MessagePort for remote RPC
-- ✅ **Binary Data** - Efficient ArrayBuffer and Blob handling
-- ✅ **Zero-Copy Transfers** - Transferable objects for performance
-- ✅ **Comprehensive Tests** - 39 unit tests with 100% coverage
+A small RPC layer over `MessagePort`, built on Comlink. You expose a plain object of async methods
+and async generators on one port; the other port gets a typed proxy with the same shape. A bridge
+carries the same protocol over a WebSocket, and a context registry lets a server publish several
+named services on one socket.
 
-## Installation
+## Why it exists
 
-```bash
-pnpm add @repo/rpc
-```
+Comlink alone proxies async methods but does not stream: an async generator cannot cross a port.
+This package adds a stream protocol on top of Comlink, so `async *method()` on the server becomes a
+`for await` on the client, and async-iterable arguments stream the other way. It also sends a
+service descriptor as the first message, so the client builds its proxy without any shared schema.
+`@statewalker/service-http-impl` uses it to serve RPC at `/rpc`.
 
-## Quick Start
+## How to use
 
-### Basic RPC
+The package is private; inside this workspace depend on it with `"@statewalker/service-rpc": "workspace:^"`.
 
-```typescript
-import { exposeService, getServiceClient } from '@repo/rpc';
+| Entry | What it gives |
+| --- | --- |
+| `@statewalker/service-rpc` | Everything below (`src/index.ts`) |
+| `@statewalker/service-rpc/<path>` | A single source module, e.g. `rpc/index`, `ws/websocket-rpc` (`./*` maps to `./src/*.ts`) |
 
-// Define a service
-const myService = {
+Main exports:
+
+| Export | Purpose |
+| --- | --- |
+| `exposeService(port, service)` | Serve `service` on a `MessagePort`. Sends the descriptor first. Returns a cleanup function. |
+| `getServiceClient<T>(port, timeout = 5000)` | Wait for the descriptor and return `[client, close]`. |
+| `bindWebSocketToPort(ws, port)` | Forward messages both ways between an open WebSocket and a `MessagePort`. Returns a cleanup function. |
+| `waitForWebSocketOpen(ws, timeout = 5000)` | Resolve when the socket is open. |
+| `isWebSocket(obj)`, `WS_READY_STATE`, `WebSocketLike` | Helpers that work with the browser `WebSocket` and the `ws` package. |
+| `createWebSocketRpcServer(ws, service, options?)` | `bindWebSocketToPort` + `exposeService` for one connection. Options: `onConnect`, `onDisconnect`, `onError`. Returns a cleanup function. |
+| `createWebSocketRpcClient<T>(ws, options?)` | `bindWebSocketToPort` + `getServiceClient`. Options: `onConnect`, `onDisconnect`, `onError`, `connectionTimeout`. Returns `[client, cleanup]`. |
+| `getRpcRegistry(context)`, `removeRpcRegistry(context)` | The per-context object of named services. |
+| `newRpcAdapter<T>(name)` | `[getRpc, setRpc, removeRpc]` for one named service in that registry. |
+| `sendStream`, `receiveMessages`, `StreamRegistry` | The stream protocol used for async generators. |
+
+## Examples
+
+### Over a MessageChannel
+
+```ts
+import { exposeService, getServiceClient } from "@statewalker/service-rpc";
+
+const service = {
   async sayHello(name: string) {
     return `Hello ${name}!`;
   },
-
-  async *generateMessages(name: string, count: number) {
-    for (let i = 0; i < count; i++) {
-      yield `Message ${i} for ${name}`;
-    }
+  async *count(n: number) {
+    for (let i = 0; i < n; i++) yield i;
   },
 };
 
-// Create a MessageChannel
 const { port1, port2 } = new MessageChannel();
+const closeService = exposeService(port1, service);
+const [client, closeClient] = await getServiceClient<typeof service>(port2);
 
-// Expose the service on port1
-const [descriptor, closeService] = exposeService(port1, myService);
+await client.sayHello("World"); // "Hello World!"
+for await (const i of client.count(3)) console.log(i); // 0, 1, 2
 
-// Create a client from port2
-const [client, closeClient] = await getServiceClient<typeof myService>(
-  port2,
-  descriptor,
-);
-
-// Use the client
-const greeting = await client.sayHello('World'); // "Hello World!"
-
-for await (const message of client.generateMessages('Alice', 3)) {
-  console.log(message);
-  // "Message 0 for Alice"
-  // "Message 1 for Alice"
-  // "Message 2 for Alice"
-}
-
-// Cleanup
 closeClient();
 closeService();
 ```
 
-### RPC over WebSocket
+### Over a WebSocket
 
-```typescript
-import { bindWebSocketToPort, exposeService, getServiceClient } from '@repo/rpc';
+```ts
+import { WebSocketServer } from "ws";
+import { createWebSocketRpcClient, createWebSocketRpcServer } from "@statewalker/service-rpc";
 
-// Server side
-const ws = new WebSocket('ws://localhost:8080');
-const { port1: serverPort1, port2: serverPort2 } = new MessageChannel();
-bindWebSocketToPort(ws, serverPort1);
-
-const service = {
+const calculator = {
   async add(a: number, b: number) {
     return a + b;
   },
 };
 
-exposeService(serverPort2, service);
-
-// Client side (in another context/process)
-const clientWs = new WebSocket('ws://localhost:8080');
-const { port1: clientPort1, port2: clientPort2 } = new MessageChannel();
-bindWebSocketToPort(clientWs, clientPort1);
-
-const [client] = await getServiceClient(clientPort2, descriptor);
-const result = await client.add(5, 3); // 8
-```
-
-### Enhanced WebSocket Bridge
-
-```typescript
-import { createWebSocketBridge } from '@repo/rpc';
-
-const ws = new WebSocket('ws://localhost:8080');
-const { port1 } = new MessageChannel();
-
-const { cleanup, isActive } = createWebSocketBridge(ws, port1, {
-  onError: (error) => {
-    console.error('Bridge error:', error);
-  },
-  onClose: () => {
-    console.log('Bridge closed');
-  },
-  autoReconnect: true, // Attempt to maintain connection
+// Server: one RPC server per connection.
+const wss = new WebSocketServer({ port: 8080 });
+wss.on("connection", (ws) => {
+  const cleanup = createWebSocketRpcServer(ws, calculator);
+  ws.on("close", cleanup);
 });
 
-// Check if bridge is active
-if (isActive()) {
-  // Bridge is operational
-}
-
-// Cleanup when done
+// Client (browser WebSocket or `ws`).
+const [remote, cleanup] = await createWebSocketRpcClient<typeof calculator>(
+  new WebSocket("ws://localhost:8080"),
+);
+await remote.add(5, 3); // 8
 cleanup();
 ```
 
-## API Reference
+### Named services in a context
 
-### RPC Functions
+```ts
+import { getRpcRegistry, newRpcAdapter } from "@statewalker/service-rpc";
 
-#### `exposeService(port, service)`
+const [getCalculator, setCalculator] = newRpcAdapter<{
+  add(a: number, b: number): Promise<number>;
+}>("calculator");
 
-Exposes a service object through a MessagePort.
+const context = {};
+setCalculator(context, { add: async (a, b) => a + b });
 
-**Parameters:**
-- `port: MessagePort` - The port to expose the service on
-- `service: Record<string, unknown>` - Object containing service methods
-
-**Returns:** `[descriptor, cleanup]`
-- `descriptor: Record<string, FieldDescription>` - Service descriptor
-- `cleanup: () => void` - Function to close the service
-
-#### `getServiceClient<T>(port, descriptor)`
-
-Creates a client proxy for a remote service.
-
-**Parameters:**
-- `port: MessagePort` - The port connected to the service
-- `descriptor: Record<string, FieldDescription>` - Service descriptor
-
-**Returns:** `Promise<[client, cleanup]>`
-- `client: T` - Typed client proxy
-- `cleanup: () => void` - Function to close the client
-
-#### `getServiceDescriptor(service)`
-
-Extracts method information from a service object.
-
-**Parameters:**
-- `service: Record<string, unknown>` - Service object
-
-**Returns:** `Record<string, FieldDescription>`
-- Object mapping field names to their descriptions
-
-### WebSocket Functions
-
-#### `bindWebSocketToPort(ws, port)`
-
-Binds a WebSocket to a MessagePort, creating a bidirectional bridge.
-
-**Parameters:**
-- `ws: WebSocket` - The WebSocket instance
-- `port: MessagePort` - The MessagePort instance
-
-**Returns:** `() => void` - Cleanup function
-
-**Features:**
-- Automatic JSON serialization/deserialization
-- Binary data support (ArrayBuffer, Blob)
-- Error handling and connection lifecycle management
-
-#### `createWebSocketBridge(ws, port, options)`
-
-Creates an enhanced WebSocket-to-MessagePort bridge.
-
-**Parameters:**
-- `ws: WebSocket` - The WebSocket instance
-- `port: MessagePort` - The MessagePort instance
-- `options: BridgeOptions` - Configuration options
-
-**Options:**
-```typescript
-interface BridgeOptions {
-  onError?: (error: Error) => void;
-  onClose?: () => void;
-  autoReconnect?: boolean;
-}
+getRpcRegistry(context); // { calculator: { add } }: expose this object to serve every service
 ```
 
-**Returns:** `{ cleanup, isActive }`
-- `cleanup: () => void` - Cleanup function
-- `isActive: () => boolean` - Check if bridge is active
+A client of a registry sees nested objects: `client.calculator.add(1, 2)`.
 
-#### `isWebSocket(obj)`
+## Internals
 
-Type guard to check if an object is a WebSocket.
+### How the descriptor is built
 
-**Parameters:**
-- `obj: unknown` - Object to check
+`exposeService` walks the service object and records, for each field:
 
-**Returns:** `boolean` - True if obj is a WebSocket
+- `method`: a function. Argument names are parsed from `fn.toString()`.
+- `stream`: a function whose constructor is `AsyncGenerator`, i.e. declared `async function*` or
+  `async *name()`. A function that only returns an async iterator is a `method`, and its result
+  does not stream.
+- `object`: a nested object, described recursively.
 
-## Types
+The descriptor is posted as `{ __service_descriptor }` before Comlink takes over the port. The
+client waits for it; if it does not arrive in time the call rejects with
+`Timeout waiting for service descriptor`.
 
-### FieldDescription
+### Why the client binds before the socket opens
 
-```typescript
-interface FieldDescription {
-  args: string[];              // Parameter names
-  type: 'method' | 'stream' | 'object';  // Field type
-}
+The server posts the descriptor as soon as a connection opens. With the `ws` package that message
+can arrive in the same tick as `open`. `createWebSocketRpcClient` therefore binds the socket to the
+port before awaiting `open`; a listener attached after `open` misses the descriptor and times out.
+If you wire `bindWebSocketToPort` and `getServiceClient` by hand, keep that order.
+
+### What breaks
+
+- `WebSocket open timeout`, `WebSocket connection failed`, `WebSocket is closed or closing`: from
+  `waitForWebSocketOpen`, also thrown by `createWebSocketRpcClient`.
+- `Timeout waiting for service descriptor`: the other side never called `exposeService`, or the
+  bridge was attached too late (see above).
+- `bindWebSocketToPort` assumes an open socket; wait first with `waitForWebSocketOpen`.
+- In Node, `MessagePort.prototype.start` is polyfilled as a no-op when missing.
+
+### Dependencies
+
+- `comlink`: the call protocol over `MessagePort`.
+- `@statewalker/shared-generators`: `newAsyncGenerator`, used to turn incoming stream messages into
+  an async iterator.
+
+## Commands
+
+```sh
+pnpm --filter @statewalker/service-rpc test       # typecheck tests, then vitest
+pnpm --filter @statewalker/service-rpc build      # tsdown
+pnpm --filter @statewalker/service-rpc typecheck
 ```
 
-- `method` - Regular async function
-- `stream` - Async generator function
-- `object` - Nested object containing methods/streams
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  Service Object (Server)                                │
-│  - async methods                                        │
-│  - async generators                                     │
-└──────────────────────┬──────────────────────────────────┘
-                       │ exposeService()
-                       ▼
-┌──────────────────────────────────────────────────────────┐
-│  MessagePort / WebSocket                                 │
-│  - Comlink proxy                                         │
-│  - Transfer handlers                                     │
-└──────────────────────┬──────────────────────────────────┘
-                       │ getServiceClient()
-                       ▼
-┌──────────────────────────────────────────────────────────┐
-│  Client Proxy (Type-Safe)                                │
-│  - Mirrors service API                                   │
-│  - Automatic serialization                               │
-└──────────────────────────────────────────────────────────┘
-```
-
-## Advanced Usage
-
-### Async Generator with Input
-
-```typescript
-const service = {
-  async *transformStream(input: AsyncIterable<number>) {
-    for await (const value of input) {
-      yield value * 2;
-    }
-  },
-};
-
-// Client side
-async function* inputNumbers() {
-  yield 1;
-  yield 2;
-  yield 3;
-}
-
-for await (const doubled of client.transformStream(inputNumbers())) {
-  console.log(doubled); // 2, 4, 6
-}
-```
-
-### Error Handling
-
-```typescript
-const service = {
-  async riskyOperation() {
-    throw new Error('Something went wrong');
-  },
-};
-
-// Client side
-try {
-  await client.riskyOperation();
-} catch (error) {
-  console.error('Remote error:', error);
-}
-```
-
-### Complex Data Types
-
-```typescript
-const service = {
-  async processData(data: { id: number; items: string[] }) {
-    return {
-      processed: true,
-      count: data.items.length,
-    };
-  },
-};
-
-const result = await client.processData({
-  id: 123,
-  items: ['a', 'b', 'c'],
-});
-// { processed: true, count: 3 }
-```
-
-## Testing
-
-The package includes comprehensive tests:
-
-```bash
-pnpm test
-```
-
-**Test Coverage:**
-- ✅ 17 RPC tests (async methods, generators, error handling)
-- ✅ 22 WebSocket binding tests (message forwarding, binary data, lifecycle)
-- ✅ 39 total tests - all passing
-
-## Performance
-
-### Zero-Copy Transfers
-
-ArrayBuffers are transferred without copying:
-```typescript
-const buffer = new ArrayBuffer(1024 * 1024); // 1MB
-port.postMessage(buffer, [buffer]); // Zero-copy transfer
-```
-
-### Streaming
-
-Async generators enable efficient streaming without buffering:
-```typescript
-async *streamLargeDataset() {
-  for (let i = 0; i < 1000000; i++) {
-    yield data[i]; // Process one at a time
-  }
-}
-```
-
-## Documentation
-
-- **[TESTING.md](./TESTING.md)** - Comprehensive testing guide
-- **[WEBSOCKET_BINDING.md](./WEBSOCKET_BINDING.md)** - WebSocket bridge documentation
-
-## Dependencies
-
-- **comlink** (^4.4.2) - Message passing foundation
-- **vitest** - Testing framework (dev)
-
-## Browser Support
-
-- Chrome/Edge 90+
-- Firefox 88+
-- Safari 15+
-- Node.js 18+
-
-Requires native support for:
-- MessageChannel
-- WebSocket (for WebSocket features)
-- Async generators
-
-## Contributing
-
-1. Write tests for new features
-2. Follow existing code patterns
-3. Keep files under 120 lines
-4. Use TypeScript with strict types
+Design notes: [TESTING.md](./TESTING.md),
+[WEBSOCKET_BINDING.md](./WEBSOCKET_BINDING.md).
 
 ## License
 
 MIT
-
----
-
-**Type-safe RPC with WebSocket support. Simple, efficient, tested.**
