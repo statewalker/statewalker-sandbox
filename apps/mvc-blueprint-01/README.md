@@ -1,11 +1,14 @@
 # @statewalker/mvc-blueprint-01
 
+## What it is
+
 The MVC blueprint, on signals. The same TODO app, the same three layers, the same command bus and
 view protocol, and the same test ladder as `apps/mvc-blueprint-00` — with every model built on signals
 behind one small contract, so the question it answers is: **which of the blueprint's rules were
 about the architecture, and which only about its `BaseClass`?** The answer is in
-[docs/DECISIONS.md](docs/DECISIONS.md): three rules disappeared (named channels, forwarding derived
-getters, the view-side method grep), and none of the architecture did.
+[docs/DECISIONS.md](docs/DECISIONS.md): three of mvc-blueprint-00's rules are not needed here
+(named channels, forwarding derived getters, the view-side method grep), and the architecture is
+unchanged.
 
 The signals library is a one-line choice (`src/lib/signals/deps.ts`): alien-signals by default,
 `@preact/signals-core` as the other implementation. The ladder runs on both.
@@ -18,7 +21,7 @@ pnpm typecheck
 pnpm build        # production bundle in dist/
 ```
 
-## Goals
+## Why it is the way it is: four goals
 
 1. **Separate substrate from application.** Find, by building the smallest honest app, which code
    is framework and which is domain — so the framework can later be extracted into a package with
@@ -34,7 +37,7 @@ pnpm build        # production bundle in dist/
    The browser is reserved for what only a browser can prove — that React renders, that Tailwind
    emitted the styles, that a user can click.
 4. **Be a starting point, not a demo.** The code is written to be copied. Its comments say *why*,
-   and every place where the obvious approach was tried and failed says so.
+   and say where the obvious approach does not work.
 
 ## How it is built, in one picture
 
@@ -60,19 +63,14 @@ pnpm build        # production bundle in dist/
   layer, `control` for the controller.
 - **`src/app.ts`** is the one place that wires the core, the app and the React views together.
 
-## Documentation
+## Where the rest is documented
 
 | Read this | For |
 | --- | --- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The model: layers, commands, models, events, views, bootstrap — with the code |
 | [docs/DEVELOPING.md](docs/DEVELOPING.md) | The rules, which test enforces each, and recipes for adding a command, an intent, a controller or a view |
 | [docs/TESTING.md](docs/TESTING.md) | How it is tested, why, and the catalogue of tests that looked right and could not fail |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | What was decided, what was rejected, and why — including the ideas that were tried and removed |
-
-The authoritative design is `docs/superpowers/specs/2026-09-11-mvc-blueprint-signals-design.md` in
-the `statewalker/umbrella` repository (not linked: it lives in a different repo from this one).
-These documents describe what was actually built from it, including where building it proved the
-design wrong.
+| [docs/DECISIONS.md](docs/DECISIONS.md) | The design choices, the alternatives that lose, and why |
 
 ## Layout
 
@@ -93,9 +91,11 @@ Three layers are three **directories** behind `@todo/core`, `@todo/app` and `@to
 not three packages. The boundary suite polices them by reading the files, without the build steps;
 [docs/DEVELOPING.md](docs/DEVELOPING.md) says exactly what each of its patterns catches.
 
-## Running it
+## How to run it
 
 `pnpm dev` starts Vite on the app. Open the URL it prints.
+
+### What will surprise you
 
 **If `pnpm dev` fails with `ENOSPC: System limit for number of file watchers reached`**, the
 machine's inotify watch limit is exhausted — usually by an editor watching large trees. It is not
@@ -111,10 +111,10 @@ or close editor windows, or run the production build, which needs no watcher:
 pnpm build && pnpm preview
 ```
 
-The app starts with three seeded todos in memory. There is no persistence yet — a persistent
-`TodoApi` is rung B7, out of scope here; the seam for it is `TodoApi` in `src/lib/todo-core`.
+The app starts with three seeded todos in memory and keeps nothing across reloads. The seam for a
+persistent store is `TodoApi` in `src/lib/todo-core`.
 
-## Status
+## Reference: the test ladder
 
 | Rung | Settles | Where | Tests |
 | --- | --- | --- | --- |
@@ -130,14 +130,13 @@ The app starts with three seeded todos in memory. There is no persistence yet �
 (`node:alien`/`node:preact`, `browser:alien`/`browser:preact`); the contract suite (counted in B1)
 and B0/B6 run once.
 
-**Not done:** B7 (a persistent `TodoApi`), and B8–B9 (extracting the substrate into `app-kit` —
-which the spec gates on the Files Manager being ported onto it as a second caller).
+Not built: a persistent `TodoApi`, and a separate package for the substrate. A substrate package
+needs a second caller to show which parts are general.
 
-## Known upstream dependencies
+## Why `claimed` is guarded by a test
 
 The command-override rule reads `cmd.claimed`, which `@statewalker/shared-commands@0.2.1` sets at
 run time but declares only on its **unexported** `CommandInternal` type; the public `Command` type
 does not carry it. `tests/B2-commands/claimed-contract.test.ts` guards the behaviour, so an upstream
 change fails loudly rather than silently letting every default handler run alongside a host's
-override. An upstream issue asking for `claimed` on the public type is **not yet filed** — it must
-be before this substrate is published.
+override.

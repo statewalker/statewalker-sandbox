@@ -1,8 +1,10 @@
 # @statewalker/webrun-notes-demo
 
+## What it is
+
 A browser note-taking app served **with no bundler** — it dogfoods the
-[`@statewalker/webrun-modules-build`](../../../webrun-files/packages/webrun-modules-build)
-no-bundle pipeline end to end, and validates its Phase-3 CSS features in a real browser.
+`@statewalker/webrun-modules-build`
+no-bundle pipeline end to end, and checks its CSS features in a real browser.
 
 `newProjectBuild({ project, cache })` scans the TS/TSX + CSS sources under `src/`
 and emits a **static `.js` tree** into `dist/` (ext-map: `main.tsx` → `/~/main.js`,
@@ -12,13 +14,12 @@ no CDN, no import map**. The UI is **React** (`react`/`react-dom` served from np
 transformed CJS→ESM on the fly), so the demo also exercises no-bundle React
 end-to-end (createRoot, hooks, state).
 
-> No-bundle React needs two webrun-modules transform behaviours the CSS-only demo
-> didn't: the JSX runtime must match the globals' `NODE_ENV` (browser → production
+> No-bundle React needs two webrun-modules transform behaviours: the JSX runtime must match the globals' `NODE_ENV` (browser → production
 > `jsx`), and React's `process.env.NODE_ENV`-gated package entry must be dead-code-
 > eliminated to a **single** react instance (else react-dom's `ReactSharedInternals`
-> is undefined and it crashes at render). Both landed in webrun-modules.
+> is undefined and it crashes at render). `@statewalker/webrun-modules` does both.
 
-## What it proves (Phase-3 features, verified in-browser)
+## What it proves (CSS features, verified in-browser)
 
 - **Tailwind v4** — `src/styles.css` is a `@import "tailwindcss"` entry. The build's
   Tailwind transform generates the full utility stylesheet, honoring the
@@ -36,11 +37,13 @@ end-to-end (createRoot, hooks, state).
   url("./logo.svg") }`. The build copies `src/logo.svg` **byte-identical** to
   `/~/logo.svg`; the inlined `url("./logo.svg")` resolves against the `<base>`.
 
-## Run it
+## How to run it
+
+After `pnpm install` at the repo root:
 
 ```sh
-pnpm build     # newProjectBuild: src/ → dist/
-pnpm serve     # node:http static server for the dist/ tree
+pnpm --filter @statewalker/webrun-notes-demo build   # newProjectBuild: src/ → dist/
+pnpm --filter @statewalker/webrun-notes-demo serve   # node:http static server for the dist/ tree
 ```
 
 Then open <http://localhost:8899> (`PORT` overrides the port).
@@ -51,7 +54,7 @@ Then open <http://localhost:8899> (`PORT` overrides the port).
   **FilesApi-only**, so any implementation (`BrowserFilesApi`/OPFS, `NodeFilesApi`)
   drops in unchanged.
 
-## The `<base href="/~/">` requirement (F2/F3 runtime)
+## What will surprise you: assets 404 without `<base href="/~/">`
 
 `index.html` sets `<base href="/~/">`. Relative URLs inside an injected `<style>`
 (a kept `@import`, or a `url()` asset) resolve against the **document base**, not the
@@ -61,10 +64,10 @@ injector module — so the base must be the emitted-tree root (`/~/`) for
 graph (module imports resolve by module URL). Drop the `<base>` and the injected
 `@import`/asset 404 against the document root. See the comment in `index.html`.
 
-## Test
+## Reference: tests
 
 ```sh
-npx vitest run   # from this directory
+pnpm --filter @statewalker/webrun-notes-demo test
 ```
 
 `test/build.test.ts` runs `newProjectBuild` with a `MemFilesApi` project + cache

@@ -31,46 +31,18 @@ const { port1, port2 } = new MessageChannel();
 const cleanup = bindWebSocketToPort(ws, port1);
 
 // Use the other port with RPC
-const [serviceProxy, closeClient] = await getServiceClient(port2, descriptor);
+const [serviceProxy, closeClient] = await getServiceClient(port2);
 
 // Later: cleanup both
 cleanup();
 closeClient();
 ```
 
-#### 2. `createWebSocketBridge(ws, port, options)`
+#### 2. `createWebSocketRpcServer(ws, service, options)` / `createWebSocketRpcClient(ws, options)`
 
-Enhanced version with additional features:
-- Error callbacks
-- Close callbacks
-- Auto-reconnect support
-- Connection state tracking
-
-**Options:**
-```typescript
-interface BridgeOptions {
-  onError?: (error: Error) => void;
-  onClose?: () => void;
-  autoReconnect?: boolean;
-}
-```
-
-**Usage:**
-```typescript
-const { cleanup, isActive } = createWebSocketBridge(ws, port, {
-  onError: (err) => console.error('Bridge error:', err),
-  onClose: () => console.log('Bridge closed'),
-  autoReconnect: true,
-});
-
-// Check if bridge is active
-if (isActive()) {
-  // Bridge is operational
-}
-
-// Cleanup
-cleanup();
-```
+Combine `bindWebSocketToPort` with `exposeService` / `getServiceClient` for one connection.
+Options: `onConnect`, `onDisconnect`, `onError` (and `connectionTimeout` on the client).
+There is no auto-reconnect. See `src/ws/websocket-rpc.ts`.
 
 #### 3. `isWebSocket(obj)`
 
@@ -211,7 +183,7 @@ const ws = new WebSocket('ws://server.com/rpc');
 const { port1, port2 } = new MessageChannel();
 bindWebSocketToPort(ws, port1);
 
-const [client] = await getServiceClient(port2, descriptor);
+const [client] = await getServiceClient(port2);
 const result = await client.add(5, 3); // 8
 ```
 
@@ -230,8 +202,8 @@ const service = {
   },
 };
 
-const [descriptor] = exposeService(port2, service);
-const [client] = await getServiceClient(port1, descriptor);
+exposeService(port2, service);
+const [client] = await getServiceClient(port1);
 
 for await (const item of client.generateData(10)) {
   console.log(item);
@@ -241,16 +213,9 @@ for await (const item of client.generateData(10)) {
 ### 3. Error Handling with Callbacks
 
 ```typescript
-const { cleanup, isActive } = createWebSocketBridge(ws, port, {
-  onError: (error) => {
-    logger.error('WebSocket bridge error:', error);
-    // Notify user or retry
-  },
-  onClose: () => {
-    logger.info('WebSocket bridge closed');
-    // Cleanup resources
-  },
-  autoReconnect: true,
+const [client, cleanup] = await createWebSocketRpcClient(ws, {
+  onError: (error) => logger.error('WebSocket RPC error:', error),
+  onDisconnect: () => logger.info('WebSocket RPC closed'),
 });
 ```
 
@@ -263,9 +228,7 @@ const { port1, port2 } = new MessageChannel();
 const cleanup = bindWebSocketToPort(ws, port1);
 
 // Get remote service client
-const [remoteService] = await getServiceClient(port2, {
-  processData: { args: ['data'], type: 'method' },
-});
+const [remoteService] = await getServiceClient(port2);
 
 const result = await remoteService.processData({ value: 42 });
 ```

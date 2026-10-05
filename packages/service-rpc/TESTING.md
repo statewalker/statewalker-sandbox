@@ -4,7 +4,7 @@
 
 ## Summary
 
-Created comprehensive unit tests for the `@repo/rpc` package, covering all RPC functionality including async methods, async generators, and async generators with input streams.
+Created comprehensive unit tests for the `@statewalker/service-rpc` package, covering all RPC functionality including async methods, async generators, and async generators with input streams.
 
 ## Test Coverage
 
@@ -160,10 +160,7 @@ The RPC system uses Comlink for message passing over MessagePort:
 ### 1. Type Safety
 All tests use TypeScript with proper typing:
 ```typescript
-const [serviceProxy, closeClient] = await getServiceClient<typeof myService>(
-  port2,
-  descriptor,
-);
+const [serviceProxy, closeClient] = await getServiceClient<typeof myService>(port2);
 ```
 
 ### 2. Async Generator Support
@@ -173,7 +170,7 @@ Custom transfer handler for async generators:
 - Maintains async iteration protocol
 
 ### 3. Parameter Introspection
-Service descriptor includes parameter names:
+The service descriptor (built internally and sent as the first message) includes parameter names:
 ```typescript
 descriptor.method1.args // ['a', 'b', 'c']
 descriptor.method1.type // 'method' | 'stream'
@@ -182,8 +179,8 @@ descriptor.method1.type // 'method' | 'stream'
 ### 4. Resource Management
 Proper cleanup with close functions:
 ```typescript
-const [descriptor, closeService] = exposeService(port1, myService);
-const [serviceProxy, closeClient] = await getServiceClient(port2, descriptor);
+const closeService = exposeService(port1, myService);
+const [serviceProxy, closeClient] = await getServiceClient(port2);
 
 // Cleanup
 closeClient();
@@ -205,14 +202,11 @@ const myService = {
 // 2. Create MessageChannel
 const { port1, port2 } = new MessageChannel();
 
-// 3. Expose service on port1
-const [descriptor, closeService] = exposeService(port1, myService);
+// 3. Expose service on port1 (the descriptor is sent as the first message)
+const closeService = exposeService(port1, myService);
 
-// 4. Create client from port2
-const [serviceProxy, closeClient] = await getServiceClient<typeof myService>(
-  port2,
-  descriptor,
-);
+// 4. Create client from port2 (waits for the descriptor)
+const [serviceProxy, closeClient] = await getServiceClient<typeof myService>(port2);
 
 // 5. Use the service
 const result = await serviceProxy.sayHello('World');

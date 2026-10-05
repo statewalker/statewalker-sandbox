@@ -23,8 +23,14 @@ npm i -D playwright@1.56.1 playwright-core@1.56.1 @vitest/browser-playwright rea
 PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers vitest run --config vitest.browser.config.ts
 ```
 
-`--no-sandbox` is required as root. Scripts: `npm test` (Node, 221),
-`npm run test:browser` (Chromium, 13), `npm run test:all`.
+`--no-sandbox` is required as root. Scripts at the time: `test` (Node, 221),
+`test:browser` (Chromium, 13), `test:all`.
+
+> In this repository the rung lives in `apps/fm-protos`. Playwright and
+> `@vitest/browser-playwright` come from the workspace catalog, so the `npm i`
+> line above is not needed: run `pnpm install` at the repo root, then
+> `pnpm --filter @statewalker/fm-protos test:browser`. Current test counts are
+> in [../README.md](../README.md).
 
 Browser tests live in `packages/*/browser/`, kept out of the Node `include`
 glob. Everything up to this rung was Node-testable by design and stays that

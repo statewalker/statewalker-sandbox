@@ -1,6 +1,8 @@
 # @statewalker/mvc-blueprint-02
 
-The MVC blueprint, second generation: a todo app joined by three small controllers, built to show
+## What it is
+
+An MVC blueprint: a todo app joined by three small controllers, built to show
 **four interaction mechanisms working together** — and a UI that renders only what controllers
 publish.
 
@@ -9,7 +11,9 @@ publish.
 | **Adapters** on one app context | shared infrastructure | the command bus, the slots bus, the logger, the todo api |
 | **Slots** (extension points) | what is available | `ui:panels`, `ui:dialogs`, `ui:progress`, `sys:logger-backends`, `ops:running` |
 | **Commands** | invocations with an answer | `todos:*` (core services), `todos:summary` (stats → todo RPC) |
-| **Models** (MODELS.md) | what is true now, what the user intends | on signals (todo), BaseClass (stats), a plain listener set (progress) |
+| **Models** | what is true now, what the user intends | on signals (todo), BaseClass (stats), a plain listener set (progress) |
+
+## Why the UI only renders what controllers publish
 
 Two rules make the separation real, and `B0-boundaries` checks both:
 
@@ -18,6 +22,8 @@ Two rules make the separation real, and `B0-boundaries` checks both:
   raises an intent; a controller decides and publishes.
 - **Commands are for invocations between controllers.** Showing a panel or a dialog is a
   contribution; removing it is the disposer.
+
+## How to run it
 
 ```
 pnpm dev          # the app
@@ -56,9 +62,7 @@ tests/support        recording logger, test context, React helpers
 tests/B0…B4          boundaries · model contract · controllers · hosts and views · the running app
 ```
 
-## Documentation
+## Where the rest is documented
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the mechanisms, the lifetimes, the data flows.
-- [docs/DECISIONS.md](docs/DECISIONS.md) — what changed from v1 and why, and what is still open.
-- The design: `docs/superpowers/specs/2026-09-14-mvc-blueprint-v2-design.md` in the umbrella
-  repository; the model rules: `docs/sandbox-apps/MODELS.md` there.
+- [docs/DECISIONS.md](docs/DECISIONS.md) — the design choices and why, and what is still open.

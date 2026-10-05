@@ -1,11 +1,13 @@
 # openai-proxy.app
 
+## What it is
+
 HTTP proxy that exposes a local [llama.cpp](https://github.com/ggml-org/llama.cpp)
 + Gemma model over the OpenAI v1 wire format. Built on
-[`@statewalker/openai-compat`](https://github.com/statewalker/statewalker-workbench/tree/main/packages/ai-openai-compat.core) (the adapter) and
+`@statewalker/ai-openai-compat.core` (the adapter) and
 [Hono](https://hono.dev/) (the transport).
 
-## Architecture
+## The shape
 
 ```
 openai client (curl, openai SDK, IDE plugin, ...)
@@ -14,7 +16,7 @@ openai client (curl, openai SDK, IDE plugin, ...)
 Hono server (@hono/node-server)
   │
   ▼  app.fetch(Request)
-@statewalker/openai-compat handler
+@statewalker/ai-openai-compat.core handler
   │
   ▼  generateText / streamText
 @ai-sdk/openai provider (baseURL = http://127.0.0.1:8080/v1)
@@ -26,7 +28,9 @@ llama-server (llama.cpp)
 Gemma 3 1B GGUF
 ```
 
-## Prerequisites
+## How to run it
+
+### Prerequisites
 
 - `llama-server` binary from llama.cpp. Build from source or install a
   prebuilt release.
@@ -34,7 +38,7 @@ Gemma 3 1B GGUF
   [`ggml-org/gemma-3-1b-it-GGUF`](https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF)
   (≈1 GB at Q4_K_M). Download any quantization that fits the host's RAM.
 
-## Start llama-server
+### 1. Start llama-server
 
 ```sh
 llama-server \
@@ -43,12 +47,12 @@ llama-server \
   --host 127.0.0.1
 ```
 
-## Start the proxy
+### 2. Start the proxy
 
 ```sh
-pnpm --filter @repo/openai-proxy-app dev
+pnpm --filter @statewalker/openai-proxy-app dev
 # or one-shot
-pnpm --filter @repo/openai-proxy-app start
+pnpm --filter @statewalker/openai-proxy-app start
 ```
 
 Defaults:
@@ -63,7 +67,7 @@ Overrides:
 | `OPENAI_PROXY_PORT`   | `8787`                        | Port the proxy binds to              |
 | `LLAMACPP_BASE_URL`   | `http://127.0.0.1:8080/v1`    | OpenAI-compatible base URL of the backend |
 
-## Smoke test
+### 3. Smoke test
 
 ```sh
 curl http://127.0.0.1:8787/v1/models
@@ -95,7 +99,7 @@ const reply = await client.chat.completions.create({
 console.log(reply.choices[0].message.content);
 ```
 
-## Integration tests
+## Reference: integration tests
 
 The integration tests boot a real `llama-server` and drive the proxy
 end-to-end. They are skipped by default. To run:
@@ -104,5 +108,5 @@ end-to-end. They are skipped by default. To run:
 OPENAI_COMPAT_E2E=1 \
 LLAMACPP_BIN=/path/to/llama-server \
 LLAMACPP_MODEL=/path/to/gemma-3-1b-it-q4_K_M.gguf \
-pnpm --filter @repo/openai-proxy-app test
+pnpm --filter @statewalker/openai-proxy-app test
 ```

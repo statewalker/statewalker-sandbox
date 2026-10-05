@@ -4,16 +4,16 @@ This document demonstrates how to use the WebSocket RPC functionality exposed by
 
 ## Overview
 
-The HTTP service (`@repo/service-http-impl`) automatically exposes all RPC services registered in the context over a WebSocket endpoint at `/rpc`.
+The HTTP service (`@statewalker/service-http-impl`) automatically exposes all RPC services registered in the context over a WebSocket endpoint at `/rpc`.
 
 ## Server Setup
 
 ### 1. Register RPC Services
 
 ```typescript
-import { newRpcAdapter } from '@repo/rpc';
-import createHttpService from '@repo/service-http-impl';
-import { setHttpServiceConfig } from '@repo/service-http';
+import { newRpcAdapter } from '@statewalker/service-rpc';
+import createHttpService from '@statewalker/service-http-impl';
+import { setHttpServiceConfig } from '@statewalker/service-http';
 
 // Create context
 const context = {};
@@ -73,7 +73,7 @@ console.log('WebSocket RPC: ws://localhost:3000/rpc');
 
 ```typescript
 import WebSocket from 'ws';
-import { createWebSocketRpcClient } from '@repo/rpc';
+import { createWebSocketRpcClient } from '@statewalker/service-rpc';
 
 // Connect to WebSocket RPC endpoint
 const ws = new WebSocket('ws://localhost:3000/rpc');
@@ -118,7 +118,7 @@ ws.close();
 ### Browser Client
 
 ```typescript
-import { createWebSocketRpcClient } from '@repo/rpc';
+import { createWebSocketRpcClient } from '@statewalker/service-rpc';
 
 // Connect to WebSocket
 const ws = new WebSocket('ws://localhost:3000/rpc');
@@ -285,10 +285,9 @@ Multiple clients can connect simultaneously:
 
 ### Manual Testing
 
-1. Start the server:
-```bash
-pnpm start
-```
+1. Start the server: run a script that calls `createHttpService(context)` as in
+   [Server Setup](#server-setup). The package's own `start` script only watches
+   `src/index.ts`, which exports the factory and starts nothing.
 
 2. Connect with a WebSocket client:
 ```bash
@@ -307,8 +306,8 @@ For integration tests, use actual WebSocket connections:
 
 ```typescript
 import WebSocket from 'ws';
-import { createWebSocketRpcClient } from '@repo/rpc';
-import createHttpService from '@repo/service-http-impl';
+import { createWebSocketRpcClient } from '@statewalker/service-rpc';
+import createHttpService from '@statewalker/service-http-impl';
 
 // Setup server
 const context = {};

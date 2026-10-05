@@ -4,25 +4,36 @@
 
 A browser-first application that lets a user point a Flue agent at a local directory and chat with it through an xterm-based terminal. The user picks a workspace folder (via `showDirectoryPicker`), the app discovers or prompts for a Gemini API key, then runs the Flue 2 runtime (`@flue/runtime` 2.x) in the same tab — every `read`/`write`/`edit`/`bash`/`grep`/`glob`/`task` tool the model invokes operates on the picked directory through `FilesApi`. The terminal the user types into runs a second `Bash` instance over the same filesystem; the `agent <prompt>` command streams Gemini's response back into xterm.
 
-The app ships with a self-contained integration library at `apps/flue-workbench/src/lib/` (logical package: `flue-workbench`). That library is the only thing a future second consumer (e.g. a Node demo or an embed in `chat.app`) would import; the rest of the app is Vite glue and React UI.
+The app ships with a self-contained integration library at `apps/flue-workbench/src/lib/` (logical package: `flue-workbench`). That library is the only thing a second consumer (e.g. a Node demo or an embed in another app) would import; the rest of the app is Vite glue and React UI.
 
 ## Why it exists
 
 Two motivations:
 
-1. **Validate the isomorphic-Flue hypothesis end-to-end.** The companion sketch (`notes/2026-05/2026-05-21/flue-isomorphic-adoption-sketch.md`) argues that Flue can run unchanged in Node and the browser by wrapping `@statewalker/webrun-files`'s `FilesApi` as a `just-bash` filesystem and a Flue `SessionEnv`. This app is the first surface that actually proves the wiring works against a real LLM call.
-2. **Have a usable workbench for poking at Gemini against a local directory.** Today the only path is `chat.app` (Vercel AI SDK, `@statewalker/ai-agent`) or one of the webrun-wire site-builder demos — neither of which is a "drop me into a folder and let me talk to a model" tool. Flue's `read`/`edit`/`grep`/`task` toolset is exactly that, and Gemini's free tier makes it cheap to iterate.
+1. **Show that Flue runs unchanged in the browser.** Wrapping `@statewalker/webrun-files`'s `FilesApi` as a `just-bash` filesystem and Flue persistence lets the same agent code run in Node and the browser. This app exercises that wiring against a real LLM call.
+2. **Have a usable workbench for poking at Gemini against a local directory.** Chat-style agent apps (such as those built on `@statewalker/ai-agent`) are not a "drop me into a folder and let me talk to a model" tool. Flue's `read`/`edit`/`grep`/`task` toolset is exactly that, and Gemini's free tier makes it cheap to iterate.
 
-What it explicitly does *not* replace: `chat.app`, `@statewalker/ai-agent`, or the production agent runtime in `statewalker-apps`. This is a sandbox-tier workbench, hosted in `statewalker-sandbox`, until the design proves itself.
+It does not replace `@statewalker/ai-agent` or a production agent runtime. It is a sandbox-tier workbench.
+
+## How to run it
+
+```sh
+pnpm install                                   # at the repo root
+pnpm --filter @statewalker/flue-workbench dev  # Vite dev server
+pnpm --filter @statewalker/flue-workbench test
+pnpm --filter @statewalker/flue-workbench build && pnpm --filter @statewalker/flue-workbench preview
+```
+
+The app needs a browser with the File System Access API (`showDirectoryPicker`) and a Gemini API key.
 
 ## How to use
 
 The library at `src/lib/` exposes two layers:
 
 - A **convenience factory** — `createWorkbench(opts)` — composes everything with defaults. Use this in the app entry.
-- **Piecewise factories** — `buildFilesViews`, `FilesApiSecretStore`, `FilesApiSessionStore` (a Flue 2 `PersistenceAdapter`), `filesApiBashFactory`, `buildBash`, `createWorkbenchAgent`, `mountXtermTerminal`, `newAgentCommand`, `newSecretCommand`, `newSessionCommand`, `gateSecret`, `configureGemini` / `createGeminiProvider`. Use these to compose a workbench with non-default wiring (e.g. a custom secret prompt UI, an alternate terminal emulator, a different default model).
+- **Piecewise factories** — `buildFilesViews`, `FilesApiSecretStore`, `FilesApiSessionStore` (a Flue 2 `PersistenceAdapter`), `filesApiBashFactory`, `buildBash`, `createWorkbenchAgent`, `newAgentCommand`, `newSecretCommand`, `newSessionCommand`, `gateSecret`, `configureGemini` / `createGeminiProvider`. The host side (`src/lib-host/`) adds `mountXtermTerminal`. Use these to compose a workbench with non-default wiring (e.g. a custom secret prompt UI, an alternate terminal emulator, a different default model).
 
-The convenience factory is the canonical entry; piecewise exports are documented but the surface is owned by `createWorkbench` for v1 — see `## Internals` for the drift-risk note.
+The convenience factory is the canonical entry; piecewise exports are documented but the surface is owned by `createWorkbench` — see `## Internals` for the drift-risk note.
 
 Boot sequence:
 
@@ -65,7 +76,7 @@ const workbench = await createWorkbench({
 // No further code needed; createWorkbench owns the input loop.
 ```
 
-### Failure / edge path
+### When the user dismisses the key prompt
 
 ```ts
 try {
@@ -129,24 +140,24 @@ App UI (`src/ui/`):
 - `ask-gemini-key.tsx` — React modal mounted imperatively, suitable as `onSecretRequest`.
 - `secrets-banner.tsx` — dismissable `.gitignore` reminder shown above the terminal.
 
-### Constraints
+## What will surprise you
 
-- **Browser support**: Chromium-family only (Chrome / Edge / Opera / Arc). The app uses `window.showDirectoryPicker()` for workspace selection; Firefox and Safari render an "unsupported browser" page. No OPFS fallback in v1 — adding it doubles the UX surface without solving the "talk to a model about my repo" story.
+- **Browser support**: Chromium-family only (Chrome / Edge / Opera / Arc). The app uses `window.showDirectoryPicker()` for workspace selection; Firefox and Safari render an "unsupported browser" page. No OPFS fallback — adding it doubles the UX surface without solving the "talk to a model about my repo" story.
 - **Workspace handle lifetime**: the picked `FileSystemDirectoryHandle` is persisted in IndexedDB so reload re-opens the same directory. The browser still re-prompts for permission on every reload; the user has to click "Allow" each session. We cache nothing more than the handle itself.
 - **Secrets live inside the workspace**. `/.settings/secrets.json` is written into the picked folder (hidden from the model via `FilteredFilesApi`, never via `userFiles`). The app shows a banner urging the user to add `/.settings/` to `.gitignore`. This is a deliberate choice over IndexedDB-only secrets; the leak surface is real.
-- **Single-provider v1**: `google/gemini-2.5-flash` is the only configured provider. Multi-provider support (Anthropic / OpenAI) is deferred — the secret store can carry multiple keys, but only `GEMINI_API_KEY` is read at boot.
+- **Single provider**: `google/gemini-2.5-flash` is the only configured provider. Other providers (Anthropic / OpenAI) are not wired — the secret store can carry multiple keys, but only `GEMINI_API_KEY` is read at boot.
 - **Single-session per workspace**: `session id = workbench/<workspace-key>/main`. No multi-session UI. `session reset` (human-terminal command) wipes the persisted session and starts fresh. Flue 2's stores are append-only per instance and the live runtime caches conversation state, so the reset stops the runtime, deletes the instance's files, and starts a new runtime.
 - **Flue 2 in the browser**: Flue 2 targets Node and Cloudflare; the workbench boots it with the documented standalone bootstrap `start()` from `@flue/runtime/node`, passing its own persistence (`db`), an explicit agent list and `providers: []`, so the Node-only `sqlite()` / `local()` code in that module is bundled but never executed (Vite's empty stubs for `node:sqlite`, `node:child_process`, `node:fs`, `node:path` suffice). `@flue/runtime` does construct an `AsyncLocalStorage` at module load, so `vite.config.ts` aliases `node:async_hooks` to `src/lib-host/async-hooks-browser-shim.ts` (synchronous scope only — Flue uses it for instrumentation-owner registration, a path the workbench never takes). One tab holds at most one Flue runtime; `Workbench.dispose()` stops it.
-- **Persisted format is reset-only**: conversations written by the earlier Flue 0.7 build (`/.settings/sessions/<hex>.json`) are ignored, not migrated — Flue 2 does not migrate pre-1.0 state.
+- **Old session files are ignored**: files under `/.settings/sessions/<hex>.json` are not read; Flue 2 does not load pre-1.0 session state.
 - **`just-bash` browser-bundle gotcha**: just-bash's `browser` export condition is a stripped bundle that doesn't re-export `decodeBytesToUtf8`, which `@just-bash/executor` imports. The Vite config sets `resolve.conditions: ["module", "import", "default"]` to skip the `browser` condition globally and pick the universal bundle. Bundle-size cost ~30KB gz. Revisit when upstream fixes the export.
 - **`@executor-js/sdk` optional peer deps**: `@just-bash/executor` declares the SDK as an optional peer for the discovery path. We use inline tools only, so the SDK code is a dead branch. Vite's `build.rollupOptions.external: [/^@executor-js\/sdk/]` keeps the build from trying to resolve it.
 - **No node-tagged code in `src/lib/`**. The library is Vite-buildable for the browser target with no `node:*` imports.
 - **API surface drift risk**: both `createWorkbench` and the piecewise factories are exported. `createWorkbench` is the canonical surface; piecewise exports exist for power users but are subject to incompatible change.
 
-### Dependencies
+## Reference: dependencies and why
 
 - `@flue/runtime` 2.x — public entries only: `@flue/runtime` (agent hooks, `init`, `observe`, `setProvider`, `bash`), `@flue/runtime/node` (`start`), `@flue/runtime/adapter` (persistence contract types and helpers); tests also use `@flue/runtime/test-utils`. No `@flue/runtime/internal`.
-- `@earendil-works/pi-ai` — `createProvider`, the `google` provider catalog (`./providers/google`) and the Gemini wire API (`./api/google-generative-ai.lazy`); tests use `./providers/faux`. Same version range `@flue/runtime` itself depends on, so there is a single copy. `@earendil-works/pi-agent-core` is no longer a direct dependency.
+- `@earendil-works/pi-ai` — `createProvider`, the `google` provider catalog (`./providers/google`) and the Gemini wire API (`./api/google-generative-ai.lazy`); tests use `./providers/faux`. Same version range `@flue/runtime` itself depends on, so there is a single copy.
 - `just-bash` — the shell. Resolved against the universal bundle (see Constraints) so both the model's bash tool and the human-facing terminal share the same `Bash` class.
 - `@just-bash/executor` — wires Flue tools as bash commands + js-exec tools.
 - `@statewalker/webrun-files` — the `FilesApi` abstraction the adapter wraps.
@@ -156,7 +167,3 @@ App UI (`src/ui/`):
 - `@xterm/xterm` + `@xterm/addon-fit` + `@xterm/addon-web-links` — terminal emulator.
 - `idb-keyval` — IndexedDB persistence for the `FileSystemDirectoryHandle`. Host-only.
 - `react` / `react-dom` — app UI only; the library has no React dependency.
-
-## License
-
-MIT © statewalker
