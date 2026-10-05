@@ -66,7 +66,7 @@ Work on one package with `pnpm --filter <name> <script>`, e.g.
 
 - **Nothing is published.** All packages are private and there is no release workflow. The
   `.changeset/` config and the `changeset` / `publish-all` / `release-packages` scripts exist, but
-  with every package private they publish nothing. Renovate keeps dependencies up to date.
+  with every package private they publish nothing.
 - **Dependencies come from the catalog.** External versions, including published `@statewalker/*`
   packages, are declared once in `pnpm-workspace.yaml` (`catalog:`); packages in this repository
   refer to each other with `workspace:^`.

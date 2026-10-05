@@ -1,15 +1,16 @@
 # fm-protos — the File Manager prototype ladder
 
-Twenty-one rungs, restored as runnable code from the Drive session
-`notes/drive/2026-09-08.File-Manager/`. **313 tests green** — 260 in Node, 53 in a
-real Chromium — and a clean `tsc --noEmit`.
+## What it is
+
+A file manager built as a ladder of twenty-one rungs, each settling one question
+with an acceptance suite: 260 tests in Node, 53 in a real Chromium.
 
 ## Why it is laid out this way
 
-Unlike the httpeers shell ladder, where each rung stands alone, this ladder is
+Unlike `httpeers-shell-protos`, where each rung stands alone, this ladder is
 **cumulative**: every rung adds to one `fm-core` / `fm-app` / `fm-ui`. So the code
 lives once, under `lib/`, and each rung folder holds the acceptance suite that rung
-contributed, plus its verbatim record as `README.md`.
+contributed, plus its record as `README.md`.
 
 ```
 lib/fm-core/src    registry, engine, checkpoints, conflicts, queue,
@@ -18,15 +19,17 @@ lib/fm-app/src     declarations, panel/panels models, controllers, model-kit,
                    table-model, config-store, open-storage, file-manager
 lib/fm-ui/src      view-adapter, panel-view, panel-slots, drag, use-model
 <rung>/tests       that rung's acceptance suite
-<rung>/README.md   that rung's record, verbatim from Drive
+<rung>/README.md   that rung's record: the question and the answer
 ```
 
-The three packages are addressed as `@fm/core`, `@fm/app` and `@fm/ui` — the same
-aliases the C-era rungs used. C0's `boundaries.test.ts` polices them: `fm-core`
+The three packages are addressed through the aliases `@fm/core`, `@fm/app` and
+`@fm/ui`. C0's `boundaries.test.ts` polices them: `fm-core`
 names no `ui:` command and touches no DOM, `fm-app` imports no ui package, and
 `fm-ui` never reaches past the app layer into the core.
 
-## Running it
+## How to run it
+
+From this folder, after `pnpm install` at the repo root:
 
 ```sh
 pnpm test            # the 260 Node tests
@@ -42,7 +45,14 @@ pnpm test:D1, test:D15, test:D2a, test:D2b, test:D3, test:D4, test:D5   # Phase 
 Every rung is individually runnable; `test:D2b` is the only one that needs a
 browser, and it launches Chromium through Playwright.
 
-## The ladder
+## What will surprise you
+
+- The browser suites need Playwright's Chromium. On a fresh machine install it once:
+  `pnpm --filter @statewalker/httpeers-stack exec playwright install chromium`
+  (the repository has one Playwright version).
+- `pnpm test:all` calls `npm run`, so it needs npm on the `PATH`.
+
+## Reference: the ladder
 
 | Rung | What it settles | Tests |
 | --- | --- | --- |
@@ -68,5 +78,4 @@ browser, and it launches Chromium through Playwright.
 | `D4-open-storage-by-command` | opening a filesystem is a command | 14 |
 | `D5-assembly-end-to-end` | `FileManager` — the wiring and nothing else | 10 |
 
-See [PROVENANCE.md](PROVENANCE.md) for what is recovered code, what was ported,
-and the four defects the restoration surfaced.
+[PROVENANCE.md](PROVENANCE.md) lists where each file's code comes from.

@@ -1,6 +1,8 @@
 # httpeers-shell-protos
 
-The **shell prototype ladder** restored as runnable code — twelve rungs that each
+## What it is
+
+The **shell prototype ladder**: twelve rungs that each
 answer one question about a "browser for meshes": a shell that renders applications
 served by other peers.
 
@@ -8,28 +10,16 @@ Companion to [`httpeers-protos`](../httpeers-protos), which does the same for th
 mesh ladder. That one runs demos over real libp2p; this one is a test suite, because
 every question here is answered by an assertion rather than by a process.
 
-## Where this came from
-
-The ladder ran on 2–3 September 2026 and produced ten positive rungs. Its record is
-the Drive session `notes/drive/2026-09-02.Httpeers-Shell/` — 39 notes, eleven
-archives, and `code/shell-core/`, the consolidated live code.
-
-**Three archives are corrupt and no copy survives** (note 39 predicted it: "binary
-uploads to Drive proved unreliable at these sizes"). Rungs 01, 05, and Z were
-therefore **rebuilt from their notes' signature-level API references**, not
-recovered. Every file says which it is, and `PROVENANCE.md` is the index.
-
 ## Layout
 
-`lib/` is `code/shell-core/` — the consolidated renderer, catalogue, Basecoat
-mapping, dock, mount, peer and theme bridge. The archives hold *superseded* copies
-of the renderer; note 39 is explicit that shell-core is what the code actually is,
-so the rungs are tested against it rather than against their own historical copies.
+`lib/` is the shell core — the renderer, catalogue, Basecoat mapping, dock, mount,
+peer and theme bridge. Every rung is tested against this one copy, so the rungs
+cannot drift apart. [PROVENANCE.md](PROVENANCE.md) lists where each file comes from.
 
 Each rung is a folder: `README.md` (the question and the answer), `tests/`, and
 `src/` only where the rung owns code that is not in `lib/`.
 
-## Running it
+## How to run it
 
 ```bash
 pnpm install                      # at the repo root
@@ -39,7 +29,16 @@ pnpm typecheck
 ```
 
 **Dependencies come from the workspace catalog** (`catalog:`), like every other
-package in the repo. Rungs 04 and Z parse TypeScript source without executing it;
-they used the TypeScript compiler API, which TypeScript 7 no longer ships, and now
-use `parseSource` from `@statewalker/webrun-modules` (sucrase strips the types, acorn
-parses into an ESTree), so the app runs on the same TypeScript 7 as the rest.
+package in the repo. Rungs 04 and Z parse TypeScript source without executing it,
+with `parseSource` from `@statewalker/webrun-modules` (sucrase strips the types,
+acorn parses into an ESTree). TypeScript 7 does not ship the compiler API, so this
+is what lets the app run on the same TypeScript 7 as the rest.
+
+## Reference
+
+| Command (in this folder) | What it does |
+| --- | --- |
+| `pnpm test [rung]` | vitest, all rungs or one |
+| `pnpm test:watch` | vitest in watch mode |
+| `pnpm typecheck` | `tsc --noEmit` |
+| `pnpm build:css` | Tailwind build of `06a-tailwind-build/input.css` into `06a-tailwind-build/dist/shell.css` |

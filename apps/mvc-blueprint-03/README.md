@@ -1,6 +1,8 @@
 # @statewalker/mvc-blueprint-03
 
-The todo app of `mvc-blueprint-01`, rebuilt to show four choices:
+## What it is
+
+The same todo app as `mvc-blueprint-01`, organised to show four choices:
 
 1. **Slots carry everything the UI shows** — panels, dialogs, notifications and action lists are
    contributions to extension points (`src/lib/sys/extension-points.ts`). The UI sees only model
@@ -13,6 +15,8 @@ The todo app of `mvc-blueprint-01`, rebuilt to show four choices:
 4. **Code is organised by domain**, not by type: `src/lib/todos/{core,list,edit,clear-completed}`,
    `src/lib/notifications`, each holding its models, implementations, commands and controller; the
    UI mirrors the same tree under `src/ui`.
+
+## How to run it
 
 ```
 pnpm dev            # the app
@@ -40,9 +44,7 @@ src/app.ts                   the composition root
 tests/B0…B4                  boundaries · contract · controllers · host and renderers · the app
 ```
 
-## Documentation
+## Where the rest is documented
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — mechanisms, extension points, the ActionModel, flows, errors, disposal.
-- [docs/DECISIONS.md](docs/DECISIONS.md) — what changed from 01 and 02, and why.
-- The design: `docs/superpowers/specs/2026-09-15-mvc-blueprint-03-design.md` in the umbrella repository;
-  the model rules: `docs/sandbox-apps/MODELS.md` there.
+- [docs/DECISIONS.md](docs/DECISIONS.md) — how it differs from 01 and 02, and why.
