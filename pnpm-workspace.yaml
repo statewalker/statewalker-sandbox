@@ -14,7 +14,7 @@ catalog:
   "@chainsafe/libp2p-noise": ^17.0.0
   "@chainsafe/libp2p-yamux": ^8.0.1
   "@changesets/cli": "^3.0.3"
-  "@earendil-works/pi-ai": "^0.87.1"
+  "@earendil-works/pi-ai": "^1.1.0"
   "@flue/runtime": "^2.2.2"
   "@just-bash/executor": "^7.0.0"
   "@libp2p/circuit-relay-v2": ^4.2.13
