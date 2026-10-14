@@ -1,0 +1,40 @@
+{
+  "name": "@statewalker/pdf-portabletext-prototype",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PROTOTYPE \u2014 in-browser PDF to PortableText conversion with worker-based OCR of embedded images.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/pdf-portabletext-prototype"
+  },
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/apps/pdf-portabletext-prototype#readme",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 5181",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "fixture": "tsx scripts/make-fixture.ts",
+    "e2e": "tsx scripts/e2e.ts"
+  },
+  "dependencies": {
+    "@portabletext/to-html": "^6.0.0",
+    "fflate": "^0.8.3",
+    "pdfjs-dist": "^6.4.299",
+    "tesseract-wasm": "^0.11.0"
+  },
+  "devDependencies": {
+    "@portabletext/types": "^4.0.2",
+    "@types/node": "catalog:",
+    "pdf-lib": "^1.17.1",
+    "playwright": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}
