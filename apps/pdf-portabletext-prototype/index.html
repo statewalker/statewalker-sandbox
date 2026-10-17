@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF → PortableText</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%232563eb'/></svg>" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>PDF → PortableText</h1>
+      <p class="hint">
+        Runs entirely in the browser: pdf.js extracts the text layer and embedded images,
+        tesseract-wasm recognises text in the images (one worker per language), franc detects
+        the language.
+      </p>
+    </header>
+
+    <form id="controls">
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="application/pdf,.pdf" />
+        <span id="file-label">Drop a PDF here or click to choose</span>
+      </label>
+      <div class="options">
+        <label>
+          Language
+          <select id="language"></select>
+        </label>
+        <label>
+          Fallback language
+          <select id="fallback"></select>
+        </label>
+        <label>
+          Max. pages
+          <input type="number" id="max-pages" value="50" min="1" />
+        </label>
+        <label>
+          Image format
+          <select id="format">
+            <option value="png" selected>PNG</option>
+            <option value="jpeg">JPEG</option>
+            <option value="webp">WebP</option>
+          </select>
+        </label>
+        <label>
+          Min. image size (px)
+          <input type="number" id="min-size" value="48" min="1" />
+        </label>
+        <label>
+          Min. word confidence
+          <input type="number" id="min-conf" value="0.3" min="0" max="1" step="0.05" />
+        </label>
+        <label class="check"><input type="checkbox" id="ocr-images" checked /> OCR images</label>
+        <label class="check">
+          <input type="checkbox" id="ocr-pages" checked /> OCR pages without text or images
+        </label>
+        <label class="check">
+          <input type="checkbox" id="orientation" checked /> Fix rotated scans
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit" id="convert" disabled>Convert</button>
+        <button type="button" id="cancel" disabled>Cancel</button>
+        <button type="button" id="dl-json" disabled>Download JSON</button>
+        <button type="button" id="dl-zip" disabled>Download ZIP (JSON + images)</button>
+      </div>
+    </form>
+
+    <pre id="log" aria-live="polite"></pre>
+
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="preview" aria-selected="true">Preview</button>
+      <button type="button" role="tab" data-tab="json" aria-selected="false">PortableText JSON</button>
+    </div>
+    <main>
+      <section id="preview" class="tab-panel"></section>
+      <section id="json" class="tab-panel" hidden><pre></pre></section>
+    </main>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
