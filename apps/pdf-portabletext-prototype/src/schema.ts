@@ -60,6 +60,8 @@ export type TextBlock = {
   _type: "block";
   _key: string;
   style: "normal" | "h1" | "h2" | "h3";
+  /** BCP 47 language of the block's text, when known. */
+  language?: string;
   markDefs: OcrBoxMark[];
   children: Span[];
   source: BlockSource;
@@ -76,12 +78,26 @@ export type ImageBlock = {
   source: {
     type: "pdfImage" | "pageRender";
     page: number;
-    /** Placement of the image on the page. */
+    /** Axis-aligned bounds of the image on the page; may extend past the page edges. */
     bbox: PageBox;
+    /**
+     * Only for images not drawn upright (rotated, flipped, skewed): matrix mapping the image's unit
+     * square to page points; (0,1) is the image's top-left corner.
+     */
+    transform?: number[];
   };
   ocr?: {
     engine: string;
+    /** BCP 47 language of the recognised text. */
     language: string;
+    /** Tesseract model the kept result was recognised with. */
+    model: string;
+    /** How the model was chosen. */
+    languageSource: "user" | "detected" | "document" | "default";
+    /** Models tried, in order, with the mean word confidence each produced. */
+    attempts: { model: string; confidence: number; words: number }[];
+    /** Clockwise rotation of the text in the image, corrected before recognition. */
+    rotation: number;
     /** `_key`s of the text blocks recognised in this image, in reading order. */
     blocks: string[];
     wordCount: number;
@@ -111,6 +127,8 @@ export type PdfPortableTextDocument = {
   _type: "pdfDocument";
   version: 1;
   title: string;
+  /** Dominant BCP 47 language of the document text. */
+  language?: string;
   source: { fileName: string; size: number; pageCount: number };
   createdAt: string;
   pages: PageInfo[];

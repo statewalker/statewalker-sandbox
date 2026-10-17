@@ -64,6 +64,11 @@ export type ExtractedImage = {
   width: number;
   height: number;
   bbox: PageBox;
+  /**
+   * Set when the image is not drawn upright (rotated, flipped or skewed): maps the image's unit
+   * square to page points (top-left origin); (0,1) is the image's top-left corner.
+   */
+  transform?: number[];
 };
 
 type Matrix = [number, number, number, number, number, number];
@@ -130,6 +135,12 @@ async function toBitmap(img: PdfjsImage): Promise<ImageBitmap | null> {
   }
   const data = toImageData(img);
   return data ? createImageBitmap(data) : null;
+}
+
+/** Drawn upright: only scaled and moved (image y axis points up, page y axis down). */
+function isUpright(m: Matrix): boolean {
+  const eps = 1e-6;
+  return Math.abs(m[1]) < eps && Math.abs(m[2]) < eps && m[0] > 0 && m[3] < 0;
 }
 
 function unitSquareBox(m: Matrix): PageBox {
@@ -209,6 +220,9 @@ export async function extractImages(
       width: bitmap.width,
       height: bitmap.height,
       bbox: unitSquareBox(placement.ctm),
+      ...(isUpright(placement.ctm)
+        ? {}
+        : { transform: placement.ctm.map((v) => Math.round(v * 1000) / 1000) }),
     });
   }
   return images;

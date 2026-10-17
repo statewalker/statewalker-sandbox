@@ -52,9 +52,14 @@ export async function encodeImageAsset(
   };
 }
 
-/** Upscale factor that brings small images closer to ~300 dpi text sizes for OCR. */
+/**
+ * Scale factor for OCR: small images are upscaled towards ~300 dpi text sizes,
+ * huge ones (e.g. 2400 dpi scans) downscaled, which is much faster and loses
+ * nothing at that resolution.
+ */
 export function ocrScale(width: number, height: number): number {
   const longSide = Math.max(width, height);
+  if (longSide > 4000) return Math.round((4000 / longSide) * 1000) / 1000;
   if (longSide >= 1600) return 1;
   return Math.min(3, Math.max(1, Math.round((1600 / longSide) * 10) / 10));
 }

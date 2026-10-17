@@ -35,6 +35,8 @@ export function renderPreview(doc: PdfPortableTextDocument, urls: Map<string, st
             value.ocr
               ? `${value.ocr.wordCount} words, ${(value.ocr.confidence * 100).toFixed(0)}% conf.`
               : "",
+            value.ocr ? `lang ${value.ocr.language} (${value.ocr.languageSource})` : "",
+            value.ocr?.rotation ? `rotated ${value.ocr.rotation}°` : "",
           ]
             .filter(Boolean)
             .join(" · ");
@@ -57,7 +59,8 @@ export function renderPreview(doc: PdfPortableTextDocument, urls: Map<string, st
         const value = v as unknown as TextBlock;
         const tag = value.style === "normal" ? "p" : value.style;
         const cls = value.source.type === "ocr" ? "pt-block ocr" : "pt-block";
-        return `<${tag} class="${cls}" data-key="${value._key}">${children ?? ""}</${tag}>`;
+        const lang = value.language ? ` lang="${value.language}"` : "";
+        return `<${tag} class="${cls}" data-key="${value._key}"${lang}>${children ?? ""}</${tag}>`;
       },
     },
     onMissingComponent: false,

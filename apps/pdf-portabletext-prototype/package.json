@@ -20,11 +20,14 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "fixture": "tsx scripts/make-fixture.ts",
-    "e2e": "tsx scripts/e2e.ts"
+    "e2e": "tsx scripts/e2e.ts",
+    "corpus:fetch": "NODE_USE_ENV_PROXY=1 tsx scripts/fetch-corpus.ts",
+    "corpus": "tsx scripts/corpus.ts"
   },
   "dependencies": {
     "@portabletext/to-html": "^6.0.0",
     "fflate": "^0.8.3",
+    "franc-all": "^7.2.0",
     "pdfjs-dist": "^6.4.299",
     "tesseract-wasm": "^0.11.0"
   },

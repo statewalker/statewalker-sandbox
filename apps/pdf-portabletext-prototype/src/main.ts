@@ -1,7 +1,8 @@
 import type { ImageFormat } from "./assets.ts";
 import { createBundle, download } from "./bundle.ts";
 import { type ConvertResult, convertPdf } from "./convert.ts";
-import { createOcrClient, type OcrClient } from "./ocr-client.ts";
+import { DEFAULT_LANGUAGE, LANGUAGES } from "./languages.ts";
+import { createOcrPool, type OcrPool } from "./ocr-client.ts";
 import { renderPreview } from "./preview.ts";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -18,10 +19,21 @@ const logEl = $("log");
 const previewEl = $("preview");
 const jsonEl = $("json").querySelector("pre") as HTMLPreElement;
 
+const option = (value: string, label: string, selected = false) =>
+  Object.assign(document.createElement("option"), { value, textContent: label, selected });
+$("language").append(
+  option("auto", "Auto-detect", true),
+  ...LANGUAGES.map((l) => option(l.tesseract, `${l.name} (${l.tesseract})`)),
+);
+$("fallback").append(...LANGUAGES.map((l) => option(l.tesseract, l.name, l === DEFAULT_LANGUAGE)));
+$<HTMLSelectElement>("language").addEventListener("change", (e) => {
+  $<HTMLSelectElement>("fallback").disabled = (e.target as HTMLSelectElement).value !== "auto";
+});
+
 let file: File | null = null;
 let result: ConvertResult | null = null;
 let objectUrls: string[] = [];
-let ocr: OcrClient | null = null;
+let ocr: OcrPool | null = null;
 let abort: AbortController | null = null;
 
 function log(message: string) {
@@ -61,11 +73,16 @@ form.addEventListener("submit", async (e) => {
   cancelBtn.disabled = false;
   jsonBtn.disabled = zipBtn.disabled = true;
   abort = new AbortController();
-  ocr ??= createOcrClient(new URLSearchParams(location.search).get("models") ?? undefined);
+  ocr ??= createOcrPool({
+    modelBaseUrl: new URLSearchParams(location.search).get("models") ?? undefined,
+  });
   const started = performance.now();
   try {
     result = await convertPdf(file, ocr, {
       language: $<HTMLSelectElement>("language").value,
+      fallbackLanguage: $<HTMLSelectElement>("fallback").value,
+      maxPages: Number($<HTMLInputElement>("max-pages").value) || undefined,
+      detectOrientation: $<HTMLInputElement>("orientation").checked,
       imageFormat: $<HTMLSelectElement>("format").value as ImageFormat,
       ocrImages: $<HTMLInputElement>("ocr-images").checked,
       ocrEmptyPages: $<HTMLInputElement>("ocr-pages").checked,
@@ -86,7 +103,7 @@ form.addEventListener("submit", async (e) => {
     if (abort.signal.aborted) {
       log("cancelled");
       // The worker may be busy with a long recognition: drop it.
-      ocr.terminate();
+      ocr?.terminate();
       ocr = null;
     } else {
       log(`error: ${err instanceof Error ? err.message : String(err)}`);
@@ -103,6 +120,8 @@ form.addEventListener("submit", async (e) => {
 cancelBtn.addEventListener("click", () => abort?.abort());
 
 function show({ document: doc, blobs }: ConvertResult) {
+  // Exposed for scripts/corpus.ts and debugging from the console.
+  (window as unknown as { __lastResult?: ConvertResult }).__lastResult = result ?? undefined;
   const urls = new Map<string, string>();
   for (const [id, blob] of blobs) {
     const url = URL.createObjectURL(blob);

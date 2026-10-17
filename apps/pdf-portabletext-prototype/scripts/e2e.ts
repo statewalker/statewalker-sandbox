@@ -26,6 +26,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   page.on("console", (m) => m.type() === "error" && console.error("[browser]", m.text()));
   await page.goto("http://localhost:5199/");
+  await page.selectOption("#language", "auto");
   await page.setInputFiles("#file", join(root, "fixtures", "sample-de.pdf"));
   await page.click("#convert");
   await page.waitForFunction(
@@ -57,6 +58,11 @@ try {
     [
       "images reference assets with sizes",
       images.every((i) => doc.assets[i.asset._ref]?.metadata.dimensions.width === i.width),
+    ],
+    ["document language detected as German", doc.language === "de"],
+    [
+      "German images OCR'd with the German model",
+      images.filter((i) => i.ocr?.wordCount).every((i) => i.ocr?.model === "deu"),
     ],
     ["OCR found 'Rechnung'", /Rechnung/.test(text)],
     ["OCR found 'Ergebnisse'", /Ergebnisse/.test(text)],

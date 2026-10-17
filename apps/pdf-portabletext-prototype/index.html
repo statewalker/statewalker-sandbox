@@ -12,7 +12,8 @@
       <h1>PDF → PortableText</h1>
       <p class="hint">
         Runs entirely in the browser: pdf.js extracts the text layer and embedded images,
-        tesseract-wasm recognises text in the images in a dedicated worker.
+        tesseract-wasm recognises text in the images (one worker per language), franc detects
+        the language.
       </p>
     </header>
 
@@ -23,15 +24,16 @@
       </label>
       <div class="options">
         <label>
-          OCR language
-          <select id="language">
-            <option value="deu" selected>German (deu)</option>
-            <option value="eng">English (eng)</option>
-            <option value="fra">French (fra)</option>
-            <option value="ita">Italian (ita)</option>
-            <option value="spa">Spanish (spa)</option>
-            <option value="rus">Russian (rus)</option>
-          </select>
+          Language
+          <select id="language"></select>
+        </label>
+        <label>
+          Fallback language
+          <select id="fallback"></select>
+        </label>
+        <label>
+          Max. pages
+          <input type="number" id="max-pages" value="50" min="1" />
         </label>
         <label>
           Image format
@@ -52,6 +54,9 @@
         <label class="check"><input type="checkbox" id="ocr-images" checked /> OCR images</label>
         <label class="check">
           <input type="checkbox" id="ocr-pages" checked /> OCR pages without text or images
+        </label>
+        <label class="check">
+          <input type="checkbox" id="orientation" checked /> Fix rotated scans
         </label>
       </div>
       <div class="actions">
