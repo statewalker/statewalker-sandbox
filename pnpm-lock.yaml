@@ -1144,6 +1144,9 @@ importers:
       '@statewalker/webrun-streams':
         specifier: ^0.2.0
         version: 0.2.2
+      htmlrewriter:
+        specifier: ^0.0.13
+        version: 0.0.13
       sqlite-vec:
         specifier: ^0.1.7
         version: 0.1.9
@@ -4709,6 +4712,9 @@ packages:
 
   html5-qrcode@2.3.8:
     resolution: {integrity: sha512-jsr4vafJhwoLVEDW3n1KvPnCCXWaQfRng0/EEYk1vNcQGcG/htAdhJX0be8YyqMoSz7+hZvOZSTAepsabiuhiQ==}
+
+  htmlrewriter@0.0.13:
+    resolution: {integrity: sha512-HPxT+y/i9RzNeKrJ6MBFXwB+FeTfHPfcBzoKHVnk3oiKn2s6x13tLoxjggI+0/yOSBG1n8SV//PGDBJYT/4XQw==}
 
   http-errors@2.0.1:
     resolution: {integrity: sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ==}
@@ -9978,6 +9984,8 @@ snapshots:
       lru-cache: 11.5.3
 
   html5-qrcode@2.3.8: {}
+
+  htmlrewriter@0.0.13: {}
 
   http-errors@2.0.1:
     dependencies:
