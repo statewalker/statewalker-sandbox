@@ -1144,9 +1144,6 @@ importers:
       '@statewalker/webrun-streams':
         specifier: ^0.2.0
         version: 0.2.2
-      htmlrewriter:
-        specifier: ^0.0.13
-        version: 0.0.13
       sqlite-vec:
         specifier: ^0.1.7
         version: 0.1.9
@@ -1181,6 +1178,9 @@ importers:
       esbuild:
         specifier: ^0.28.0
         version: 0.28.2
+      html-rewriter-wasm:
+        specifier: ^0.4.1
+        version: 0.4.1
       sqlite-vec-wasm-demo:
         specifier: 0.1.6
         version: 0.1.6
@@ -4710,11 +4710,11 @@ packages:
     resolution: {integrity: sha512-DeOnSPAvOndYKfw075gt8yZzQ7S2hNztw34zBTfhIzLhmBTswIBg5/y+pqu/VD5cYWm5goAFTusDmUEmKZ0PEQ==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
+  html-rewriter-wasm@0.4.1:
+    resolution: {integrity: sha512-lNovG8CMCCmcVB1Q7xggMSf7tqPCijZXaH4gL6iE8BFghdQCbaY5Met9i1x2Ex8m/cZHDUtXK9H6/znKamRP8Q==}
+
   html5-qrcode@2.3.8:
     resolution: {integrity: sha512-jsr4vafJhwoLVEDW3n1KvPnCCXWaQfRng0/EEYk1vNcQGcG/htAdhJX0be8YyqMoSz7+hZvOZSTAepsabiuhiQ==}
-
-  htmlrewriter@0.0.13:
-    resolution: {integrity: sha512-HPxT+y/i9RzNeKrJ6MBFXwB+FeTfHPfcBzoKHVnk3oiKn2s6x13tLoxjggI+0/yOSBG1n8SV//PGDBJYT/4XQw==}
 
   http-errors@2.0.1:
     resolution: {integrity: sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ==}
@@ -9983,9 +9983,9 @@ snapshots:
     dependencies:
       lru-cache: 11.5.3
 
-  html5-qrcode@2.3.8: {}
+  html-rewriter-wasm@0.4.1: {}
 
-  htmlrewriter@0.0.13: {}
+  html5-qrcode@2.3.8: {}
 
   http-errors@2.0.1:
     dependencies:
