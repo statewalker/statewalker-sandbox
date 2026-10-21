@@ -1126,12 +1126,21 @@ importers:
       '@statewalker/webrun-files':
         specifier: ^0.10.0
         version: 0.10.2
+      '@statewalker/webrun-http-browser':
+        specifier: 'catalog:'
+        version: 0.6.5
       '@statewalker/webrun-http-streams':
         specifier: ^0.2.2
         version: 0.2.5
       '@statewalker/webrun-rpc':
         specifier: ^0.4.0
         version: 0.4.3
+      '@statewalker/webrun-site-builder':
+        specifier: 'catalog:'
+        version: 0.2.2(@statewalker/webrun-files@0.10.2)
+      '@statewalker/webrun-site-host':
+        specifier: 'catalog:'
+        version: 0.2.4(@statewalker/webrun-files@0.10.2)
       '@statewalker/webrun-streams':
         specifier: ^0.2.0
         version: 0.2.2
@@ -1154,9 +1163,6 @@ importers:
       '@statewalker/webrun-files-mem':
         specifier: ^0.10.0
         version: 0.10.3
-      '@statewalker/webrun-http-browser':
-        specifier: ^0.6.0
-        version: 0.6.5
       '@statewalker/webrun-modules':
         specifier: 'catalog:'
         version: 0.3.3
