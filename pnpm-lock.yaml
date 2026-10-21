@@ -1172,6 +1172,9 @@ importers:
       esbuild:
         specifier: ^0.28.0
         version: 0.28.2
+      sqlite-vec-wasm-demo:
+        specifier: 0.1.6
+        version: 0.1.6
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -5926,6 +5929,9 @@ packages:
     resolution: {integrity: sha512-w3tCH8xK2finW8fQJ/m8uqKodXUZ9KAuAar2UIhz4BHILfpE0WM/MTGCRfa7RjYbrYim5Luk3guvMOGI7T7JQA==}
     cpu: [x64]
     os: [linux]
+
+  sqlite-vec-wasm-demo@0.1.6:
+    resolution: {integrity: sha512-s0tpWfxmP9GfVAvFT6jdLiA4ZfWVRsS69sJpicLd+1Y8jHMagdcFWvhV8JxLK/o7T5DVywi0SSMMnAyFHmfH4g==}
 
   sqlite-vec-windows-x64@0.1.9:
     resolution: {integrity: sha512-y3gEIyy/17bq2QFPQOWLE68TYWcRZkBQVA2XLrTPHNTOp55xJi/BBBmOm40tVMDMjtP+Elpk6UBUXdaq+46b0Q==}
@@ -11354,6 +11360,8 @@ snapshots:
 
   sqlite-vec-linux-x64@0.1.9:
     optional: true
+
+  sqlite-vec-wasm-demo@0.1.6: {}
 
   sqlite-vec-windows-x64@0.1.9:
     optional: true
