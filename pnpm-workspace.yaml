@@ -57,7 +57,7 @@ catalog:
   "zod": ^4.6.5
   "@statewalker/ai-openai-compat.core": "^0.4.0"
   "@statewalker/webrun-modules-build": "^0.2.0"
-  "@statewalker/webrun-modules": ^0.3.4
+  "@statewalker/webrun-modules": ^0.3.5
   "@statewalker/webrun-files-node": "^0.10.0"
   "@statewalker/webrun-http-browser": "^0.6.0"
   "@statewalker/webrun-streams-libp2p": ^0.1.6

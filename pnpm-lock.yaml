@@ -127,8 +127,8 @@ catalogs:
       specifier: ^0.2.1
       version: 0.2.5
     '@statewalker/webrun-modules':
-      specifier: ^0.3.4
-      version: 0.3.4
+      specifier: ^0.3.5
+      version: 0.3.5
     '@statewalker/webrun-modules-build':
       specifier: ^0.2.0
       version: 0.2.1
@@ -661,7 +661,7 @@ importers:
         version: 0.2.3
       '@statewalker/webrun-modules':
         specifier: 'catalog:'
-        version: 0.3.4
+        version: 0.3.5
       basecoat-css:
         specifier: 'catalog:'
         version: 1.0.2
@@ -1042,7 +1042,7 @@ importers:
         version: 0.10.3
       '@statewalker/webrun-modules':
         specifier: 'catalog:'
-        version: 0.3.4
+        version: 0.3.5
       '@statewalker/webrun-modules-build':
         specifier: 'catalog:'
         version: 0.2.1
@@ -1180,7 +1180,7 @@ importers:
         version: 0.10.3
       '@statewalker/webrun-modules':
         specifier: 'catalog:'
-        version: 0.3.4
+        version: 0.3.5
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.4
@@ -3728,8 +3728,8 @@ packages:
   '@statewalker/webrun-modules-build@0.2.1':
     resolution: {integrity: sha512-oHup5Z+ix8D53LZ0KDd+7kwzpiiy/HK1n5g+sR7DnChrj2YK4syP/ZWBB1NpJizq8V+PpbezhZLlGsi1n7Yd8w==}
 
-  '@statewalker/webrun-modules@0.3.4':
-    resolution: {integrity: sha512-uQjITNI8mBJWWmUU95p+gINkxe0f/shFzaEkJTcKrtXhzkUOQBHCFQwIdqCpNtSuxQo/LaI/z8rq5J/WLHTDPg==}
+  '@statewalker/webrun-modules@0.3.5':
+    resolution: {integrity: sha512-nFtaCII75pbSh6Ocdc6OHjpf/3OvndPQ/eGjJY2IHD5/POSAQv/zEExjLj55dqzeeZuaCOG4Zk3nJYduTgbBkQ==}
 
   '@statewalker/webrun-msgpack@0.3.3':
     resolution: {integrity: sha512-rVdQpJYXYaI6vvOqJolSV9w02jZQbNXfU8zpbKQVw0/swRICBBogsKUPUGG8v1kRv4kwXHAye5dJxwAvudqLNw==}
@@ -9486,10 +9486,10 @@ snapshots:
       '@statewalker/webrun-builder': 0.2.1
       '@statewalker/webrun-dataflow': 0.1.3
       '@statewalker/webrun-files': 0.10.2
-      '@statewalker/webrun-modules': 0.3.4
+      '@statewalker/webrun-modules': 0.3.5
       '@statewalker/webrun-tailwind': 0.2.1
 
-  '@statewalker/webrun-modules@0.3.4':
+  '@statewalker/webrun-modules@0.3.5':
     dependencies:
       '@jspm/core': 2.1.0
       '@statewalker/webrun-files': 0.10.2
@@ -9536,7 +9536,7 @@ snapshots:
   '@statewalker/webrun-tailwind@0.2.1':
     dependencies:
       '@statewalker/webrun-files': 0.10.2
-      '@statewalker/webrun-modules': 0.3.4
+      '@statewalker/webrun-modules': 0.3.5
       tailwindcss: 4.3.3
 
   '@tailwindcss/cli@4.3.3':
