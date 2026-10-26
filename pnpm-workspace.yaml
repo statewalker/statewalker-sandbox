@@ -23,7 +23,7 @@ catalog:
   "@libp2p/interface": ^3.3.0
   "@libp2p/peer-id": ^6.0.15
   "@libp2p/tcp": ^11.0.28
-  "@libp2p/webrtc": ^6.0.33
+  "@libp2p/webrtc": ^7.0.2
   "@libp2p/websockets": ^10.1.21
   "@multiformats/multiaddr": ^13.0.3
   "@preact/signals-core": ^1.14.4
