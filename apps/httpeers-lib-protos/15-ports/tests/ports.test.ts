@@ -11,8 +11,9 @@
  *   - webrun-rpc's own port stack (`connect`/`serve`), which is rung 11's
  *     MessagePort column — it runs, and gives a fifth parity column;
  *   - the browser's ServiceWorker HTTP transport
- *     (`handleHttpRequests`/`sendHttpRequest`), which is rung 14's — it does
- *     NOT, and claim 4 is the measurement of why: it transfers a real
+ *     (`connectHttpLink`/`serveHttpLink`), which is rung 14's — it runs too,
+ *     because it multiplexes calls over its one port. Its first version
+ *     (`handleHttpRequests`/`sendHttpRequest`) did NOT: it transferred a real
  *     `MessagePort` per call, and transfer has no meaning between machines.
  *
  * So "written against a `MessageTarget`" is not by itself enough to cross a
@@ -27,7 +28,7 @@ import type { Libp2p } from "@libp2p/interface";
 import { tcp } from "@libp2p/tcp";
 import { generateMeshKey, mintToken } from "@statewalker/httpeers.core/tokens";
 import { peerIdOf } from "@statewalker/httpeers-stack/src/setup/keys.js";
-import { handleHttpRequests, sendHttpRequest } from "@statewalker/webrun-http-browser";
+import { connectHttpLink, serveHttpLink } from "@statewalker/webrun-http-browser";
 import { fetchOverDuplex, serveFetchOverDuplex } from "@statewalker/webrun-http-streams";
 import {
   connect as connectPort,
@@ -196,29 +197,27 @@ describe("15 — a libp2p connection that hands out ports", () => {
     await stop();
   }, 120_000);
 
-  it("CLAIM 4 — a transport that TRANSFERS ports cannot cross the mesh", async () => {
-    // THIS CLAIM ASSERTED THE OPPOSITE when it was written. The reasoning was
-    // that `handleHttpRequests`/`sendHttpRequest` are typed against a
-    // `MessageTarget` and never mention a browser, so they should run over a
-    // mesh port unchanged. Running it said otherwise, on the first call:
-    // `sendStream`'s very first move is
-    //
-    //     communicationPort.postMessage({type:"START_CALL"}, [channel.port2])
-    //
-    // — it TRANSFERS a real `MessagePort` per call. Transfer moves ownership
-    // between two agents in one process. A mesh stream copies bytes between
-    // machines; there is no ownership to move, and no amount of framing
-    // invents one. So the limit is a property of that transport, not of the
-    // mesh, and claim 5 shows the repo's own answer to it.
+  it("CLAIM 4 — the browser's HTTP link crosses the mesh, now that it transfers nothing", async () => {
+    // THIS CLAIM HAS FLIPPED TWICE. It was written expecting the ServiceWorker
+    // HTTP transport to run over a mesh port, because it is typed against a
+    // port and never mentions a browser. Version 1 of that transport
+    // (`handleHttpRequests`/`sendHttpRequest`) proved it wrong on the first
+    // call: it TRANSFERRED a real `MessagePort` per call, and transfer has no
+    // meaning between machines. Version 2 (`connectHttpLink`/`serveHttpLink`)
+    // multiplexes every call over the one port it is given — ids in an
+    // envelope, nothing transferred — so the same consumer, unmodified, now
+    // crosses. The dividing line is still transfer; the transport moved.
     const site = createSite({
       issuer,
       selfPeer: server.peerId.toString(),
       callerOf: () => client.peerId.toString(),
     });
 
-    let stopHandling: (() => void) | undefined;
+    let stopServingHttp: (() => Promise<void>) | undefined;
     const stop = await servePorts({ node: server, protocol: "/t4/1.0.0" }, (port) => {
-      stopHandling = handleHttpRequests(port, site);
+      void (async () => {
+        stopServingHttp = await serveHttpLink(port as unknown as MessagePort, site);
+      })();
     });
 
     const opened = await openPort({
@@ -226,14 +225,17 @@ describe("15 — a libp2p connection that hands out ports", () => {
       peerId: server.peerId.toString(),
       protocol: "/t4/1.0.0",
     });
+    const link = await connectHttpLink(opened.port as unknown as MessagePort);
 
-    // Refused loudly, at the point of the attempt — not a hang, and not a
-    // silent copy that would leave the sender holding a port it gave away.
-    await expect(
-      sendHttpRequest(opened.port, new Request("http://peer.local/hello")),
-    ).rejects.toThrow(/transferable/);
+    const outcomes = await runScenarios((request) => link.send(request), {
+      goodToken,
+      foreignToken,
+    });
+    expect(outcomes.length).toBe(8);
+    expect(outcomes.filter((o) => !o.pass).map((o) => `${o.name}: ${o.detail}`)).toEqual([]);
 
-    stopHandling?.();
+    await link.close();
+    await stopServingHttp?.();
     await opened.close();
     await stop();
   }, 120_000);

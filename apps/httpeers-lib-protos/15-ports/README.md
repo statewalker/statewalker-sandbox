@@ -17,7 +17,7 @@ a mesh needs: **a libp2p stream, seen as a port.**
 | 1 | A message posted on one side arrives on the other, in order, both ways | any loss, reorder, or corruption of a structured value |
 | 2 | The port carries the **proven** remote peer | `peerId` not matching what Noise established |
 | 3 | **webrun-rpc's port stack runs over it unchanged** — a fifth parity column | any of rung 11's eight scenarios failing |
-| 4 | A transport that **transfers** ports cannot cross the mesh | `sendHttpRequest` succeeding over a mesh port |
+| 4 | The browser's HTTP link (`connectHttpLink`/`serveHttpLink`), which **transfers nothing**, crosses the mesh unchanged | any of rung 11's eight scenarios failing over it |
 | 5 | **The remedy**: `multiplexPort` gives virtual ports that do cross | no port arriving at the responder's `onPort` |
 | 6 | Transferables are refused, not silently copied | `postMessage(msg, [port])` returning normally |
 | 7 | Closing one side is observable to the other | `closed` never resolving |
@@ -42,25 +42,30 @@ none. Identity comes from `serveConnections`' `ConnectionContext`, captured per
 stream by closure — the same seam rung 11 uses, because a duplex has no
 `Request` to hang a `WeakMap` off.
 
-## Claim 4 asserted the opposite when it was written
+## Claim 4: the dividing line is transfer, and the transport moved across it
 
-The reasoning was clean and wrong: `handleHttpRequests`/`sendHttpRequest` are
-typed against a `MessageTarget` and never mention a browser, so they should run
-over a mesh port unchanged. Running it said otherwise on the very first call —
+The ServiceWorker HTTP transport is typed against a port and never mentions a
+browser, so it should run over a mesh port unchanged. Its first version
+(`handleHttpRequests`/`sendHttpRequest`, still exported but deprecated) did
+not, on the very first call —
 
 ```js
 communicationPort.postMessage({ type: "START_CALL" }, [channel.port2])
 ```
 
-— the ServiceWorker transport **transfers a real `MessagePort` per call**.
-Transfer moves ownership between two agents in one process. A mesh stream
-copies bytes between machines; there is no ownership to move, and no framing
-invents one.
+— it **transferred a real `MessagePort` per call**. Transfer moves ownership
+between two agents in one process. A mesh stream copies bytes between
+machines; there is no ownership to move, and no framing invents one.
 
-So the limit belongs to that transport, not to the mesh, and the repo already
-names the way across it: `transferPortMux`'s own docstring says *"use
-`multiplexPort` where the transport is one pipe of bytes"*. A mesh stream is
-one pipe of bytes. Claim 5 runs it and virtual ports cross.
+`connectHttpLink`/`serveHttpLink` multiplex every call over the one port they
+are given — ids in an envelope, nothing transferred — and claim 4 runs rung
+11's eight scenarios through them over a mesh port, unmodified. Both are typed
+`MessagePort` though they use only the `MessageTarget` surface, so the test
+casts the mesh port; the type is narrower than the contract.
+
+The same rule covers ports themselves: `transferPortMux`'s own docstring says
+*"use `multiplexPort` where the transport is one pipe of bytes"*. A mesh stream
+is one pipe of bytes. Claim 5 runs it and virtual ports cross.
 
 **This is the finding that matters for the library.** "Isomorphic" cannot mean
 "anything holding a `MessageTarget` works everywhere". It means: *no transfer
