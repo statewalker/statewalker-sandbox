@@ -34,6 +34,7 @@ import {
   connect as connectPort,
   type MessageTarget,
   multiplexPort,
+  overPipe,
   serve as servePort,
   structuredCodec,
 } from "@statewalker/webrun-rpc";
@@ -170,7 +171,10 @@ describe("15 — a libp2p connection that hands out ports", () => {
     let stopServingRpc: (() => Promise<void>) | undefined;
     const stop = await servePorts({ node: server, protocol: "/t3/1.0.0" }, (port) => {
       void (async () => {
-        stopServingRpc = await servePort({ port }, serveFetchOverDuplex(site));
+        stopServingRpc = await servePort(
+          { mux: overPipe(port, { codec: structuredCodec, side: "responder" }) },
+          serveFetchOverDuplex(site),
+        );
       })();
     });
 
@@ -179,7 +183,9 @@ describe("15 — a libp2p connection that hands out ports", () => {
       peerId: server.peerId.toString(),
       protocol: "/t3/1.0.0",
     });
-    const rpc = await connectPort({ port: opened.port });
+    const rpc = await connectPort({
+      mux: overPipe(opened.port, { codec: structuredCodec, side: "initiator" }),
+    });
 
     const outcomes = await runScenarios((request) => fetchOverDuplex(rpc.call, request), {
       goodToken,
