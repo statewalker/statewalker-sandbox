@@ -30,6 +30,8 @@ export interface SharingState {
 
 export interface GuestRecord {
   peerId: string;
+  /** When the Guest joined, in the hub's time (ms). */
+  joinedAt: number;
 }
 
 export const StartSharing = required<void, SharingState>("peershare:start");

@@ -81,3 +81,14 @@ describe("M1 — Test again", () => {
     expect((await call(GetSharer, undefined)).services[0]).toMatchObject({ health: "disabled" });
   });
 });
+
+describe("M1 — a new Service is tested at once", () => {
+  it("add-service starts Test again in the background: Health is known without asking", async () => {
+    const { call } = withPeerShare({ bridge: () => ({ base: bridge.origin, token: TOKEN }) });
+    await call(AddService, { name: "dev", kind: "bridged", target: app.origin });
+
+    await expect
+      .poll(async () => (await call(GetSharer, undefined)).services[0]?.health, { timeout: 5_000 })
+      .toBe("ok");
+  });
+});

@@ -104,7 +104,7 @@ export function SharerScreen() {
   const guests: Guest[] = snapshot.guests.map((g) => ({
     peerId: g.peerId,
     name: `Guest ${g.peerId.slice(-6)}`,
-    joinedAt: new Date(0),
+    joinedAt: new Date(g.joinedAt),
     online: true,
   }));
 

@@ -72,4 +72,6 @@ grilled in three rounds. Every answer below accepted the recommended option.
 | 14 | The compiled Bridge is one 109 MB file and needs nothing on PATH | Cross-compiling, signing and size are milestone M8 |
 | 15 | A session's WebSockets go to the session host, past the ServiceWorker; a shim can be injected | Carrying sockets over the mesh is open (full-duplex in httpeers-member?) |
 | 16 | A per-Guest jar in the Bridge keeps cookie logins working for Bridged Services | Direct stays cookie-less (ADR 0003) |
+| M7 | The deployed `*.p.httpeers.net` shell accepts parents on `*.httpeers.net` only | **Open:** decision 2.8 needs revisiting. Host the page under `httpeers.net`, or deploy a session zone (e.g. `*.p.sandclaw.ai`) whose shell accepts `tools.sandclaw.ai`. `sessionOrigin` in `/peershare.json` makes it a deploy setting. |
+| M7 | The hub adds members without telling anyone | The Sharer watches its member list (500 ms) so Guests appear live |
 

@@ -17,7 +17,8 @@
   "main": "src/public/index.ts",
   "exports": {
     ".": "./src/public/index.ts",
-    "./node": "./src/node/index.ts"
+    "./node": "./src/node/index.ts",
+    "./browser": "./src/browser/index.ts"
   },
   "files": [
     "src/**"
@@ -46,6 +47,7 @@
     "@statewalker/shared-commands": "catalog:",
     "@statewalker/shared-slots": "catalog:",
     "@statewalker/webrun-http-proxy": "catalog:",
+    "idb-keyval": "catalog:",
     "libp2p": "catalog:"
   },
   "devDependencies": {

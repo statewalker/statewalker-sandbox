@@ -1,0 +1,41 @@
+{
+  "name": "@statewalker/peershare.page",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The standalone PeerShare page: /peer-share for the Sharer, /peer-share/invite for Guests.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@statewalker/httpeers-share": "workspace:^",
+    "@statewalker/peershare": "workspace:^",
+    "@statewalker/peershare-react": "workspace:^",
+    "@statewalker/webrun-http-browser": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@chainsafe/libp2p-noise": "catalog:",
+    "@chainsafe/libp2p-yamux": "catalog:",
+    "@libp2p/circuit-relay-v2": "catalog:",
+    "@libp2p/crypto": "catalog:",
+    "@libp2p/identify": "catalog:",
+    "@libp2p/websockets": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "libp2p": "catalog:",
+    "playwright": "catalog:",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

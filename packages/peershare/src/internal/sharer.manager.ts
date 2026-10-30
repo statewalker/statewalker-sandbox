@@ -66,6 +66,8 @@ export class SharerManager {
       { id, name: draft.name, kind: draft.kind, target: draft.target, enabled: true, isDefault },
     ];
     await this.save();
+    // Tested at once, in the background: the Sharer sees Health without asking.
+    void this.probe(id);
     return { ok: true, id };
   }
 
@@ -88,6 +90,7 @@ export class SharerManager {
         : s,
     );
     await this.save();
+    void this.probe(id);
     return { ok: true };
   }
 

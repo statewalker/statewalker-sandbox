@@ -27,7 +27,15 @@ interface Running {
   node: Libp2p;
   hub: Hub;
   peer: Peer;
+  watch: ReturnType<typeof setInterval>;
 }
+
+/**
+ * The hub adds members inside its own endpoints and says nothing, so the
+ * Sharer's view of who joined is refreshed by looking: often enough to feel
+ * live, rarely enough to cost nothing.
+ */
+const MEMBERS_WATCH_MS = 500;
 
 export class SharingManager {
   private running: Running | undefined;
@@ -93,7 +101,19 @@ export class SharingManager {
       serveOnLimitedConnection: true,
     });
 
-    this.running = { node, hub, peer };
+    let seen = "";
+    const watch = setInterval(() => {
+      const now = hub.members
+        .list()
+        .map((m) => m.peerId)
+        .sort()
+        .join(",");
+      if (now !== seen) {
+        seen = now;
+        this.notify();
+      }
+    }, MEMBERS_WATCH_MS);
+    this.running = { node, hub, peer, watch };
     this.peerId = peerId;
     this.notify();
     return this.state();
@@ -103,6 +123,7 @@ export class SharingManager {
     const running = this.running;
     this.running = undefined;
     if (running != null) {
+      clearInterval(running.watch);
       for (const step of [
         () => running.peer.stop(),
         () => running.hub.stop(),
@@ -133,7 +154,10 @@ export class SharingManager {
   }
 
   guests(): GuestRecord[] {
-    return (this.running?.hub.members.list() ?? []).map((m) => ({ peerId: m.peerId }));
+    return (this.running?.hub.members.list() ?? []).map((m) => ({
+      peerId: m.peerId,
+      joinedAt: m.updatedAt,
+    }));
   }
 
   revoke(peerId: string): void {

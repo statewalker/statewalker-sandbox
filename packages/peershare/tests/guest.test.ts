@@ -17,7 +17,12 @@ import {
   StartSharing,
   StopSharing,
 } from "../src/public/commands.js";
-import { type GuestFetch, guestFetchSlot } from "../src/public/extension-points.js";
+import {
+  type GuestFetch,
+  guestFetchSlot,
+  type PeerShareModel,
+  peershareModelSlot,
+} from "../src/public/extension-points.js";
 import type { MeshInit } from "../src/public/mesh.js";
 import { meshFor, onMesh, startRelay } from "./mesh-harness.js";
 
@@ -171,5 +176,23 @@ describe("M5 — Dirk stops, and comes back after a reload", () => {
     }
     expect(status).toBe(200);
     expect(await claudia.call(GetGuest, undefined)).toMatchObject({ stage: "joined" });
+  });
+});
+
+describe("M5 — Dirk sees who joined", () => {
+  it("a Guest who joins appears in Dirk's model, without Dirk asking", async () => {
+    let model: PeerShareModel | undefined;
+    dirk.rt.slots.observe(peershareModelSlot, (v) => {
+      model = v[0];
+    })();
+    const before = model?.getSnapshot().guests.length ?? 0;
+
+    await guest().call(Join, { link: (await dirk.call(Invite, undefined)).url });
+
+    await expect
+      .poll(() => model?.getSnapshot().guests.length, { timeout: 5_000 })
+      .toBe(before + 1);
+    const joinedAt = model?.getSnapshot().guests.at(-1)?.joinedAt ?? 0;
+    expect(Math.abs(Date.now() - joinedAt)).toBeLessThan(60_000);
   });
 });

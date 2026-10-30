@@ -1,0 +1,3 @@
+@import "@statewalker/peershare-react/styles.css";
+@source "../node_modules/@statewalker/peershare-react/src/**/*.tsx";
+@source "./**/*.tsx";

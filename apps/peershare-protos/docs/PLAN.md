@@ -141,6 +141,17 @@ Refactoring happens in review, not in the loop. Each milestone ends runnable.
 | M8 | Ship | compiled Bridge per OS; `tools.sandclaw.ai` deploy; session domain from config; e2e (Playwright, two browsers + Bridge) | 14 |
 | M9 | Optional | WebSocket tunnel; cookie jar — each only if its spike says "cheap" | 15, 16 |
 
+### Status (2026-10-30)
+
+| M | Status | Where |
+|---|---|---|
+| M0–M1 | done | `packages/httpeers-share` (library + `./bridge`), `apps/peershare-bridge` (CLI, compiled binary), `packages/peershare` (Services through commands) |
+| M2–M5 | done | `packages/peershare`: the Sharer as hub, Invites, join/resume/close-session, Revoke, Stop and reload, on a real relay |
+| M6 | done | `peershare:model`, the browser mesh platform and IndexedDB stores (`@statewalker/peershare/browser`), Bridge pairing from the link |
+| M7 | done (standalone page) | `packages/peershare-react` (wired screens), `apps/peershare.page` with an end-to-end test in Chromium. Lazy loading inside SandClaw waits for the move to sandclaw (rung 13 proved it). |
+| M8 | open | Per-OS Bridge builds and signing; the deploy of the page, relay and session zone (see the session-zone note in `apps/peershare.page/README.md`) |
+| M9 | open | WebSocket tunnel (rung 15); cookie jars on by default (rung 16) |
+
 ## 5. Seams to confirm before the first red test
 
 Per the `tdd` discipline, no test is written at an unconfirmed seam. Proposed:
