@@ -44,4 +44,4 @@ grilled in three rounds. Every answer below accepted the recommended option.
 | 01 | Direct passed Guest-sent Bridge headers to the app | Bridge headers are stripped for every Upstream kind |
 | 02 | Browsers make `redirect: "manual"` responses opaque | The Bridge restates redirects as headers; Direct's redirects are open for rung 08 |
 | 02 | `localhost` may resolve to `::1` in browsers | The pairing URL uses `127.0.0.1`, not the draft's `localhost:9090` |
-| 02 | `*.localhost` and every DNS name are refused as targets | Only exact `localhost` and literal private addresses; **open:** Tailscale `100.64/10` and mDNS `.local` names |
+| 02 | `*.localhost` and every DNS name are refused as targets | Only exact `localhost`, literal private addresses including Tailscale `100.64/10`, and `.local` names whose every resolved address is private |

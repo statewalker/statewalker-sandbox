@@ -16,7 +16,7 @@ import {
   BRIDGE_TARGET_HEADER,
   BRIDGE_TOKEN_HEADER,
 } from "../../01-upstream-kinds/src/upstreams.js";
-import { isAllowedTarget } from "./targets.js";
+import { checkTarget, isPrivateAddress } from "./targets.js";
 
 export interface BridgeInit {
   /** The Pairing token generated at launch; nothing is answered without it. */
@@ -25,9 +25,17 @@ export interface BridgeInit {
   allowedOrigin: string;
   /** Injected by tests; defaults to the platform's. */
   fetchImpl?: typeof fetch;
+  /** Every address a `.local` name resolves to. Injected by tests; defaults to the OS resolver. */
+  resolveHost?: (name: string) => Promise<string[]>;
+}
+
+async function systemResolve(name: string): Promise<string[]> {
+  const { lookup } = await import("node:dns/promises");
+  return (await lookup(name, { all: true })).map((a) => a.address);
 }
 
 export function createBridge(init: BridgeInit): FetchHandler {
+  const resolveHost = init.resolveHost ?? systemResolve;
   return async (request) => {
     // A page on another site carries its own `Origin`. No `Origin` at all is
     // a local process (curl, the Probe's CLI): the token alone admits it.
@@ -50,7 +58,13 @@ export function createBridge(init: BridgeInit): FetchHandler {
     const target = request.headers.get(BRIDGE_TARGET_HEADER);
     if (target == null) return refuse(400, "no-target", origin);
     // The page passed both checks, so it may read WHY the target was refused.
-    if (!isAllowedTarget(target)) return refuse(403, "target-forbidden", origin);
+    const verdict = checkTarget(target);
+    if (verdict === "forbidden") return refuse(403, "target-forbidden", origin);
+    if (verdict !== "allowed") {
+      const addresses = await resolveHost(verdict.resolve).catch(() => []);
+      if (addresses.length === 0) return refuse(502, "target-unreachable", origin);
+      if (!addresses.every(isPrivateAddress)) return refuse(403, "target-forbidden", origin);
+    }
 
     // The same re-issuing the page itself does (rung 01): hop-by-hop headers
     // dropped, body streamed, redirects reported. The Bridge's own headers

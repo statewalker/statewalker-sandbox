@@ -168,11 +168,59 @@ describe("02 — where the Bridge relays", () => {
       reached.push(new URL(req.url).origin);
       return new Response("ok");
     }) as typeof fetch;
+    // The resolver is the other network boundary: `.local` names resolve
+    // to whatever this table says, as mDNS on the Sharer's LAN would.
+    const resolveHost = async (name: string) => MDNS[name] ?? [];
     const b = await listenLoopback(
-      createBridge({ token: TOKEN, allowedOrigin: PEERSHARE, fetchImpl }),
+      createBridge({ token: TOKEN, allowedOrigin: PEERSHARE, fetchImpl, resolveHost }),
     );
     return { b, reached };
   }
+
+  const MDNS: Record<string, string[]> = {
+    "nas.local": ["192.168.1.30"],
+    "rebound.local": ["192.168.1.31", "8.8.8.8"], // one public answer is enough to refuse
+    "public.local": ["93.184.216.34"],
+  };
+
+  it.each(["http://rebound.local", "http://public.local"])(
+    "refuses %s: a .local name that resolves to a public address",
+    async (target) => {
+      const { b, reached } = await recordingBridge();
+      try {
+        const res = await fetch(`${b.origin}/`, {
+          headers: {
+            origin: PEERSHARE,
+            [BRIDGE_TARGET_HEADER]: target,
+            [BRIDGE_TOKEN_HEADER]: TOKEN,
+          },
+        });
+        expect(res.status).toBe(403);
+        expect(res.headers.get(BRIDGE_MARKER)).toBe("target-forbidden");
+        expect(reached).toEqual([]);
+      } finally {
+        await b.close();
+      }
+    },
+  );
+
+  it("reports a .local name that does not resolve as unreachable", async () => {
+    const { b, reached } = await recordingBridge();
+    try {
+      const res = await fetch(`${b.origin}/`, {
+        headers: {
+          origin: PEERSHARE,
+          [BRIDGE_TARGET_HEADER]: "http://gone.local",
+          [BRIDGE_TOKEN_HEADER]: TOKEN,
+        },
+      });
+      expect(res.status).toBe(502);
+      expect(res.headers.get(BRIDGE_MARKER)).toBe("target-unreachable");
+      expect(reached).toEqual([]);
+    } finally {
+      await b.close();
+    }
+  });
 
   const FORBIDDEN = [
     "http://8.8.8.8", // a public address
@@ -181,7 +229,7 @@ describe("02 — where the Bridge relays", () => {
     "http://169.254.169.254", // link-local: cloud metadata
     "http://[fe80::1]", // IPv6 link-local
     "http://0.0.0.0:8080", // "any interface", reaches loopback by accident on some systems
-    "http://100.64.0.1", // carrier-grade NAT, not the Sharer's LAN
+    "http://100.128.0.1", // just past carrier-grade NAT (100.64/10)
     "file:///etc/passwd", // not HTTP at all
   ];
 
@@ -212,6 +260,9 @@ describe("02 — where the Bridge relays", () => {
     "http://172.16.4.2:8080",
     "http://192.168.1.20:8000",
     "http://[fd12:3456::1]:80", // IPv6 unique-local
+    "http://100.64.0.1:8080", // Tailscale / carrier-grade NAT (100.64/10)
+    "http://100.101.102.103",
+    "http://nas.local:8000", // mDNS: resolved first, see `resolveHost` below
   ];
 
   it.each(ALLOWED)("relays to %s", async (target) => {

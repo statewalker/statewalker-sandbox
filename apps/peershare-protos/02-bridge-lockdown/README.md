@@ -13,18 +13,20 @@ real port, and the same handler runs under Node (tests) and Bun (`main.ts`).
 | 2 | Any `Origin` other than the PeerShare page → 403, no CORS headers | Other websites, even ones that somehow got the token |
 | 3 | No Pairing token → 401, no CORS headers. The token is 32 random bytes, new each launch, compared in constant time | Websites guessing at loopback ports |
 | 4 | Preflight: granted to the PeerShare origin only, echoing the requested method and headers, plus `Access-Control-Allow-Private-Network` | Nothing extra; a preflight cannot carry the token, so the origin check is its only guard |
-| 5 | Relay only to `localhost`, `127/8`, `10/8`, `172.16/12`, `192.168/16`, `::1` and `fc00::/7`; refuse every other address, every DNS name, and non-HTTP schemes | The Bridge as an open proxy into the internet or cloud metadata, and DNS rebinding |
+| 5 | Relay only to `localhost`, `127/8`, `10/8`, `172.16/12`, `192.168/16`, `100.64/10` (Tailscale), `::1` and `fc00::/7`, and to `.local` names whose every resolved address is one of those; refuse every other address, every other DNS name, and non-HTTP schemes | The Bridge as an open proxy into the internet or cloud metadata, and DNS rebinding |
 | 6 | Replace the Service's own CORS headers with a grant for the one origin | A dev server's `Access-Control-Allow-Origin: *` + credentials leaking through the relay |
 
 ## Measured, 2026-10-30 (Node 22 and Bun 1.4.4)
 
-30 tests at the port, plus 11 from rung 01:
+36 tests at the port, plus 11 from rung 01:
 
 - **Refuses:** no token; a foreign origin; a foreign preflight; `8.8.8.8`,
   `example.com`, `dev.localhost`, `169.254.169.254`, `[fe80::1]`, `0.0.0.0`,
-  `100.64.0.1`, `file:`.
+  `100.128.0.1`, `file:`, and `.local` names resolving to any public address.
 - **Relays to:** `localhost`, `127.0.0.1`, `[::1]`, `10.0.0.5`, `172.16.4.2`,
-  `192.168.1.20`, `[fd12:3456::1]`.
+  `192.168.1.20`, `[fd12:3456::1]`, `100.64.0.1`, `100.101.102.103`, `nas.local`
+  (resolving to `192.168.1.30`). A `.local` name that does not resolve is reported as
+  `target-unreachable`.
 - **Rung 01's bridged upstream against this Bridge:** reaches the Service; tells
   "Service down" from "Bridge down"; turns redirects back into real redirects; a POST
   arrives whole; live responses stream.
@@ -62,12 +64,15 @@ relay, a `0.0.0.0` bind, and removing the CORS replacement.
 6. **A request with no `Origin`** (curl, a local script) is admitted by the token alone
    and gets no CORS headers. Browsers always send `Origin` on these requests.
 
-## Decisions this rung needs from you
+## Decided after the rung
 
-- **Tailscale / CGNAT (`100.64/10`) is refused by default.** Should a Sharer be able
-  to share a service on their tailnet?
-- **mDNS names (`nas.local`) are refused,** like every DNS name; the Sharer types the
-  IP instead. Acceptable?
+- **Tailscale / CGNAT (`100.64/10`) is allowed.**
+- **mDNS `.local` names are allowed, after resolving.** The Bridge resolves the name
+  and relays only if every address returned is private. One public answer refuses
+  it, because some company networks serve `.local` from ordinary DNS. What remains:
+  `fetch` resolves the name again when connecting, so someone who already controls
+  mDNS on the Sharer's LAN could change the answer between the check and the
+  connection. Accepted for v1.
 
 ## Not answered here
 
