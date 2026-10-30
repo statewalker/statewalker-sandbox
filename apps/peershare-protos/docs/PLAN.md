@@ -143,6 +143,11 @@ Refactoring happens in review, not in the loop. Each milestone ends runnable.
 
 ### Status (2026-10-30)
 
+The application now lives in `statewalker/httpeers` (`packages/httpeers-share`,
+`apps/peershare-bridge`) and `statewalker/sandclaw` (`apps/peershare.share`,
+`apps/peershare.share-react`, `apps/peershare.app`); the paths below are where each was
+built in this sandbox first.
+
 | M | Status | Where |
 |---|---|---|
 | M0–M1 | done | `packages/httpeers-share` (library + `./bridge`), `apps/peershare-bridge` (CLI, compiled binary), `packages/peershare` (Services through commands) |
