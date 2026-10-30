@@ -1,0 +1,41 @@
+{
+  "name": "@statewalker/peershare",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PeerShare's logic: share local HTTP services with invited Guests over an httpeers mesh, as a Feature of the SandClaw suite.",
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/packages/peershare#readme",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "packages/peershare"
+  },
+  "main": "src/public/index.ts",
+  "exports": {
+    ".": "./src/public/index.ts"
+  },
+  "files": [
+    "src/**"
+  ],
+  "scripts": {
+    "test": "pnpm run typecheck:tests && vitest run",
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit"
+  },
+  "dependencies": {
+    "@statewalker/httpeers-share": "workspace:^",
+    "@statewalker/shared-commands": "catalog:",
+    "@statewalker/shared-slots": "catalog:",
+    "@statewalker/webrun-http-proxy": "catalog:"
+  },
+  "devDependencies": {
+    "@hono/node-server": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

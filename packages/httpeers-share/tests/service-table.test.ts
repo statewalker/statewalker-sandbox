@@ -42,3 +42,17 @@ describe("serviceTable", () => {
     expect(await res.text()).not.toContain("<b>");
   });
 });
+
+describe("serviceTable, the Sharer's name", () => {
+  it("is read per request when given as a function", async () => {
+    let name = "";
+    const t = serviceTable(
+      () => [{ id: "foo", name: "foo", upstream: answering("x"), enabled: false, isDefault: true }],
+      { sharerName: () => name },
+    );
+    name = "Dirk";
+    expect(await (await t(new Request("http://sharer/s/foo/"))).text()).toContain(
+      "Dirk paused foo",
+    );
+  });
+});

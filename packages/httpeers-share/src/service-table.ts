@@ -31,12 +31,17 @@ export const SERVICE_MARKER = "x-peershare-service";
 
 export function serviceTable(
   services: () => readonly ServiceEntry[],
-  opts: { sharerName?: string } = {},
+  /** `sharerName` may be a function: read per request, so a name set later shows. */
+  opts: { sharerName?: string | (() => string) } = {},
 ): FetchHandler {
-  const sharer = opts.sharerName ?? "The Sharer";
+  const nameOf =
+    typeof opts.sharerName === "function"
+      ? opts.sharerName
+      : () => opts.sharerName as string | undefined;
   const router = shareRouter({ services: () => services().filter((s) => s.enabled) });
 
   return async (request) => {
+    const sharer = nameOf() || "The Sharer";
     const { pathname } = new URL(request.url);
     if (pathname === "/s/" || pathname === "/s") {
       const catalog: CatalogEntry[] = [...services()]
