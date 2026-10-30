@@ -6,7 +6,7 @@ The **PeerShare prototype ladder and plan**. PeerShare is a SandClaw app: *"I ha
 local HTTP service which I want to securely share to invited peers."* It is built on
 [HTTPeers](https://github.com/statewalker/httpeers).
 
-Status: **plan only**. No rung is implemented yet. The design was settled in a
+Status: **rung 01 answered** ([01-upstream-kinds](01-upstream-kinds/README.md)); the rest are planned. The design was settled in a
 grilling session (three rounds); the record is in [docs/decisions.md](docs/decisions.md).
 
 | File | What it holds |
@@ -16,7 +16,16 @@ grilling session (three rounds); the record is in [docs/decisions.md](docs/decis
 | [GLOSSARY.md](GLOSSARY.md) | The domain words: Sharer, Guest, Service, Upstream, Bridge, Invite, Viewer… |
 | [docs/adr/](docs/adr/) | The three decisions that are hard to reverse |
 
-## Layout (once rungs exist)
+## How to run it
+
+```bash
+pnpm install          # at the repo root
+pnpm test             # in this folder: every rung
+pnpm test 01-upstream-kinds
+pnpm typecheck
+```
+
+## Layout
 
 Same shape as [`httpeers-shell-protos`](../httpeers-shell-protos) and
 [`httpeers-lib-protos`](../httpeers-lib-protos): each rung is a folder
