@@ -11,6 +11,13 @@ export const BRIDGE_TARGET_HEADER = "x-peershare-target";
 export const BRIDGE_TOKEN_HEADER = "x-peershare-bridge-token";
 /** Marks the Bridge's own responses, so they are never mistaken for the Service's. */
 export const BRIDGE_MARKER = "x-peershare-bridge";
+/**
+ * A Service's redirect, restated by the Bridge as a 200 with these two
+ * headers: a browser makes every `redirect: "manual"` 3xx opaque (status 0,
+ * no `Location`), so a real 3xx would reach the page with nothing in it.
+ */
+export const BRIDGE_REDIRECT_STATUS_HEADER = "x-peershare-redirect-status";
+export const BRIDGE_REDIRECT_LOCATION_HEADER = "x-peershare-redirect-location";
 
 export type UpstreamConfig =
   | { kind: "direct"; target: string }
@@ -39,6 +46,15 @@ export function createUpstream(config: UpstreamConfig): Upstream {
   });
   return async (request) => {
     const response = await viaBridge(request);
+    const redirect = response.headers.get(BRIDGE_REDIRECT_STATUS_HEADER);
+    if (redirect != null) {
+      // Back to a real redirect for the Guest (see BRIDGE_REDIRECT_STATUS_HEADER).
+      const headers = new Headers(response.headers);
+      headers.set("location", headers.get(BRIDGE_REDIRECT_LOCATION_HEADER) ?? "/");
+      headers.delete(BRIDGE_REDIRECT_STATUS_HEADER);
+      headers.delete(BRIDGE_REDIRECT_LOCATION_HEADER);
+      return new Response(null, { status: Number(redirect), headers });
+    }
     // To `urlUpstream` the Bridge IS the upstream, so its "unreachable" means
     // the Bridge is not running, not that the Service is down.
     if (response.headers.get(MARKER) !== "upstream-unreachable") return response;

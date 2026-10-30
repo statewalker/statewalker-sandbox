@@ -35,7 +35,10 @@ unreachable(response): "service" | "bridge" | undefined
      and `x-peershare-bridge-token` (the Pairing token); the Bridge consumes both;
    - response marker `x-peershare-bridge`: `relayed` on every relayed response,
      `target-unreachable` when the Service did not answer. The page adds
-     `bridge-unreachable` itself when the Bridge did not answer.
+     `bridge-unreachable` itself when the Bridge did not answer;
+   - added by rung 02: a Service's redirect arrives as a 200 with
+     `x-peershare-redirect-status` and `x-peershare-redirect-location`, which the
+     bridged upstream turns back into a real 3xx (browsers make manual redirects opaque).
 2. **Direct leaked the Bridge headers.** A Guest could send `x-peershare-target` and
    `x-peershare-bridge-token` through a Direct upstream straight to the app. Both are
    now stripped for every kind, together with `MESH_CREDENTIAL_HEADERS`. Bridged was

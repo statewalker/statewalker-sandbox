@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@hono/node-server": "catalog:",
     "@statewalker/httpeers-core": "catalog:",
     "@statewalker/webrun-http-proxy": "catalog:",
     "hono": "catalog:"

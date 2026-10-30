@@ -36,3 +36,12 @@ grilled in three rounds. Every answer below accepted the recommended option.
 | 3.5 | What "Test again" checks | `GET /` through the same Upstream Guests use → Health (ok/slow/down/disabled/checking) + warnings (CORS missing with fix steps, WebSockets needed, cookies set). |
 | 3.6 | Bridge packaging | Prototypes: `bun run bridge.ts --port 9090`. Compiled, signed installers are the last milestone. |
 | 3.7 | Where code lives | Everything on this branch of `statewalker-sandbox` until approved; then libraries → `httpeers`, app packages and stories → `sandclaw`. |
+
+## Found while prototyping
+
+| Rung | Finding | Effect on the design |
+|---|---|---|
+| 01 | Direct passed Guest-sent Bridge headers to the app | Bridge headers are stripped for every Upstream kind |
+| 02 | Browsers make `redirect: "manual"` responses opaque | The Bridge restates redirects as headers; Direct's redirects are open for rung 08 |
+| 02 | `localhost` may resolve to `::1` in browsers | The pairing URL uses `127.0.0.1`, not the draft's `localhost:9090` |
+| 02 | `*.localhost` and every DNS name are refused as targets | Only exact `localhost` and literal private addresses; **open:** Tailscale `100.64/10` and mDNS `.local` names |

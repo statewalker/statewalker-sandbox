@@ -1123,6 +1123,9 @@ importers:
 
   apps/peershare-protos:
     dependencies:
+      '@hono/node-server':
+        specifier: 'catalog:'
+        version: 2.1.3(hono@4.13.13)
       '@statewalker/httpeers-core':
         specifier: 'catalog:'
         version: 0.1.3

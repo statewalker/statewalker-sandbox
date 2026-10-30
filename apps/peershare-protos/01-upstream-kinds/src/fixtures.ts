@@ -41,6 +41,29 @@ export function startService(): Promise<Running> {
       return;
     }
 
+    if (url.pathname === "/cors-star") {
+      // A dev server's typical "allow everything" policy.
+      res.writeHead(200, {
+        "access-control-allow-origin": "*",
+        "access-control-allow-credentials": "true",
+        "access-control-allow-headers": "*",
+      });
+      res.end("open to all");
+      return;
+    }
+
+    if (url.pathname.startsWith("/redirect-")) {
+      // `/redirect-self` → this Service's own `/echo/landed`, absolute, as most
+      // frameworks write it; `/redirect-away` → somewhere else entirely.
+      const location =
+        url.pathname === "/redirect-self"
+          ? `http://${req.headers.host}/echo/landed?from=redirect`
+          : "https://accounts.example/login";
+      res.writeHead(302, { location });
+      res.end();
+      return;
+    }
+
     if (url.pathname === "/stream") {
       // The second chunk is written only after the first was READ by the
       // test, so a relay that buffers deadlocks instead of passing by luck.
