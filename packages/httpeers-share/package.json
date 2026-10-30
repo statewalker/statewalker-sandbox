@@ -34,11 +34,13 @@
     "@statewalker/httpeers-hub": "catalog:",
     "@statewalker/httpeers-member": "catalog:",
     "@statewalker/webrun-http-proxy": "catalog:",
-    "hono": "catalog:"
+    "hono": "catalog:",
+    "ws": "catalog:"
   },
   "devDependencies": {
     "@statewalker/httpeers-qr": "catalog:",
     "@types/node": "catalog:",
+    "@types/ws": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

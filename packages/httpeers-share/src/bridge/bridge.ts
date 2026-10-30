@@ -20,6 +20,7 @@ import {
   BRIDGE_TARGET_HEADER,
   BRIDGE_TOKEN_HEADER,
 } from "../upstreams.js";
+import { type SocketGate, socketGate } from "./sockets.js";
 
 export interface BridgeInit {
   /** The Pairing token generated at launch; nothing is answered without it. */
@@ -39,15 +40,31 @@ export interface BridgeInit {
   cookieJars?: boolean;
 }
 
-async function systemResolve(name: string): Promise<string[]> {
+/** Whether the Bridge may relay to `target` (rung 02 rules): `ok`, `forbidden` or `unreachable`. */
+export async function reachable(
+  target: string,
+  resolveHost: (name: string) => Promise<string[]>,
+): Promise<"ok" | "forbidden" | "unreachable"> {
+  const verdict = checkTarget(target);
+  if (verdict === "forbidden") return "forbidden";
+  if (verdict === "allowed") return "ok";
+  const addresses = await resolveHost(verdict.resolve).catch(() => []);
+  if (addresses.length === 0) return "unreachable";
+  return addresses.every(isPrivateAddress) ? "ok" : "forbidden";
+}
+
+export async function systemResolve(name: string): Promise<string[]> {
   const { lookup } = await import("node:dns/promises");
   return (await lookup(name, { all: true })).map((a) => a.address);
 }
 
-export function createBridge(init: BridgeInit): FetchHandler {
+/** The Bridge's HTTP handler, carrying its WebSocket gate for whichever server hosts it. */
+export type BridgeHandler = FetchHandler & { sockets: SocketGate };
+
+export function createBridge(init: BridgeInit): BridgeHandler {
   const resolveHost = init.resolveHost ?? systemResolve;
   const jars = new Map<string, Map<string, string>>();
-  return async (incoming) => {
+  const handler: FetchHandler = async (incoming) => {
     const guest = init.cookieJars === true ? incoming.headers.get(BRIDGE_GUEST_HEADER) : null;
     const jar =
       guest == null ? undefined : (jars.get(guest) ?? jars.set(guest, new Map()).get(guest));
@@ -79,13 +96,8 @@ export function createBridge(init: BridgeInit): FetchHandler {
       return new Response(JSON.stringify({ bridge: "peershare" }), { headers });
     }
     // The page passed both checks, so it may read WHY the target was refused.
-    const verdict = checkTarget(target);
-    if (verdict === "forbidden") return refuse(403, "target-forbidden", origin);
-    if (verdict !== "allowed") {
-      const addresses = await resolveHost(verdict.resolve).catch(() => []);
-      if (addresses.length === 0) return refuse(502, "target-unreachable", origin);
-      if (!addresses.every(isPrivateAddress)) return refuse(403, "target-forbidden", origin);
-    }
+    const reach = await reachable(target, resolveHost);
+    if (reach !== "ok") return refuse(reach === "forbidden" ? 403 : 502, `target-${reach}`, origin);
 
     // The same re-issuing the page itself does (rung 01): hop-by-hop headers
     // dropped, body streamed, redirects reported. The Bridge's own headers
@@ -127,6 +139,7 @@ export function createBridge(init: BridgeInit): FetchHandler {
     if (origin != null) grantTo(headers, origin);
     return new Response(response.body, { status: response.status, headers });
   };
+  return Object.assign(handler, { sockets: socketGate(init, resolveHost) });
 }
 
 /**
@@ -181,7 +194,7 @@ function refuse(status: number, reason: string, grantToOrigin?: string | null): 
   return new Response(null, { status, headers });
 }
 
-function sameSecret(given: string | null, expected: string): boolean {
+export function sameSecret(given: string | null, expected: string): boolean {
   if (given == null) return false;
   const a = new TextEncoder().encode(given);
   const b = new TextEncoder().encode(expected);

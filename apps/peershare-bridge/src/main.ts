@@ -7,16 +7,36 @@
 
 import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
-import { createBridge } from "@statewalker/httpeers-share/bridge";
+import {
+  createBridge,
+  relaySocket,
+  SOCKET_PATH,
+  type SocketPlan,
+} from "@statewalker/httpeers-share/bridge";
 
+/** The slice of Bun's server API the Bridge uses (no `bun-types` needed). */
+interface BunSocket {
+  data: { plan: SocketPlan; relay?: ReturnType<typeof relaySocket> };
+  send(data: string | ArrayBuffer | Uint8Array): void;
+  close(code?: number, reason?: string): void;
+}
 interface BunServer {
   port: number;
+  upgrade(
+    request: Request,
+    init: { headers: Record<string, string>; data: BunSocket["data"] },
+  ): boolean;
 }
 declare const Bun: {
   serve(init: {
     hostname: string;
     port: number;
-    fetch: (request: Request) => Promise<Response>;
+    fetch: (request: Request, server: BunServer) => Promise<Response | undefined>;
+    websocket: {
+      open(ws: BunSocket): void;
+      message(ws: BunSocket, message: string | Uint8Array): void;
+      close(ws: BunSocket, code: number, reason: string): void;
+    };
   }): BunServer;
 };
 
@@ -34,12 +54,48 @@ const { values } = parseArgs({
 const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
 const origin = values.origin;
 
+const bridge = createBridge({
+  token,
+  allowedOrigin: origin,
+  cookieJars: !values["no-cookie-jars"],
+});
+
 const server = Bun.serve({
   // IPv4 loopback only. The printed URL says 127.0.0.1, never `localhost`,
   // which a browser may try as ::1 first and find nothing there.
   hostname: "127.0.0.1",
   port: Number(values.port),
-  fetch: createBridge({ token, allowedOrigin: origin, cookieJars: !values["no-cookie-jars"] }),
+  async fetch(request, srv) {
+    const url = new URL(request.url);
+    if (
+      url.pathname !== SOCKET_PATH ||
+      request.headers.get("upgrade")?.toLowerCase() !== "websocket"
+    ) {
+      return bridge(request);
+    }
+    // A WebSocket for the app (M9): the same guards as HTTP.
+    const verdict = await bridge.sockets(url, request.headers);
+    if (!verdict.ok) return new Response(null, { status: verdict.status });
+    const upgraded = srv.upgrade(request, {
+      headers: { "sec-websocket-protocol": verdict.plan.accept },
+      data: { plan: verdict.plan },
+    });
+    return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
+  },
+  websocket: {
+    open(ws) {
+      ws.data.relay = relaySocket(
+        { send: (data) => ws.send(data), close: (code, reason) => ws.close(code, reason) },
+        ws.data.plan,
+      );
+    },
+    message(ws, message) {
+      ws.data.relay?.message(typeof message === "string" ? message : message.slice().buffer);
+    },
+    close(ws, code, reason) {
+      ws.data.relay?.close(code, reason);
+    },
+  },
 });
 
 const localUrl = `http://127.0.0.1:${server.port}`;

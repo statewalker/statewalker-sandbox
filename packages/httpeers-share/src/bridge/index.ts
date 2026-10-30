@@ -3,5 +3,13 @@
  * PeerShare page to the Sharer's local Services, with per-Guest cookie jars.
  */
 
-export { type BridgeInit, createBridge } from "./bridge.js";
+export { type BridgeHandler, type BridgeInit, createBridge } from "./bridge.js";
 export { type Listening, listenLoopback } from "./serve.js";
+export {
+  type InboundSocket,
+  relaySocket,
+  SOCKET_PATH,
+  type SocketGate,
+  type SocketPlan,
+  TOKEN_PROTOCOL_PREFIX,
+} from "./sockets.js";

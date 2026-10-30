@@ -68,6 +68,28 @@ describe.skipIf(!hasBun())("02 — the Bridge under Bun", () => {
   });
 });
 
+describe.skipIf(!hasBun())("the Bridge program, WebSockets (M9)", () => {
+  it("relays a WebSocket to the app, under Bun", async () => {
+    child?.kill();
+    const url = await launch();
+    const fragment = new URLSearchParams(url.hash.slice(1));
+    const q = new URLSearchParams({ target: `${service.origin}/live` });
+    const { WebSocket: WS } = await import("ws");
+    const ws = new WS(
+      `${fragment.get("localUrl")?.replace("http:", "ws:")}/.peershare/socket?${q}`,
+      [`peershare.${fragment.get("t")}`],
+      { origin: PEERSHARE },
+    );
+    const reply = await new Promise<string>((resolve, reject) => {
+      ws.on("open", () => ws.send("ping"));
+      ws.on("message", (data) => resolve(String(data)));
+      ws.on("error", reject);
+    });
+    expect(reply).toBe("echo ping");
+    ws.close();
+  });
+});
+
 describe.skipIf(!hasBun())("the Bridge program, defaults", () => {
   it("keeps each Guest's cookies (M9): a login survives to that Guest's next request", async () => {
     child?.kill();
