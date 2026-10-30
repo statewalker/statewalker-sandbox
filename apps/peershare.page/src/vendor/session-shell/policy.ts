@@ -21,10 +21,17 @@
  */
 
 /** The zone every session lives under. One wildcard certificate covers it. */
-export const SESSION_ZONE = "p.httpeers.net";
+// PEERSHARE EDIT: both zones are build-time settings (`define` in the build),
+// so the same shell serves a deployment's own zone (e.g. `p.sandclaw.ai`
+// under `sandclaw.ai`). Defaults: httpeers' own.
+declare const __PEERSHARE_SESSION_ZONE__: string | undefined;
+declare const __PEERSHARE_PARENT_ZONE__: string | undefined;
+export const SESSION_ZONE =
+  typeof __PEERSHARE_SESSION_ZONE__ === "string" ? __PEERSHARE_SESSION_ZONE__ : "p.httpeers.net";
 
 /** The registrable domain the ghost apps are published on. */
-export const GHOST_ZONE = "httpeers.net";
+export const GHOST_ZONE =
+  typeof __PEERSHARE_PARENT_ZONE__ === "string" ? __PEERSHARE_PARENT_ZONE__ : "httpeers.net";
 
 /** The page a ghost app frames to connect. The user-facing URL of the contract. */
 export const RELAY_PATH = "/relay.html";
@@ -227,7 +234,7 @@ export function isShellPath(pathname: string): boolean {
 export function frameAncestorsFor(hostname: string): string {
   // PEERSHARE-PROTOS EDIT: an https viewer on 127.0.0.1 (the public-page stand-in) too.
   return isLocalHost(hostname)
-    ? `'self' http://localhost:* http://127.0.0.1:* https://127.0.0.1:*`
+    ? `'self' http://localhost:* http://127.0.0.1:* https://127.0.0.1:* https://*.localhost:*`
     : FRAME_ANCESTORS;
 }
 

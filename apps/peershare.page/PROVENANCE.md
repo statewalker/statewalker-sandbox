@@ -17,3 +17,14 @@ The third is in `client.ts`, and is type-only: a tuple cast so the sandbox's
 
 Production behaviour (`*.p.httpeers.net`, `*.httpeers.net` parents) is unchanged. The
 folder is excluded from Biome, so its formatting stays as upstream wrote it.
+
+## Edits made for the PeerShare page (in addition to the three above)
+
+4. `policy.ts`: `SESSION_ZONE` and `GHOST_ZONE` (the zone parents may live in) are read
+   from the build-time constants `__PEERSHARE_SESSION_ZONE__` and
+   `__PEERSHARE_PARENT_ZONE__`, defaulting to httpeers' own. That lets one shell serve a
+   deployment's own zone, such as `p.sandclaw.ai` under `sandclaw.ai`
+   (`deploy/peershare`).
+5. `policy.ts`, local only: `frameAncestorsFor` also allows `https://*.localhost:*`, so a
+   page on `peershare.localhost` can frame `*.p.localhost` sessions in the deploy smoke
+   test.

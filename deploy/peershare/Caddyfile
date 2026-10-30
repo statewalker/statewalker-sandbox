@@ -1,0 +1,38 @@
+# PeerShare: the page, and the session zone its Guests' Services open in.
+#
+# TLS is a setting: in production `{$TLS}` names the ACME issuer (with a DNS
+# provider for the wildcard), in the smoke test a certificate and key file.
+
+{$PAGE_HOST} {
+	tls {$TLS}
+
+	handle /peershare.json {
+		header Cache-Control no-store
+		root * /srv/config
+		file_server
+	}
+	# Every route is the one page: /peer-share, /peer-share/invite.
+	handle {
+		root * /srv/page
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# Every session name serves the same shell; the name only makes an origin.
+*.{$SESSION_ZONE} {
+	tls {$TLS}
+
+	root * /srv/shell
+	@shell path /relay.html /relay-sw.js /_shell/*
+	handle @shell {
+		header /relay-sw.js Cache-Control no-store
+		file_server
+	}
+	# With a session connected, the worker answers everything else; without
+	# one, the network shows the empty-session page.
+	handle {
+		rewrite * /index.html
+		file_server
+	}
+}

@@ -149,8 +149,8 @@ Refactoring happens in review, not in the loop. Each milestone ends runnable.
 | M2–M5 | done | `packages/peershare`: the Sharer as hub, Invites, join/resume/close-session, Revoke, Stop and reload, on a real relay |
 | M6 | done | `peershare:model`, the browser mesh platform and IndexedDB stores (`@statewalker/peershare/browser`), Bridge pairing from the link |
 | M7 | done (standalone page) | `packages/peershare-react` (wired screens), `apps/peershare.page` with an end-to-end test in Chromium. Lazy loading inside SandClaw waits for the move to sandclaw (rung 13 proved it). |
-| M8 | open | Per-OS Bridge builds and signing; the deploy of the page, relay and session zone (see the session-zone note in `apps/peershare.page/README.md`) |
-| M9 | open | WebSocket tunnel (rung 15); cookie jars on by default (rung 16) |
+| M8 | done, except signing and the zone choice | Bridge for 5 platforms (`apps/peershare-bridge`, `compile:all`); `deploy/peershare` (Caddy: page + session zone; httpeers' relay), smoke-tested with Docker Compose through the whole scenario. Signing needs the publisher's certificates; the zone is decision 2.8 |
+| M9 | cookie jars done; WebSocket tunnel open | Jars on by default in the Bridge program; the tunnel: see rung 15 |
 
 ## 5. Seams to confirm before the first red test
 
