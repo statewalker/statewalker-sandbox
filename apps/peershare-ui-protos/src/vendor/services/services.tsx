@@ -61,7 +61,7 @@ export interface ServicesProps {
   now?: Date;
 }
 
-const healthWords: Record<Health, string> = {
+export const healthWords: Record<Health, string> = {
   ok: "Working",
   slow: "Slow",
   down: "Not reachable",
@@ -79,7 +79,7 @@ const healthDot: Record<Health, string> = {
 
 const accessWords: Record<Access, string> = { everyone: "Everyone", admins: "Admins only" };
 
-function HealthTag({ health }: { health: Health }) {
+export function HealthTag({ health }: { health: Health }) {
   return (
     <span className="bg-secondary inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs">
       <span className={cn("size-2 rounded-full", healthDot[health])} />
@@ -214,7 +214,7 @@ function ServiceDetail({
   );
 }
 
-function Field({
+export function Field({
   id,
   label,
   hint,

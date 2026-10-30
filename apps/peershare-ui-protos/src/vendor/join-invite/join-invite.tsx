@@ -71,12 +71,12 @@ const promises = [
   },
 ];
 
-function Frame({ children }: { children: React.ReactNode }) {
+export function Frame({ children }: { children: React.ReactNode }) {
   return <Card className="w-full max-w-md">{children}</Card>;
 }
 
 /** Where the flow ends without joining: used, expired or declined — only the words differ. */
-function EndPage({ title, children }: { title: string; children: React.ReactNode }) {
+export function EndPage({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Frame>
       <CardHeader>

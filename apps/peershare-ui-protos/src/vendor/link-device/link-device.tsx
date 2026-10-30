@@ -196,7 +196,7 @@ function BigCode({ code }: { code: string }) {
 }
 
 /** A stand-in for the QR code: a fixed pattern, not a scannable code. */
-function QrPlaceholder() {
+export function QrPlaceholder() {
   const cells = Array.from({ length: 21 * 21 }, (_, i) => (i * 7919) % 13 < 6);
   return (
     <svg viewBox="0 0 21 21" className="mx-auto size-36" role="img" aria-label="QR code">
@@ -223,7 +223,7 @@ function QrPlaceholder() {
 }
 
 /** "valid 9:41", counting down to the window's end. */
-function Countdown({ expiresAt }: { expiresAt: Date }) {
+export function Countdown({ expiresAt }: { expiresAt: Date }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -237,7 +237,7 @@ function Countdown({ expiresAt }: { expiresAt: Date }) {
   );
 }
 
-function CopyLink({ link }: { link: string }) {
+export function CopyLink({ link }: { link: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="flex gap-2">

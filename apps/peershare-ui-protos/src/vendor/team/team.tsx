@@ -117,11 +117,11 @@ type Team = ReturnType<typeof useTeamState>;
 const TeamContext = createContext<Team | null>(null);
 const useTeam = () => useContext(TeamContext) as Team;
 
-function Badge({ children }: { children: ReactNode }) {
+export function Badge({ children }: { children: ReactNode }) {
   return <span className="bg-secondary rounded-md px-2 py-0.5 text-xs">{children}</span>;
 }
 
-function Dot({ online }: { online: boolean }) {
+export function Dot({ online }: { online: boolean }) {
   return (
     <span
       title={online ? "Online" : "Offline"}
@@ -150,7 +150,7 @@ function CopyButton({ text }: { text: string }) {
 }
 
 /** A destructive action behind a confirmation that says what will happen. */
-function Confirm({
+export function Confirm({
   trigger,
   title,
   children,
@@ -255,7 +255,7 @@ function Header() {
   );
 }
 
-function Choice<T extends string | number>({
+export function Choice<T extends string | number>({
   label,
   value,
   options,
