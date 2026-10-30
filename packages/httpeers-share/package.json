@@ -1,0 +1,45 @@
+{
+  "name": "@statewalker/httpeers-share",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Share HTTP services with the members of an httpeers mesh: upstream kinds, sharing policy, probe, service table, invite links.",
+  "bugs": {
+    "url": "https://github.com/statewalker/statewalker-sandbox/issues"
+  },
+  "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/packages/httpeers-share#readme",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "packages/httpeers-share"
+  },
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./bridge": "./src/bridge/index.ts"
+  },
+  "files": [
+    "src/**"
+  ],
+  "scripts": {
+    "test": "pnpm run typecheck:tests && vitest run",
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit",
+    "lint": "biome check --write ."
+  },
+  "dependencies": {
+    "@hono/node-server": "catalog:",
+    "@statewalker/httpeers-core": "catalog:",
+    "@statewalker/httpeers-hub": "catalog:",
+    "@statewalker/httpeers-member": "catalog:",
+    "@statewalker/webrun-http-proxy": "catalog:",
+    "hono": "catalog:"
+  },
+  "devDependencies": {
+    "@statewalker/httpeers-qr": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
