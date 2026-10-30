@@ -57,3 +57,10 @@ grilled in three rounds. Every answer below accepted the recommended option.
 | 03 | Way B to a plain-http LAN Service is mixed content | Direct passes `targetAddressSpace: "local"` for non-loopback http targets |
 | 04 | A missing CORS header fails like a dead server | For Direct, the Probe follows a failure with a `no-cors` request: an answer means `cors-missing` |
 | 04 | Page scripts never see `Set-Cookie` | The Bridge restates it as `x-peershare-set-cookie`; Direct cookies are undetectable |
+| 05 | The Sharer can be the hub with the published packages as they are | Sharer = `createHub` + `servePeer` + `/s` as `extraMounts`; `guest` role in PeerShare's rules |
+| 06 | httpeers' join blob travels in `?join=`, which servers log | The Invite carries the same blob in the fragment |
+| 07 | Hub advertisements are fixed at creation | One static advertisement; the live catalog is `GET /s/` |
+| 09 | Revocations were not enforced without `revocation: hub.revocations` | The Sharer's guard is given the registry |
+| 10 | Used and expired Invites are the same error | `joinOutcome` reads the hub's quoted answer; proposed a structured field for httpeers-member |
+| 11 | Relay-link Guests could not join; stock relays cap 128 KiB | `serveOnLimitedConnection: true`; PeerShare needs a relay with httpeers' limits |
+
