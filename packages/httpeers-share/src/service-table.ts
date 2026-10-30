@@ -10,11 +10,15 @@
 
 import type { FetchHandler, Upstream } from "@statewalker/webrun-http-proxy";
 import { shareRouter } from "./share-router.js";
+import { SOCKET_HEADER } from "./socket-frames.js";
+import { sharerSocket } from "./socket-tunnel.js";
 
 export interface ServiceEntry {
   id: string;
   name: string;
   upstream: Upstream;
+  /** The Service's WebSocket at `path` (M9); without it, sockets are refused. */
+  socket?: (path: string, protocols: string[]) => WebSocket;
   enabled: boolean;
   isDefault: boolean;
 }
@@ -57,6 +61,17 @@ export function serviceTable(
         503,
         "paused",
         `${sharer} paused ${service.name}. It is back when ${sharer} turns it on again.`,
+      );
+    }
+    const protocols = request.headers.get(SOCKET_HEADER);
+    if (protocols != null) {
+      if (service.socket == null)
+        return own(501, "no-socket", `${service.name} cannot carry live connections.`);
+      const url = new URL(request.url);
+      const rest = url.pathname.slice(`/s/${id}`.length) || "/";
+      const open = service.socket;
+      return sharerSocket(request, () =>
+        open(`${rest}${url.search}`, protocols.split(",").filter(Boolean)),
       );
     }
     return router(request);

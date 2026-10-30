@@ -29,6 +29,7 @@ import {
 } from "./commands.js";
 import {
   guestFetchSlot,
+  guestSocketSlot,
   peershareModelSlot,
   sharerMountSlot,
   type UpstreamKind,
@@ -168,6 +169,9 @@ function guestCommands(rt: AppRuntime, guest: GuestManager): Array<() => void> {
     rt.slots.provide(guestFetchSlot, (serviceId, request) =>
       guest.fetchService(serviceId, request),
     ),
+    rt.slots.provide(guestSocketSlot, (serviceId, path, protocols) =>
+      guest.openSocket(serviceId, path, protocols),
+    ),
     // Closing the tab is not Close session: the identity stays.
     () => void guest.leave(),
   ];
@@ -180,6 +184,20 @@ function builtInKinds(init: PeerShareInit): UpstreamKind[] {
       id: "bridged",
       label: "On this computer or network (through the Bridge)",
       check: (target) => checkServiceTarget("bridged", target),
+      socket: (target, path, protocols) => {
+        const bridge = init.bridge?.();
+        if (bridge == null) throw new Error("The Bridge is not paired.");
+        // The token travels as a subprotocol: a browser cannot set headers on a WebSocket.
+        const q = new URLSearchParams({
+          target: `${target.replace(/\/$/, "")}${path}`,
+          protocols: protocols.join(","),
+        });
+        // The app's own subprotocols are offered too, so the Bridge can hand back the one the app chose.
+        return new WebSocket(`${bridge.base.replace(/^http/, "ws")}/.peershare/socket?${q}`, [
+          `peershare.${bridge.token}`,
+          ...protocols,
+        ]);
+      },
       create: (target) => async (request) => {
         // Read per request: the Bridge may be paired, or re-paired, later.
         const bridge = init.bridge?.();
@@ -198,6 +216,9 @@ function builtInKinds(init: PeerShareInit): UpstreamKind[] {
       label: "A website (https, with CORS)",
       check: (target) => checkServiceTarget("direct", target),
       create: (target) => createUpstream({ kind: "direct", target }),
+      // WebSockets are not subject to CORS: the Sharer's tab opens the site's own.
+      socket: (target, path, protocols) =>
+        new WebSocket(`${target.replace(/^http/, "ws").replace(/\/$/, "")}${path}`, protocols),
     },
   ];
 }

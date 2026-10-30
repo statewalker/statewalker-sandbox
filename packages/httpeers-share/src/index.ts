@@ -30,6 +30,8 @@ export {
   type ServiceEntry,
   serviceTable,
 } from "./service-table.js";
+export { decodeFrames, encodeFrame, SOCKET_HEADER, type SocketFrame } from "./socket-frames.js";
+export { openTunnel, sharerSocket, TunnelSocket } from "./socket-tunnel.js";
 export { stampGuest } from "./stamp-guest.js";
 export { checkTarget, isPrivateAddress, type TargetVerdict } from "./targets.js";
 export {

@@ -6,6 +6,8 @@
 export { type BridgeHandler, type BridgeInit, createBridge } from "./bridge.js";
 export { type Listening, listenLoopback } from "./serve.js";
 export {
+  acceptedProtocol,
+  connectApp,
   type InboundSocket,
   relaySocket,
   SOCKET_PATH,

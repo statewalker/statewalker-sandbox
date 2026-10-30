@@ -131,6 +131,11 @@ export class SharerManager {
       enabled: s.enabled,
       isDefault: s.isDefault,
       upstream: this.upstreamOf(s),
+      socket: (path: string, protocols: string[]) => {
+        const kind = this.kinds().get(s.kind);
+        if (kind?.socket == null) throw new Error(`${s.kind} cannot carry live connections`);
+        return kind.socket(s.target, path, protocols);
+      },
     }));
   }
 

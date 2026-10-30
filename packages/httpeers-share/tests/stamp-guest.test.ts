@@ -23,3 +23,21 @@ describe("stampGuest", () => {
     expect(await (await echoGuest(req)).text()).toBe("none");
   });
 });
+
+describe("stampGuest, streaming bodies", () => {
+  it("passes a streaming request body on (a live connection's frames, an upload)", async () => {
+    const echo = stampGuest(async (req) => new Response(req.body));
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode("frames"));
+        c.close();
+      },
+    });
+    const req = new Request("http://sharer/s/app/", {
+      method: "POST",
+      body,
+      duplex: "half",
+    } as RequestInit);
+    expect(await (await echo(req)).text()).toBe("frames");
+  });
+});

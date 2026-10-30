@@ -1,8 +1,10 @@
 /** M3–M5 — Dirk and Claudia: two runtimes, one real mesh. */
 
 import { createServer } from "node:http";
+import type { TunnelSocket } from "@statewalker/httpeers-share";
 import { createBridge, type Listening, listenLoopback } from "@statewalker/httpeers-share/bridge";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { WebSocketServer } from "ws";
 import {
   AddService,
   CloseSession,
@@ -19,7 +21,9 @@ import {
 } from "../src/public/commands.js";
 import {
   type GuestFetch,
+  type GuestSocket,
   guestFetchSlot,
+  guestSocketSlot,
   type PeerShareModel,
   peershareModelSlot,
 } from "../src/public/extension-points.js";
@@ -43,12 +47,22 @@ beforeAll(async () => {
       .writeHead(200, { "content-type": "application/json" })
       .end(JSON.stringify({ app: "dirk", path: req.url }));
   });
+  // Dirk's app has a live channel too (a dev server's hot reload, a chat).
+  const wss = new WebSocketServer({ server, handleProtocols: (p) => [...p][0] ?? false });
+  wss.on("connection", (socket, req) => {
+    socket.send(`hello ${req.url} ${socket.protocol}`);
+    socket.on("message", (data) => socket.send(`echo ${data}`));
+  });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const address = server.address();
   if (address == null || typeof address === "string") throw new Error("no address");
   app = {
     origin: `http://127.0.0.1:${address.port}`,
-    close: () => new Promise((r) => server.close(() => r())),
+    close: () =>
+      new Promise((r) => {
+        for (const c of wss.clients) c.terminate();
+        server.close(() => r());
+      }),
   };
 
   dirk = onMesh(meshFor(relay.addr), { bridge: () => ({ base: bridge.origin, token: TOKEN }) });
@@ -194,5 +208,28 @@ describe("M5 — Dirk sees who joined", () => {
       .toBe(before + 1);
     const joinedAt = model?.getSnapshot().guests.at(-1)?.joinedAt ?? 0;
     expect(Math.abs(Date.now() - joinedAt)).toBeLessThan(60_000);
+  });
+});
+
+describe("M9 — live connections", () => {
+  it("Claudia's WebSocket reaches Dirk's app through the mesh, Dirk's tab and the Bridge", async () => {
+    const claudia = guest();
+    await claudia.call(Join, { link: (await dirk.call(Invite, undefined)).url });
+    let open: GuestSocket | undefined;
+    claudia.rt.slots.observe(guestSocketSlot, (v) => {
+      open = v[0];
+    })();
+
+    const socket = (open as GuestSocket)("fooservice", "/live?x=1", ["vite-hmr"]);
+    const next = (s: TunnelSocket) =>
+      new Promise<unknown>((r) => {
+        s.onmessage = (e) => r(e.data);
+      });
+    expect(await next(socket)).toBe("hello /live?x=1 vite-hmr");
+    const reply = next(socket);
+    socket.send("ping");
+    expect(await reply).toBe("echo ping");
+    expect(socket.protocol).toBe("vite-hmr");
+    socket.close();
   });
 });

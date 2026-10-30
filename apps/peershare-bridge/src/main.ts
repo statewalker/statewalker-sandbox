@@ -8,15 +8,16 @@
 import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
 import {
+  acceptedProtocol,
+  connectApp,
   createBridge,
   relaySocket,
   SOCKET_PATH,
-  type SocketPlan,
 } from "@statewalker/httpeers-share/bridge";
 
 /** The slice of Bun's server API the Bridge uses (no `bun-types` needed). */
 interface BunSocket {
-  data: { plan: SocketPlan; relay?: ReturnType<typeof relaySocket> };
+  data: { app: WebSocket; relay?: ReturnType<typeof relaySocket> };
   send(data: string | ArrayBuffer | Uint8Array): void;
   close(code?: number, reason?: string): void;
 }
@@ -76,17 +77,25 @@ const server = Bun.serve({
     // A WebSocket for the app (M9): the same guards as HTTP.
     const verdict = await bridge.sockets(url, request.headers);
     if (!verdict.ok) return new Response(null, { status: verdict.status });
+    // The app first: the page is then given the subprotocol the app chose.
+    const app = await connectApp(verdict.plan).catch(() => null);
+    if (app == null) return new Response(null, { status: 502 });
+    const offered = (request.headers.get("sec-websocket-protocol") ?? "")
+      .split(",")
+      .map((p) => p.trim());
     const upgraded = srv.upgrade(request, {
-      headers: { "sec-websocket-protocol": verdict.plan.accept },
-      data: { plan: verdict.plan },
+      headers: { "sec-websocket-protocol": acceptedProtocol(verdict.plan, app, offered) },
+      data: { app },
     });
-    return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
+    if (upgraded) return undefined;
+    app.close();
+    return new Response("WebSocket upgrade failed", { status: 400 });
   },
   websocket: {
     open(ws) {
       ws.data.relay = relaySocket(
         { send: (data) => ws.send(data), close: (code, reason) => ws.close(code, reason) },
-        ws.data.plan,
+        ws.data.app,
       );
     },
     message(ws, message) {

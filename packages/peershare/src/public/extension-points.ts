@@ -10,6 +10,8 @@ export interface UpstreamKind {
   /** Whether `target` can be shared this way; the reason is shown on the form. */
   check(target: string): { ok: true } | { ok: false; reason: string };
   create(target: string): Upstream;
+  /** The Service's WebSocket at `path` (M9). A kind without it cannot carry live connections. */
+  socket?(target: string, path: string, protocols: string[]): WebSocket;
 }
 
 export const upstreamKindsSlot = defineKeyedSlot<UpstreamKind>("peershare:upstream-kinds");
@@ -42,3 +44,11 @@ export interface PeerShareModel {
 }
 
 export const peershareModelSlot = defineSlot<PeerShareModel>("peershare:model");
+
+/** How the Viewer opens a live connection to a Service as a Guest (M9): a WebSocket over the mesh. */
+export type GuestSocket = (
+  serviceId: string,
+  path: string,
+  protocols: string[],
+) => import("@statewalker/httpeers-share").TunnelSocket;
+export const guestSocketSlot = defineSlot<GuestSocket>("peershare:guest-socket");

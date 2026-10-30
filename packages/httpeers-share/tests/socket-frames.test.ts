@@ -15,6 +15,7 @@ async function roundTrip(frames: SocketFrame[], chunking: (bytes: Uint8Array) =>
 }
 
 const FRAMES: SocketFrame[] = [
+  { type: "open", protocol: "vite-hmr" },
   { type: "text", data: "héllo" },
   { type: "binary", data: new Uint8Array([0, 1, 2, 255]) },
   { type: "text", data: "" },

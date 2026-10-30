@@ -13,6 +13,8 @@ import {
   decodeInvite,
   isSharerOffline,
   joinOutcome,
+  openTunnel,
+  type TunnelSocket,
 } from "@statewalker/httpeers-share";
 import type { GuestState } from "../public/commands.js";
 import type { GuestIdentity, MeshInit } from "../public/mesh.js";
@@ -74,6 +76,20 @@ export class GuestManager {
       headers: request.headers,
       body,
     });
+  }
+
+  /** A live connection to a Service (M9): a WebSocket inside one request over the mesh. */
+  openSocket(serviceId: string, path: string, protocols: string[]): TunnelSocket {
+    const member = this.member;
+    const sharer = this.current.sharerPeerId;
+    return openTunnel(
+      async (request) =>
+        member == null || sharer == null
+          ? new Response("not joined", { status: 409 })
+          : member.fetch(request),
+      `http://local/peers/${sharer}/s/${serviceId}${path}`,
+      protocols,
+    );
   }
 
   async closeSession(): Promise<GuestState> {

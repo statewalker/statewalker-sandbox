@@ -6,12 +6,14 @@
  *   text   (1): UTF-8
  *   binary (2): bytes
  *   close  (3): 2 bytes code, then the reason in UTF-8
+ *   open   (4): the subprotocol the app accepted, in UTF-8 (first frame back)
  */
 
 export type SocketFrame =
   | { type: "text"; data: string }
   | { type: "binary"; data: Uint8Array }
-  | { type: "close"; code: number; reason: string };
+  | { type: "close"; code: number; reason: string }
+  | { type: "open"; protocol: string };
 
 /** Asks a Service's upstream for a socket instead of a response: the header names the subprotocols. */
 export const SOCKET_HEADER = "x-peershare-websocket";
@@ -19,6 +21,7 @@ export const SOCKET_HEADER = "x-peershare-websocket";
 const TEXT = 1;
 const BINARY = 2;
 const CLOSE = 3;
+const OPEN = 4;
 const HEAD = 5;
 
 export function encodeFrame(frame: SocketFrame): Uint8Array {
@@ -31,6 +34,9 @@ export function encodeFrame(frame: SocketFrame): Uint8Array {
   } else if (frame.type === "binary") {
     type = BINARY;
     payload = frame.data;
+  } else if (frame.type === "open") {
+    type = OPEN;
+    payload = enc.encode(frame.protocol);
   } else {
     type = CLOSE;
     const reason = enc.encode(frame.reason);
@@ -68,7 +74,9 @@ export function decodeFrames(): TransformStream<Uint8Array, SocketFrame> {
         else if (type === CLOSE) {
           const code = new DataView(payload.buffer, payload.byteOffset).getUint16(0);
           controller.enqueue({ type: "close", code, reason: dec.decode(payload.slice(2)) });
-        } else controller.error(new Error(`unknown socket frame type ${type}`));
+        } else if (type === OPEN)
+          controller.enqueue({ type: "open", protocol: dec.decode(payload) });
+        else controller.error(new Error(`unknown socket frame type ${type}`));
       }
     },
   });

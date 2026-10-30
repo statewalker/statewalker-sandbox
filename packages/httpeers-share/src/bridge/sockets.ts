@@ -68,29 +68,47 @@ export interface InboundSocket {
 }
 
 /**
- * Open the app's socket and relay. Returns the inbound side's event sinks;
- * messages that arrive before the app's socket opens are held, in order.
+ * Open the app's socket first: the page's upgrade is completed only once the
+ * app has accepted, so the page can be given the subprotocol the APP chose
+ * (a WebSocket's protocol is fixed by its handshake). Rejects if the app
+ * refuses or cannot be reached.
  */
+export function connectApp(plan: SocketPlan): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const app = new WebSocket(plan.target, plan.protocols);
+    app.binaryType = "arraybuffer";
+    // An app often speaks first ("hello" on connect), before the page's side
+    // is upgraded and relaying: held here, delivered first by `relaySocket`.
+    const held: Array<string | ArrayBuffer> = [];
+    early.set(app, held);
+    app.onmessage = (e) => held.push(e.data as string | ArrayBuffer);
+    app.onopen = () => resolve(app);
+    app.onerror = () => reject(new Error(`the app's socket at ${plan.target} refused`));
+  });
+}
+
+/** The subprotocol to accept from the page: the app's choice when the page offered it, else the token's. */
+export function acceptedProtocol(plan: SocketPlan, app: WebSocket, offered: string[]): string {
+  return app.protocol !== "" && offered.includes(app.protocol) ? app.protocol : plan.accept;
+}
+
+const early = new WeakMap<WebSocket, Array<string | ArrayBuffer>>();
+
+/** Relay two open sockets, message for message, both ways; returns the inbound side's event sinks. */
 export function relaySocket(
   inbound: InboundSocket,
-  plan: SocketPlan,
+  app: WebSocket,
 ): { message(data: string | ArrayBuffer): void; close(code?: number, reason?: string): void } {
-  const outbound = new WebSocket(plan.target, plan.protocols);
-  outbound.binaryType = "arraybuffer";
-  const held: Array<string | ArrayBuffer> = [];
-  outbound.onopen = () => {
-    for (const data of held.splice(0)) outbound.send(data);
-  };
-  outbound.onmessage = (e) => inbound.send(e.data as string | ArrayBuffer);
-  outbound.onclose = (e) => inbound.close(closable(e.code), e.reason);
-  outbound.onerror = () => inbound.close(1011, "the app's socket failed");
+  for (const data of early.get(app)?.splice(0) ?? []) inbound.send(data);
+  app.onmessage = (e) => inbound.send(e.data as string | ArrayBuffer);
+  app.onclose = (e) => inbound.close(closable(e.code), e.reason);
+  app.onerror = () => inbound.close(1011, "the app's socket failed");
   return {
     message(data) {
-      if (outbound.readyState === WebSocket.OPEN) outbound.send(data);
-      else held.push(data);
+      if (app.readyState === WebSocket.OPEN) app.send(data);
     },
     close(code, reason) {
-      if (outbound.readyState <= WebSocket.OPEN) outbound.close(closable(code), reason);
+      if (app.readyState <= WebSocket.OPEN) app.close(closable(code), reason);
     },
   };
 }

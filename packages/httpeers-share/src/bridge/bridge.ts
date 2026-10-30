@@ -206,7 +206,16 @@ function withCookies(request: Request, jar: Map<string, string>): Request {
   if (jar.size === 0) return request;
   const headers = new Headers(request.headers);
   headers.set("cookie", [...jar].map(([name, value]) => `${name}=${value}`).join("; "));
-  return new Request(request, { headers });
+  // Rebuilt from its parts: the server's own request object (e.g.
+  // @hono/node-server's) need not be one the global Request can copy.
+  const body = request.method === "GET" || request.method === "HEAD" ? null : request.body;
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    body,
+    ...(body != null ? { duplex: "half" as const } : {}),
+    signal: request.signal,
+  });
 }
 
 /** A spike's cookie jar: name and value only; `Max-Age=0` deletes. Path, domain and expiry are ignored. */
