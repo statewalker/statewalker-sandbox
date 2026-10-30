@@ -40,10 +40,12 @@ export class SharerManager {
     await this.update(id, { health: "checking" });
     const direct = service.kind === "direct" ? { direct: service.target } : {};
     const report = await probe(this.upstreamOf(service), direct);
+    // A kind that carries live connections (M9) makes "ws-needed" moot.
+    const live = this.kinds().get(service.kind)?.socket != null;
     await this.update(id, {
       health: report.health,
       cause: report.cause,
-      warnings: report.warnings,
+      warnings: live ? report.warnings.filter((w) => w !== "ws-needed") : report.warnings,
     });
   }
 

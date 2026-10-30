@@ -105,7 +105,7 @@ Order is by risk: a rung that can sink the design goes first.
 | 12 ✓ | [`feature-contribution`](../12-feature-contribution/README.md) | Does PeerShare plug into the suite through slots and commands only? | The ui-protos `Feature.contribute(rt)` runtime | **Every PeerShare menu item names a handled command**; views register in their zones; disposing removes all | logic |
 | 13 ✓ | [`lazy-activation`](../13-lazy-activation/README.md) | Can SandClaw list PeerShare without importing it? | Manifest + activation (shell-protos rung 05 harness) | **Menu renders from manifest, module not imported**; first `peershare:*` call imports it once | logic |
 | 14 ✓ | [`bun-bridge-binary`](../14-bun-bridge-binary/README.md) | Does `bun build --compile` give a one-file Bridge that opens the browser at the right URL? | The built binary as a child process | **Binary starts, prints a URL with `localUrl` and token**; opens the browser (stubbed `open`) | build smoke |
-| 15 ◐ | [`ws-tunnel`](../15-ws-tunnel/README.md) *(spike: premises answered, transport open)* | Can a WebSocket from the isolated origin be tunnelled to the Service over the mesh? | A `WebSocket` shim in the session origin → MessagePort → Sharer → local WS server | **Echo message round-trips**; Vite HMR fixture receives an update | browser spike |
+| 15 ✓ | [`ws-tunnel`](../15-ws-tunnel/README.md) *(spike; built in M9)* | Can a WebSocket from the isolated origin be tunnelled to the Service over the mesh? | A `WebSocket` shim in the session origin → MessagePort → Sharer → local WS server | **Echo message round-trips**; Vite HMR fixture receives an update | browser spike |
 | 16 ✓ | [`cookie-jar`](../16-cookie-jar/README.md) *(spike)* | Can a per-Guest jar on the Sharer keep cookie logins working? | `withCookieJar(upstream, jarFor(peerId))` | **Login cookie set for Guest A is sent on A's next request**; never on Guest B's | logic spike |
 
 UI rungs (stories, in the ui-protos convention `src/<topic>/{<topic>.tsx, .stories.tsx,
@@ -150,7 +150,7 @@ Refactoring happens in review, not in the loop. Each milestone ends runnable.
 | M6 | done | `peershare:model`, the browser mesh platform and IndexedDB stores (`@statewalker/peershare/browser`), Bridge pairing from the link |
 | M7 | done (standalone page) | `packages/peershare-react` (wired screens), `apps/peershare.page` with an end-to-end test in Chromium. Lazy loading inside SandClaw waits for the move to sandclaw (rung 13 proved it). |
 | M8 | done, except signing and the zone choice | Bridge for 5 platforms (`apps/peershare-bridge`, `compile:all`); `deploy/peershare` (Caddy: page + session zone; httpeers' relay), smoke-tested with Docker Compose through the whole scenario. Signing needs the publisher's certificates; the zone is decision 2.8 |
-| M9 | cookie jars done; WebSocket tunnel open | Jars on by default in the Bridge program; the tunnel: see rung 15 |
+| M9 | done | Cookie jars on by default; WebSockets over the mesh (shim → Viewer → one full-duplex mesh request → Sharer → Bridge or `wss`), end to end in Chromium and through the Docker deployment |
 
 ## 5. Seams to confirm before the first red test
 

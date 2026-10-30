@@ -65,6 +65,9 @@ export async function dirkSharesClaudiaViews(init: ScenarioInit): Promise<void> 
 
   const frame = await viewerFrame(claudia.tab, init.sessionUrl);
   await frame.getByText("hello from Dirk's app").waitFor({ timeout: 30_000 });
+  // Its live connection: a WebSocket from the isolated origin, over the mesh,
+  // through Dirk's tab and the Bridge, to the app, and back (M9).
+  await frame.getByText("live: pong").waitFor({ timeout: 30_000 });
   expect(new URL(frame.url()).origin).not.toBe(init.pageOrigin);
   // And Dirk sees who joined.
   await dirk.tab.keyboard.press("Escape");
@@ -82,15 +85,32 @@ export async function dirkSharesClaudiaViews(init: ScenarioInit): Promise<void> 
 /** Dirk's local app. */
 export async function startDirksApp(): Promise<{ origin: string; close(): Promise<void> }> {
   const { createServer } = await import("node:http");
+  const { WebSocketServer } = await import("ws");
   const server = createServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end("<!doctype html><title>Dirk's app</title><h1 id=hello>hello from Dirk's app</h1>");
+    // A live channel, opened the way apps do: to their own host.
+    res.end(`<!doctype html><html><head><title>Dirk's app</title></head><body>
+<h1 id=hello>hello from Dirk's app</h1><p id=live>live: waiting</p>
+<script>
+const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/live");
+ws.onopen = () => ws.send("ping");
+ws.onmessage = (e) => { document.getElementById("live").textContent = "live: " + e.data; };
+ws.onclose = (e) => { if (!/pong/.test(document.getElementById("live").textContent)) document.getElementById("live").textContent = "live: closed " + e.code; };
+</script></body></html>`);
   });
+  const wss = new WebSocketServer({ server });
+  wss.on("connection", (socket) =>
+    socket.on("message", (data) => socket.send(data.toString() === "ping" ? "pong" : "?")),
+  );
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const address = server.address();
   if (address == null || typeof address === "string") throw new Error("no address");
   return {
     origin: `http://127.0.0.1:${address.port}`,
-    close: () => new Promise((r) => server.close(() => r())),
+    close: () =>
+      new Promise((r) => {
+        for (const c of wss.clients) c.terminate();
+        server.close(() => r());
+      }),
   };
 }

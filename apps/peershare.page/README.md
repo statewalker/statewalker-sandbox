@@ -37,9 +37,13 @@ Serve `dist/` with every route falling back to `index.html`, and `/peershare.jso
 `tests/e2e.test.ts` runs the whole scenario in Chromium. Dirk and Claudia are two
 browser contexts, with two IndexedDBs and two mesh nodes. Everything around them is real:
 a relay, Dirk's Bridge and app, the built page on a public https origin, and session
-origins built from the vendored shell (`tests/e2e-harness.ts`). The test checks:
+origins built from the vendored shell (`tests/e2e-harness.ts`). `tests/deploy.test.ts` runs the same
+scenario through the Docker deployment (`deploy/peershare`). The two files run one at a time
+(`fileParallelism: false`): each starts Chromium, a relay and a page build. The scenario checks:
 - Dirk pairs with the Bridge, starts sharing, exposes his app and makes an Invite;
 - Claudia opens it, joins, and sees the app in her own origin;
+- the app's WebSocket to its own host works (the shim, `src/ws-shim.ts`, hands it to the Viewer,
+  which carries it over the mesh);
 - Dirk sees her in his Guests list.
 
 **Open, before deploying:** the deployed `*.p.httpeers.net` shell accepts parent pages on

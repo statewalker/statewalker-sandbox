@@ -8,7 +8,9 @@ import { decodeInvite } from "@statewalker/httpeers-share";
 import {
   createRuntime,
   type GuestFetch,
+  type GuestSocket,
   guestFetchSlot,
+  guestSocketSlot,
   peershare,
   Resume,
 } from "@statewalker/peershare";
@@ -16,6 +18,7 @@ import { browserMesh, idbSharerStore } from "@statewalker/peershare/browser";
 import { GuestScreen, PeerShareProvider } from "@statewalker/peershare-react";
 import { useEffect, useState } from "react";
 import type { PeerShareConfig } from "./config.js";
+import { listenForSockets, type SessionFrame, withSocketShim } from "./socket-channel.js";
 import { APP_SERVICE_KEY, openSession } from "./vendor/session-shell/client.js";
 
 export function GuestApp({ config }: { config: PeerShareConfig }) {
@@ -45,6 +48,38 @@ export function GuestApp({ config }: { config: PeerShareConfig }) {
     void rt.commands.call(Resume, undefined).promise;
   }, [rt]);
 
+  // Live connections (M9): the shim in each session frame asks for sockets here.
+  useEffect(() => {
+    const frames = () => {
+      const byWindow = new Map<MessageEventSource, SessionFrame>();
+      for (const iframe of document.querySelectorAll("iframe")) {
+        const origin = (() => {
+          try {
+            return new URL(iframe.src).origin;
+          } catch {
+            return "";
+          }
+        })();
+        const serviceId = Object.keys(sessions).find(
+          (id) => new URL(sessions[id] as string).origin === origin,
+        );
+        if (serviceId != null && iframe.contentWindow != null)
+          byWindow.set(iframe.contentWindow, { serviceId, origin });
+      }
+      return byWindow;
+    };
+    return listenForSockets(frames, () => slotValue<GuestSocket>(guestSocketSlot));
+  }, [sessions]);
+
+  function slotValue<T>(slot: import("@statewalker/shared-slots").SlotDeclaration<T>): T {
+    let value: T | undefined;
+    rt.slots.observe(slot, (v) => {
+      value = v[0];
+    })();
+    if (value == null) throw new Error("PeerShare has no mesh");
+    return value;
+  }
+
   const guestFetch = (): GuestFetch => {
     let fetcher: GuestFetch | undefined;
     rt.slots.observe(guestFetchSlot, (v) => {
@@ -64,7 +99,9 @@ export function GuestApp({ config }: { config: PeerShareConfig }) {
         {
           key: APP_SERVICE_KEY,
           path: "/",
-          handler: (request: Request) => guestFetch()(service.id, request),
+          // The WebSocket shim goes first in every page (M9).
+          handler: async (request: Request) =>
+            withSocketShim(await guestFetch()(service.id, request)),
         },
       ],
     }).then((session) => setSessions((s) => ({ ...s, [service.id]: session.url("/") })));

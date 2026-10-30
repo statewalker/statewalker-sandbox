@@ -15,6 +15,7 @@
     "@statewalker/httpeers-share": "workspace:^",
     "@statewalker/peershare": "workspace:^",
     "@statewalker/peershare-react": "workspace:^",
+    "@statewalker/shared-slots": "catalog:",
     "@statewalker/webrun-http-browser": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:"
@@ -30,12 +31,14 @@
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "@types/ws": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "libp2p": "catalog:",
     "playwright": "catalog:",
     "tailwindcss": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "ws": "catalog:"
   }
 }

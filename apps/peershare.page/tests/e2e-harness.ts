@@ -112,15 +112,17 @@ async function bundle(entry: string): Promise<string> {
 
 /** Session origins `https://<name>.localhost:<port>`, serving the vendored shell. */
 export async function serveSessions(vendor: string): Promise<Hosted> {
-  const [worker, relay] = await Promise.all([
+  const [worker, relay, shim] = await Promise.all([
     bundle(join(vendor, "sw.ts")),
     bundle(join(vendor, "relay.ts")),
+    bundle(resolve(vendor, "../../ws-shim.ts")),
   ]);
   const js = { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" };
   return https("DNS:localhost,DNS:*.localhost", (req, res) => {
     const path = new URL(req.url ?? "/", "https://x").pathname;
     if (path === "/relay-sw.js") return void res.writeHead(200, js).end(worker);
     if (path === "/_shell/relay.js") return void res.writeHead(200, js).end(relay);
+    if (path === "/_shell/ws-shim.js") return void res.writeHead(200, js).end(shim);
     if (path === "/relay.html") {
       return void res
         .writeHead(200, { "content-type": "text/html; charset=utf-8" })

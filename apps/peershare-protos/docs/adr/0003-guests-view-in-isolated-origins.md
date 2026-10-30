@@ -20,4 +20,5 @@ a public URL). The gateway stays available for non-browser consumers.
 - A ServiceWorker cannot set cookies from responses it builds, and cannot answer
   WebSocket upgrades. Cookies: the Bridge keeps a jar per Guest, on by default since
   M9 (rung 16), so cookie logins work for Bridged Services; Direct Services remain
-  cookie-less. WebSockets: open (rung 15).
+  cookie-less. WebSockets: a shim in each session origin hands same-host sockets to
+  the Viewer, which carries them over the mesh inside one full-duplex request (M9).

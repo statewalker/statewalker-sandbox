@@ -7,7 +7,7 @@
     "defaultBranch": "main"
   },
   "files": {
-    "includes": ["**", "!**/08-isolated-viewer/vendor/**", "!**/peershare.page/src/vendor/**"]
+    "includes": ["**", "!**/08-isolated-viewer/vendor/**", "!**/peershare.page/src/vendor/**", "!**/deploy/peershare/srv/**"]
   },
   "formatter": {
     "enabled": true,

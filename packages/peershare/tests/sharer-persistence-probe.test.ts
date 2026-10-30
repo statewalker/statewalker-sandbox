@@ -62,7 +62,8 @@ describe("M1 — Test again", () => {
 
     expect((await call(GetSharer, undefined)).services[0]).toMatchObject({
       health: "ok",
-      warnings: ["ws-needed", "cookies-set"],
+      // No ws-needed: Bridged Services carry live connections since M9.
+      warnings: ["cookies-set"],
     });
   });
 

@@ -48,6 +48,8 @@ const define = {
 for (const [entry, out] of [
   ["sw.ts", "relay-sw.js"],
   ["relay.ts", "_shell/relay.js"],
+  // The WebSocket shim (M9): served beside the relay, outside the worker's reach.
+  ["../../ws-shim.ts", "_shell/ws-shim.js"],
 ]) {
   await build({
     root: vendor,

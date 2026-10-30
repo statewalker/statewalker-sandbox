@@ -21,7 +21,7 @@
 chunk of the request body as it arrives. The Guest sends A, **hears A's echo before it sends
 B**, then sends B and hears it. httpeers-member's `fetch` carries a streaming request and a
 streaming response at once, over the libp2p stream, so a WebSocket can ride one request.
-The tunnel is built in the application (milestone M9).
+The tunnel is built in the application (milestone M9): `@statewalker/httpeers-share` (`openTunnel`, `sharerSocket`, the Bridge's socket endpoint), `@statewalker/peershare` (`peershare:guest-socket`), and `apps/peershare.page` (`src/ws-shim.ts`, `src/socket-channel.ts`). Its end-to-end test has Dirk's page open a WebSocket in Claudia's isolated origin and get its answer back.
 
 ## What was left (before part 2)
 
