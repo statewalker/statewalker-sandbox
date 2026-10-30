@@ -10,7 +10,11 @@
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
-import { createServer as createHttpServer } from "node:http";
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { createServer, type Server } from "node:https";
 import { networkInterfaces, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -26,29 +30,27 @@ export interface PublicPage {
   close(): Promise<void>;
 }
 
-/** An https page with a throwaway self-signed certificate for 127.0.0.1. */
-export async function startPublicPage(): Promise<PublicPage> {
-  const dir = mkdtempSync(join(tmpdir(), "peershare-03-"));
+/** A throwaway self-signed certificate for `san` (e.g. `IP:127.0.0.1`, `DNS:remote.localhost`). */
+export function selfSignedCert(san: string): { key: Buffer; cert: Buffer } {
+  const dir = mkdtempSync(join(tmpdir(), "peershare-cert-"));
   execFileSync(
     "openssl",
     [
       ...["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1"],
       ...["-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem")],
-      ...["-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
+      ...["-subj", "/CN=peershare-test", "-addext", `subjectAltName=${san}`],
     ],
     { stdio: "ignore" },
   );
-  const server: Server = createServer(
-    { key: readFileSync(join(dir, "key.pem")), cert: readFileSync(join(dir, "cert.pem")) },
-    (req, res) => {
-      if (req.url === "/redirect") {
-        res.writeHead(302, { location: "/" }).end();
-        return;
-      }
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end("<!doctype html><title>PeerShare (public page)</title><p>public</p>");
-    },
-  );
+  return { key: readFileSync(join(dir, "key.pem")), cert: readFileSync(join(dir, "cert.pem")) };
+}
+
+/** An https server on 127.0.0.1 with a certificate for `san`. */
+export async function startHttps(
+  san: string,
+  handler: (req: IncomingMessage, res: ServerResponse) => void,
+): Promise<PublicPage> {
+  const server: Server = createServer(selfSignedCert(san), handler);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const address = server.address();
   if (address == null || typeof address === "string") throw new Error("no address");
@@ -63,34 +65,54 @@ export async function startPublicPage(): Promise<PublicPage> {
   };
 }
 
+/** The PeerShare page stand-in: https on 127.0.0.1, relabelled public by `launchChromium`. */
+export function startPublicPage(): Promise<PublicPage> {
+  return startHttps("IP:127.0.0.1", (req, res) => {
+    if (req.url === "/redirect") {
+      res.writeHead(302, { location: "/" }).end();
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end("<!doctype html><title>PeerShare (public page)</title><p>public</p>");
+  });
+}
+
 /** `overrides` as `ip:port=public|private|local`. */
 export function launchChromium(overrides: string[]): Promise<Browser> {
   return chromium.launch({ args: [`--ip-address-space-overrides=${overrides.join(",")}`] });
 }
 
-let pageCode: Promise<string> | undefined;
+const pageCode = new Map<string, Promise<string>>();
 
-/** `browser-entry.ts`, bundled once, as an IIFE exposing `window.Rung03`. */
-export function bundledPageCode(): Promise<string> {
-  pageCode ??= (async () => {
-    const built = await build({
-      root: here,
-      logLevel: "error",
-      configFile: false,
-      build: {
-        target: "esnext",
-        write: false,
-        minify: false,
-        lib: { entry: resolve(here, "browser-entry.ts"), formats: ["iife"], name: "Rung03" },
-      },
-    });
-    // biome-ignore lint/suspicious/noExplicitAny: vite's build() union is not narrowable here.
-    const results = (Array.isArray(built) ? built : [built]) as any[];
-    const chunk = results[0]?.output?.find((o: { type: string }) => o.type === "chunk");
-    if (chunk == null) throw new Error("no chunk built for the page");
-    return chunk.code as string;
-  })();
-  return pageCode;
+/** `entry` (default: this rung's `browser-entry.ts`), bundled once, as an IIFE exposing `window[name]`. */
+export function bundledPageCode(
+  entry = resolve(here, "browser-entry.ts"),
+  name = "Rung03",
+): Promise<string> {
+  const key = `${entry}#${name}`;
+  let code = pageCode.get(key);
+  if (code == null) {
+    code = (async () => {
+      const built = await build({
+        root: dirname(entry),
+        logLevel: "error",
+        configFile: false,
+        build: {
+          target: "esnext",
+          write: false,
+          minify: false,
+          lib: { entry, formats: ["iife"], name },
+        },
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: vite's build() union is not narrowable here.
+      const results = (Array.isArray(built) ? built : [built]) as any[];
+      const chunk = results[0]?.output?.find((o: { type: string }) => o.type === "chunk");
+      if (chunk == null) throw new Error(`no chunk built for ${entry}`);
+      return chunk.code as string;
+    })();
+    pageCode.set(key, code);
+  }
+  return code;
 }
 
 export interface OpenedPage {
@@ -104,7 +126,7 @@ export interface OpenedPage {
 export async function openPage(
   browser: Browser,
   origin: string,
-  opts: { grant?: boolean } = {},
+  opts: { grant?: boolean; entry?: string; name?: string } = {},
 ): Promise<OpenedPage> {
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   if (opts.grant === true) await context.grantPermissions(["local-network-access"]);
@@ -112,7 +134,7 @@ export async function openPage(
   const console: string[] = [];
   page.on("console", (m) => console.push(m.text()));
   await page.goto(`${origin}/`);
-  await page.addScriptTag({ content: await bundledPageCode() });
+  await page.addScriptTag({ content: await bundledPageCode(opts.entry, opts.name) });
   return { context, page, console };
 }
 

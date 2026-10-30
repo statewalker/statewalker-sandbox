@@ -37,6 +37,13 @@ grilled in three rounds. Every answer below accepted the recommended option.
 | 3.6 | Bridge packaging | Prototypes: `bun run bridge.ts --port 9090`. Compiled, signed installers are the last milestone. |
 | 3.7 | Where code lives | Everything on this branch of `statewalker-sandbox` until approved; then libraries → `httpeers`, app packages and stories → `sandclaw`. |
 
+## Decided after rung 03
+
+| # | Question | Decision |
+|---|---|---|
+| 4.1 | What can be shared in v1? | **Bridged**: a local (machine/LAN) service through the CORS proxy on localhost. **Direct**: only a remote resource with a domain name, a certificate and its own CORS headers (`https`, a host name, not an IP literal, not `localhost`/`.local`). Plain-http LAN services are shared Bridged, never Direct. Enforced by `checkServiceTarget` (rung 04). |
+| 4.2 | Bridge targets | Tailscale `100.64/10` allowed; `.local` names allowed after resolving, when every address is private (rung 02). |
+
 ## Found while prototyping
 
 | Rung | Finding | Effect on the design |
@@ -48,3 +55,5 @@ grilled in three rounds. Every answer below accepted the recommended option.
 | 03 | Chromium blocks a public page's call to loopback/LAN until the Sharer allows local network access; a blocked call looks exactly like a stopped Bridge | `diagnoseBridge` reads the permission state; the page explains the prompt before the first call |
 | 03 | A stale token looked like a stopped Bridge | The Bridge's 401 is readable by the PeerShare origin; the Bridge answers a hello |
 | 03 | Way B to a plain-http LAN Service is mixed content | Direct passes `targetAddressSpace: "local"` for non-loopback http targets |
+| 04 | A missing CORS header fails like a dead server | For Direct, the Probe follows a failure with a `no-cors` request: an answer means `cors-missing` |
+| 04 | Page scripts never see `Set-Cookie` | The Bridge restates it as `x-peershare-set-cookie`; Direct cookies are undetectable |

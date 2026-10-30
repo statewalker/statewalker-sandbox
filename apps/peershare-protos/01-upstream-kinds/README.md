@@ -58,7 +58,10 @@ unreachable(response): "service" | "bridge" | undefined
 
 - **Rung 03:** Direct passes `targetAddressSpace: "local"` for plain-http targets that
   are not loopback. Without it, Chromium blocks an https page's call to a LAN Service as
-  mixed content.
+  mixed content. Since decision 4.1, Direct is `https` with a domain name only, so this
+  matters only if plain-http LAN targets are ever allowed Direct again.
+- **Rung 04:** `checkServiceTarget(kind, target)` is the v1 rule for which targets each
+  kind accepts.
 
 ## Not answered here
 

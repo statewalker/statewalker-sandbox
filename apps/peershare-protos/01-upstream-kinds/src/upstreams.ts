@@ -18,6 +18,11 @@ export const BRIDGE_MARKER = "x-peershare-bridge";
  */
 export const BRIDGE_REDIRECT_STATUS_HEADER = "x-peershare-redirect-status";
 export const BRIDGE_REDIRECT_LOCATION_HEADER = "x-peershare-redirect-location";
+/**
+ * How many cookies the Service tried to set. `Set-Cookie` is a forbidden
+ * response header: no page script can read it, so the Bridge says it instead.
+ */
+export const BRIDGE_SET_COOKIE_HEADER = "x-peershare-set-cookie";
 
 export type UpstreamConfig =
   | { kind: "direct"; target: string }

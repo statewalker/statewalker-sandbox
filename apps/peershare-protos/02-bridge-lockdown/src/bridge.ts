@@ -13,6 +13,7 @@ import {
   BRIDGE_MARKER,
   BRIDGE_REDIRECT_LOCATION_HEADER,
   BRIDGE_REDIRECT_STATUS_HEADER,
+  BRIDGE_SET_COOKIE_HEADER,
   BRIDGE_TARGET_HEADER,
   BRIDGE_TOKEN_HEADER,
 } from "../../01-upstream-kinds/src/upstreams.js";
@@ -92,6 +93,8 @@ export function createBridge(init: BridgeInit): FetchHandler {
 
     const headers = new Headers(response.headers);
     headers.set(BRIDGE_MARKER, "relayed");
+    const cookies = response.headers.getSetCookie().length;
+    if (cookies > 0) headers.set(BRIDGE_SET_COOKIE_HEADER, String(cookies));
 
     const location = response.headers.get("location");
     if (response.status >= 300 && response.status < 400 && location != null) {
