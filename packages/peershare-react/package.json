@@ -1,0 +1,50 @@
+{
+  "name": "@statewalker/peershare-react",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PeerShare's views (React), wired to @statewalker/peershare through its model and commands.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "packages/peershare-react"
+  },
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./styles.css": "./src/index.css"
+  },
+  "files": [
+    "src/**"
+  ],
+  "scripts": {
+    "test": "vitest --run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@statewalker/httpeers-qr": "catalog:",
+    "@statewalker/httpeers-share": "workspace:^",
+    "@statewalker/peershare": "workspace:^",
+    "@statewalker/shared-commands": "catalog:",
+    "@statewalker/ui.view.shadcn": "catalog:",
+    "lucide-react": "catalog:",
+    "radix-ui": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "catalog:",
+    "@testing-library/react": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "jsdom": "catalog:",
+    "tailwindcss": "catalog:",
+    "tw-animate-css": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}
