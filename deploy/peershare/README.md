@@ -1,4 +1,10 @@
-# Deploying PeerShare
+# Deploying PeerShare, self-hosted
+
+> **Decision 2.8: PeerShare is published under httpeers.net** (`peershare.httpeers.net`, a
+> site on httpeers' static host, with httpeers' session zone and relay):
+> `pnpm --filter @statewalker/peershare.page build:site`, then
+> `rclone sync site/peershare.httpeers.net httpeers:sites/peershare.httpeers.net`.
+> This stack is the alternative for running PeerShare under a zone of one's own.
 
 ## What it is
 
@@ -13,7 +19,7 @@ The **relay** is httpeers' own (`relay.httpeers.net`), already deployed with the
 PeerShare needs (1 GiB and 6 h per relayed connection; rung 11). `--profile relay` runs one
 here instead, from httpeers' relay image.
 
-## Choosing the zones (decision 2.8, open)
+## Choosing the zones
 
 The session shell admits only parent pages in `PARENT_ZONE`: the zone itself or one label
 under it. That leaves two options:

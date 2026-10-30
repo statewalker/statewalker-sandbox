@@ -1,5 +1,5 @@
 /**
- * `bun run main.ts [--port 9090] [--origin https://tools.sandclaw.ai] [--open] [--no-cookie-jars]`
+ * `bun run main.ts [--port 9090] [--origin https://peershare.httpeers.net] [--open] [--no-cookie-jars]`
  *
  * Starts the Bridge on 127.0.0.1 and prints the PeerShare URL that pairs the
  * page with it; `--open` also opens that URL in the default browser (rung 14).
@@ -44,7 +44,8 @@ declare const Bun: {
 const { values } = parseArgs({
   options: {
     port: { type: "string", default: "9090" },
-    origin: { type: "string", default: "https://tools.sandclaw.ai" },
+    // Where the PeerShare page lives (decision 2.8).
+    origin: { type: "string", default: "https://peershare.httpeers.net" },
     open: { type: "boolean", default: false },
     // Each Guest's cookies kept apart, so cookie logins work for Guests (rung 16, M9).
     "no-cookie-jars": { type: "boolean", default: false },

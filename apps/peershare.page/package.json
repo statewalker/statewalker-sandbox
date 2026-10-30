@@ -9,7 +9,8 @@
     "dev": "vite",
     "build": "vite build",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:site": "node scripts/build-site.mjs site"
   },
   "dependencies": {
     "@statewalker/httpeers-share": "workspace:^",
