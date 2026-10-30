@@ -19,7 +19,8 @@
     "compile": "bun build --compile src/main.ts --outfile dist/peershare-bridge",
     "test": "pnpm run typecheck:tests && vitest run",
     "typecheck": "tsc --noEmit",
-    "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit"
+    "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit",
+    "compile:all": "node scripts/compile-all.mjs dist"
   },
   "dependencies": {
     "@statewalker/httpeers-share": "workspace:^"
