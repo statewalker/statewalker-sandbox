@@ -7,7 +7,7 @@ afterEach(cleanup);
 
 const now = new Date("2026-10-30T10:00:00Z");
 const invite = {
-  url: "https://tools.sandclaw.ai/invite#k=a41d07b9c2",
+  url: "https://tools.sandclaw.ai/peer-share/invite#join=eyJyZWxheUFkZHJzIjpb&from=Dirk",
   expiresAt: new Date(now.getTime() + INVITE_TTL_MS),
   used: false,
 };

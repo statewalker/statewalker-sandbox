@@ -171,7 +171,8 @@ export class FakeMesh {
         this.setSharer({
           inviteOpen: true,
           invite: {
-            url: `https://tools.sandclaw.ai/invite#k=${randomKey()}`,
+            // The shape rung 06 settled: httpeers' join blob in the FRAGMENT, plus the Sharer's name.
+            url: `https://tools.sandclaw.ai/peer-share/invite#join=${randomKey()}&from=${encodeURIComponent(sharer.name)}`,
             expiresAt: new Date(this.now().getTime() + INVITE_TTL_MS),
             used: false,
           },

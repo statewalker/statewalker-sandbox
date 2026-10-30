@@ -38,7 +38,7 @@ export const nas: Service = {
 };
 
 export const invite: Invite = {
-  url: "https://tools.sandclaw.ai/invite#k=a41d07b9c2e5f813",
+  url: "https://tools.sandclaw.ai/peer-share/invite#join=eyJyZWxheUFkZHJzIjpb&from=Dirk",
   expiresAt: new Date(now.getTime() + INVITE_TTL_MS),
   used: false,
 };
