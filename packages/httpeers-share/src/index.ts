@@ -33,6 +33,7 @@ export {
 export { stampGuest } from "./stamp-guest.js";
 export { checkTarget, isPrivateAddress, type TargetVerdict } from "./targets.js";
 export {
+  BRIDGE_COOKIES_KEPT_HEADER,
   BRIDGE_GUEST_HEADER,
   BRIDGE_MARKER,
   BRIDGE_REDIRECT_LOCATION_HEADER,
@@ -41,6 +42,7 @@ export {
   BRIDGE_TARGET_HEADER,
   BRIDGE_TOKEN_HEADER,
   createUpstream,
+  PROBE_GUEST,
   type UpstreamConfig,
   unreachable,
 } from "./upstreams.js";

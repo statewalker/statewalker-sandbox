@@ -3,7 +3,13 @@
  */
 
 import type { Upstream } from "@statewalker/webrun-http-proxy";
-import { BRIDGE_SET_COOKIE_HEADER, unreachable } from "./upstreams.js";
+import {
+  BRIDGE_COOKIES_KEPT_HEADER,
+  BRIDGE_GUEST_HEADER,
+  BRIDGE_SET_COOKIE_HEADER,
+  PROBE_GUEST,
+  unreachable,
+} from "./upstreams.js";
 
 export type Health = "ok" | "slow" | "down";
 export type ProbeCause = "service-down" | "bridge-down" | "cors-missing";
@@ -24,7 +30,10 @@ export async function probe(
   opts: { slowMs?: number; direct?: string } = {},
 ): Promise<ProbeReport> {
   const started = performance.now();
-  const response = await upstream(new Request("http://probe.peershare/"));
+  // As a Guest of its own: a Bridge with cookie jars treats the Probe like anyone else.
+  const response = await upstream(
+    new Request("http://probe.peershare/", { headers: { [BRIDGE_GUEST_HEADER]: PROBE_GUEST } }),
+  );
   const body = await response.text();
   const ms = Math.round(performance.now() - started);
 
@@ -40,7 +49,9 @@ export async function probe(
   const warnings: ProbeWarning[] = [];
   if (isHtml(response) && WEBSOCKET_CLIENTS.some((re) => re.test(body))) warnings.push("ws-needed");
   // Only the Bridge's marker: a page never sees `Set-Cookie` itself.
-  if (response.headers.has(BRIDGE_SET_COOKIE_HEADER)) warnings.push("cookies-set");
+  // A cookie login breaks for Guests only when nothing keeps the cookies for them.
+  const kept = response.headers.get(BRIDGE_COOKIES_KEPT_HEADER) === "kept";
+  if (response.headers.has(BRIDGE_SET_COOKIE_HEADER) && !kept) warnings.push("cookies-set");
   return { health, warnings, ms };
 }
 

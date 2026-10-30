@@ -18,5 +18,6 @@ a public URL). The gateway stays available for non-browser consumers.
 - The Service is served at the root of its origin, so absolute paths work without
   rewriting.
 - A ServiceWorker cannot set cookies from responses it builds, and cannot answer
-  WebSocket upgrades. v1 accepts both limits and the Probe warns about them; a
-  per-Guest cookie jar and a WebSocket tunnel are separate prototypes.
+  WebSocket upgrades. Cookies: the Bridge keeps a jar per Guest, on by default since
+  M9 (rung 16), so cookie logins work for Bridged Services; Direct Services remain
+  cookie-less. WebSockets: open (rung 15).

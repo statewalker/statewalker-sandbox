@@ -100,3 +100,27 @@ describe("04 — warnings: what will not work for Guests", () => {
     expect(report.warnings).toContain("cookies-set");
   });
 });
+
+describe("04 — cookies, with the Bridge's jars on (M9)", () => {
+  let jarBridge: Listening;
+  beforeAll(async () => {
+    jarBridge = await listenLoopback(
+      createBridge({ token: TOKEN, allowedOrigin: "https://tools.sandclaw.ai", cookieJars: true }),
+    );
+  });
+  afterAll(async () => {
+    await jarBridge?.close();
+  });
+
+  it("no cookies-set warning: the Bridge keeps each Guest's cookies, so logins work", async () => {
+    const app = await startApp({ setCookie: "session=abc; Path=/; HttpOnly" });
+    running.push(app);
+    const upstream = createUpstream({
+      kind: "bridged",
+      target: app.origin,
+      bridge: { base: jarBridge.origin, token: TOKEN },
+    });
+
+    expect((await probe(upstream)).warnings).not.toContain("cookies-set");
+  });
+});

@@ -9,6 +9,14 @@ export interface Running {
 export async function startService(): Promise<Running> {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://x");
+    if (url.pathname === "/login") {
+      res.writeHead(200, { "set-cookie": "session=claudia; Path=/" }).end("ok");
+      return;
+    }
+    if (url.pathname === "/whoami") {
+      res.writeHead(200).end(/session=(\w+)/.exec(req.headers.cookie ?? "")?.[1] ?? "anonymous");
+      return;
+    }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ service: "dirk", path: url.pathname }));
   });

@@ -11,6 +11,7 @@ import { timingSafeEqual } from "node:crypto";
 import { type FetchHandler, MARKER, urlUpstream } from "@statewalker/webrun-http-proxy";
 import { checkTarget, isPrivateAddress } from "../targets.js";
 import {
+  BRIDGE_COOKIES_KEPT_HEADER,
   BRIDGE_GUEST_HEADER,
   BRIDGE_MARKER,
   BRIDGE_REDIRECT_LOCATION_HEADER,
@@ -111,6 +112,7 @@ export function createBridge(init: BridgeInit): FetchHandler {
     if (jar != null) {
       for (const cookie of cookies) keep(jar, cookie);
       headers.delete("set-cookie");
+      if (cookies.length > 0) headers.set(BRIDGE_COOKIES_KEPT_HEADER, "kept");
     }
 
     const location = response.headers.get("location");

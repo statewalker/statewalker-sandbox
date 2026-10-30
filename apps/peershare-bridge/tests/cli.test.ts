@@ -68,6 +68,25 @@ describe.skipIf(!hasBun())("02 — the Bridge under Bun", () => {
   });
 });
 
+describe.skipIf(!hasBun())("the Bridge program, defaults", () => {
+  it("keeps each Guest's cookies (M9): a login survives to that Guest's next request", async () => {
+    child?.kill();
+    const url = await launch();
+    const fragment = new URLSearchParams(url.hash.slice(1));
+    const as = (path: string) =>
+      fetch(`${fragment.get("localUrl")}${path}`, {
+        headers: {
+          [BRIDGE_TARGET_HEADER]: service.origin,
+          [BRIDGE_TOKEN_HEADER]: fragment.get("t") ?? "",
+          "x-peershare-guest": "12D3KooWClaudia",
+        },
+      }).then((r) => r.text());
+
+    await as("/login");
+    expect(await as("/whoami")).toBe("claudia");
+  });
+});
+
 function hasBun(): boolean {
   try {
     execFileSync("bun", ["--version"]);

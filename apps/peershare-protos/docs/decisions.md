@@ -74,4 +74,5 @@ grilled in three rounds. Every answer below accepted the recommended option.
 | 16 | A per-Guest jar in the Bridge keeps cookie logins working for Bridged Services | Direct stays cookie-less (ADR 0003) |
 | M7 | The deployed `*.p.httpeers.net` shell accepts parents on `*.httpeers.net` only | **Open:** decision 2.8 needs revisiting. Host the page under `httpeers.net`, or deploy a session zone (e.g. `*.p.sandclaw.ai`) whose shell accepts `tools.sandclaw.ai`. `sessionOrigin` in `/peershare.json` makes it a deploy setting. |
 | M7 | The hub adds members without telling anyone | The Sharer watches its member list (500 ms) so Guests appear live |
+| M9 | Cookie jars on by default | The Bridge program keeps each Guest's cookies (`--no-cookie-jars` to opt out) and marks them `kept`; the Probe identifies itself as a Guest and warns `cookies-set` only when nothing keeps them. Cookie logins work for Bridged Services; Direct stays cookie-less. Supersedes 3.4 for Bridged. |
 

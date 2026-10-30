@@ -29,6 +29,10 @@ export const BRIDGE_SET_COOKIE_HEADER = "x-peershare-set-cookie";
  * cookie jar per value.
  */
 export const BRIDGE_GUEST_HEADER = "x-peershare-guest";
+/** Set by a Bridge with cookie jars when it kept the Service's cookies for that Guest. */
+export const BRIDGE_COOKIES_KEPT_HEADER = "x-peershare-cookies";
+/** The Guest id the Probe uses, so a Bridge with cookie jars treats it like any Guest. */
+export const PROBE_GUEST = "peershare-probe";
 
 export type UpstreamConfig =
   | { kind: "direct"; target: string }
