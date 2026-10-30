@@ -16,3 +16,11 @@ export const upstreamKindsSlot = defineKeyedSlot<UpstreamKind>("peershare:upstre
 
 /** The Sharer's `/s` handler, provided for whichever Feature hosts the mesh. */
 export const sharerMountSlot = defineSlot<FetchHandler>("peershare:sharer-mount");
+
+/**
+ * How the Viewer reaches a Service as a Guest: over the mesh, through the
+ * member's JavaScript `fetch` (rung 08), so a redirect stays a real 3xx.
+ * `request`'s path is the Service's own (`/`, `/api/…`).
+ */
+export type GuestFetch = (serviceId: string, request: Request) => Promise<Response>;
+export const guestFetchSlot = defineSlot<GuestFetch>("peershare:guest-fetch");

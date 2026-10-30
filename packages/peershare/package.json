@@ -16,7 +16,8 @@
   },
   "main": "src/public/index.ts",
   "exports": {
-    ".": "./src/public/index.ts"
+    ".": "./src/public/index.ts",
+    "./node": "./src/node/index.ts"
   },
   "files": [
     "src/**"
@@ -27,10 +28,25 @@
     "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit"
   },
   "dependencies": {
+    "@chainsafe/libp2p-noise": "catalog:",
+    "@chainsafe/libp2p-yamux": "catalog:",
+    "@libp2p/circuit-relay-v2": "catalog:",
+    "@libp2p/crypto": "catalog:",
+    "@libp2p/identify": "catalog:",
+    "@libp2p/interface": "catalog:",
+    "@libp2p/tcp": "catalog:",
+    "@libp2p/webrtc": "catalog:",
+    "@libp2p/websockets": "catalog:",
+    "@statewalker/httpeers-access": "catalog:",
+    "@statewalker/httpeers-core": "catalog:",
+    "@statewalker/httpeers-hub": "catalog:",
+    "@statewalker/httpeers-libp2p": "catalog:",
+    "@statewalker/httpeers-member": "catalog:",
     "@statewalker/httpeers-share": "workspace:^",
     "@statewalker/shared-commands": "catalog:",
     "@statewalker/shared-slots": "catalog:",
-    "@statewalker/webrun-http-proxy": "catalog:"
+    "@statewalker/webrun-http-proxy": "catalog:",
+    "libp2p": "catalog:"
   },
   "devDependencies": {
     "@hono/node-server": "catalog:",

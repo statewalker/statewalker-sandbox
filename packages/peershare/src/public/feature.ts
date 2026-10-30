@@ -2,18 +2,37 @@
 
 import { BRIDGE_MARKER, checkServiceTarget, createUpstream } from "@statewalker/httpeers-share";
 import type { CommandDeclaration } from "@statewalker/shared-commands";
+import { GuestManager } from "../internal/guest.manager.js";
 import { SharerManager } from "../internal/sharer.manager.js";
+import { SharingManager } from "../internal/sharing.manager.js";
 import {
   AddService,
+  CloseSession,
   EditService,
+  GetGuest,
   GetSharer,
+  GetSharing,
+  Invite,
+  Join,
+  ListGuests,
+  ListSharedServices,
   ProbeService,
   RemoveService,
+  Resume,
+  RevokeGuest,
   SetDefault,
   SetName,
+  StartSharing,
+  StopSharing,
   ToggleService,
 } from "./commands.js";
-import { sharerMountSlot, type UpstreamKind, upstreamKindsSlot } from "./extension-points.js";
+import {
+  guestFetchSlot,
+  sharerMountSlot,
+  type UpstreamKind,
+  upstreamKindsSlot,
+} from "./extension-points.js";
+import type { MeshInit } from "./mesh.js";
 import { type AppRuntime, all, type Feature } from "./suite.js";
 import type { SharerStore } from "./types.js";
 
@@ -21,6 +40,8 @@ export interface PeerShareInit {
   store: SharerStore;
   /** The Bridge, once paired from the Bridge's printed link. */
   bridge?: () => { base: string; token: string } | undefined;
+  /** How to reach a mesh; without it PeerShare edits Services but cannot share them. */
+  mesh?: MeshInit;
 }
 
 export function peershare(init: PeerShareInit): Feature {
@@ -86,9 +107,47 @@ export function peershare(init: PeerShareInit): Feature {
           GetSharer,
           on(() => sharer.snapshot()),
         ),
+        ...(init.mesh == null ? [] : meshCommands(rt, init.mesh, sharer)),
       );
     },
   };
+}
+
+function meshCommands(rt: AppRuntime, mesh: MeshInit, sharer: SharerManager): Array<() => void> {
+  const sharing = new SharingManager(
+    mesh,
+    sharer.mount(),
+    () => sharer.snapshot().name || "The Sharer",
+  );
+  return [
+    handle(rt, StartSharing, async () => {
+      await sharer.ready;
+      return sharing.start();
+    }),
+    handle(rt, StopSharing, () => sharing.stop()),
+    handle(rt, GetSharing, () => sharing.state()),
+    handle(rt, Invite, () => sharing.invite()),
+    handle(rt, ListGuests, () => sharing.guests()),
+    handle(rt, RevokeGuest, ({ peerId }) => sharing.revoke(peerId)),
+    // Leaving the suite leaves the mesh.
+    () => void sharing.stop(),
+    ...guestCommands(rt, new GuestManager(mesh)),
+  ];
+}
+
+function guestCommands(rt: AppRuntime, guest: GuestManager): Array<() => void> {
+  return [
+    handle(rt, Join, ({ link }) => guest.join(link)),
+    handle(rt, Resume, () => guest.resume()),
+    handle(rt, GetGuest, () => guest.state()),
+    handle(rt, ListSharedServices, () => guest.catalog()),
+    handle(rt, CloseSession, () => guest.closeSession()),
+    rt.slots.provide(guestFetchSlot, (serviceId, request) =>
+      guest.fetchService(serviceId, request),
+    ),
+    // Closing the tab is not Close session: the identity stays.
+    () => void guest.leave(),
+  ];
 }
 
 /** The two kinds v1 ships (decision 4.1). */
