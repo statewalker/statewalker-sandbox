@@ -3,6 +3,7 @@
 import { BRIDGE_MARKER, checkServiceTarget, createUpstream } from "@statewalker/httpeers-share";
 import type { CommandDeclaration } from "@statewalker/shared-commands";
 import { GuestManager } from "../internal/guest.manager.js";
+import { Model } from "../internal/model.js";
 import { SharerManager } from "../internal/sharer.manager.js";
 import { SharingManager } from "../internal/sharing.manager.js";
 import {
@@ -28,6 +29,7 @@ import {
 } from "./commands.js";
 import {
   guestFetchSlot,
+  peershareModelSlot,
   sharerMountSlot,
   type UpstreamKind,
   upstreamKindsSlot,
@@ -54,7 +56,28 @@ export function peershare(init: PeerShareInit): Feature {
         kinds.clear();
         for (const [id, kind] of entries) kinds.set(id, kind);
       });
-      const sharer = new SharerManager(init.store, () => kinds);
+      // The managers report changes; the model turns them into snapshots for views.
+      let changed: () => void = () => {};
+      const notify = () => changed();
+      const sharer = new SharerManager(init.store, () => kinds, notify);
+      const sharing =
+        init.mesh == null
+          ? undefined
+          : new SharingManager(
+              init.mesh,
+              sharer.mount(),
+              () => sharer.snapshot().name || "The Sharer",
+              notify,
+            );
+      const guest = init.mesh == null ? undefined : new GuestManager(init.mesh, notify);
+      const model = new Model(() => ({
+        sharer: sharer.snapshot(),
+        sharing: sharing?.state() ?? { sharing: false },
+        guests: sharing?.guests() ?? [],
+        ...(sharing?.lastInvite != null ? { invite: sharing.lastInvite } : {}),
+        guest: guest?.state() ?? { stage: "no-link" },
+      }));
+      changed = model.changed;
       /** Every command waits for the stored Sharer before acting. */
       const on =
         <P, R>(fn: (payload: P) => R | Promise<R>) =>
@@ -67,6 +90,7 @@ export function peershare(init: PeerShareInit): Feature {
         stopKinds,
         ...builtInKinds(init).map((kind) => rt.slots.register(upstreamKindsSlot, kind.id, kind)),
         rt.slots.provide(sharerMountSlot, sharer.mount()),
+        rt.slots.provide(peershareModelSlot, model),
         handle(
           rt,
           AddService,
@@ -107,18 +131,18 @@ export function peershare(init: PeerShareInit): Feature {
           GetSharer,
           on(() => sharer.snapshot()),
         ),
-        ...(init.mesh == null ? [] : meshCommands(rt, init.mesh, sharer)),
+        ...(sharing == null ? [] : meshCommands(rt, sharer, sharing)),
+        ...(guest == null ? [] : guestCommands(rt, guest)),
       );
     },
   };
 }
 
-function meshCommands(rt: AppRuntime, mesh: MeshInit, sharer: SharerManager): Array<() => void> {
-  const sharing = new SharingManager(
-    mesh,
-    sharer.mount(),
-    () => sharer.snapshot().name || "The Sharer",
-  );
+function meshCommands(
+  rt: AppRuntime,
+  sharer: SharerManager,
+  sharing: SharingManager,
+): Array<() => void> {
   return [
     handle(rt, StartSharing, async () => {
       await sharer.ready;
@@ -131,7 +155,6 @@ function meshCommands(rt: AppRuntime, mesh: MeshInit, sharer: SharerManager): Ar
     handle(rt, RevokeGuest, ({ peerId }) => sharing.revoke(peerId)),
     // Leaving the suite leaves the mesh.
     () => void sharing.stop(),
-    ...guestCommands(rt, new GuestManager(mesh)),
   ];
 }
 

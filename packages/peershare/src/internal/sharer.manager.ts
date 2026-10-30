@@ -23,9 +23,11 @@ export class SharerManager {
   constructor(
     private readonly store: SharerStore,
     private readonly kinds: () => ReadonlyMap<string, UpstreamKind>,
+    private readonly notify: () => void = () => {},
   ) {
     this.ready = store.load().then((saved) => {
       if (saved != null) this.state = saved;
+      notify();
     });
   }
 
@@ -150,6 +152,7 @@ export class SharerManager {
   }
 
   private save(): Promise<void> {
+    this.notify();
     return this.store.save(this.snapshot());
   }
 }

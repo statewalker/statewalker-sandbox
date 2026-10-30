@@ -24,3 +24,21 @@ export const sharerMountSlot = defineSlot<FetchHandler>("peershare:sharer-mount"
  */
 export type GuestFetch = (serviceId: string, request: Request) => Promise<Response>;
 export const guestFetchSlot = defineSlot<GuestFetch>("peershare:guest-fetch");
+
+/** Everything a view shows, as one immutable snapshot. */
+export interface PeerShareSnapshot {
+  sharer: import("./types.js").SharerState;
+  sharing: import("./commands.js").SharingState;
+  guests: import("./commands.js").GuestRecord[];
+  /** The last Invite made, for the Invite dialog. */
+  invite?: { url: string; expiresAt: number };
+  guest: import("./commands.js").GuestState;
+}
+
+/** An external store (React's `useSyncExternalStore`): views read here, act through commands. */
+export interface PeerShareModel {
+  getSnapshot(): PeerShareSnapshot;
+  subscribe(onChange: () => void): () => void;
+}
+
+export const peershareModelSlot = defineSlot<PeerShareModel>("peershare:model");

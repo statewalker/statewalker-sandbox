@@ -20,9 +20,21 @@ import { PEERSHARE_RULES } from "./rules.js";
 
 export class GuestManager {
   private member: MemberHandle | undefined;
-  private current: GuestState = { stage: "no-link" };
+  private state_: GuestState = { stage: "no-link" };
 
-  constructor(private readonly mesh: MeshInit) {}
+  constructor(
+    private readonly mesh: MeshInit,
+    private readonly notify: () => void = () => {},
+  ) {}
+
+  private get current(): GuestState {
+    return this.state_;
+  }
+
+  private set current(next: GuestState) {
+    this.state_ = next;
+    this.notify();
+  }
 
   state(): GuestState {
     return { ...this.current };

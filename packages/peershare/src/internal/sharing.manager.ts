@@ -37,7 +37,11 @@ export class SharingManager {
     private readonly mesh: MeshInit,
     private readonly mount: FetchHandler,
     private readonly sharerName: () => string,
+    private readonly notify: () => void = () => {},
   ) {}
+
+  /** The last Invite made, for the Invite dialog. */
+  lastInvite: { url: string; expiresAt: number } | undefined;
 
   state(): SharingState {
     return {
@@ -91,6 +95,7 @@ export class SharingManager {
 
     this.running = { node, hub, peer };
     this.peerId = peerId;
+    this.notify();
     return this.state();
   }
 
@@ -108,6 +113,7 @@ export class SharingManager {
           .catch(() => {});
       }
     }
+    this.notify();
     return this.state();
   }
 
@@ -121,7 +127,9 @@ export class SharingManager {
       invitationId: id,
       sharerName: this.sharerName(),
     });
-    return { url, expiresAt };
+    this.lastInvite = { url, expiresAt };
+    this.notify();
+    return this.lastInvite;
   }
 
   guests(): GuestRecord[] {
@@ -130,6 +138,7 @@ export class SharingManager {
 
   revoke(peerId: string): void {
     revokeGuest(this.required().hub, peerId);
+    this.notify();
   }
 
   private required(): Running {
