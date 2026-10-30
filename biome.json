@@ -6,6 +6,9 @@
     "useIgnoreFile": true,
     "defaultBranch": "main"
   },
+  "files": {
+    "includes": ["**", "!**/08-isolated-viewer/vendor/**"]
+  },
   "formatter": {
     "enabled": true,
     "indentStyle": "space",

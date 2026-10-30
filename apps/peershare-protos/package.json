@@ -1,0 +1,48 @@
+{
+  "name": "@statewalker/peershare-protos",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PeerShare prototype ladder: each rung answers one question about sharing a local HTTP service with invited peers over HTTPeers.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/peershare-protos"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@chainsafe/libp2p-noise": "catalog:",
+    "@chainsafe/libp2p-yamux": "catalog:",
+    "@hono/node-server": "catalog:",
+    "@libp2p/circuit-relay-v2": "catalog:",
+    "@libp2p/crypto": "catalog:",
+    "@libp2p/identify": "catalog:",
+    "@libp2p/interface": "catalog:",
+    "@libp2p/tcp": "catalog:",
+    "@libp2p/webrtc": "catalog:",
+    "@libp2p/websockets": "catalog:",
+    "@statewalker/httpeers-access": "catalog:",
+    "@statewalker/httpeers-core": "catalog:",
+    "@statewalker/httpeers-hub": "catalog:",
+    "@statewalker/httpeers-libp2p": "catalog:",
+    "@statewalker/httpeers-member": "catalog:",
+    "@statewalker/httpeers-qr": "catalog:",
+    "@statewalker/shared-commands": "catalog:",
+    "@statewalker/shared-slots": "catalog:",
+    "@statewalker/webrun-http-browser": "catalog:",
+    "@statewalker/webrun-http-proxy": "catalog:",
+    "hono": "catalog:",
+    "libp2p": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "playwright": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}
