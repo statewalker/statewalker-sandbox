@@ -39,11 +39,14 @@ export function createUpstream(config: UpstreamConfig): Upstream {
     BRIDGE_TOKEN_HEADER,
   ];
   if (config.kind === "direct") {
-    return urlUpstream({
-      base: config.target,
-      stripRequestHeaders,
-      ...(needsLocalAddressSpace(config.target) ? { fetchImpl: fetchLocal } : {}),
-    });
+    return inGuestOrigin(
+      urlUpstream({
+        base: config.target,
+        stripRequestHeaders,
+        fetchImpl: directFetch(needsLocalAddressSpace(config.target)),
+      }),
+      config.target,
+    );
   }
   // Bridged is a URL upstream too: re-issued at the Bridge instead of the
   // Service, with the real target and the Pairing token as headers.
@@ -55,7 +58,7 @@ export function createUpstream(config: UpstreamConfig): Upstream {
       [BRIDGE_TOKEN_HEADER]: config.bridge.token,
     },
   });
-  return async (request) => {
+  return inGuestOrigin(async (request) => {
     const response = await viaBridge(request);
     const redirect = response.headers.get(BRIDGE_REDIRECT_STATUS_HEADER);
     if (redirect != null) {
@@ -72,6 +75,27 @@ export function createUpstream(config: UpstreamConfig): Upstream {
     const headers = new Headers(response.headers);
     headers.delete(MARKER);
     headers.set(BRIDGE_MARKER, "bridge-unreachable");
+    return new Response(response.body, { status: response.status, headers });
+  }, config.target);
+}
+
+/**
+ * A Guest sees the Service at the root of their own isolated origin (rung
+ * 08), so a redirect the Service writes absolutely to ITSELF
+ * (`https://wiki.example.com/login`, `http://127.0.0.1:5173/login`) must
+ * become a path, or the Guest's frame leaves that origin. Redirects anywhere
+ * else stay absolute.
+ */
+function inGuestOrigin(upstream: Upstream, target: string): Upstream {
+  const own = new URL(target).origin;
+  return async (request) => {
+    const response = await upstream(request);
+    const location = response.headers.get("location");
+    if (response.status < 300 || response.status >= 400 || location == null) return response;
+    const resolved = new URL(location, target);
+    if (resolved.origin !== own) return response;
+    const headers = new Headers(response.headers);
+    headers.set("location", `${resolved.pathname}${resolved.search}${resolved.hash}`);
     return new Response(response.body, { status: response.status, headers });
   };
 }
@@ -98,6 +122,18 @@ function needsLocalAddressSpace(target: string): boolean {
   return !(host === "localhost" || host === "::1" || /^127\./.test(host));
 }
 
-/** `targetAddressSpace` is Chromium's; other runtimes ignore the unknown option. */
-const fetchLocal: typeof fetch = (input, init) =>
-  fetch(input, { ...init, targetAddressSpace: "local" } as RequestInit);
+/**
+ * How Direct calls the Service. Redirects are FOLLOWED: in the Sharer's
+ * browser tab a `redirect: "manual"` response is opaque (status 0, no
+ * `Location`), so following is the only way to serve a site that redirects
+ * (rung 04). Same everywhere, so Node and the browser agree.
+ * `targetAddressSpace` is Chromium's; other runtimes ignore it.
+ */
+function directFetch(local: boolean): typeof fetch {
+  return (input, init) =>
+    fetch(input, {
+      ...init,
+      redirect: "follow",
+      ...(local ? { targetAddressSpace: "local" } : {}),
+    } as RequestInit);
+}

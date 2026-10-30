@@ -82,6 +82,11 @@ export async function startRelay(opts: { limits?: "stock" | "httpeers" } = {}): 
     transports: [webSockets()],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],
+    // Every peer in a test dials from 127.0.0.1. libp2p's default inbound
+    // rate limit per host then drops the next dial mid-handshake
+    // (`EncryptionFailedError: Unexpected EOF`). A production relay meets the
+    // same limit when an office of Guests behind one NAT joins at once.
+    connectionManager: { inboundConnectionThreshold: 1000, maxIncomingPendingConnections: 1000 },
     services: {
       identify: identify(),
       relay: circuitRelayServer({ reservations: { applyDefaultLimit: true, ...limits } }),

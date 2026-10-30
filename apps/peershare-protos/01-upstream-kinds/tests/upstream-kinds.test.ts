@@ -128,6 +128,28 @@ describe.each(Object.keys(KINDS))("01 — %s", (kind) => {
   });
 });
 
+describe("01 — a Service's redirect", () => {
+  it("bridged: reaches the Guest as a path, so they stay in their origin", async () => {
+    const res = await sharerFor("bridged")(new Request("http://sharer.mesh/s/foo/redirect-self"));
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/echo/landed?from=redirect");
+  });
+
+  it("bridged: a redirect to another site stays absolute", async () => {
+    const res = await sharerFor("bridged")(new Request("http://sharer.mesh/s/foo/redirect-away"));
+
+    expect(res.headers.get("location")).toBe("https://accounts.example/login");
+  });
+
+  it("direct: is followed, as the Sharer's browser tab can only do (rung 04)", async () => {
+    const res = await sharerFor("direct")(new Request("http://sharer.mesh/s/foo/redirect-self"));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ path: "/echo/landed", query: "?from=redirect" });
+  });
+});
+
 describe("01 — what is down", () => {
   it("tells 'the Service is down' from 'the Bridge is down', whichever kind is used", async () => {
     const dead = await deadOrigin();

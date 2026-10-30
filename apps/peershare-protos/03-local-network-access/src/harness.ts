@@ -9,6 +9,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash, createPublicKey } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import {
   createServer as createHttpServer,
@@ -31,7 +32,7 @@ export interface PublicPage {
 }
 
 /** A throwaway self-signed certificate for `san` (e.g. `IP:127.0.0.1`, `DNS:remote.localhost`). */
-export function selfSignedCert(san: string): { key: Buffer; cert: Buffer } {
+export function selfSignedCert(san: string): { key: Buffer; cert: Buffer; spki: string } {
   const dir = mkdtempSync(join(tmpdir(), "peershare-cert-"));
   execFileSync(
     "openssl",
@@ -42,7 +43,18 @@ export function selfSignedCert(san: string): { key: Buffer; cert: Buffer } {
     ],
     { stdio: "ignore" },
   );
-  return { key: readFileSync(join(dir, "key.pem")), cert: readFileSync(join(dir, "cert.pem")) };
+  // The certificate's SPKI hash: what `--ignore-certificate-errors-spki-list`
+  // takes to make Chromium treat this one certificate as valid.
+  const spki = createHash("sha256")
+    .update(
+      createPublicKey(readFileSync(join(dir, "key.pem"))).export({ type: "spki", format: "der" }),
+    )
+    .digest("base64");
+  return {
+    key: readFileSync(join(dir, "key.pem")),
+    cert: readFileSync(join(dir, "cert.pem")),
+    spki,
+  };
 }
 
 /** An https server on 127.0.0.1 with a certificate for `san`. */
@@ -77,9 +89,15 @@ export function startPublicPage(): Promise<PublicPage> {
   });
 }
 
-/** `overrides` as `ip:port=public|private|local`. */
-export function launchChromium(overrides: string[]): Promise<Browser> {
-  return chromium.launch({ args: [`--ip-address-space-overrides=${overrides.join(",")}`] });
+/**
+ * `overrides` as `ip:port=public|private|local`. `trust` lists certificate
+ * SPKI hashes Chromium should treat as valid: a ServiceWorker never registers
+ * on an origin whose certificate has an error, `ignoreHTTPSErrors` or not.
+ */
+export function launchChromium(overrides: string[], trust: string[] = []): Promise<Browser> {
+  const args = [`--ip-address-space-overrides=${overrides.join(",")}`];
+  if (trust.length > 0) args.push(`--ignore-certificate-errors-spki-list=${trust.join(",")}`);
+  return chromium.launch({ args });
 }
 
 const pageCode = new Map<string, Promise<string>>();

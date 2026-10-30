@@ -63,6 +63,12 @@ unreachable(response): "service" | "bridge" | undefined
 - **Rung 04:** `checkServiceTarget(kind, target)` is the v1 rule for which targets each
   kind accepts.
 
+- **Rung 08:** a redirect the Service writes absolutely to itself becomes a path, for
+  both kinds, so the Guest's frame stays in its isolated origin.
+- **Rung 04 (browser):** Direct follows redirects. In the Sharer's browser tab a manual
+  redirect is opaque, so following is the only way to serve a site that redirects. Bridged
+  still passes redirects to the Guest as 3xx responses.
+
 ## Not answered here
 
 - Browser behaviour: CORS on Direct, Local Network Access on Bridged (rungs 03, 08).

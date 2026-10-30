@@ -63,4 +63,8 @@ grilled in three rounds. Every answer below accepted the recommended option.
 | 09 | Revocations were not enforced without `revocation: hub.revocations` | The Sharer's guard is given the registry |
 | 10 | Used and expired Invites are the same error | `joinOutcome` reads the hub's quoted answer; proposed a structured field for httpeers-member |
 | 11 | Relay-link Guests could not join; stock relays cap 128 KiB | `serveOnLimitedConnection: true`; PeerShare needs a relay with httpeers' limits |
+| 08 | A real SPA runs unmodified in an isolated session origin; ServiceWorkers refuse certificate errors; a downgrade drops the Referer the shell needs | Sessions are https; the Viewer calls the mesh with the member's JS `fetch` |
+| 08 | A self-redirect would take the Guest's frame out of its origin | Both upstream kinds rewrite self-redirects into paths |
+| 04 | In the Sharer's browser, Direct redirects are opaque | Direct follows redirects |
+| 05 | The relay rate-limits new connections per host | The production relay's connection manager needs review (offices behind one NAT) |
 

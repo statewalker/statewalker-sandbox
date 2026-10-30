@@ -31,6 +31,7 @@
     "@statewalker/httpeers-libp2p": "catalog:",
     "@statewalker/httpeers-member": "catalog:",
     "@statewalker/httpeers-qr": "catalog:",
+    "@statewalker/webrun-http-browser": "catalog:",
     "@statewalker/webrun-http-proxy": "catalog:",
     "hono": "catalog:",
     "libp2p": "catalog:"

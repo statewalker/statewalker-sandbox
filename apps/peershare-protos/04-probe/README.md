@@ -54,6 +54,11 @@ checkServiceTarget(kind, target): { ok: true } | { ok: false, reason }   // the 
 
 ## What the rung found
 
+0. **Direct must follow redirects.** In the Sharer's browser tab, a Direct upstream's
+   `redirect: "manual"` response is opaque, so a remote site that redirects came back
+   as `502 upstream-redirect`. Direct now follows (`redirect: "follow"`), measured in
+   Chromium.
+
 1. **A missing CORS header is a dead server, to a page.** Both fail with
    `TypeError: Failed to fetch`. For Direct, the Probe follows a failure with a
    `mode: "no-cors"` request. That request is not subject to CORS, so an opaque answer

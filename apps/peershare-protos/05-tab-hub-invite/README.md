@@ -30,3 +30,8 @@ Sharer → `/s` → the Bridge → Dirk's app.
 3. **The Sharer's access guard must be given the revocation registry, and must serve
    limited connections.** Rungs 09 and 11 found these, and both are fixed in
    `src/mesh.ts`.
+4. **The relay rate-limits new connections per host.** With libp2p's default inbound
+   threshold, the relay dropped Guests' dials mid-handshake once several peers dialled
+   from one address within a second (`EncryptionFailedError: Unexpected EOF`). The test
+   relay raises it. A production relay meets the same limit when an office of Guests
+   behind one NAT joins at once, so its connection manager needs the same review.

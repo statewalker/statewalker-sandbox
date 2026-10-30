@@ -38,7 +38,11 @@ function remote(cors: boolean) {
   return startHttps("DNS:remote.localhost", (req, res) => {
     const headers: Record<string, string> = { "content-type": "text/html" };
     if (cors) headers["access-control-allow-origin"] = req.headers.origin ?? "*";
-    res.writeHead(200, headers).end("<p>remote</p>");
+    if (req.url === "/moved") {
+      res.writeHead(302, { ...headers, location: "/new-home" }).end();
+      return;
+    }
+    res.writeHead(200, headers).end(req.url === "/new-home" ? "<p>new home</p>" : "<p>remote</p>");
   });
 }
 
@@ -105,6 +109,29 @@ describe("04 — Direct, in the browser", () => {
       health: "down",
       cause: "service-down",
     });
+  });
+});
+
+describe("04 — Direct redirects, in the Sharer's browser tab", () => {
+  it("a remote site's redirect is followed, not lost as an opaque response", async () => {
+    const { page, context } = await openPage(browser, site.origin, {
+      entry: ENTRY,
+      name: "Rung04",
+    });
+    try {
+      const got = await page.evaluate(async (target) => {
+        const { Rung04 } = window as unknown as {
+          Rung04: typeof import("../src/browser-entry.js");
+        };
+        const res = await Rung04.createUpstream({ kind: "direct", target })(
+          new Request("http://guest.mesh/moved"),
+        );
+        return { status: res.status, body: await res.text() };
+      }, at(withCors));
+      expect(got).toEqual({ status: 200, body: "<p>new home</p>" });
+    } finally {
+      await context.close();
+    }
   });
 });
 
