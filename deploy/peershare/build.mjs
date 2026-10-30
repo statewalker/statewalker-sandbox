@@ -33,7 +33,11 @@ const srv = join(here, "srv");
 rmSync(srv, { recursive: true, force: true });
 
 // The page.
-await build({ root: page, logLevel: "warn", build: { outDir: join(srv, "page"), emptyOutDir: true } });
+await build({
+  root: page,
+  logLevel: "warn",
+  build: { outDir: join(srv, "page"), emptyOutDir: true },
+});
 
 // The shell, for this deployment's zones.
 const vendor = join(page, "src/vendor/session-shell");
@@ -54,7 +58,12 @@ for (const [entry, out] of [
       outDir: join(srv, "shell", out.includes("/") ? out.split("/")[0] : ""),
       emptyOutDir: false,
       minify: true,
-      lib: { entry: join(vendor, entry), formats: ["iife"], name: "Shell", fileName: () => out.split("/").pop() },
+      lib: {
+        entry: join(vendor, entry),
+        formats: ["iife"],
+        name: "Shell",
+        fileName: () => out.split("/").pop(),
+      },
     },
   });
 }
