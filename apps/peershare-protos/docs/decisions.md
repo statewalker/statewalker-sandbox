@@ -45,3 +45,6 @@ grilled in three rounds. Every answer below accepted the recommended option.
 | 02 | Browsers make `redirect: "manual"` responses opaque | The Bridge restates redirects as headers; Direct's redirects are open for rung 08 |
 | 02 | `localhost` may resolve to `::1` in browsers | The pairing URL uses `127.0.0.1`, not the draft's `localhost:9090` |
 | 02 | `*.localhost` and every DNS name are refused as targets | Only exact `localhost`, literal private addresses including Tailscale `100.64/10`, and `.local` names whose every resolved address is private |
+| 03 | Chromium blocks a public page's call to loopback/LAN until the Sharer allows local network access; a blocked call looks exactly like a stopped Bridge | `diagnoseBridge` reads the permission state; the page explains the prompt before the first call |
+| 03 | A stale token looked like a stopped Bridge | The Bridge's 401 is readable by the PeerShare origin; the Bridge answers a hello |
+| 03 | Way B to a plain-http LAN Service is mixed content | Direct passes `targetAddressSpace: "local"` for non-loopback http targets |

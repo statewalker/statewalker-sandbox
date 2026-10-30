@@ -54,6 +54,12 @@ unreachable(response): "service" | "bridge" | undefined
 6. **The streaming test is a guard.** It passed on its first run. It was then checked
    against a buffering Bridge, which made it fail in 3 s instead of hanging.
 
+## Changed by later rungs
+
+- **Rung 03:** Direct passes `targetAddressSpace: "local"` for plain-http targets that
+  are not loopback. Without it, Chromium blocks an https page's call to a LAN Service as
+  mixed content.
+
 ## Not answered here
 
 - Browser behaviour: CORS on Direct, Local Network Access on Bridged (rungs 03, 08).

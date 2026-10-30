@@ -53,10 +53,16 @@ export function createBridge(init: BridgeInit): FetchHandler {
       return preflight(request, origin);
     }
     if (!sameSecret(request.headers.get(BRIDGE_TOKEN_HEADER), init.token)) {
-      return refuse(401, "bad-token");
+      return refuse(401, "bad-token", origin);
     }
-    const target = request.headers.get(BRIDGE_TARGET_HEADER);
-    if (target == null) return refuse(400, "no-target", origin);
+    // No target: the page is asking whether its Bridge is there and its
+    // token is right (the token check above already passed).
+    const target = request.headers.get(BRIDGE_TARGET_HEADER) || null;
+    if (target == null) {
+      const headers = new Headers({ "content-type": "application/json" });
+      if (origin != null) grantTo(headers, origin);
+      return new Response(JSON.stringify({ bridge: "peershare" }), { headers });
+    }
     // The page passed both checks, so it may read WHY the target was refused.
     const verdict = checkTarget(target);
     if (verdict === "forbidden") return refuse(403, "target-forbidden", origin);

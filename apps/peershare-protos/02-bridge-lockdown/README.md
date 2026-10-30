@@ -11,7 +11,7 @@ real port, and the same handler runs under Node (tests) and Bun (`main.ts`).
 |---|---|---|
 | 1 | Bind `127.0.0.1` only | Anyone on the LAN or café Wi-Fi using the Bridge |
 | 2 | Any `Origin` other than the PeerShare page → 403, no CORS headers | Other websites, even ones that somehow got the token |
-| 3 | No Pairing token → 401, no CORS headers. The token is 32 random bytes, new each launch, compared in constant time | Websites guessing at loopback ports |
+| 3 | No valid Pairing token → 401. The token is 32 random bytes, new each launch, compared in constant time. The 401 is readable by the PeerShare origin only (changed in rung 03, so the page can say "relaunch the Bridge") | Websites guessing at loopback ports |
 | 4 | Preflight: granted to the PeerShare origin only, echoing the requested method and headers, plus `Access-Control-Allow-Private-Network` | Nothing extra; a preflight cannot carry the token, so the origin check is its only guard |
 | 5 | Relay only to `localhost`, `127/8`, `10/8`, `172.16/12`, `192.168/16`, `100.64/10` (Tailscale), `::1` and `fc00::/7`, and to `.local` names whose every resolved address is one of those; refuse every other address, every other DNS name, and non-HTTP schemes | The Bridge as an open proxy into the internet or cloud metadata, and DNS rebinding |
 | 6 | Replace the Service's own CORS headers with a grant for the one origin | A dev server's `Access-Control-Allow-Origin: *` + credentials leaking through the relay |
@@ -52,10 +52,13 @@ relay, a `0.0.0.0` bind, and removing the CORS replacement.
 2. **The Bridge's own "Service unreachable" must be restated.** Passed through as the
    proxy's `upstream-unreachable`, the page read it as "the Bridge is down". The
    Bridge now answers `x-peershare-bridge: target-unreachable`.
-3. **Refusals the page may read, and ones it may not.** No-token and wrong-origin
-   refusals carry no CORS headers, so a foreign page learns nothing. Refusals after
-   both checks pass (`target-forbidden`, `target-unreachable`, `no-target`) are granted
-   to the PeerShare origin, so the page can tell the Sharer what is wrong.
+3. **Refusals the page may read, and ones it may not.** Wrong-origin refusals carry
+   no CORS headers, so a foreign page learns nothing. (Token refusals were the same
+   until rung 03 showed a stale token then looked like a stopped Bridge; they are now
+   readable by the PeerShare origin.) Refusals after
+   both checks pass (`target-forbidden`, `target-unreachable`) are granted to the
+   PeerShare origin, so the page can tell the Sharer what is wrong. A request with no
+   target is the page's hello (`200 {"bridge":"peershare"}`, added in rung 03).
 4. **`*.localhost` is refused.** Mapping `*.localhost` to loopback is a convention, not
    a guarantee; a resolver may forward it to DNS. Only exact `localhost` is accepted.
 5. **The printed URL says `127.0.0.1`, not `localhost`.** The draft writes

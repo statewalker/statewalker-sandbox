@@ -55,8 +55,20 @@ function toBridge(path: string, init: RequestInit & { headers?: Record<string, s
 }
 
 describe("02 — the Bridge refuses", () => {
-  it("a request without the Pairing token: 401, and no cross-origin permission", async () => {
-    const res = await toBridge("/echo", { headers: { [BRIDGE_TOKEN_HEADER]: "" } });
+  it("the PeerShare page with a stale token: 401 it can read, so it can say 'relaunch the Bridge'", async () => {
+    // Readable to the PeerShare origin only: other sites are refused before
+    // the token is looked at (below), and a browser cannot forge `Origin`.
+    const res = await toBridge("/echo", { headers: { [BRIDGE_TOKEN_HEADER]: "stale" } });
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get(BRIDGE_MARKER)).toBe("bad-token");
+    expect(res.headers.get("access-control-allow-origin")).toBe(PEERSHARE);
+  });
+
+  it("anyone else without the token: 401, and no cross-origin permission", async () => {
+    const res = await fetch(`${bridge.origin}/echo`, {
+      headers: { [BRIDGE_TARGET_HEADER]: service.origin },
+    });
 
     expect(res.status).toBe(401);
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
@@ -67,6 +79,16 @@ describe("02 — the Bridge refuses", () => {
 
     expect(res.status).toBe(403);
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
+  });
+});
+
+describe("02 — the Bridge's hello", () => {
+  it("answers the PeerShare page with who it is when no target is named", async () => {
+    const res = await toBridge("/", { headers: { [BRIDGE_TARGET_HEADER]: "" } });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("access-control-allow-origin")).toBe(PEERSHARE);
+    expect(await res.json()).toEqual({ bridge: "peershare" });
   });
 });
 

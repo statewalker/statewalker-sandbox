@@ -33,7 +33,13 @@ export function createUpstream(config: UpstreamConfig): Upstream {
     BRIDGE_TARGET_HEADER,
     BRIDGE_TOKEN_HEADER,
   ];
-  if (config.kind === "direct") return urlUpstream({ base: config.target, stripRequestHeaders });
+  if (config.kind === "direct") {
+    return urlUpstream({
+      base: config.target,
+      stripRequestHeaders,
+      ...(needsLocalAddressSpace(config.target) ? { fetchImpl: fetchLocal } : {}),
+    });
+  }
   // Bridged is a URL upstream too: re-issued at the Bridge instead of the
   // Service, with the real target and the Pairing token as headers.
   const viaBridge = urlUpstream({
@@ -73,3 +79,20 @@ export function unreachable(response: Response): "service" | "bridge" | undefine
   if (response.headers.get(MARKER) === "upstream-unreachable") return "service";
   return undefined;
 }
+
+/**
+ * A plain-http Service on the LAN, called from the https PeerShare page, is
+ * mixed content and Chromium blocks it — unless the call says the target is
+ * on the local network, which also lets Local Network Access ask the Sharer
+ * (measured in rung 03). Loopback needs nothing: it is trusted already.
+ */
+function needsLocalAddressSpace(target: string): boolean {
+  const url = new URL(target);
+  if (url.protocol !== "http:") return false;
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  return !(host === "localhost" || host === "::1" || /^127\./.test(host));
+}
+
+/** `targetAddressSpace` is Chromium's; other runtimes ignore the unknown option. */
+const fetchLocal: typeof fetch = (input, init) =>
+  fetch(input, { ...init, targetAddressSpace: "local" } as RequestInit);
