@@ -6,9 +6,10 @@ The **PeerShare prototype ladder and plan**. PeerShare is a SandClaw app: *"I ha
 local HTTP service which I want to securely share to invited peers."* It is built on
 [HTTPeers](https://github.com/statewalker/httpeers).
 
-Status: **rungs 01–04 answered** ([01](01-upstream-kinds/README.md),
-[02](02-bridge-lockdown/README.md), [03](03-local-network-access/README.md),
-[04](04-probe/README.md)); the rest are in progress. The design was settled in a
+Status: **every rung answered** (01–14, 16; 15 is a spike with its premises answered and
+the transport open), 142 tests. See the ladder in [docs/PLAN.md](docs/PLAN.md#3-prototype-ladder).
+The UI is prototyped in Storybook: [`../peershare-ui-protos`](../peershare-ui-protos).
+The design was settled in a
 grilling session (three rounds); the record is in [docs/decisions.md](docs/decisions.md).
 
 | File | What it holds |

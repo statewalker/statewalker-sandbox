@@ -10,6 +10,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { type FetchHandler, MARKER, urlUpstream } from "@statewalker/webrun-http-proxy";
 import {
+  BRIDGE_GUEST_HEADER,
   BRIDGE_MARKER,
   BRIDGE_REDIRECT_LOCATION_HEADER,
   BRIDGE_REDIRECT_STATUS_HEADER,
@@ -28,6 +29,13 @@ export interface BridgeInit {
   fetchImpl?: typeof fetch;
   /** Every address a `.local` name resolves to. Injected by tests; defaults to the OS resolver. */
   resolveHost?: (name: string) => Promise<string[]>;
+  /**
+   * Keep one cookie jar per Guest (rung 16, spike): a Service's `Set-Cookie`
+   * goes into the jar of the Guest named in `x-peershare-guest`, and that
+   * jar's cookies go on the Guest's next requests. Cookies never reach the
+   * page, which could not use them anyway.
+   */
+  cookieJars?: boolean;
 }
 
 async function systemResolve(name: string): Promise<string[]> {
@@ -37,7 +45,12 @@ async function systemResolve(name: string): Promise<string[]> {
 
 export function createBridge(init: BridgeInit): FetchHandler {
   const resolveHost = init.resolveHost ?? systemResolve;
-  return async (request) => {
+  const jars = new Map<string, Map<string, string>>();
+  return async (incoming) => {
+    const guest = init.cookieJars === true ? incoming.headers.get(BRIDGE_GUEST_HEADER) : null;
+    const jar =
+      guest == null ? undefined : (jars.get(guest) ?? jars.set(guest, new Map()).get(guest));
+    const request = jar == null ? incoming : withCookies(incoming, jar);
     // A page on another site carries its own `Origin`. No `Origin` at all is
     // a local process (curl, the Probe's CLI): the token alone admits it.
     const origin = request.headers.get("origin");
@@ -78,7 +91,7 @@ export function createBridge(init: BridgeInit): FetchHandler {
     // are consumed by this hop.
     const upstream = urlUpstream({
       base: target,
-      stripRequestHeaders: [BRIDGE_TARGET_HEADER, BRIDGE_TOKEN_HEADER],
+      stripRequestHeaders: [BRIDGE_TARGET_HEADER, BRIDGE_TOKEN_HEADER, BRIDGE_GUEST_HEADER],
       ...(init.fetchImpl != null ? { fetchImpl: init.fetchImpl } : {}),
     });
     const response = await upstream(request);
@@ -93,8 +106,12 @@ export function createBridge(init: BridgeInit): FetchHandler {
 
     const headers = new Headers(response.headers);
     headers.set(BRIDGE_MARKER, "relayed");
-    const cookies = response.headers.getSetCookie().length;
-    if (cookies > 0) headers.set(BRIDGE_SET_COOKIE_HEADER, String(cookies));
+    const cookies = response.headers.getSetCookie();
+    if (cookies.length > 0) headers.set(BRIDGE_SET_COOKIE_HEADER, String(cookies.length));
+    if (jar != null) {
+      for (const cookie of cookies) keep(jar, cookie);
+      headers.delete("set-cookie");
+    }
 
     const location = response.headers.get("location");
     if (response.status >= 300 && response.status < 400 && location != null) {
@@ -167,4 +184,22 @@ function sameSecret(given: string | null, expected: string): boolean {
   const a = new TextEncoder().encode(given);
   const b = new TextEncoder().encode(expected);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** `request` with `jar`'s cookies as its `Cookie` header (the page cannot send one itself). */
+function withCookies(request: Request, jar: Map<string, string>): Request {
+  if (jar.size === 0) return request;
+  const headers = new Headers(request.headers);
+  headers.set("cookie", [...jar].map(([name, value]) => `${name}=${value}`).join("; "));
+  return new Request(request, { headers });
+}
+
+/** A spike's cookie jar: name and value only; `Max-Age=0` deletes. Path, domain and expiry are ignored. */
+function keep(jar: Map<string, string>, setCookie: string): void {
+  const [pair = "", ...attributes] = setCookie.split(";");
+  const at = pair.indexOf("=");
+  if (at <= 0) return;
+  const name = pair.slice(0, at).trim();
+  if (attributes.some((a) => /^\s*max-age\s*=\s*0\s*$/i.test(a))) jar.delete(name);
+  else jar.set(name, pair.slice(at + 1).trim());
 }

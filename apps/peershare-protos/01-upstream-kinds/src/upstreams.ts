@@ -23,6 +23,12 @@ export const BRIDGE_REDIRECT_LOCATION_HEADER = "x-peershare-redirect-location";
  * response header: no page script can read it, so the Bridge says it instead.
  */
 export const BRIDGE_SET_COOKIE_HEADER = "x-peershare-set-cookie";
+/**
+ * Which Guest a request is for, as the Sharer states it from the mesh-proven
+ * peer id (rung 16); a Guest's own copy is overwritten. The Bridge keeps one
+ * cookie jar per value.
+ */
+export const BRIDGE_GUEST_HEADER = "x-peershare-guest";
 
 export type UpstreamConfig =
   | { kind: "direct"; target: string }

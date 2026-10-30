@@ -67,4 +67,9 @@ grilled in three rounds. Every answer below accepted the recommended option.
 | 08 | A self-redirect would take the Guest's frame out of its origin | Both upstream kinds rewrite self-redirects into paths |
 | 04 | In the Sharer's browser, Direct redirects are opaque | Direct follows redirects |
 | 05 | The relay rate-limits new connections per host | The production relay's connection manager needs review (offices behind one NAT) |
+| 12 | PeerShare plugs in through slots and commands only; a third upstream kind from another Feature works | `peershare:upstream-kinds` and `peershare:sharer-mount` are the extension points |
+| 13 | Lazy activation works for commands with results; a hand-written manifest is kept honest by a drift test | The manifest lives next to the Feature |
+| 14 | The compiled Bridge is one 109 MB file and needs nothing on PATH | Cross-compiling, signing and size are milestone M8 |
+| 15 | A session's WebSockets go to the session host, past the ServiceWorker; a shim can be injected | Carrying sockets over the mesh is open (full-duplex in httpeers-member?) |
+| 16 | A per-Guest jar in the Bridge keeps cookie logins working for Bridged Services | Direct stays cookie-less (ADR 0003) |
 

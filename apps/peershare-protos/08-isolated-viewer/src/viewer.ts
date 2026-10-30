@@ -16,6 +16,8 @@ export interface ViewerInit {
   serviceId: string;
   /** `openSession`'s origin function, as a template with `{name}`. */
   sessionOrigin: string;
+  /** Rung 15 (spike): put `/_shell/ws-shim.js` first in every HTML page the Service returns. */
+  injectWsShim?: boolean;
 }
 
 /** The member's `fetch`, as the Viewer calls it: a redirect comes back as a real 3xx Response. */
@@ -45,7 +47,8 @@ export async function openViewer(init: ViewerInit): Promise<{ origin: string }> 
         handler: async (request: Request) => {
           const url = new URL(request.url);
           const path = `/${init.sharerPeerId}/s/${init.serviceId}${url.pathname}${url.search}`;
-          return meshFetch(init.edge, path, request);
+          const response = await meshFetch(init.edge, path, request);
+          return init.injectWsShim === true ? withWsShim(response) : response;
         },
       },
     ],
@@ -55,4 +58,15 @@ export async function openViewer(init: ViewerInit): Promise<{ origin: string }> 
   frame.src = session.url("/");
   document.body.append(frame);
   return { origin: session.origin };
+}
+
+async function withWsShim(response: Response): Promise<Response> {
+  if (!(response.headers.get("content-type") ?? "").includes("text/html")) return response;
+  const html = await response.text();
+  const shim = '<script src="/_shell/ws-shim.js"></script>';
+  const at = html.search(/<head[^>]*>/i);
+  const patched = at < 0 ? shim + html : html.replace(/<head[^>]*>/i, (head) => head + shim);
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(patched, { status: response.status, headers });
 }

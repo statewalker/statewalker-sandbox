@@ -38,6 +38,8 @@ async function bundle(entry: string): Promise<string> {
 
 export interface SessionServer {
   port: number;
+  /** WebSocket upgrades that reached this host: a session's sockets bypass its ServiceWorker (rung 15). */
+  upgrades: string[];
   /** The certificate's SPKI hash, for `launchChromium(…, trust)`. */
   spki: string;
   /** The `origin` function `openSession` takes. */
@@ -59,10 +61,16 @@ export async function startSessionServer(): Promise<SessionServer> {
     const js = { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" };
     if (path === "/relay-sw.js") return void res.writeHead(200, js).end(worker);
     if (path === "/_shell/relay.js") return void res.writeHead(200, js).end(relay);
+    if (path === "/_shell/ws-shim.js") return void res.writeHead(200, js).end(WS_SHIM);
     if (path === "/relay.html") {
       return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(relayHtml);
     }
     res.writeHead(404, { "content-type": "text/html; charset=utf-8" }).end(fallback);
+  });
+  const upgrades: string[] = [];
+  server.on("upgrade", (req, socket) => {
+    upgrades.push(`${req.headers.host}${req.url}`);
+    socket.destroy();
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const address = server.address();
@@ -71,6 +79,7 @@ export async function startSessionServer(): Promise<SessionServer> {
   return {
     port,
     spki: cert.spki,
+    upgrades,
     originOf: (name) => `https://${name}.localhost:${port}`,
     close: () =>
       new Promise<void>((r) => {
@@ -79,3 +88,24 @@ export async function startSessionServer(): Promise<SessionServer> {
       }),
   };
 }
+
+/**
+ * Rung 15's hook (spike): replaces `WebSocket` before the app's own scripts
+ * run, so a socket could be carried over the mesh instead of the network.
+ * This shim only records the attempt; carrying it is the open question.
+ */
+const WS_SHIM = `(() => {
+  class PeerShareSocket extends EventTarget {
+    constructor(url) {
+      super();
+      this.url = String(url);
+      this.readyState = 0;
+      (window.__peershareSockets ??= []).push(this.url);
+      setTimeout(() => this.dispatchEvent(new Event("error")), 0);
+    }
+    send() {}
+    close() {}
+  }
+  PeerShareSocket.peershare = true;
+  window.WebSocket = PeerShareSocket;
+})();`;
