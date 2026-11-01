@@ -430,6 +430,11 @@ Data flow:
    minimal theme project whose live collection reads notebook page models; one notebook page
    rendered through it in Node, then in Chromium, then exported with the crawl-to-ZIP. Can start
    in parallel with milestones 3–5, since it only needs the page-model shape.
+   *Progress (2026-11-01):* the builder is extracted as `@statewalker/astro-builder` in
+   `cellb.dev/packages/astro-builder` (branch `claude/notebook-runtime-markdown-6a86s9`; private
+   until `webrun-bundler` 0.1.1 is on npm). Its test builds a project with a live content
+   collection from a `MemFilesApi` and runs it on cellb in Node. Next: the notebook theme project
+   and `notebook-astro`.
 9. Optional: `static-bundled` export (E2) and a PT-editor-based notebook editor.
 
 ## 11. Open questions
@@ -437,8 +442,9 @@ Data flow:
 - Where does the Astro builder live once extracted: cellb.dev (it depends on cellb's host
   modules and adapter stub) or webrun-sites (next to `webrun-bundler`)? The notebook packages
   should depend on it, not on the example.
-- Does the notebook-kit runtime and `define()` output survive Astro's HTML pipeline unchanged
-  (inline module scripts, `is:inline`, script hoisting), or must cells be emitted as an island?
+- ~~Does the `define()` output survive Astro's HTML pipeline unchanged?~~ Yes for
+  `<script type="module" is:inline>`: `astro-builder`'s test checks that it reaches the page
+  verbatim. Whether one inline script per page or one per cell works better is still open.
 - Is crawl-based export enough, or does the builder need real prerendering for large sites
   (pages unreachable by links, e.g. search-only pages)?
 
