@@ -1,6 +1,7 @@
 # Notebook runtime: options and proposal
 
-Status: exploration, no code yet. Date: 2026-10-31.
+Status: exploration, no code yet. Date: 2026-10-31; revised 2026-11-01 after cellb.dev's
+in-browser Astro builder landed (Sections 1, 3, 8–11).
 
 Goal: turn Markdown files into interactive sites, doing in the browser what Observable
 notebook-kit's CLI and Observable Framework do under Node: parse, convert to notebook-kit's
@@ -24,7 +25,9 @@ instead of starting over.
 | `@statewalker/webrun-cells` | webrun-sites | Key-level incremental engine whose whole state is SQLite (Node, DO storage, D1): queue, provenance, retraction, dead letters. | Not used by notebooks yet. |
 | `@statewalker/webrun-site-builder` / `-site-host` | webrun-sites | `SiteHandler` composition; hosting it behind a same-origin ServiceWorker. | — |
 | `@statewalker/webrun-files-*` | webrun-files | `FilesApi` over memory, Node, OPFS/FSA, S3, HTTP, SQLite, composite. | — |
-| `@statewalker/cellb` | cellb.dev | Durable Objects runtime with a Cloudflare/celld surface, in Node and in the browser (OPFS SQLite in Dedicated Workers, ServiceWorker ingress); Worker Loader (dynamic workers), KV, R2, D1, WebSockets. | — |
+| `@statewalker/cellb` | cellb.dev | Now publishable (`dist/` build, changesets). Durable Objects runtime with a Cloudflare/celld surface, in Node and in the browser (OPFS SQLite in Dedicated Workers, ServiceWorker ingress); Worker Loader (dynamic workers), KV, R2, D1, WebSockets. | — |
+| cellb.dev `examples/astro-in-browser` | cellb.dev (private example) | **Builds an Astro SSR app from its sources in a browser tab** (or under Node) and runs it on cellb: Astro's compiler (`@astrojs/compiler-rs`, wasm) + esbuild-wasm through `webrun-bundler`; evaluates `astro.config.mjs` and runs integrations' `astro:config:setup`/`astro:config:done` hooks and their Vite plugins through an adapter; routes from `src/pages`, middleware, islands and client bundles; `@astrojs/cloudflare` replaced by a cellb stub; output is ONE Worker module + client assets, run in cellb shards with Durable Objects (D1, KV, R2) on LTX storage in OPFS; npm packages cached in a package-store Durable Object. **Export**: crawl the running site from `/` into a ZIP served by any static server. Proven on a small app (~5 s) and on EmDash's `blog-cloudflare` template (225 routes, React islands; 65–115 s, ~2 GB peak renderer memory). | Example code, not a package. SSR only, **no prerendering**; only `.astro` pages and `.ts` endpoints (no `.md`/`.mdx` pages); `astro:content` with **live** collections only (no build-time content layer); `astro:assets` with a no-op image service. |
+| cellb.dev `examples/emdash` | cellb.dev (private example) | An Astro CMS (EmDash) built by Astro under Node and run unchanged on cellb in Node and, as a static file set, entirely in a browser tab (host page + ServiceWorker owning the origin root, `installProjectRouter({ root })`). | — |
 | cellb.dev `site/` | cellb.dev | An Astro + Tailwind + shadcn site: the house style a theme could reuse. | — |
 
 Consequence: the open design questions are not "how to parse and transpile" but
@@ -175,20 +178,39 @@ TOC and search.
   browser runtime would still need its own preview renderer, so there are two renderers to keep
   consistent.
 
-### F3. Astro theme precompiled to a Worker, run by cellb
+### F3. Astro theme as an SSR Worker, built and run on cellb (now demonstrated)
 
-A theme is an Astro project built **once, at theme-publish time**, with the Cloudflare adapter
-into a Worker (SSR). The notebook runtime loads that Worker (cellb Worker Loader, or as a project)
-and asks it to render each page from the PT/page model passed in a request or read from a binding.
-A static export is a crawl of the rendered routes into a `FilesApi`.
+A theme is an Astro project (layouts, components, `astro.config.mjs`, integrations). It is built
+into one SSR Worker by cellb.dev's in-browser Astro builder (in a tab, in a worker, or under Node)
+and run by cellb. Notebook content is **data, not source**: a live collection
+(`src/live.config.ts`) whose loader reads PT documents / page models from a binding (KV, R2, a
+Durable Object, or a `FilesApi` mount), and a `<NotebookCell>` / `<Notebook>` component that
+renders prose through `astro-portabletext` and emits each cell's root and `define()` call. A
+static export is the builder's crawl-to-ZIP.
 
-- Pro: authors write Astro; rendering happens in the browser, in a DO or on Cloudflare, without
-  Node at site-build time.
-- Pro: themes become versioned, swappable artifacts (one Worker bundle each).
-- Con: unproven: Astro SSR output running under cellb in a browser is untested; bundle size;
-  coupling to Astro's adapter output format across Astro versions (7.x today).
-- Con: Astro features that need build-time Node (image optimization, Pagefind) are lost or must
-  be replaced.
+As of 2026-11-01 `cellb.dev/examples/astro-in-browser` shows the hard part works: an Astro SSR app,
+EmDash included, compiled, bundled and run entirely in a tab, then exported as a static site.
+
+- Pro: authors write ordinary Astro; the same theme renders in a tab, in a Durable Object, on
+  Cloudflare and on celld, with no Node at site-build time.
+- Pro: content edits do **not** rebuild Astro. The theme is built once per theme change (seconds
+  for a small theme; EmDash-sized ones take a minute or more); a notebook edit updates the live
+  collection's data and the next request renders it.
+- Pro: themes are versioned, swappable artifacts (one Worker bundle each), and a theme can carry
+  server routes (search API, an edit endpoint) next to the pages.
+- Con: the builder is example code in a private package; it must be extracted into a library
+  (inputs: `FilesApi` project, `PackageStore`, esbuild, compiler; output: Worker module + client
+  assets) before notebooks can depend on it.
+- Con: what the builder leaves out: no prerendering (export crawls an SSR site instead), no
+  `.md`/`.mdx` pages and no build-time content collections (irrelevant here: notebooks reach Astro
+  as live-collection data, already converted to PT), no image optimization, no Pagefind-style
+  build-time search (the search index must come from the notebook build).
+- Con: weight: the first build in a fresh browser downloads Astro and its dependency graph
+  (cached afterwards in the package store); building needs cross-origin isolation
+  (SharedArrayBuffer, COOP/COEP from the ServiceWorker) and, for large themes, gigabytes of
+  memory. Not something to run per keystroke.
+- Con: coupling to Astro internals (`astro/app`, the manifest shape, virtual modules) that the
+  builder re-implements; each Astro major release is a porting task in cellb.dev.
 
 ### F4. Astro "shell extraction"
 
@@ -198,12 +220,14 @@ Build an Astro theme once to static HTML shells with slot markers; the runtime f
 - Con: only static layout; per-page logic (active nav item, TOC) moves to client JS or to
   precomputed variants. A worse F1 with Astro as a template editor.
 
-**Recommendation: the theme contract with F1 as the built-in default, F3 as the Astro path to
-prototype, F2 as an optional exporter.** F1 keeps the browser and DO path self-contained; F3 is
-the only option that gives Astro authoring without Node at build time, so it is worth a spike
-(render one notebook page through an Astro SSR Worker under cellb in Node, then in Chromium).
-F2 is a thin integration for people who already have an Astro site, and the Starlight docs
-case.
+**Recommendation (revised): F3 is the site/theme layer; F1 stays as the live-preview renderer
+behind the same contract; F2 is only a fallback.** With cellb.dev's builder, Astro no longer
+forces Node, so the earlier reason to default to plain templates is gone for published sites. The
+split is by latency: a keystroke-speed preview of one notebook uses F1 (pure functions, no
+esbuild, no Astro), while the site, its navigation and its export go through an Astro theme built
+once and fed notebooks as data. The theme contract of this section becomes the shape of the
+live-collection entry (`PageModel`, `SiteModel`), shared by both renderers so that preview and
+site agree on what a page contains.
 
 ## 4. Build orchestration and state
 
@@ -339,20 +363,22 @@ These are needed under every option and are the main "Framework parity" work.
 | | Option 1: extend in place | Option 2: PT-centric portable runtime (recommended) | Option 3: Astro-first | Option 4: port Observable Framework |
 |---|---|---|---|---|
 | IR | notebook-kit `Notebook` | PT document → `Notebook` + page model | mdast inside Astro | Framework's own |
-| Skin | templates around `renderPage` | theme contract; F1 default, F3 Astro spike | Astro / Starlight | Framework themes |
+| Skin | templates around `renderPage` | Astro theme built and run on cellb (F3); F1 for live preview | Astro / Starlight under Node | Framework themes |
 | Orchestration | `webrun-builder` | stages + `webrun-cells` | Astro build | Framework build |
 | Platform | page + SW | DO (cellb), SW as degenerate case | Node, static hosting | Node |
 | In-browser build | yes | yes | no | no without a large port |
 | Effort | small | medium-large | small-medium | large |
-| Main risk | prose stays opaque; ceiling on themes and editing | scope; cellb/Astro-SSR integration unproven | not browser-native; two renderers | Framework is Node-centric (fs, its own dev server, rollup); Observable's own focus moved to notebook-kit 2 |
+| Main risk | prose stays opaque; ceiling on themes and editing | scope; extracting the Astro builder from an example into a library; Astro-version coupling | not browser-native; two renderers | Framework is Node-centric (fs, its own dev server, rollup); Observable's own focus moved to notebook-kit 2 |
 
 - **Option 1** adds fence attributes, CDN-free builtins and a template theme to
   `notebook-build`. It ships value quickly but leaves no structured content for themes or an
   editor and does not use DOs.
 - **Option 2** layers new packages on top of the existing ones (below). Every stage stays
   usable on its own, and Option 1's improvements are its first milestones.
-- **Option 3** is right if the goal were only a nicer static export. It does not satisfy
-  "purely in the browser".
+- **Option 3** (Astro-first under Node, Markdown through Astro's own content layer) is right if
+  the goal were only a nicer static export. It does not satisfy "purely in the browser". Option 2
+  now keeps Astro's authoring model without that cost, because cellb.dev builds Astro in the
+  browser.
 - **Option 4** is rejected: it would mean re-hosting a Node application in the browser against
   the direction of its upstream.
 
@@ -368,7 +394,10 @@ These are needed under every option and are the main "Framework parity" work.
 @statewalker/notebook-builtins CDN-free htl / tex / dot / Inputs for notebook-kit's runtime
 @statewalker/notebook-loaders  data-loader stage: bundle (webrun-bundler) + run (Worker / Dynamic Worker)
 @statewalker/notebook-theme    the contract + the default F1 theme
-@statewalker/notebook-theme-astro  F3 adapter (Astro SSR Worker) — spike first
+@statewalker/astro-builder     extracted from cellb.dev examples/astro-in-browser/src/builder:
+                               FilesApi project + PackageStore → Worker module + client assets
+@statewalker/notebook-astro    Astro side of F3: live-collection loader over PageModel/SiteModel,
+                               <Notebook>/<NotebookCell> components, a default theme project
 @statewalker/notebook-site     unchanged: SiteHandler composition
 @statewalker/notebook-do       NotebookProject Durable Object (cellb / Cloudflare / celld)
 ```
@@ -397,10 +426,21 @@ Data flow:
 5. **`webrun-cells` orchestration**, parity with the incremental tests of `notebook-build`.
 6. **`notebook-do`** on cellb in Node, then in Chromium; same handler on Cloudflare.
 7. **Data loaders** (JS/TS) via Worker Loader; SQL precompute from cell attributes.
-8. **Spike: Astro SSR theme under cellb** (F3). Keep or drop based on the result.
+8. **Astro theme on cellb** (F3): extract the builder into `@statewalker/astro-builder`; a
+   minimal theme project whose live collection reads notebook page models; one notebook page
+   rendered through it in Node, then in Chromium, then exported with the crawl-to-ZIP. Can start
+   in parallel with milestones 3–5, since it only needs the page-model shape.
 9. Optional: `static-bundled` export (E2) and a PT-editor-based notebook editor.
 
 ## 11. Open questions
+
+- Where does the Astro builder live once extracted: cellb.dev (it depends on cellb's host
+  modules and adapter stub) or webrun-sites (next to `webrun-bundler`)? The notebook packages
+  should depend on it, not on the example.
+- Does the notebook-kit runtime and `define()` output survive Astro's HTML pipeline unchanged
+  (inline module scripts, `is:inline`, script hoisting), or must cells be emitted as an island?
+- Is crawl-based export enough, or does the builder need real prerendering for large sites
+  (pages unreachable by links, e.g. search-only pages)?
 
 - Is Observable Desktop / notebook-kit HTML round-trip a hard requirement? It decides whether PT
   must carry every notebook-kit attribute (pinned, hidden, display modes) or only the Markdown
