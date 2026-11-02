@@ -433,8 +433,15 @@ Data flow:
    *Progress (2026-11-01):* the builder is extracted as `@statewalker/astro-builder` in
    `cellb.dev/packages/astro-builder` (branch `claude/notebook-runtime-markdown-6a86s9`; private
    until `webrun-bundler` 0.1.1 is on npm). Its test builds a project with a live content
-   collection from a `MemFilesApi` and runs it on cellb in Node. Next: the notebook theme project
-   and `notebook-astro`.
+   collection from a `MemFilesApi` and runs it on cellb in Node.
+   `cellb.dev/examples/notebook-site` then does the milestone end to end in Node: Markdown →
+   page models (notebook-build stages) in KV → an Astro theme (live collections, navigation,
+   table of contents, one inline `define()` script per page) built by astro-builder and run on
+   cellb with the `/_m/` closure as static assets → an edit without a rebuild → a static export
+   (pages crawled, modules from the closure) whose cells run in Chromium with no off-origin
+   request. Remaining: the same build in a browser tab (astro-builder's browser path with the
+   page-model step in a worker), moving the page-model step into a package (`notebook-astro`),
+   and a Portable Text page model (milestone 3).
 9. Optional: `static-bundled` export (E2) and a PT-editor-based notebook editor.
 
 ## 11. Open questions
