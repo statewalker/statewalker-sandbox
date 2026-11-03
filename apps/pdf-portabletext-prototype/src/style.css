@@ -1,0 +1,182 @@
+:root {
+  --bg: #fafaf9;
+  --fg: #1c1917;
+  --muted: #78716c;
+  --line: #e7e5e4;
+  --panel: #ffffff;
+  --accent: #2563eb;
+  --box: rgb(37 99 235 / 0.35);
+  --box-active: rgb(234 88 12 / 0.45);
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1917;
+    --fg: #f5f5f4;
+    --muted: #a8a29e;
+    --line: #44403c;
+    --panel: #292524;
+    --accent: #60a5fa;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0 auto;
+  max-width: 1100px;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--fg);
+}
+header h1 {
+  margin: 0 0 4px;
+  font-size: 1.4rem;
+}
+.hint {
+  margin: 0 0 16px;
+  color: var(--muted);
+}
+form {
+  display: grid;
+  gap: 12px;
+}
+.drop {
+  display: block;
+  padding: 24px;
+  border: 2px dashed var(--line);
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--panel);
+}
+.drop.over {
+  border-color: var(--accent);
+}
+.drop input {
+  display: none;
+}
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: end;
+}
+.options label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.options label.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.options input[type="number"] {
+  width: 7rem;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+button {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: inherit;
+  cursor: pointer;
+}
+button[type="submit"] {
+  background: var(--accent);
+  color: white;
+  border-color: transparent;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+#log {
+  max-height: 160px;
+  overflow: auto;
+  font-size: 0.8rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 16px 0;
+}
+#log:empty {
+  display: none;
+}
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.tabs button {
+  border-radius: 6px 6px 0 0;
+  border-bottom: none;
+}
+.tabs button[aria-selected="true"] {
+  border-color: var(--accent);
+}
+.tab-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: none;
+  padding: 16px;
+  min-height: 200px;
+  overflow-wrap: anywhere;
+}
+#json pre {
+  margin: 0;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+}
+.pt-block.ocr {
+  border-left: 3px solid var(--box);
+  padding-left: 8px;
+}
+.ocr-word.active {
+  background: var(--box-active);
+}
+.pt-image {
+  margin: 16px 0;
+}
+.pt-image-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+}
+.pt-image-frame img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+}
+.pt-image-frame svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.pt-image-frame rect {
+  fill: transparent;
+  stroke: var(--box);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+.pt-image-frame rect.active,
+.pt-image-frame rect:hover {
+  fill: var(--box-active);
+  stroke: transparent;
+}
+figcaption {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 4px;
+}

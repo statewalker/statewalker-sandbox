@@ -46,6 +46,7 @@ pnpm-workspace.yaml   workspace globs and the dependency catalog
 | [notes-demo](apps/notes-demo) | React notes app served without a bundler by `@statewalker/webrun-modules-build` |
 | [openai-proxy.app](apps/openai-proxy.app) | OpenAI v1 HTTP proxy in front of a local llama.cpp server |
 | [byok-config-prototype](apps/byok-config-prototype) | Throwaway UI prototype for editing an LLM connections config file |
+| [pdf-portabletext-prototype](apps/pdf-portabletext-prototype) | In-browser PDF → PortableText conversion: OCR of embedded images (tesseract-wasm, one worker per language) with in-browser language detection (franc) |
 
 Each folder has a README with its own run instructions.
 
