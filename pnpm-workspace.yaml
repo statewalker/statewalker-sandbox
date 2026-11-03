@@ -44,7 +44,7 @@ catalog:
   "alien-signals": ^3.2.1
   "basecoat-css": ^1.0.2
   "dockview-core": ^8.4.0
-  "happy-dom": ^20.14.5
+  "happy-dom": ^21.0.4
   "hightable": ^0.26.4
   "html5-qrcode": "^2.3.8"
   "jsqr": "^1.4.0"
