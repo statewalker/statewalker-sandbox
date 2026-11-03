@@ -14,8 +14,9 @@ catalog:
   "@chainsafe/libp2p-noise": ^17.0.0
   "@chainsafe/libp2p-yamux": ^8.0.1
   "@changesets/cli": "^3.0.3"
-  "@earendil-works/pi-ai": "^0.87.1"
-  "@flue/runtime": "^2.2.2"
+  # ~1.4: pi-ai 1.5.0 dropped the `Type` export that @flue/runtime 2.3.0 imports.
+  "@earendil-works/pi-ai": "~1.4.0"
+  "@flue/runtime": "^2.3.0"
   "@just-bash/executor": "^7.0.0"
   "@libp2p/circuit-relay-v2": ^4.2.13
   "@libp2p/crypto": ^5.1.23
@@ -129,3 +130,6 @@ overrides:
   "undici@<7.29.1": ^7.30.0
   # @flue/runtime pins @modelcontextprotocol/client 2.0.0
   "@modelcontextprotocol/client@<2.2.0": ^2.2.0
+  # pi-ai 1.5.0 dropped the `Type` export @flue/runtime 2.3.0 imports; pi-agent-core pins the
+  # same pi-ai version, so it stays on 1.4 too. Remove once @flue/runtime supports pi-ai 1.5.
+  "@earendil-works/pi-agent-core": ~1.4.0
