@@ -12,8 +12,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { createServer } from "vite";
+import { CORPUS, type CorpusEntry } from "../scripts/corpus-manifest.ts";
 import type { PdfPortableTextDocument } from "../src/schema.ts";
-import { CORPUS, type CorpusEntry } from "./corpus-manifest.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const corpusDir = join(root, "fixtures", "corpus");

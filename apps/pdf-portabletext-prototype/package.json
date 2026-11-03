@@ -20,9 +20,9 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "fixture": "tsx scripts/make-fixture.ts",
-    "e2e": "tsx scripts/e2e.ts",
+    "e2e": "tsx e2e-browser/e2e.ts",
     "corpus:fetch": "NODE_USE_ENV_PROXY=1 tsx scripts/fetch-corpus.ts",
-    "corpus": "tsx scripts/corpus.ts"
+    "corpus": "tsx e2e-browser/corpus.ts"
   },
   "dependencies": {
     "@portabletext/to-html": "^6.0.0",
