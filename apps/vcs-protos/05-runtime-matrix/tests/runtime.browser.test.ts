@@ -1,10 +1,14 @@
 import { describe, expect, inject, it } from "vitest";
 import { BENCH_NAMES, expectedCheckNames, runBench, runConformance } from "../src/conformance.js";
 import type { BenchRow, Check } from "../src/types.js";
+import { EXPECTED_FAMILIES, EXPECTED_TOTAL, familyCounts } from "./expected.js";
+import { cloneFixtures, TAMPERS } from "./tamper.js";
 
 const fx = inject("fixtures");
 
 function assertAllPass(checks: Check[]) {
+  expect(checks.length).toBe(EXPECTED_TOTAL);
+  expect(familyCounts(checks)).toEqual(EXPECTED_FAMILIES);
   expect(checks.map((c) => c.name)).toEqual(expectedCheckNames(fx));
   const failed = checks.filter((c) => !c.ok);
   expect(failed, JSON.stringify(failed, null, 1)).toEqual([]);
@@ -40,6 +44,16 @@ describe("R3 every check passes in a Chromium page", () => {
   }, 120_000);
 });
 
+describe("R3b negative controls in the page", () => {
+  for (const t of TAMPERS) {
+    it(t.family, async () => {
+      const bad = cloneFixtures(fx);
+      const expected = t.apply(bad);
+      expect((await runConformance(bad)).filter((c) => !c.ok).map((c) => c.name)).toEqual(expected);
+    });
+  }
+});
+
 describe("R4 every check passes in a Chromium Dedicated Worker", () => {
   it("worker", async () => {
     const { checks } = await inWorker<{ checks: Check[] }>({ fixtures: fx });
@@ -58,11 +72,8 @@ describe("R6 bench in the page and the worker", () => {
     for (const r of rows) expect(r.ms).toBeGreaterThan(0);
   }, 300_000);
   it("worker", async () => {
-    const rows: BenchRow[] = [];
-    for (const name of BENCH_NAMES) {
-      await inWorker({ bench: name });
-      rows.push((await inWorker<{ row: BenchRow }>({ bench: name })).row);
-    }
+    // One worker for warm-up and timing, so its JIT is as warm as the page's (review of #51).
+    const { rows } = await inWorker<{ rows: BenchRow[] }>({ benchAll: [...BENCH_NAMES] });
     console.log(`chromium worker bench\n${fmt(rows)}`);
     for (const r of rows) expect(r.ms).toBeGreaterThan(0);
   }, 300_000);

@@ -30,6 +30,7 @@ const SHA1_IMPLS = ["vcs", "noble"] as const;
 const BLAKE3_MODES = ["hash", "keyed_hash", "derive_key"] as const;
 const INFLATE_CHUNKS = [1, 7, 4096] as const;
 const PACK_CHUNKS = [1, 65536] as const;
+const TYPE_NAMES: Record<number, string> = { 1: "commit", 2: "tree", 3: "blob", 4: "tag" };
 
 function fromB64(s: string): Uint8Array {
   const bin = atob(s);
@@ -39,11 +40,6 @@ function fromB64(s: string): Uint8Array {
 }
 function* chunked(bytes: Uint8Array, size: number): Iterable<Uint8Array> {
   for (let pos = 0; pos < bytes.length; pos += size) yield bytes.subarray(pos, pos + size);
-}
-function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
 }
 function concat(parts: Uint8Array[]): Uint8Array {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
@@ -144,35 +140,41 @@ export async function runConformance(fx: Fixtures): Promise<Check[]> {
       return got === s.hex ? undefined : `got ${got}`;
     });
   }
+  const shaInputs = new Map(fx.sha256.map((s) => [s.name, s.b64]));
   for (const l of fx.lfs) {
     await check(`lfs:${l.name}`, async () => {
-      const got = await lfsPointer(chunked(fromB64(l.b64), 65536));
+      const input = shaInputs.get(l.name);
+      if (input === undefined) return `no input named ${l.name}`;
+      const got = await lfsPointer(chunked(fromB64(input), 65536));
       return got === l.pointer ? undefined : `pointer differs from ${l.oracle}`;
     });
   }
 
   const zAll = fromB64(fx.zlib.concatenatedB64);
-  const zInputs = fx.zlib.inputs.map(fromB64);
+  const zCount = fx.zlib.lengths.length;
+  const sha256Hex = (b: Uint8Array) => toHex(createSha256().update(b).digest());
+  // Inflated data is compared with node:crypto's SHA-256 of the original input (the inputs are not
+  // shipped twice); createSha256 itself is verified against node:crypto by the sha256 checks.
   const compare = (results: Array<{ data: Uint8Array; compressedLength: number }>) => {
-    if (results.length !== zInputs.length) return `got ${results.length} streams`;
+    if (results.length !== zCount) return `got ${results.length} streams`;
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
       if (!r || r.compressedLength !== fx.zlib.lengths[i])
         return `stream ${i}: wrong compressed length`;
-      if (!sameBytes(r.data, zInputs[i] ?? new Uint8Array())) return `stream ${i}: wrong data`;
+      if (sha256Hex(r.data) !== fx.zlib.inputSha256[i]) return `stream ${i}: wrong data`;
     }
     return undefined;
   };
   for (const size of INFLATE_CHUNKS) {
     await check(`inflate:push:chunk${size}`, async () => {
       const results: Array<{ data: Uint8Array; compressedLength: number }> = [];
-      for await (const r of inflateSequence(chunked(zAll, size), zInputs.length)) results.push(r);
+      for await (const r of inflateSequence(chunked(zAll, size), zCount)) results.push(r);
       return compare(results);
     });
   }
   for (const size of INFLATE_CHUNKS) {
     await check(`inflate:pooled:chunk${size}`, () =>
-      compare(inflatePooled(createInflaterPool(), chunked(zAll, size), zInputs.length)),
+      compare(inflatePooled(createInflaterPool(), chunked(zAll, size), zCount)),
     );
   }
 
@@ -181,11 +183,24 @@ export async function runConformance(fx: Fixtures): Promise<Check[]> {
     for (const size of PACK_CHUNKS) {
       await check(`pack:${p.kind}:chunk${size}`, async () => {
         const walk = await walkPack(chunked(pack, size));
-        if (walk.count !== p.count) return `count ${walk.count} vs ${p.count}`;
-        const offsets = walk.entries.map((e) => e.offset);
-        if (offsets.join() !== p.offsets.join()) return "offsets differ from git verify-pack";
+        if (walk.count !== p.entries.length) return `count ${walk.count} vs ${p.entries.length}`;
         if (!walk.trailerOk) return "trailer SHA-1 mismatch";
-        if (walk.entries.some((e) => e.inflatedLength !== e.size)) return "inflated length != size";
+        for (let i = 0; i < walk.entries.length; i++) {
+          const e = walk.entries[i];
+          const g = p.entries[i];
+          if (!e || !g) return `entry ${i} missing`;
+          if (e.offset !== g.offset)
+            return `entry ${i}: offset ${e.offset} vs verify-pack ${g.offset}`;
+          if (e.totalLength !== g.packedSize)
+            return `entry ${i}: packed size ${e.totalLength} vs ${g.packedSize}`;
+          if (e.inflatedLength !== e.size) return `entry ${i}: inflated length != header size`;
+          // verify-pack reports delta entries with the resolved type and size; compare non-deltas only.
+          if (e.type < 6) {
+            if (TYPE_NAMES[e.type] !== g.type)
+              return `entry ${i}: type ${TYPE_NAMES[e.type]} vs ${g.type}`;
+            if (e.size !== g.size) return `entry ${i}: size ${e.size} vs ${g.size}`;
+          }
+        }
         const deltaType = p.kind === "ofs" ? 6 : 7;
         if (!walk.entries.some((e) => e.type === deltaType)) return `no type-${deltaType} entries`;
         return undefined;
@@ -198,8 +213,11 @@ export async function runConformance(fx: Fixtures): Promise<Check[]> {
 let smallObjects: Uint8Array[] | undefined;
 
 /** One named benchmark; timed with performance.now() (meaningless in workerd: time it from outside). */
+// Built once per isolate, so the workerd timing (measured from outside) excludes its construction.
+const BENCH_BUF = Uint8Array.from({ length: 65536 }, (_, i) => (i * 31 + 7) & 0xff);
+
 export async function runBench(name: string): Promise<BenchRow> {
-  const buf = Uint8Array.from({ length: 65536 }, (_, i) => (i * 31 + 7) & 0xff);
+  const buf = BENCH_BUF;
   const stream = (
     mib: number,
     make: () => { update(b: Uint8Array): unknown; digest(): Uint8Array },
