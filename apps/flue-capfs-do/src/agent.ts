@@ -24,6 +24,8 @@ import { CapFs, safeExec } from "./capfs.ts";
 import { type Cap, type CapHandoff, capFromHandoff, ToolFiles, type WorkspaceEnv } from "./caps.ts";
 import { rgForFlue } from "./flue-compat.ts";
 import { attenuationBlock } from "./policy.ts";
+import { engineHost } from "./python/hosts.ts";
+import { PythonKernel, type PythonRunRequest } from "./python/kernel.ts";
 import { deploymentToolConfig } from "./tools/config.ts";
 import { admitTool, toolPolicy } from "./tools/policy.ts";
 
@@ -33,7 +35,8 @@ export type Task =
   | { kind: "bash"; script: string; cwd?: string }
   | { kind: "flue"; calls: { tool: string; params: Record<string, unknown> }[]; cwd?: string }
   | { kind: "tool"; code: string; input?: unknown; bundled?: boolean }
-  | { kind: "revocationId" };
+  | { kind: "revocationId" }
+  | ({ kind: "python" } & PythonRunRequest);
 
 interface WorkerLoader {
   get(
@@ -56,6 +59,10 @@ export interface AgentEnv extends WorkspaceEnv {
   ALLOW_HOST_FS_TOOLS?: string;
   /** Run-side tool policy: overrides of tool-bundle.config.json, a JSON string or an object. */
   TOOL_BUNDLE?: unknown;
+  /** Python engine location (see src/python/hosts.ts). */
+  PYTHON_ENGINE?: string;
+  PYODIDE_INDEX?: string;
+  PYTHON?: string;
 }
 
 export interface RunResult {
@@ -103,6 +110,8 @@ export class Agent extends DurableObject<AgentEnv> {
         return this.#tool(cap, task.code, task.input, !!task.bundled);
       case "revocationId":
         return cap.revocationId();
+      case "python":
+        return this.#python().run(cap, task);
       default:
         throw new Error(`EINVAL: unknown task '${(task as { kind?: string }).kind}'`);
     }
@@ -139,6 +148,13 @@ export class Agent extends DurableObject<AgentEnv> {
       }
     }
     return out;
+  }
+
+  #kernel?: PythonKernel;
+  /** One Python engine per agent cell, started on first use. */
+  #python(): PythonKernel {
+    this.#kernel ??= new PythonKernel(engineHost(this.env));
+    return this.#kernel;
   }
 
   /** Tool code in its own isolate: no network, no bindings, only the narrowed capability as an argument. */

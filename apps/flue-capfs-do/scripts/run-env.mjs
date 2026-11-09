@@ -170,6 +170,7 @@ const durability = { DURABILITY_FILE: join(state, "durability.json") };
 // A test run killed by a signal exits with code null: count it as a failure.
 const failed = (code) => code !== 0;
 let code = await runTests("tests/scenario.test.mjs");
+if (!failed(code)) code = await runTests("tests/python.test.mjs");
 if (!failed(code))
   code = await runTests("tests/durability.test.mjs", { ...durability, PHASE: "write" });
 await stopRuntime(child);
