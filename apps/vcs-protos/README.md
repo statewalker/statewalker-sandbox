@@ -13,6 +13,7 @@ then tests written first (red), then the implementation (green), then findings.
 | `04-pooled-inflater` | X1d — **works: 3.1× on small objects** | Does reusing pako inflate state (JGit `InflaterCache` style) close the small-object gap without losing exactness? |
 | `05-runtime-matrix` | X0a — **identical in 4 runtimes; browser BLAKE3 too slow** | Do the X1 primitives behave identically in Chromium (page and worker) and workerd, and how fast are they there? |
 | `06-wasm-hash-tier` | X1e — **works everywhere; BLAKE3 16× (Node) to 35× faster; workerd SHA via DigestStream** | Can a WASM hash tier run in every runtime, including workerd, and is it fast enough for browser Xet? |
+| `07-lockfile-cas` | X2 | Can git's lock-file protocol give a crash-safe, linearizable ref compare-and-set on FilesApi, interoperating with native git? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.

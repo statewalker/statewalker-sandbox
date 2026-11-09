@@ -1,0 +1,190 @@
+import { execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+import { type FaultPoint, faultyFiles } from "../src/adapters/faulty.js";
+import { memAtomicFiles } from "../src/adapters/mem.js";
+import { nodeAtomicFiles } from "../src/adapters/node.js";
+import { type AtomicFiles, breakLock, casRef, readRef } from "../src/lockfile.js";
+
+const dirs: string[] = [];
+const tmp = (p: string) => {
+  const d = mkdtempSync(join(tmpdir(), p));
+  dirs.push(d);
+  return d;
+};
+afterAll(() => {
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+const oid = (n: number) => n.toString(16).padStart(40, "0");
+const REF = "refs/heads/main";
+const enc = new TextEncoder();
+
+const ADAPTERS: Array<[string, () => AtomicFiles]> = [
+  ["memory", () => memAtomicFiles()],
+  ["node fs", () => nodeAtomicFiles(tmp("x2-"))],
+];
+
+for (const [name, make] of ADAPTERS) {
+  describe(`R1 one winner among 100 concurrent compare-and-sets (${name})`, () => {
+    it("exactly one ok; final value is the winner's; no lock left", async () => {
+      const files = make();
+      expect(await casRef(files, REF, undefined, oid(1))).toBe("ok");
+      const results = await Promise.all(
+        Array.from({ length: 100 }, (_, i) => casRef(files, REF, oid(1), oid(100 + i))),
+      );
+      const winners = results.flatMap((r, i) => (r === "ok" ? [i] : []));
+      expect(winners.length).toBe(1);
+      expect(results.every((r) => r === "ok" || r === "mismatch" || r === "locked")).toBe(true);
+      expect(await readRef(files, REF)).toBe(oid(100 + (winners[0] ?? -1)));
+      expect(await files.exists(`${REF}.lock`)).toBe(false);
+    });
+    it("expected-value semantics: create, mismatch, update, delete", async () => {
+      const files = make();
+      expect(await casRef(files, REF, oid(9), oid(1))).toBe("mismatch");
+      expect(await casRef(files, REF, undefined, oid(1))).toBe("ok");
+      expect(await casRef(files, REF, undefined, oid(2))).toBe("mismatch");
+      expect(await casRef(files, REF, oid(1), oid(2))).toBe("ok");
+      expect(await casRef(files, REF, oid(2), undefined)).toBe("ok");
+      expect(await readRef(files, REF)).toBeUndefined();
+    });
+  });
+
+  describe(`R4 crash safety (${name})`, () => {
+    const points: FaultPoint[] = [
+      "createExclusive",
+      "after-createExclusive",
+      "replace",
+      "after-replace",
+    ];
+    for (const at of points) {
+      it(`crash at ${at}: old or new value, never torn; a left lock blocks until breakLock`, async () => {
+        const files = make();
+        expect(await casRef(files, REF, undefined, oid(1))).toBe("ok");
+        await expect(casRef(faultyFiles(files, at), REF, oid(1), oid(2))).rejects.toThrow(
+          /injected crash/,
+        );
+        const value = await readRef(files, REF);
+        expect([oid(1), oid(2)]).toContain(value);
+        if (await files.exists(`${REF}.lock`)) {
+          expect(await casRef(files, REF, value, oid(3))).toBe("locked");
+          expect(await readRef(files, REF)).toBe(value);
+          expect(await breakLock(files, REF)).toBe(true);
+        }
+        expect(await casRef(files, REF, value, oid(3))).toBe("ok");
+      });
+    }
+  });
+
+  describe(`R5 primitives (${name})`, () => {
+    it("createExclusive refuses an existing path and leaves it unchanged", async () => {
+      const files = make();
+      expect(await files.createExclusive("a/b", enc.encode("one"))).toBe(true);
+      expect(await files.createExclusive("a/b", enc.encode("two"))).toBe(false);
+      const parts: Uint8Array[] = [];
+      for await (const c of files.read("a/b")) parts.push(c);
+      expect(Buffer.concat(parts).toString()).toBe("one");
+    });
+    it("replace moves content over an existing target and removes the source", async () => {
+      const files = make();
+      await files.createExclusive("t", enc.encode("old"));
+      await files.createExclusive("s", enc.encode("new"));
+      await files.replace("s", "t");
+      expect(await files.exists("s")).toBe(false);
+      const parts: Uint8Array[] = [];
+      for await (const c of files.read("t")) parts.push(c);
+      expect(Buffer.concat(parts).toString()).toBe("new");
+    });
+  });
+}
+
+describe("R2 eight Node processes racing on one directory", () => {
+  it("exactly one ok, and the ref holds that process's value", async () => {
+    const root = tmp("x2-race-");
+    const files = nodeAtomicFiles(root);
+    expect(await casRef(files, REF, undefined, oid(1))).toBe("ok");
+    const startAt = Date.now() + 1500;
+    const child = join(import.meta.dirname, "race-child.ts");
+    const outputs = await Promise.all(
+      Array.from(
+        { length: 8 },
+        (_, i) =>
+          new Promise<string>((resolve, reject) => {
+            const p = spawn(
+              process.execPath,
+              ["--import", "tsx", child, root, String(200 + i), oid(1)],
+              {
+                env: { ...process.env, START_AT: String(startAt) },
+              },
+            );
+            let out = "";
+            p.stdout.on("data", (d) => (out += d));
+            p.on("error", reject);
+            p.on("close", (code) =>
+              code === 0 ? resolve(out.trim()) : reject(new Error(`exit ${code}`)),
+            );
+          }),
+      ),
+    );
+    const winners = outputs.filter((o) => o.endsWith(":ok"));
+    expect(winners.length, outputs.join(" ")).toBe(1);
+    const winnerId = Number(winners[0]?.split(":")[0]);
+    expect(await readRef(files, REF)).toBe(String(winnerId).padStart(40, "0"));
+  }, 60_000);
+});
+
+describe("R3 native git interop on a real repository", () => {
+  const GIT_ENV = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "a",
+    GIT_AUTHOR_EMAIL: "a@x",
+    GIT_COMMITTER_NAME: "a",
+    GIT_COMMITTER_EMAIL: "a@x",
+  };
+  const setup = () => {
+    const repo = tmp("x2-git-");
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], {
+        env: GIT_ENV,
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+        .toString()
+        .trim();
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repo, "f"), "1");
+    git("add", "f");
+    git("commit", "-q", "-m", "one");
+    const c1 = git("rev-parse", "HEAD");
+    writeFileSync(join(repo, "f"), "2");
+    git("commit", "-q", "-am", "two");
+    const c2 = git("rev-parse", "HEAD");
+    return { repo, git, c1, c2, files: nodeAtomicFiles(join(repo, ".git")) };
+  };
+
+  it("(a) while our lock is held, git update-ref fails", async () => {
+    const { git, c1, files } = setup();
+    expect(await files.createExclusive(`${REF}.lock`, enc.encode(`${c1}\n`))).toBe(true);
+    expect(() => git("update-ref", REF, c1)).toThrow(/lock|exists/i);
+    await breakLock(files, REF);
+  });
+  it("(b) while a git-style lock exists, casRef reports locked and changes nothing", async () => {
+    const { repo, git, c1, c2, files } = setup();
+    writeFileSync(join(repo, ".git", `${REF}.lock`), "");
+    expect(await casRef(files, REF, c2, c1)).toBe("locked");
+    expect(git("rev-parse", REF)).toBe(c2);
+  });
+  it("(c) a value written by casRef is what git reports; fsck is clean", async () => {
+    const { git, c1, c2, files } = setup();
+    expect(await casRef(files, REF, c2, c1)).toBe("ok");
+    expect(git("rev-parse", REF)).toBe(c1);
+    expect(git("fsck", "--strict")).toBe("");
+  });
+  it("(d) a value written by git update-ref is what we read", async () => {
+    const { git, c1, files } = setup();
+    git("update-ref", REF, c1);
+    expect(await readRef(files, REF)).toBe(c1);
+  });
+});
