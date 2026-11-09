@@ -45,12 +45,19 @@ export function makeFixtures(): Fixtures {
       id: git(["hash-object", "--literally", "-t", type, "--stdin"], bytes).toString().trim(),
     }));
 
-    const blake3 = JSON.parse(
+    // The official file names the derive-key context `context_string`; map it explicitly
+    // (a cast here once hid the mismatch and every derive_key check failed).
+    const official = JSON.parse(
       readFileSync(
         join(import.meta.dirname, "../../03-sha256-blake3/tests/fixtures/blake3-test-vectors.json"),
         "utf8",
       ),
-    ) as Fixtures["blake3"];
+    ) as { key: string; context_string: string; cases: Fixtures["blake3"]["cases"] };
+    const blake3: Fixtures["blake3"] = {
+      key: official.key,
+      context: official.context_string,
+      cases: official.cases,
+    };
 
     const shaInputs: Array<[string, Uint8Array]> = [
       ["empty", new Uint8Array(0)],

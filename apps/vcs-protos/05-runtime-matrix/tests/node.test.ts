@@ -34,6 +34,36 @@ describe("R2 every check passes in Node", () => {
   });
 });
 
+describe("R2b the conformance run discriminates (negative control)", () => {
+  it("tampered fixtures fail exactly the tampered checks", async () => {
+    const bad: Fixtures = JSON.parse(JSON.stringify(fx));
+    const obj = bad.gitObjects[1];
+    if (obj) obj.id = obj.id.replace(/^./, (c) => (c === "0" ? "1" : "0"));
+    const vec = bad.blake3.cases[5];
+    if (vec) vec.keyed_hash = vec.keyed_hash.replace(/^./, (c) => (c === "0" ? "1" : "0"));
+    const sha = bad.sha256[1];
+    if (sha) sha.hex = "0".repeat(64);
+    bad.zlib.lengths[3] = (bad.zlib.lengths[3] ?? 0) + 1;
+    const pack = bad.packs[0];
+    if (pack) pack.offsets[2] = (pack.offsets[2] ?? 0) + 1;
+    const failed = (await runConformance(bad)).filter((c) => !c.ok).map((c) => c.name);
+    expect(failed).toEqual([
+      `git:${obj?.name}:vcs`,
+      `git:${obj?.name}:noble`,
+      `blake3:keyed_hash:${vec?.input_len}`,
+      `sha256:${sha?.name}`,
+      "inflate:push:chunk1",
+      "inflate:push:chunk7",
+      "inflate:push:chunk4096",
+      "inflate:pooled:chunk1",
+      "inflate:pooled:chunk7",
+      "inflate:pooled:chunk4096",
+      "pack:ofs:chunk1",
+      "pack:ofs:chunk65536",
+    ]);
+  });
+});
+
 describe("R5 workerd", () => {
   let mf: Miniflare;
   let bundle = "";
@@ -66,7 +96,7 @@ describe("R5 workerd", () => {
     assertAllPass((await res.json()) as Check[]);
   }, 120_000);
 
-  it("R6 bench in workerd (timed from outside: workerd's clocks do not advance during compute)", async () => {
+  it("R6 bench in workerd (timed from outside; also valid where production timers are frozen)", async () => {
     const wall = async (path: string) => {
       const t = performance.now();
       const r = await mf.dispatchFetch(`http://x${path}`);
@@ -80,6 +110,10 @@ describe("R5 workerd", () => {
       await wall(`/bench/${name}`); // warm-up
       const { ms, body } = await wall(`/bench/${name}`);
       const inside = JSON.parse(body) as BenchRow;
+      // Under Miniflare, workerd's performance.now() advances during compute and agrees with the
+      // outside wall clock (probe: 288 vs 297 ms). Production Cloudflare freezes timers during
+      // execution (documented, not testable here), so the outside measurement is the portable one.
+      expect(inside.ms).toBeGreaterThan(0);
       rows.push({ ...inside, ms: ms - noop });
     }
     console.log(`workerd bench\n${formatRows(rows)}`);
