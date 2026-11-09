@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { Biscuit, generateKeypair } from "@statewalker/webrun-biscuit";
+import { bundleTodoTool } from "./fixtures/bundle-fixture.mjs";
 
 const BASE = process.env.BASE_URL ?? "http://127.0.0.1:8787";
 const ADMIN = process.env.ADMIN_KEY ?? "dev-admin-key";
@@ -379,8 +380,9 @@ export default class extends WorkerEntrypoint {
       const r = await run(`tool-${ws}`, ws, token, transport, { kind: "tool", code }, [
         { scope: "/proj", readOnly: true },
       ]);
-      if (rt.toolIsolates === "refused") {
-        // cellb on Node: loaded code would see the real node:fs, so the agent refuses tools.
+      if (rt.toolIsolates !== "isolated") {
+        // cellb on Node: loaded code would see the real node:fs, so the agent refuses raw tools
+        // ("refused": every tool; "bundled-only": tools that are not checked bundles).
         assert.equal(r.ok, false);
         assert.equal(r.code, "EPERM", r.error);
         return;
@@ -400,6 +402,69 @@ export default class extends WorkerEntrypoint {
         Array.isArray(o.nodeFsRoot) &&
         o.nodeFsRoot.some((e) => !["bundle", "tmp", "dev"].includes(e));
       assert.equal(hostFs, false, `tool isolate sees host files: ${o.nodeFsRoot}`);
+    });
+
+    test("a Node-style tool bundled with webrun-bundler runs on the capability", async (t) => {
+      const rt = (await http("/api/runtime")).value;
+      if (rt.toolIsolates === "none") return t.skip("no Worker Loader binding in this runtime");
+      const ws = freshWs();
+      await seed(ws, SEED);
+      const { token } = await session(ws, "alice", ["/p1", "/proj"]);
+      // Written for Node: node:fs/promises, fs callbacks and node:path (tests/fixtures/todo-tool.ts).
+      const { code, check } = await bundleTodoTool();
+      assert.equal(check.ok, true, check.problems.join("; "));
+      const chain = [{ scope: "/proj", readOnly: true }];
+      const r = await run(
+        `bt-${ws}`,
+        ws,
+        token,
+        transport,
+        { kind: "tool", code, bundled: true, input: { dir: "/proj" } },
+        chain,
+      );
+      if (rt.toolIsolates === "refused") {
+        assert.equal(r.code, "EPERM", r.error); // cellb on Node by default
+        return;
+      }
+      assert.equal(r.ok, true, r.error);
+      assert.deepEqual(r.value.result, {
+        names: ["readme.md", "src"],
+        todos: ["TODO: write tests"],
+        write: "EACCES",
+        p1: "EACCES",
+        env: "production",
+      });
+      // A bundle that passes the check but is not the approved one: refused where approval is needed.
+      const other = await run(`bt-${ws}`, ws, token, transport, {
+        kind: "tool",
+        code: `${code}\n// changed`,
+        bundled: true,
+        input: { dir: "/proj" },
+      });
+      if (rt.toolIsolates === "bundled-only") {
+        assert.equal(other.code, "EPERM", other.error);
+        assert.match(other.error, /allowedBundles/);
+      } else assert.equal(other.ok, true, other.error);
+      // The review's exploit: aliasing the global object to reach process. Refused by the check.
+      const alias = `${code}\nexport const leak = () => { const { process: p } = globalThis; return p; };`;
+      const leak = await run(`bt-${ws}`, ws, token, transport, {
+        kind: "tool",
+        code: alias,
+        bundled: true,
+        input: {},
+      });
+      assert.equal(leak.code, "EPERM", leak.error);
+      assert.match(leak.error, /use of globalThis/);
+      // A bundle that fails the acceptance check is refused before it is loaded.
+      const tampered = `${code}\nexport const sneak = () => import("node:fs");`;
+      const bad = await run(`bt-${ws}`, ws, token, transport, {
+        kind: "tool",
+        code: tampered,
+        bundled: true,
+        input: {},
+      });
+      assert.equal(bad.code, "EPERM", bad.error);
+      assert.match(bad.error, /dynamic import/);
     });
 
     test("tool isolates keep no state between callers", async (t) => {

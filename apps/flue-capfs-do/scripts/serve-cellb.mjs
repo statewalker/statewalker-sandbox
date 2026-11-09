@@ -2,11 +2,13 @@
 // and the Durable Objects run on node:sqlite.
 //   node scripts/serve-cellb.mjs [--port 8788] [--data .data/cellb]
 //   node scripts/serve-cellb.mjs --celld-bucket .celld/dev/objects.sqlite3
+//   node scripts/serve-cellb.mjs --var 'TOOL_BUNDLE={"hostFsRuntimes":"bundled-only"}'
 // --celld-bucket keeps every cell in celld's own format (LTX logs, ownership records) in the
 // SQLite object store `celld dev` uses, so `celld dev` can take the same cells over.
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -24,9 +26,47 @@ const { values } = parseArgs({
     port: { type: "string", default: "8788" },
     data: { type: "string" },
     "celld-bucket": { type: "string" },
+    var: { type: "string", multiple: true, default: [] },
   },
 });
-const dir = fileURLToPath(new URL("..", import.meta.url));
+const projectDir = fileURLToPath(new URL("..", import.meta.url));
+// --var KEY=VALUE overrides wrangler.jsonc `vars` (cellb reads vars from the config only): the
+// project is loaded from a temporary copy of the config whose `main` points back here (only
+// `main` is re-pointed: this project has no other relative paths in its config).
+let dir = projectDir;
+let tempDir;
+if (values.var.length) {
+  const config = JSON.parse(stripJsonc(readFileSync(join(projectDir, "wrangler.jsonc"), "utf8")));
+  for (const kv of values.var) {
+    const i = kv.indexOf("=");
+    if (i <= 0) throw new Error(`--var expects KEY=VALUE, got '${kv}'`);
+    config.vars = { ...config.vars, [kv.slice(0, i)]: kv.slice(i + 1) };
+  }
+  config.main = join(projectDir, config.main);
+  delete config.$schema;
+  dir = tempDir = mkdtempSync(join(tmpdir(), "flue-capfs-cellb-config-"));
+  writeFileSync(join(dir, "wrangler.json"), JSON.stringify(config, null, 2));
+}
+
+// JSONC → JSON: drops line and block comments outside strings, and trailing commas.
+function stripJsonc(text) {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      const start = i;
+      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === "\\") i++;
+      out += text.slice(start, i + 1);
+    } else if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      out += "\n";
+    } else if (c === "/" && text[i + 1] === "*") {
+      i = text.indexOf("*/", i + 2) + 1;
+      if (i === 0) break;
+    } else out += c;
+  }
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
 
 let project;
 if (values["celld-bucket"]) {
@@ -66,6 +106,7 @@ server.listen(Number(values.port), "127.0.0.1", () =>
 const stop = async () => {
   server.close();
   await project.close(); // releases the cells, so celld can take them at once
+  if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   process.exit(0);
 };
 process.on("SIGINT", stop);

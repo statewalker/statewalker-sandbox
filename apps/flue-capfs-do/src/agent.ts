@@ -24,13 +24,15 @@ import { CapFs, safeExec } from "./capfs.ts";
 import { type Cap, type CapHandoff, capFromHandoff, ToolFiles, type WorkspaceEnv } from "./caps.ts";
 import { rgForFlue } from "./flue-compat.ts";
 import { attenuationBlock } from "./policy.ts";
+import { deploymentToolConfig } from "./tools/config.ts";
+import { admitTool, toolPolicy } from "./tools/policy.ts";
 
 export type AttenuationSpec = { scope?: string | string[]; readOnly?: boolean; datalog?: string };
 
 export type Task =
   | { kind: "bash"; script: string; cwd?: string }
   | { kind: "flue"; calls: { tool: string; params: Record<string, unknown> }[]; cwd?: string }
-  | { kind: "tool"; code: string; input?: unknown }
+  | { kind: "tool"; code: string; input?: unknown; bundled?: boolean }
   | { kind: "revocationId" };
 
 interface WorkerLoader {
@@ -52,15 +54,9 @@ export interface AgentEnv extends WorkspaceEnv {
   LOADER?: WorkerLoader;
   /** "1" allows tool isolates on runtimes whose isolates can reach the host file system (cellb on Node). */
   ALLOW_HOST_FS_TOOLS?: string;
+  /** Run-side tool policy: overrides of tool-bundle.config.json, a JSON string or an object. */
+  TOOL_BUNDLE?: unknown;
 }
-
-/**
- * Whether Worker Loader isolates on this runtime can reach the host's files. cellb on Node runs
- * loaded code in a worker thread with the real node:fs — there a tool could read the cells'
- * SQLite files, including the Workspace root key — so tools are refused unless explicitly allowed.
- */
-export const isolatesSeeHostFs = (): boolean =>
-  /Node\.js/.test(globalThis.navigator?.userAgent ?? "");
 
 export interface RunResult {
   hops: string[];
@@ -104,7 +100,7 @@ export class Agent extends DurableObject<AgentEnv> {
       case "flue":
         return this.#flue(name, cap, task);
       case "tool":
-        return this.#tool(cap, task.code, task.input);
+        return this.#tool(cap, task.code, task.input, !!task.bundled);
       case "revocationId":
         return cap.revocationId();
       default:
@@ -146,14 +142,10 @@ export class Agent extends DurableObject<AgentEnv> {
   }
 
   /** Tool code in its own isolate: no network, no bindings, only the narrowed capability as an argument. */
-  async #tool(cap: Cap, code: string, input: unknown) {
-    const loader = this.env.LOADER;
-    if (!loader) throw new Error("ENOSYS: no Worker Loader binding (LOADER) in this runtime");
-    if (isolatesSeeHostFs() && this.env.ALLOW_HOST_FS_TOOLS !== "1") {
-      throw new Error(
-        "EPERM: tool isolates on this runtime can reach the host file system; refused",
-      );
-    }
+  async #tool(cap: Cap, code: string, input: unknown, bundled: boolean) {
+    const config = deploymentToolConfig(this.env.TOOL_BUNDLE);
+    await admitTool({ code, bundled }, toolPolicy(this.env, config), config);
+    const loader = this.env.LOADER as WorkerLoader;
     // A fresh isolate per invocation: an isolate keyed by the code would keep its globals between
     // callers, so data one user's capability read could be returned to the next user.
     const id = `tool-${crypto.randomUUID()}`;
