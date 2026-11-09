@@ -64,7 +64,13 @@ describe("R2 a real git pack walks end to end", () => {
     const dir = mkdtempSync(join(tmpdir(), "x1b-"));
     const git = (...args: string[]) =>
       execFileSync("git", ["-C", dir, ...args], {
-        env: { ...process.env, GIT_AUTHOR_NAME: "a", GIT_AUTHOR_EMAIL: "a@x", GIT_COMMITTER_NAME: "a", GIT_COMMITTER_EMAIL: "a@x" },
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "a",
+          GIT_AUTHOR_EMAIL: "a@x",
+          GIT_COMMITTER_NAME: "a",
+          GIT_COMMITTER_EMAIL: "a@x",
+        },
       });
     git("init", "-q");
     let text = "line\n".repeat(2000);
@@ -158,12 +164,29 @@ describe("R5 traps, documented as passing tests", () => {
   });
   it("(b) DecompressionStream rejects trailing bytes and has no consumed count", async () => {
     const withTrailing = concat([z, Uint8Array.of(1, 2, 3)]);
-    const s = new Blob([withTrailing]).stream().pipeThrough(new DecompressionStream("deflate"));
+    const s = new Blob([withTrailing as Uint8Array<ArrayBuffer>])
+      .stream()
+      .pipeThrough(new DecompressionStream("deflate"));
     await expect(new Response(s).arrayBuffer()).rejects.toThrow(/Trailing junk/);
     expect("bytesRead" in new DecompressionStream("deflate")).toBe(false);
   });
   it("(c) Node 22 zlib.inflateSync silently ignores trailing bytes (no position reported)", () => {
     const out = inflateSync(concat([z, Uint8Array.of(1, 2, 3)]));
     expect(out.length).toBe(data.length);
+  });
+});
+
+describe("R5 (d) trap found while going green: output views must not pin the output buffer", () => {
+  it("4 KiB of incompressible output pushed 1 byte at a time keeps arrayBuffers growth small", () => {
+    const input = new Uint8Array(randomBytes(4096));
+    const z = new Uint8Array(deflateSync(input));
+    const base = process.memoryUsage().arrayBuffers;
+    const kept: Uint8Array[] = [];
+    const inf = createInflater();
+    for (const c of chunked(z, 1)) kept.push(...inf.push(c).out);
+    inf.end();
+    // With per-push 64 KiB buffers returned as views, ~4096 views pin ~256 MiB.
+    expect(process.memoryUsage().arrayBuffers - base).toBeLessThan(32 * 1024 * 1024);
+    expect(kept.reduce((n, k) => n + k.length, 0)).toBe(input.length);
   });
 });
