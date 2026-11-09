@@ -1,0 +1,17 @@
+# vcs-protos — feasibility prototypes for the webrun-vcs / webrun-sync plan
+
+Each numbered folder answers **one** question from the combined plan
+(Drive: `2026-11-09.Webrun-VCS`, note 08). Every folder has a README with the
+question, the reject condition and acceptance criteria fixed before any code,
+then tests written first (red), then the implementation (green), then findings.
+
+| Folder | Plan id | Question |
+|---|---|---|
+| `01-streaming-git-hash` | X1a — **works; use noble** | Can the existing streaming SHA-1 compute git object ids in one bounded-memory pass? |
+| `02-inflate-stream-ends` | X1b — **works; slower than native** | Can pako's low-level inflater, fed arbitrary chunks, report exactly where each zlib stream ends? |
+
+`pnpm test` runs typecheck + all tests. `pnpm test 01-streaming-git-hash` runs one.
+`pnpm bench` prints the throughput tables recorded in each README.
+
+Vendored code is copied verbatim from `statewalker/webrun-vcs@f1abdd3` into each
+folder's `src/vendor/` so the prototype tests exactly what ships today.
