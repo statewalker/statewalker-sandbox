@@ -50,6 +50,7 @@ again.
 | `test:cellb` | `@statewalker/cellb` 0.5.2 `loadProject`, cells in `node:sqlite` files |
 | `test:cellb-bundled-only` | cellb with `TOOL_BUNDLE={"hostFsRuntimes":"bundled-only","allowedBundles":[<hash of tests/fixtures/todo-tool.ts>]}`: that approved bundle runs, other bundles and raw tools are refused |
 | `test:cellb-celld-bucket` | cellb with `celldBucket(sqliteObjectStore(...))`: cells as celld writes them (LTX logs, `own.json` ownership records), in the object store `celld dev` keeps |
+| `test:browser` | the project in Chromium on cellb (Playwright): builds `dist/`, serves it, runs the capability checks and the Python cases through the page |
 | `test:celld` | `celld dev --listen 127.0.0.1:<port>`. Set `CELLD_BIN` (default `celld` on PATH). `CELLD_ARGS` replaces the arguments, with `{port}` substituted. `TRANSPORTS=token` skips the stub transport |
 
 For interactive use, start a runtime with `pnpm dev:wrangler` (port 8787) or `pnpm dev:cellb`
@@ -106,6 +107,8 @@ Tasks:
   is a bundle from `bundleTool` (see [Bundled tools](#bundled-tools)), and the Agent runs the
   acceptance check before loading it. Whether a raw module or a bundle may run depends on
   `toolIsolates` (below).
+- `{kind: "python", code, root?, cwd?, timeoutMs?, fresh?}` runs Python (Pyodide) on the
+  capability's files (see [Python](#python)).
 - `{kind: "revocationId"}` returns the revocation id of the capability the agent holds.
 
 `chain: [{scope?, readOnly?, datalog?}, …]` adds one hop per entry. Each hop attenuates the
@@ -230,6 +233,91 @@ only bundles a deployment approved by hash, never a client's own bundle. Approve
 you have reviewed: an approved bundle runs with the host access a cellb tool isolate has.
 `ALLOW_HOST_FS_TOOLS = "1"` lets every tool run there, for experiments only.
 
+### Python
+
+Python code runs on [Pyodide](https://pyodide.org) (CPython 3.14 compiled to WebAssembly) in an
+engine of its own, never in the cell's realm. It works on the same filtered file system:
+
+1. **Before a run**, the Agent copies every file its capability can read under `root` (default
+   `/`) into the engine's `/workspace`. Files the capability hides are simply not there.
+2. **The code runs** with `/workspace` (or `cwd`) as its working directory: ordinary `open`,
+   `os`, `csv`, `json`, `sqlite3` and so on work on that copy. `import capfs` gives live,
+   authorized calls (`await capfs.read_text(p)`, `write_text`, `append_text`, `listdir`,
+   `exists`, `stat`, `mkdir`, `remove`), with paths in the capability's namespace (a
+   `/workspace/…` path is accepted too).
+3. **After the run**, the engine reports what changed. The Agent writes it back through the
+   capability: each new directory, write and deletion (a removed tree as one recursive delete)
+   is authorized again. The result lists what was `written`, `deleted` and `denied` (with the
+   error), as well as `stdout`, `stderr`, `value` (the last expression; when it is awaitable, the
+   run waits for it) and `error` (the traceback).
+
+```json
+{ "workspace": "acme", "token": "…", "transport": "token", "chain": [{ "scope": "/proj" }],
+  "task": { "kind": "python", "code": "import csv\nrows = list(csv.reader(open('/workspace/proj/data.csv')))\nlen(rows)" } }
+```
+
+| Runtime | Engine | What confines it |
+|---|---|---|
+| cellb on Node | a child process (`node --permission`) | it may only read Pyodide's directory and the engine script: no writes, no child processes or workers. Code generation from strings is disabled, so Pyodide's FFI cannot reach `Function("…")`. Its environment is empty |
+| cellb in a browser | a module Worker (`/python/engine.mjs`) | served with a CSP (`default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'`), so there is no eval and no other origin. After Pyodide loads, the network and storage APIs (`fetch`, `WebSocket`, `indexedDB`, `navigator.storage`, …) are removed from its global scope |
+| workerd (wrangler) | none | `ENOSYS`: no child processes, and workerd does not compile fetched WebAssembly |
+
+In every engine, the `js` module is empty (`jsglobals: {}`). The engine never holds the
+capability: it only sends file requests by message, and the Agent answers them with the
+capability.
+
+- **One engine per capability:** an agent cell (one per agent name, so callers with different
+  rights can share it) keeps its engine only while the same capability (the same revocation id)
+  runs. A run with another capability gets a new engine. So nothing one caller left in the
+  interpreter is seen by another: files outside `/workspace`, patched builtins, background tasks.
+  Within one capability, each run gets fresh globals, the modules and `sys.path` of a fresh
+  interpreter, and a fresh `/workspace`. Files elsewhere (`/tmp`) and changes to builtins
+  persist only for that same capability. `fresh: true` starts a new engine anyway. Starting an
+  engine takes about 2 s.
+- **`capfs` calls belong to their run.** Each call carries the id of the run that started the
+  calling code: a `contextvars` value, copied into every task that code creates. At the end of
+  a run its leftover tasks are cancelled. A call from a task that outlived its run is refused
+  (`EACCES`), even while another run is active, and is never answered with another run's
+  capability.
+- **Limits:**
+  - A run that exceeds `timeoutMs` (default 30 s) ends with `ETIMEDOUT`, and its engine is
+    replaced.
+  - An idle engine stops after 5 minutes.
+  - The copy into `/workspace` stops at 5000 files or 16 MB (`synced.truncated`).
+  - A run's write-back stops at 5000 files or 16 MB (`truncated`).
+  - `stdout` and `stderr` are cut at 1 MB each, and the value at 64 KB. The engine enforces these
+    limits, and the Agent checks them again.
+  - The store holds UTF-8 text, so binary output is refused (`EINVAL`).
+
+**Configuration** (vars):
+
+- `PYTHON=off` disables Python.
+- On Node, `PYTHON_ENGINE` (the path of `src/python/engine.mjs`) and `PYODIDE_INDEX` (Pyodide's
+  directory) are required. `scripts/serve-cellb.mjs` sets both.
+- In a browser they default to `/python/engine.mjs` and `/pyodide/`.
+
+**Remaining exposure:**
+
+- On Node 22 the permission model does not restrict the network. With `js` empty, Python has no
+  JS bridge to it: sockets fail ("Host is unreachable"), and `pyodide.http` loses `fetch` after
+  loading. A test asserts both. Node 25 adds `--allow-net` for a hard guarantee.
+- In the browser, the engine runs on the page's origin. The removed APIs are the known routes,
+  and the CSP blocks eval and other origins.
+- **The CSP is the host's job.** `scripts/serve-browser.mjs` sends it with `/python/engine.mjs`;
+  any other host that serves the engine must send the same `Content-Security-Policy` header.
+
+### In a browser
+
+`pnpm dev:browser` builds `dist/` and serves the project at <http://127.0.0.1:8790/>:
+
+- **`dist/cellb`** is `cellb build`'s output, which `loadProject` fetches.
+- **The cells worker** (`browser/cells-worker.ts`) runs it with SQLite on OPFS (`@sqlite.org/sqlite-wasm`).
+- **The page** (`browser/page.ts`) reaches the cells worker over a MessagePort
+  (`serveRuntime` / `connectRuntime`) and exposes `window.capfs.api(path, body, { admin })`, the
+  same HTTP API the Node runtimes serve.
+- **Worker Loader code** runs in cellb's own isolate worker, one Dedicated Worker per isolate.
+- **The demo page** runs a Python snippet as alice (rights: `/proj`).
+
 ## Examples
 
 Scope a sub-agent to `/proj`, read-only, two hops away:
@@ -269,13 +357,20 @@ src/tools/shims.ts   fs shim over `files`, POSIX path, deny modules, the WorkerE
 src/tools/bundle.ts  bundleTool(): webrun-bundler with the shims (build side; not in the Worker)
 src/tools/check.ts   acceptance check (acorn + eslint-scope), bundle hash
 src/tools/policy.ts  toolPolicy() and admitTool(): what may run here, from the deployment config only
+src/python/engine.mjs  the Python engine (Pyodide): a Node child process or a browser Worker
+src/python/kernel.ts   Agent side: files into /workspace, live capfs calls, write-back through the capability
+src/python/hosts.ts    where the engine runs per runtime (node child with --permission, Worker, none)
+browser/               the browser host: page, cells worker (cellb + SQLite on OPFS), index.html
 scripts/bundle-tool.mjs    CLI around bundleTool
 tests/scenario.test.mjs    the cross-runtime suite (HTTP)
 tests/durability.test.mjs  write → restart → check
 tests/unit/                the core on node:sqlite; tool bundling, check and policy
 tests/fixtures/            the Node-style tool the scenario bundles (approved in cellb-bundled-only)
 scripts/run-env.mjs        start runtime, run suites, restart, stop (process group)
-scripts/serve-cellb.mjs    cellb on node:http (optionally on a celld bucket; --var overrides vars)
+scripts/serve-cellb.mjs    cellb on node:http (optionally on a celld bucket; --var overrides vars; sets the Python vars)
+scripts/build-browser.mjs  dist/cellb (cellb build) and dist/browser (esbuild)
+scripts/serve-browser.mjs  static server for the browser build, Pyodide and the engine (with its CSP)
+tests/python-scenario.mjs  the Python cases, shared by tests/python.test.mjs (HTTP) and tests/browser.test.mjs
 ```
 
 ### Results (9 Nov 2026)
@@ -287,6 +382,15 @@ scripts/serve-cellb.mjs    cellb on node:http (optionally on a celld bucket; --v
 | scenario, runtime and admin (2) | ✅ | ✅ | ✅ | ✅ | not run |
 | durability across a restart | ✅ | ✅ | ✅ | ✅ | not run |
 | `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run | not run |
+| python (13 cases) | `ENOSYS` (as designed) | ✅ 13 | ✅ 13 | ✅ 13 | not run |
+
+In Chromium on cellb (`test:browser`), 16/16 pass: the runtime check, the capability check
+(rights, both transports, Flue tools with delegation), the 13 Python cases, and no page errors.
+The Python cases include the review's findings:
+- a caller's files, builtins and tasks are not seen by a run with another capability;
+- a task that outlives its run cannot use `capfs`;
+- there is no network from the engine;
+- a removed tree is removed from the store, and oversized output is truncated.
 
 The 27 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
 asserts the `EPERM` refusal. The bundled-tool test asserts `EPERM` by default; under

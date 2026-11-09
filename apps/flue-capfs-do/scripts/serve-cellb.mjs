@@ -7,6 +7,7 @@
 // SQLite object store `celld dev` uses, so `celld dev` can take the same cells over.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
@@ -35,6 +36,16 @@ const projectDir = fileURLToPath(new URL("..", import.meta.url));
 // `main` is re-pointed: this project has no other relative paths in its config).
 let dir = projectDir;
 let tempDir;
+// Python on Node: the kernel forks src/python/engine.mjs with read access to Pyodide only.
+const pyodideDir = dirname(createRequire(import.meta.url).resolve("pyodide/package.json"));
+const pythonVars = [
+  `PYTHON_ENGINE=${join(projectDir, "src/python/engine.mjs")}`,
+  `PYODIDE_INDEX=${pyodideDir}/`,
+];
+values.var = [
+  ...pythonVars.filter((v) => !values.var.some((o) => o.startsWith(v.split("=")[0] + "="))),
+  ...values.var,
+];
 if (values.var.length) {
   const config = JSON.parse(stripJsonc(readFileSync(join(projectDir, "wrangler.jsonc"), "utf8")));
   for (const kv of values.var) {
