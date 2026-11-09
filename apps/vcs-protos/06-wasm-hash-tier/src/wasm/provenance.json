@@ -1,0 +1,17 @@
+{
+  "source": "hash-wasm@4.13.0",
+  "files": {
+    "blake3.wasm": {
+      "bytes": 11564,
+      "sha256": "c6c8d4e499fde057c89df0461b560fe68f1fac1b384c444870c3490c31bf41fe"
+    },
+    "sha1.wasm": {
+      "bytes": 5367,
+      "sha256": "b51ba0fe01a1a075737d0b4004e2da893099743819933e7574ab05b4a12a9be0"
+    },
+    "sha256.wasm": {
+      "bytes": 9560,
+      "sha256": "7ad88dae37c322722a047435058ffc5e4f3315762c7114dfa740e5db6b474c87"
+    }
+  }
+}
