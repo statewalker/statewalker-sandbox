@@ -11,6 +11,7 @@ import { runWasmBench, runWasmConformance, WASM_BENCH_NAMES } from "../src/confo
 import { compileModulesFromBytes } from "../src/load-from-bytes.js";
 import * as embedded from "../src/wasm/binaries.js";
 import { createWasmHasher, type WasmModules } from "../src/wasm-hasher.js";
+import { WORKERD_NATIVE_BENCH_NAMES } from "../src/workerd-native.js";
 import { EXPECTED_FAMILIES, EXPECTED_TOTAL, familyCounts } from "./expected.js";
 
 const wasmDir = join(import.meta.dirname, "../src/wasm");
@@ -106,6 +107,16 @@ describe("R6 workerd: precompiled module imports work; compiling from bytes is r
     });
     assertAllPass((await res.json()) as Check[]);
   }, 120_000);
+  it("workerd's native crypto.DigestStream (SHA-1, SHA-256) matches git and node:crypto", async () => {
+    const res = await mf.dispatchFetch("http://x/digeststream", {
+      method: "POST",
+      body: JSON.stringify(fx),
+    });
+    const checks = (await res.json()) as Check[];
+    expect(checks.length).toBe(fx.gitObjects.length + fx.sha256.length);
+    const failed = checks.filter((c) => !c.ok);
+    expect(failed, JSON.stringify(failed, null, 1)).toEqual([]);
+  });
   it("trap: compiling the same binary from bytes is refused by workerd", async () => {
     const text = await (await mf.dispatchFetch("http://x/compile-from-bytes")).text();
     expect(text).toMatch(/^refused: .*disallowed by embedder/);
@@ -119,7 +130,7 @@ describe("R6 workerd: precompiled module imports work; compiling from bytes is r
     await wall("/noop");
     const noop = Math.min((await wall("/noop")).ms, (await wall("/noop")).ms);
     const rows: BenchRow[] = [];
-    for (const name of WASM_BENCH_NAMES) {
+    for (const name of [...WASM_BENCH_NAMES, ...WORKERD_NATIVE_BENCH_NAMES]) {
       await wall(`/bench/${name}`);
       const { ms, body } = await wall(`/bench/${name}`);
       rows.push({ ...(JSON.parse(body) as BenchRow), ms: ms - noop });

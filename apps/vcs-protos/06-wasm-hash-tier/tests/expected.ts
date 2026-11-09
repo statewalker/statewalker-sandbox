@@ -10,7 +10,7 @@ export const EXPECTED_FAMILIES: Record<string, number> = {
   chunking: 3,
   concurrent: 1,
 };
-export const EXPECTED_TOTAL = 83;
+export const EXPECTED_TOTAL = 84;
 
 export function familyCounts(checks: Check[]): Record<string, number> {
   const counts: Record<string, number> = {};

@@ -6,6 +6,11 @@ import blake3 from "./wasm/blake3.wasm";
 import sha1 from "./wasm/sha1.wasm";
 import sha256 from "./wasm/sha256.wasm";
 import { base64ToBytes } from "./wasm-hasher.js";
+import {
+  runDigestStreamBench,
+  runDigestStreamConformance,
+  WORKERD_NATIVE_BENCH_NAMES,
+} from "./workerd-native.js";
 
 const modules = { blake3, sha1, sha256 };
 
@@ -15,8 +20,15 @@ export default {
     if (url.pathname === "/conformance") {
       return Response.json(await runWasmConformance((await req.json()) as Fixtures, modules));
     }
+    if (url.pathname === "/digeststream") {
+      return Response.json(await runDigestStreamConformance((await req.json()) as Fixtures));
+    }
     if (url.pathname.startsWith("/bench/")) {
-      return Response.json(await runWasmBench(url.pathname.slice("/bench/".length), modules));
+      const name = url.pathname.slice("/bench/".length);
+      if ((WORKERD_NATIVE_BENCH_NAMES as readonly string[]).includes(name)) {
+        return Response.json(await runDigestStreamBench(name));
+      }
+      return Response.json(await runWasmBench(name, modules));
     }
     if (url.pathname === "/compile-from-bytes") {
       // The trap R6 documents: what hash-wasm and similar libraries do at runtime.
