@@ -4,6 +4,8 @@
   "main": "../src/entries/bundler.ts",
   "compatibility_date": "2026-02-24",
   "compatibility_flags": ["nodejs_compat"],
+  // Astro builds run their config in a Worker Loader isolate where the realm cannot evaluate code.
+  "worker_loaders": [{ "binding": "LOADER" }],
   "durable_objects": {
     "bindings": [
       { "name": "REGISTRY", "class_name": "PackageRegistry" },

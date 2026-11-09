@@ -5,6 +5,8 @@
  *
  *   POST /builds[?tier=object|runner][&entry=…][&minify=1]   body: a ZIP or JSON { files, spec }
  *   POST /builds?project=<id>&snapshot=<snap>                the snapshot of a project (App 2)
+ *        (header x-build-spec: a JSON BuildSpec; `kind=astro`, or an astro.config.* in the
+ *        project, builds an Astro project from its sources first: src/astro)
  *        → { id, status, tier, … }  (an in-object build answers when it is done)
  *   GET  /builds/<id>                     status, log, stats, output links
  *   GET  /b/<id>/<path>                   an output file: wrangler.json, worker.js, worker.js.map, assets/…
@@ -23,13 +25,15 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { readFile } from "@statewalker/webrun-files";
+import { astroInLoader, canEvaluate, type WorkerLoader } from "../astro/loader.js";
 import { registryFetch } from "../core/registry.js";
 import { SqlFilesApi } from "../core/sql-files.js";
 import { json, mimeOf, sha256Hex, text, unzip, zip, zipStream } from "../core/util.js";
-import { getEsbuild } from "../core/wasm.js";
+import { getAstroCompiler, getEsbuild } from "../core/wasm.js";
 import type { PlatformEnv } from "../platform.js";
 import { readUpload } from "../projects/project.js";
-import { BUILDER_VERSION, type BuildSpec, buildProject, defaultPackages } from "./build.js";
+import { buildAny } from "./any.js";
+import { BUILDER_VERSION, type BuildSpec, defaultPackages } from "./build.js";
 
 const QUEUE = "_queue";
 
@@ -78,7 +82,12 @@ export async function handleBuilds(request: Request, env: PlatformEnv): Promise<
       original = new Uint8Array(await request.arrayBuffer());
       files = await unzip(original);
     }
-    const spec = specFrom(url, bodySpec);
+    // A ZIP upload carries its spec (an Astro build's `astro` options, say) in a header.
+    const headerSpec = request.headers.get("x-build-spec");
+    const spec = specFrom(url, {
+      ...(headerSpec ? (JSON.parse(headerSpec) as BuildSpec) : {}),
+      ...bodySpec,
+    });
     const tier = url.searchParams.get("tier") ?? "auto";
     const sorted = [...files.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
     const hashes: string[] = [];
@@ -240,7 +249,24 @@ export class BuildJob extends DurableObject<PlatformEnv> {
     try {
       const esbuild = await getEsbuild();
       const spec = JSON.parse(this.#get("spec") ?? "{}") as BuildSpec;
-      const output = await buildProject({
+      const loader = this.env.LOADER as WorkerLoader | undefined;
+      // An Astro build evaluates the project's config: in this realm where it can, else in a
+      // Worker Loader isolate (workerd and celld refuse to evaluate code).
+      const inLoader = !(await canEvaluate()) && loader;
+      const output = await buildAny({
+        astroCompiler: () => getAstroCompiler(registryFetch(this.env)),
+        runAstro: inLoader
+          ? (packages) =>
+              astroInLoader({
+                loader: inLoader,
+                files: this.input,
+                esbuild,
+                packages,
+                registryFetch: registryFetch(this.env),
+                spec: spec.astro,
+                log: (m) => this.#log(m),
+              })
+          : undefined,
         files: this.input,
         esbuild,
         packages: defaultPackages(registryFetch(this.env)),
@@ -249,7 +275,10 @@ export class BuildJob extends DurableObject<PlatformEnv> {
       });
       await this.output.remove("/");
       for (const [p, b] of output.files) await this.output.write(p, [b]);
-      this.#set("stats", JSON.stringify(output.stats));
+      this.#set(
+        "stats",
+        JSON.stringify({ ...output.stats, ...(output.astro ? { astro: output.astro } : {}) }),
+      );
       this.#set("status", "done");
     } catch (e) {
       this.#set("error", String((e as Error).stack ?? e));

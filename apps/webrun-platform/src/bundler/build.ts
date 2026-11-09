@@ -22,13 +22,19 @@ import { listFiles, parseJsonc } from "../core/util.js";
 import { COMPAT_ENTRY, compatEntrySource, overlay } from "./compat.js";
 
 /** Part of every build id: a change to the build changes the ids, so no stale build is served. */
-export const BUILDER_VERSION = "webrun-platform-builder/2";
+export const BUILDER_VERSION = "webrun-platform-builder/3";
 
 export interface BuildSpec {
   /** The entry module (default: wrangler config's `main`). */
   entry?: string;
-  /** `worker` (default): a Worker for workerd, celld and cellb; `browser`: an ES module for a page. */
-  kind?: "worker" | "browser";
+  /**
+   * `worker`: a Worker for workerd, celld and cellb; `browser`: an ES module for a page; `astro`:
+   * an Astro project built from its sources first (src/astro). Default: `astro` when the project
+   * has an `astro.config.*`, else `worker`.
+   */
+  kind?: "worker" | "browser" | "astro";
+  /** Options of an Astro build (`kind: "astro"`). */
+  astro?: import("../astro/project.js").AstroSpec;
   minify?: boolean;
   /** Write `worker.js.map` (default true). */
   sourcemap?: boolean;

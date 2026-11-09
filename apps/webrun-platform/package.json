@@ -28,7 +28,11 @@
     "@statewalker/webrun-builder": "^0.2.1",
     "@statewalker/webrun-site-builder": "^0.2.2",
     "linkedom": "^0.18.15",
-    "urlpattern-polyfill": "catalog:"
+    "urlpattern-polyfill": "catalog:",
+    "@napi-rs/wasm-runtime": "1.2.6",
+    "@emnapi/core": "1.11.3",
+    "@emnapi/runtime": "1.11.3",
+    "@astrojs/compiler-rs": "0.5.2"
   },
   "devDependencies": {
     "@statewalker/cellb": "~0.5.2",

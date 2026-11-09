@@ -23,6 +23,16 @@ let tabs: ProjectTabs | undefined;
 async function start() {
   say("Registering the ServiceWorker…");
   await serviceWorker();
+  // The first load comes from the network, without COOP/COEP: reload once through the worker,
+  // which adds them (Astro builds need a cross-origin isolated realm for the compiler's memory).
+  if (!globalThis.crossOriginIsolated) {
+    if (!sessionStorage.getItem("webrun-coi-reload")) {
+      sessionStorage.setItem("webrun-coi-reload", "1");
+      location.reload();
+      return;
+    }
+    say("Not cross-origin isolated: Astro builds will fail (the other apps work).");
+  }
   say("Loading the platform…");
   const app = async (p: string) => {
     const r = await fetch(`/__cellb/app/${p}`);
@@ -49,7 +59,9 @@ async function start() {
     if (r?.ok && (await r.text()).includes("webrun platform")) break;
     await new Promise((r) => setTimeout(r, 200));
   }
-  say("Running: the platform is served from this tab.");
+  say(
+    `Running: the platform is served from this tab${globalThis.crossOriginIsolated ? " (cross-origin isolated)" : ""}.`,
+  );
   document.body.dataset.ready = "true";
 }
 

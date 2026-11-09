@@ -31,6 +31,10 @@ a browser tab:
   source map, `assets/`, D1 migrations), as files, as `project.zip`, and as a Worker Loader
   payload (`loader.json`). Small builds run in the object. Large ones wait for the Node runner
   (`bin/webrun-build.ts`), which uses the same `buildProject`.
+- **Astro builds from sources**: a project with an `astro.config.*` (or `kind: "astro"`) is
+  built by a port of cellb.dev's in-browser Astro builder (`src/astro`), then bundled like any
+  Worker. It works in the object, on the Node runner, and in a browser tab; see
+  [Astro builds](#astro-builds).
 - **Notebooks** compiles Markdown notebooks and Observable Notebook Kit HTML documents to pages
   inside the object. A page's npm imports come from the site's module server.
 
@@ -79,7 +83,8 @@ npx tsx bin/webrun-build.ts --runner http://localhost:8787       # the Node tier
 - the same project built by the Node runner.
 
 `scripts/e2e-browser.ts` checks the platform in a Chromium tab on cellb: CDN, project page,
-bundler (esbuild-wasm in the tab) and notebooks, all served by the tab.
+bundler (esbuild-wasm in the tab), notebooks, and the Astro demo built from its sources in the
+tab, then run on cellb in Node with its island hydrated.
 
 `demos/` has whole apps; see [demos/README.md](demos/README.md):
 
@@ -102,6 +107,9 @@ Each demo is built and run on every host.
 | EmDash: bundled (runner), setup seeds D1, pages | yes | yes | yes | n/a |
 | EmDash bundled inside the object (38.5 MB input) | 29 s | 10 s with `CELLD_V8_HEAP_LIMIT_MB=2048` | 16 s | n/a |
 | Notebooks compiled in the object, cells run | yes | yes | yes | yes |
+| Astro demo built from its sources in the object, then run and hydrated | yes (Worker Loader) | yes (Worker Loader) | yes | yes (built in the tab, run on cellb) |
+| EmDash built from its sources on the Node runner (225 routes), setup seeds D1 | yes | yes | yes | n/a |
+| EmDash built from its sources in the object | 146 s (Worker Loader) | 102 s (Worker Loader, `CELLD_V8_HEAP_LIMIT_MB=4096`) | 87 s | not tried |
 
 ## Internals
 
@@ -165,13 +173,73 @@ It also makes the output portable across hosts:
 - ZIP downloads are streamed one file at a time. celld's isolate heap (about 430 MB by default)
   cannot hold a 38 MB archive and its files together.
 
+### Astro builds
+
+`src/astro` is cellb.dev's `examples/astro-in-browser/src/builder`, ported. It does what Astro's
+build does for an on-demand (`output: "server"`) site, without Vite:
+
+- routes come from `src/pages` and from the integrations;
+- `astro.config.mjs` is bundled and evaluated, and its integrations' hooks run (EmDash's
+  included, with its Vite plugin's virtual modules);
+- `.astro` files are compiled with compiler-rs;
+- the server bundle is one Worker module, and the client bundles hold the islands, the renderers
+  and the component scripts.
+
+`src/astro/project.ts` writes what Astro's Cloudflare build writes (`wrangler.json`,
+`server/entry.mjs`, `client/`). `src/bundler/any.ts` then sends that through `buildProject`, so
+an Astro build gets the same host compatibility as any Worker.
+
+What changed from the original:
+
+- **It builds for every host, not only cellb's browser realm.** `cloudflare:*` and `node:*`
+  stay imports, so the output runs on workerd, celld and cellb alike.
+- **Where the project's config is evaluated.** The config is project code and npm packages, and
+  workerd and celld refuse to evaluate code: no `import("data:…")`, no `new Function`, no Blob
+  URLs. There, `src/astro/loader.ts` runs the whole Astro build in a Worker Loader isolate:
+  - the config is bundled in the object;
+  - the builder (`src/astro/loaded-builder.ts`, bundled by `scripts/build.mjs` and embedded in
+    the platform), the config, `esbuild.wasm` and the compiler are loaded as the modules of a
+    Worker, so the config is imported statically, in an isolate of its own.
+
+  cellb and browsers evaluate the config in the object's own realm with a data: URL import.
+- **Where the compiler comes from.** Astro's compiler is the wasm32-wasi build of compiler-rs,
+  which needs a shared WebAssembly memory. workerd, celld and cellb on Node provide one; a
+  browser tab must be cross-origin isolated, so `browser/sw.ts` adds COOP/COEP.
+  - It comes from the package store at run time, so the platform does not carry its 6 MB.
+  - The Node runner uses the native `@astrojs/compiler-rs`.
+- **Islands imported from the project itself now resolve.** compiler-rs's own `transform`
+  rewrites the islands' `client:component-path` with `resolvePath` after the binding returns. The
+  original's WebAssembly loader called the binding alone, so a project's island
+  (`../components/Counter.tsx`) failed at render with "Unable to resolve". `compiler.ts` now
+  does that step too.
+- **One React.** Peer dependencies take the project's version, as npm installs them
+  (`src/bundler/packages.ts`). Otherwise `@astrojs/react`'s peer range picked a newer React than
+  the project's, and hooks failed with "Invalid hook call".
+- **JSX and `process.env.NODE_ENV` as Astro's Vite build sets them.**
+  - JSX uses the automatic runtime of the renderer's package.
+  - Production React is bundled; its development build calls `console.createTask()`, which
+    celld lacks.
+- **A catch-all route ranks after `/`.** A rest route (`/[...rest]`) sorts after every route
+  without one, as in Astro. Before, it caught `/`.
+- **Build-time packages are a spec option, not EmDash's hard-coded list.**
+  `spec.astro.preload` names the packages integrations read from disk, and `spec.astro.metaUrl`
+  sets `import.meta.url` for the config bundle. EmDash's are in `demos/scripts/e2e.ts`
+  (`EMDASH_SPEC`).
+
+```sh
+(cd demos/astro-app && zip -r - . -x 'node_modules/*' 'dist/*') | curl -X POST --data-binary @- localhost:8787/builds
+npx tsx bin/webrun-build.ts demos/emdash --out /tmp/emdash \
+  --spec '{"astro":{"preload":[["emdash"],["@emdash-cms/admin","emdash"]],"metaUrl":"file:///node_modules/emdash/dist/astro/index.mjs"}}'
+```
+
 ### Size
 
 The workerd folders, gzipped:
 
-- the composed platform: 8.1 MB, under Cloudflare's 10 MB limit for paid plans;
+- the composed platform: 8.5 MB, under Cloudflare's 10 MB limit for paid plans (Astro's
+  compiler is not in it, see [Astro builds](#astro-builds));
 - `src/entries/cdn.ts` (no esbuild): 4.4 MB;
-- `src/entries/bundler.ts` (no lightningcss): 4.2 MB.
+- `src/entries/bundler.ts` (no lightningcss): 4.6 MB.
 
 Build each with its config in `deploy/`.
 
@@ -184,6 +252,12 @@ Build each with its config in `deploy/`.
   `CELLD_V8_HEAP_LIMIT_MB`, or leave them to the runner.
 - **Chromium needs the proxy where outbound HTTPS has one.** The pages fetch from
   registry.npmjs.org; `scripts/e2e-browser.ts` passes `HTTPS_PROXY` to Chromium.
+- **An Astro build in a browser tab needs cross-origin isolation.** The host page reloads once
+  so the ServiceWorker can add COOP/COEP. Without them, the other apps work and Astro builds
+  fail with a message about the shared memory.
+- **Astro builds do not prerender, and support what the integrations' hooks use.**
+  `injectScript` and client directives of integrations are ignored, as in the original. Image
+  services are replaced by the no-op one.
 - **`sourcemap` is on by default.** EmDash's `worker.js.map` is larger than the worker. Pass
   `?sourcemap=0` to skip it.
 - **Projects share the CDN's modules but not its `default` export analysis.** A project's
@@ -201,7 +275,8 @@ Build each with its config in `deploy/`.
 | `scripts/serve-cellb.mjs <dir>` | a wrangler project on cellb in Node over HTTP |
 | `scripts/hosts.mjs` | start/stop a project on any host (used by the e2e scripts) |
 | `scripts/get-celld.sh` | downloads celld 0.6.3 to ~/.cache/celld |
-| `bin/webrun-build.ts` | the bundler's Node tier: a local build, or `--runner <origin>` |
+| `bin/webrun-build.ts` | the bundler's Node tier: a local build (Astro projects included), or `--runner <origin>` |
+| `scripts/fetch-astro-compiler.mjs` | downloads Astro's compiler as WebAssembly to vendor/, for the tests |
 
 | Variable | Default | Meaning |
 |---|---|---|

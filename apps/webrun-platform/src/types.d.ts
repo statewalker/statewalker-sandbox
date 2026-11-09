@@ -37,3 +37,20 @@ declare module "*.wasm" {
   const module: WebAssembly.Module;
   export default module;
 }
+
+declare module "@napi-rs/wasm-runtime" {
+  export const getDefaultContext: () => unknown;
+  export const instantiateNapiModuleSync: (
+    wasm: unknown,
+    options: unknown,
+  ) => { napiModule: { exports: unknown } };
+  export class WASI {
+    constructor(options: { version: string });
+  }
+}
+
+/** The Astro builder Worker's source (src/astro/loaded-builder.ts), bundled by scripts/build.mjs. */
+declare module "virtual:astro-builder-source" {
+  const source: string;
+  export default source;
+}

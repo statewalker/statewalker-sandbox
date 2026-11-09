@@ -3,7 +3,8 @@
  * far above 128 MB) run here, with the same `buildProject` the bundler's Durable Object runs.
  *
  *   tsx bin/webrun-build.ts <project dir> --out <dir> [--platform <origin>] [--entry <path>]
- *                           [--minify] [--no-sourcemap] [--wasm]
+ *                           [--minify] [--no-sourcemap] [--wasm] [--spec <BuildSpec JSON>]
+ *       an Astro project (astro.config.*) is built from its sources first (src/astro).
  *       builds a local project; packages come from the project's node_modules, then from the
  *       platform's package store (`--platform`), else from the npm registry.
  *
@@ -17,7 +18,14 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { NodeFilesApi } from "@statewalker/webrun-files-node";
-import { type BuildSpec, buildProject, defaultPackages } from "../src/bundler/build.js";
+import { readTree } from "../scripts/tree.js";
+import { isAstroProject } from "../src/astro/project.js";
+import { buildAny } from "../src/bundler/any.js";
+import { type BuildSpec, defaultPackages } from "../src/bundler/build.js";
+
+/** Astro's compiler on Node: the native build of @astrojs/compiler-rs. */
+const astroCompiler = async () => (await import("@astrojs/compiler-rs")).transform as never;
+
 import { remoteRegistryFetch } from "../src/core/registry-fetch.js";
 import { unzip, zip } from "../src/core/util.js";
 
@@ -41,13 +49,25 @@ async function runLocal(dir: string) {
   const out = resolve(opt("out") ?? join(dir, "dist-webrun"));
   const platform = opt("platform");
   const spec: BuildSpec = {
+    ...(opt("spec") ? (JSON.parse(opt("spec") as string) as BuildSpec) : {}),
     entry: opt("entry"),
     minify: flag("minify"),
     sourcemap: !flag("no-sourcemap"),
     lowerAwait: flag("lower-await"),
   };
-  const result = await buildProject({
-    files: new NodeFilesApi({ rootDir: resolve(dir) }),
+  let files: import("@statewalker/webrun-files").FilesApi = new NodeFilesApi({
+    rootDir: resolve(dir),
+  });
+  // An Astro project is built from its sources alone: not its node_modules, nor earlier output.
+  if (await isAstroProject(files)) {
+    const sources = new MemFilesApi();
+    for (const [p, b] of readTree(resolve(dir), resolve(dir), ["dist"]))
+      await sources.write(p, [b]);
+    files = sources;
+  }
+  const result = await buildAny({
+    astroCompiler,
+    files,
     esbuild: await loadEsbuild(),
     packages: defaultPackages(platform ? remoteRegistryFetch(platform) : undefined),
     spec,
@@ -79,7 +99,8 @@ async function runRunner(origin: string) {
       const files = new MemFilesApi();
       for (const [p, b] of await unzip(new Uint8Array(await res.arrayBuffer())))
         await files.write(p, [b]);
-      const result = await buildProject({
+      const result = await buildAny({
+        astroCompiler,
         files,
         esbuild,
         packages: defaultPackages(remoteRegistryFetch(origin)),
@@ -88,7 +109,13 @@ async function runRunner(origin: string) {
       });
       const up = await fetch(job.output, {
         method: "PUT",
-        headers: { "x-build-stats": JSON.stringify({ ...result.stats, tier: "runner" }) },
+        headers: {
+          "x-build-stats": JSON.stringify({
+            ...result.stats,
+            ...(result.astro ? { astro: result.astro } : {}),
+            tier: "runner",
+          }),
+        },
         body: zip([...result.files]) as BodyInit,
       });
       console.error(`[runner] ${job.id}: uploaded (${up.status})`);

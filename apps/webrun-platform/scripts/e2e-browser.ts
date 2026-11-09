@@ -10,10 +10,12 @@
  * and the notebooks compile and run.
  */
 import { spawn } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join, resolve } from "node:path";
-import { zip } from "../src/core/util.js";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { unzip, zip } from "../src/core/util.js";
+import { startHost } from "./hosts.mjs";
 import { readTree } from "./tree.js";
 
 const root = resolve(import.meta.dirname, "..");
@@ -172,6 +174,66 @@ try {
     await p.close();
     return summary ?? "";
   });
+
+  await check(
+    "astro: demos/astro-app built from its sources in the tab, run on cellb, hydrated",
+    async () => {
+      const coi = await host.evaluate(() => globalThis.crossOriginIsolated);
+      assert(coi, "the host tab is not cross-origin isolated");
+      const z = zip([
+        ...readTree(join(root, "demos/astro-app"), join(root, "demos/astro-app"), ["dist"]),
+      ]);
+      const r = await call("/builds?tier=object&sourcemap=0", { method: "POST", body: [...z] });
+      const s = JSON.parse(r.text) as {
+        status: string;
+        id: string;
+        error?: string;
+        log?: string[];
+        stats?: { astro?: { routes: number; ms: number } };
+      };
+      assert(
+        s.status === "done",
+        `${s.status}: ${s.error ?? ""}\n${(s.log ?? []).slice(-8).join("\n")}`,
+      );
+      // The build's project.zip, out of the tab, run on cellb in Node.
+      const b64 = (await page.evaluate(async (url: string) => {
+        const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+        let bin = "";
+        for (let i = 0; i < bytes.length; i += 0x8000)
+          bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        return btoa(bin);
+      }, `/b/${s.id}/project.zip`)) as string;
+      const out = mkdtempSync(join(tmpdir(), "webrun-tab-astro-"));
+      for (const [f, bytes] of await unzip(new Uint8Array(Buffer.from(b64, "base64")))) {
+        mkdirSync(dirname(join(out, f)), { recursive: true });
+        writeFileSync(join(out, f), bytes);
+      }
+      const app = await startHost("cellb", out);
+      try {
+        const home = await fetch(`${app.url}/`)
+          .then((r) => r.text())
+          .catch((e) => `ERR ${e}`);
+        assert(
+          home.includes("Astro on the webrun platform"),
+          `home: ${home.slice(0, 300)}\n${app.logs.join("").slice(-1500)}`,
+        );
+        const p = await context.newPage();
+        await p.goto(`${app.url}/`);
+        await p.waitForSelector("text=Astro on the webrun platform");
+        await p.waitForFunction(
+          () => document.querySelector("astro-island:not([ssr])") !== null,
+          null,
+          { timeout: 15_000 },
+        );
+        await p.click("#island");
+        await p.waitForSelector("text=island clicks: 1", { timeout: 10_000 });
+        await p.close();
+      } finally {
+        await app.stop();
+      }
+      return `build ${s.id}: ${s.stats?.astro?.routes} routes in ${s.stats?.astro?.ms} ms in the tab; ran on cellb, island hydrated`;
+    },
+  );
 } finally {
   await browser.close();
   server.kill();

@@ -15,6 +15,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { HOSTS, type RunningHost, startHost } from "../../scripts/hosts.mjs";
+import { readTree } from "../../scripts/tree.js";
 import { unzip, zip } from "../../src/core/util.js";
 import { astroProject } from "./astro-project.js";
 import { notebooksDemo } from "./notebooks.js";
@@ -23,14 +24,30 @@ const demos = resolve(import.meta.dirname, "..");
 const platformRoot = resolve(demos, "..");
 const args = process.argv.slice(2);
 // Positional arguments: the host, then the demos; `--emdash-tier <tier>` takes a value.
-const positional = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--emdash-tier");
+const positional = args.filter(
+  (a, i) => !a.startsWith("--") && !["--emdash-tier", "--emdash-src-tier"].includes(args[i - 1]),
+);
 const hostArg =
   HOSTS.includes(positional[0]) || positional[0] === "all" ? positional.shift() : "all";
 const hosts = hostArg === "all" ? HOSTS : [hostArg as string];
-const apps = positional.length ? positional : ["astro", "emdash", "notebooks"];
+const apps = positional.length
+  ? positional
+  : ["astro", "astro-src", "emdash", "emdash-src", "notebooks"];
 const browserOn = !args.includes("--no-browser");
 // `--emdash-tier object` bundles EmDash inside the BuildJob object instead of on the Node runner
 // (celld needs CELLD_V8_HEAP_LIMIT_MB=2048 for it; Cloudflare's 128 MB isolates cannot).
+// `--emdash-src-tier object` builds EmDash from its sources in the object (esbuild-wasm and the
+// compiler as WebAssembly; a Worker Loader isolate on workerd and celld) instead of on the runner.
+const emdashSrcTier = args.includes("--emdash-src-tier")
+  ? args[args.indexOf("--emdash-src-tier") + 1]
+  : "runner";
+/** EmDash's integration reads its own and its admin's files at build time. */
+const EMDASH_SPEC = {
+  astro: {
+    preload: [["emdash"], ["@emdash-cms/admin", "emdash"]],
+    metaUrl: "file:///node_modules/emdash/dist/astro/index.mjs",
+  },
+};
 const emdashTier = args.includes("--emdash-tier")
   ? args[args.indexOf("--emdash-tier") + 1]
   : "auto";
@@ -64,9 +81,15 @@ function ensureBuilt(app: string) {
 }
 
 /** Sends `files` to the platform's bundler; runs the Node runner when the build is queued for it. */
-async function bundleOnPlatform(base: string, files: Map<string, Uint8Array>, query = "") {
+async function bundleOnPlatform(
+  base: string,
+  files: Map<string, Uint8Array>,
+  query = "",
+  headers: Record<string, string> = {},
+) {
   const res = await fetch(`${base}/builds${query}`, {
     method: "POST",
+    headers,
     body: zip([...files]) as BodyInit,
   });
   let s = (await res.json()) as {
@@ -118,19 +141,36 @@ async function unpackBuild(base: string, id: string, vars: Record<string, string
 
 const freePort = () => 20000 + Math.floor(Math.random() * 20000);
 
-async function astroDemo(host: string, base: string) {
-  ensureBuilt("astro-app");
+/**
+ * `dist`: Astro's own build (Node), bundled by the platform. `sources`: the sources alone, built
+ * by the platform's port of cellb.dev's in-browser Astro builder, in the BuildJob object.
+ */
+async function astroDemo(host: string, base: string, from: "dist" | "sources" = "dist") {
+  const label = from === "dist" ? "astro" : "astro-src";
+  const dirOf = join(demos, "astro-app");
+  if (from === "dist") ensureBuilt("astro-app");
   let id = "";
-  const built = await check(host, "astro: bundled by the platform", async () => {
-    const s = await bundleOnPlatform(base, astroProject(join(demos, "astro-app")));
-    id = s.id;
-    return `build ${s.id}, tier ${s.tier}, ${JSON.stringify(s.stats?.workerBytes)} bytes`;
-  });
+  const built = await check(
+    host,
+    `${label}: ${from === "dist" ? "bundled" : "built from its sources"} by the platform`,
+    async () => {
+      const s =
+        from === "dist"
+          ? await bundleOnPlatform(base, astroProject(dirOf))
+          : await bundleOnPlatform(
+              base,
+              readTree(dirOf, dirOf, ["dist"]),
+              "?tier=object&sourcemap=0",
+            );
+      id = s.id;
+      return `build ${s.id}, tier ${s.tier}, ${JSON.stringify(s.stats?.workerBytes)} bytes${s.stats?.astro ? `, Astro: ${JSON.stringify(s.stats.astro)}` : ""}`;
+    },
+  );
   if (!built) return;
   const dir = await unpackBuild(base, id);
   let app: RunningHost | undefined;
   try {
-    await check(host, "astro: SSR, Durable Object, API route, assets", async () => {
+    await check(host, `${label}: SSR, Durable Object, API route, assets`, async () => {
       app = await startHost(host, dir);
       const first = await (await fetch(`${app.url}/`)).text();
       assert(first.includes("Astro on the webrun platform"), `home: ${first.slice(0, 300)}`);
@@ -147,7 +187,7 @@ async function astroDemo(host: string, base: string) {
       return "home, visits counter, post, API, client asset";
     });
     if (browserOn && app)
-      await check(host, "astro: React island hydrates in Chromium", async () => {
+      await check(host, `${label}: React island hydrates in Chromium`, async () => {
         const b = await playwright().chromium.launch();
         try {
           const page = await b.newPage();
@@ -170,23 +210,34 @@ async function astroDemo(host: string, base: string) {
   }
 }
 
-async function emdashDemo(host: string, base: string) {
-  ensureBuilt("emdash");
+async function emdashDemo(host: string, base: string, from: "dist" | "sources" = "dist") {
+  const label = from === "dist" ? "emdash" : "emdash-src";
+  const dirOf = join(demos, "emdash");
+  if (from === "dist") ensureBuilt("emdash");
   let id = "";
-  const built = await check(host, "emdash: bundled by the platform", async () => {
-    const files = astroProject(join(demos, "emdash"));
-    const bytes = [...files.values()].reduce((n, b) => n + b.length, 0);
-    const s = await bundleOnPlatform(base, files, `?tier=${emdashTier}`);
-    id = s.id;
-    return `build ${s.id}, ${files.size} input files (${(bytes / 1e6).toFixed(1)} MB), tier ${s.tier}, worker ${((s.stats?.workerBytes as number) / 1e6).toFixed(1)} MB`;
-  });
+  const built = await check(
+    host,
+    `${label}: ${from === "dist" ? "bundled" : "built from its sources"} by the platform`,
+    async () => {
+      const files = from === "dist" ? astroProject(dirOf) : readTree(dirOf, dirOf, ["dist"]);
+      const bytes = [...files.values()].reduce((n, b) => n + b.length, 0);
+      const s =
+        from === "dist"
+          ? await bundleOnPlatform(base, files, `?tier=${emdashTier}`)
+          : await bundleOnPlatform(base, files, `?tier=${emdashSrcTier}&sourcemap=0`, {
+              "x-build-spec": JSON.stringify(EMDASH_SPEC),
+            });
+      id = s.id;
+      return `build ${s.id}, ${files.size} input files (${(bytes / 1e6).toFixed(1)} MB), tier ${s.tier}, worker ${((s.stats?.workerBytes as number) / 1e6).toFixed(1)} MB${s.stats?.astro ? `, Astro: ${JSON.stringify(s.stats.astro)}` : ""}`;
+    },
+  );
   if (!built) return;
   const port = freePort();
   const origin = `http://127.0.0.1:${port}`;
   const dir = await unpackBuild(base, id, { EMDASH_SITE_URL: origin });
   let app: RunningHost | undefined;
   try {
-    await check(host, "emdash: setup seeds D1, pages render", async () => {
+    await check(host, `${label}: setup seeds D1, pages render`, async () => {
       app = await startHost(host, dir, { port, timeoutMs: 180_000 });
       const get = (p: string) => fetch(`${origin}${p}`, { redirect: "manual" });
       const status = (await (await get("/_emdash/api/setup/status")).json()) as {
@@ -224,7 +275,7 @@ async function emdashDemo(host: string, base: string) {
       return "setup wizard seeded D1; home, post, RSS and admin answer";
     });
     if (browserOn && app)
-      await check(host, "emdash: home and post render in Chromium", async () => {
+      await check(host, `${label}: home and post render in Chromium`, async () => {
         const b = await playwright().chromium.launch();
         try {
           const page = await b.newPage();
@@ -252,7 +303,9 @@ for (const host of hosts) {
   const platform = await startHost(host, dir);
   try {
     if (apps.includes("astro")) await astroDemo(host, platform.url);
+    if (apps.includes("astro-src")) await astroDemo(host, platform.url, "sources");
     if (apps.includes("emdash")) await emdashDemo(host, platform.url);
+    if (apps.includes("emdash-src")) await emdashDemo(host, platform.url, "sources");
     if (apps.includes("notebooks"))
       await notebooksDemo(host, platform.url, { check, assert, browserOn, playwright });
   } finally {

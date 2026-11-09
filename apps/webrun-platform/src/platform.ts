@@ -18,6 +18,8 @@ export interface PlatformEnv {
   PROJECTS: DurableObjectNamespace;
   BUILDS: DurableObjectNamespace;
   NOTEBOOKS: DurableObjectNamespace;
+  /** Worker Loader: where Astro builds run on hosts whose realms cannot evaluate code. */
+  LOADER?: unknown;
   REGISTRY_URL?: string;
   PACKUMENT_TTL_S?: string;
   /** Build tier limits: a build of more input bytes than this waits for a Node runner. */

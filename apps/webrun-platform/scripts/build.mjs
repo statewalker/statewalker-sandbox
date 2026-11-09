@@ -10,7 +10,7 @@
 // build compiles inline WebAssembly) is aliased to its pure-JS build.
 //
 //   node scripts/build.mjs [entry] [wrangler config] [name]
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import * as esbuild from "esbuild";
@@ -67,8 +67,51 @@ function wasmPlugin(mode, outdir) {
   };
 }
 
+// The Astro builder Worker (src/astro/loaded-builder.ts), loaded through a Worker Loader binding
+// where the realm cannot evaluate code: one ES module whose ./config.js and .wasm imports are
+// the loaded Worker's other modules. The platform embeds its source (virtual:astro-builder-source).
+const builder = await esbuild.build({
+  entryPoints: [join(root, "src/astro/loaded-builder.ts")],
+  bundle: true,
+  write: false,
+  format: "esm",
+  platform: "browser",
+  target: "es2022",
+  conditions: ["workerd", "worker", "browser"],
+  external: [
+    "cloudflare:*",
+    "node:*",
+    "fs",
+    "path",
+    "url",
+    "module",
+    "./config.js",
+    "./esbuild.wasm",
+    "./astro.wasm",
+  ],
+  alias: { "cjs-module-lexer": join(dirname(require.resolve("cjs-module-lexer")), "lexer.js") },
+  keepNames: true,
+  logLevel: "warning",
+});
+const builderSource = builder.outputFiles[0].text;
+console.log(`astro builder worker  ${(builderSource.length / 1e6).toFixed(1)} MB (embedded)`);
+const builderSourcePlugin = {
+  name: "astro-builder-source",
+  setup(b) {
+    b.onResolve({ filter: /^virtual:astro-builder-source$/ }, (args) => ({
+      path: args.path,
+      namespace: "astro-builder-source",
+    }));
+    b.onLoad({ filter: /.*/, namespace: "astro-builder-source" }, () => ({
+      contents: `export default ${JSON.stringify(builderSource)};`,
+      loader: "js",
+    }));
+  },
+};
+
 for (const mode of ["workerd", "cellb"]) {
   const outdir = join(root, "dist", name, mode);
+  rmSync(outdir, { recursive: true, force: true });
   mkdirSync(outdir, { recursive: true });
   await esbuild.build({
     entryPoints: [entry],
@@ -80,7 +123,7 @@ for (const mode of ["workerd", "cellb"]) {
     conditions: ["workerd", "worker", "browser"],
     external: ["cloudflare:*", "node:*", "fs", "path", "url", "module"],
     alias: { "cjs-module-lexer": join(dirname(require.resolve("cjs-module-lexer")), "lexer.js") },
-    plugins: [wasmPlugin(mode === "workerd" ? "module" : "bytes", outdir)],
+    plugins: [builderSourcePlugin, wasmPlugin(mode === "workerd" ? "module" : "bytes", outdir)],
     keepNames: true,
     logLevel: "warning",
     metafile: true,

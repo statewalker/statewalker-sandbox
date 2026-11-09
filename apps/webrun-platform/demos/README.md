@@ -8,6 +8,8 @@ and EmDash bring hundreds of packages the platform does not need.
 |---|---|---|
 | `astro-app/` | Astro SSR: pages, an API route, a React island, a Durable Object (`Visits`) | `astro build`, then the bundler, in its object (1.2 MB worker) |
 | `emdash/` | [EmDash](https://github.com/emdash-cms/emdash)'s `blog-cloudflare` template (D1, KV sessions, R2 media, cron, passkeys), unchanged from cellb.dev's example | `astro build`, then the bundler: 758 files, 38.5 MB in, a 22.9 MB worker out, on the Node runner (or in the object on hosts without the 128 MB limit) |
+| `astro-app/`, from sources (`astro-src`) | the same app's sources alone, no `dist/` | built by the platform's port of cellb.dev's in-browser Astro builder, in its object |
+| `emdash/`, from sources (`emdash-src`) | EmDash's sources alone (28 files, 0.2 MB) | built by the same builder: on the Node runner by default, in the object with `--emdash-src-tier object` |
 | `notebooks/` | a Markdown notebook (from statewalker-knowledge's demo) and an Observable Notebook Kit HTML document with Inputs, d3 and Observable Plot | sent as sources; compiled to pages in a `NotebookSite` object; their npm imports come from the site's module server |
 
 ## How to use it
@@ -17,6 +19,8 @@ pnpm install                         # here: the demos' workspace (own lockfile)
 (cd .. && npm run build)             # the platform's per-host builds
 npx tsx scripts/e2e.ts all           # every demo on Wrangler, celld and cellb
 npx tsx scripts/e2e.ts celld emdash  # one host, one demo
+npx tsx scripts/e2e.ts all astro-src emdash-src                      # built from sources by the platform
+CELLD_V8_HEAP_LIMIT_MB=4096 npx tsx scripts/e2e.ts all emdash-src --emdash-src-tier object
 CELLD_V8_HEAP_LIMIT_MB=2048 npx tsx scripts/e2e.ts all emdash --emdash-tier object   # EmDash bundled in the object
 ```
 
@@ -33,6 +37,8 @@ For each host, the platform is started on it, then for each demo:
   - the home page renders on the server and counts visits in its Durable Object;
   - a post page, the API route and the client asset answer;
   - in Chromium, the React island hydrates and counts clicks.
+- **astro-src, emdash-src**: the same checks, on what the platform built from the sources (the
+  Astro build itself in the object, or on the runner for EmDash by default).
 - **emdash**:
   - the bundle runs on the same host, with `EMDASH_SITE_URL` set in its `vars`;
   - EmDash's setup wizard applies the template's seed to D1;

@@ -9,6 +9,8 @@
   "compatibility_flags": ["nodejs_compat"],
   // workerd forbids compiling WebAssembly from bytes; cjs-module-lexer's pure-JS build avoids it.
   "alias": { "cjs-module-lexer": "./node_modules/cjs-module-lexer/lexer.js" },
+  // Astro builds run their config in a Worker Loader isolate where the realm cannot evaluate code.
+  "worker_loaders": [{ "binding": "LOADER" }],
   "durable_objects": {
     "bindings": [
       { "name": "REGISTRY", "class_name": "PackageRegistry" },

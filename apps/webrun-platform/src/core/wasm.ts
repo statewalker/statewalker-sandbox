@@ -9,9 +9,9 @@ import * as esbuildWasm from "esbuild-wasm/esm/browser.js";
 import initLightningCss from "lightningcss-wasm";
 
 type Wasm = WebAssembly.Module | Promise<WebAssembly.Module>;
-const modules: { esbuild?: Wasm; lightningcss?: Wasm } = {};
+const modules: { esbuild?: Wasm; lightningcss?: Wasm; astro?: Wasm } = {};
 
-export function provideWasm(m: { esbuild?: Wasm; lightningcss?: Wasm }) {
+export function provideWasm(m: { esbuild?: Wasm; lightningcss?: Wasm; astro?: Wasm }) {
   Object.assign(modules, m);
 }
 
@@ -46,4 +46,28 @@ export function ensureLightningCss(): Promise<void> {
     await initLightningCss(Promise.resolve(m) as never);
   })();
   return cssReady;
+}
+
+let astroReady: Promise<import("../astro/astro-plugin.js").AstroTransform> | undefined;
+
+/**
+ * Astro's compiler (compiler-rs as WebAssembly), for Astro builds in this realm. Unless the entry
+ * provided the module, its bytes come from the package store and are compiled here: only realms
+ * that can compile from bytes build Astro here (cellb, browsers); workerd and celld build in a
+ * Worker Loader isolate (src/astro/loader.ts), so the platform does not carry the compiler.
+ */
+export function getAstroCompiler(fetchImpl?: typeof fetch) {
+  astroReady ??= (async () => {
+    const { loadAstroCompiler, ASTRO_COMPILER_BINDING } = await import("../astro/compiler.js");
+    if (modules.astro) return loadAstroCompiler(await modules.astro);
+    const { npmRegistrySource } = await import("@statewalker/webrun-modules");
+    const { readFile } = await import("@statewalker/webrun-files");
+    const pkg = await npmRegistrySource({ fetch: fetchImpl }).load({
+      pkg: ASTRO_COMPILER_BINDING.name,
+      version: ASTRO_COMPILER_BINDING.version,
+    });
+    const bytes = await readFile(pkg.files, "/astro.wasm32-wasi.wasm");
+    return loadAstroCompiler(await WebAssembly.compile(bytes as BufferSource));
+  })();
+  return astroReady;
 }
