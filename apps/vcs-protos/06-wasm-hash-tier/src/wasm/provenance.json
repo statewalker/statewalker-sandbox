@@ -1,5 +1,7 @@
 {
   "source": "hash-wasm@4.13.0",
+  "license": "MIT",
+  "licenseFile": "LICENSE.hash-wasm",
   "files": {
     "blake3.wasm": {
       "bytes": 11564,

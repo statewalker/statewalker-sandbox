@@ -69,7 +69,8 @@ export async function runWasmConformance(fx: Fixtures, modules: WasmModules): Pr
       const bytes = base64ToBytes(o.b64);
       const h = await createWasmHasher(modules.sha1, "sha1");
       h.update(enc.encode(`${o.type} ${bytes.length}\0`));
-      const id = feed(h, chunked(bytes, 4096));
+      const id = feed(h, [bytes]); // one update: the 300 KiB blob crosses the 16 KiB buffer
+
       return id === o.id ? undefined : `got ${id}, git says ${o.id}`;
     });
   }
@@ -80,8 +81,10 @@ export async function runWasmConformance(fx: Fixtures, modules: WasmModules): Pr
     });
   }
 
-  // Chunking across the 16 KiB transfer buffer, against the X1c (noble) references.
-  const big = base64ToBytes(fx.sha256[2]?.b64 ?? "");
+  // Chunking across the 16 KiB transfer buffer: SHA-256 against node:crypto's value in the fixture,
+  // BLAKE3 and SHA-1 against noble (their official references are checked above with one update).
+  const bigFixture = fx.sha256.find((s) => s.name === "256 KiB random");
+  const big = base64ToBytes(bigFixture?.b64 ?? "");
   const cases: Array<[string, number[]]> = [
     ["chunking:one 256 KiB update", [big.length]],
     ["chunking:16383/16384/16385 splits", [16383, 16384, 16385]],
@@ -89,6 +92,8 @@ export async function runWasmConformance(fx: Fixtures, modules: WasmModules): Pr
   ];
   for (const [name, sizes] of cases) {
     await check(name, async () => {
+      if (!bigFixture || big.length !== 256 * 1024)
+        return "fixture '256 KiB random' missing or resized";
       const parts: Uint8Array[] = [];
       for (let pos = 0, i = 0; pos < big.length; i++) {
         const n = sizes[i % sizes.length] ?? 1;
@@ -124,6 +129,23 @@ export async function runWasmConformance(fx: Fixtures, modules: WasmModules): Pr
       toHex(ha.digest()) === feed(createBlake3({ key }), [a]) &&
       toHex(hb.digest()) === feed(createBlake3({ key }), [b]);
     return ok ? undefined : "interleaved digests differ from references";
+  });
+  await check("finalized:update and digest throw after digest", async () => {
+    // A second Hash_Final on these binaries returns a wrong value silently, so the guard matters.
+    const h = await createWasmHasher(modules.sha1, "sha1");
+    h.update(enc.encode("x"));
+    h.digest();
+    const threw = (fn: () => unknown) => {
+      try {
+        fn();
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    return threw(() => h.update(enc.encode("y"))) && threw(() => h.digest())
+      ? undefined
+      : "no error after digest";
   });
   return checks;
 }

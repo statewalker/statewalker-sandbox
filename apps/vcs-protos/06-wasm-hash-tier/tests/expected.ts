@@ -9,6 +9,7 @@ export const EXPECTED_FAMILIES: Record<string, number> = {
   "sha256-wasm": 3,
   chunking: 3,
   concurrent: 1,
+  finalized: 1,
 };
 export const EXPECTED_TOTAL = 84;
 

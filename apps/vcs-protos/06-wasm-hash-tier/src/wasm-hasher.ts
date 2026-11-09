@@ -50,7 +50,7 @@ export async function createWasmHasher(
   if (opts.context) {
     throw new Error("BLAKE3 derive_key mode is not built into the hash-wasm binaries");
   }
-  if (algo !== "blake3" && (opts.key || opts.dkLen)) {
+  if (algo !== "blake3" && (opts.key !== undefined || opts.dkLen !== undefined)) {
     throw new Error(`${algo}: key and dkLen apply to BLAKE3 only`);
   }
   if (opts.key && opts.key.length !== 32) {
