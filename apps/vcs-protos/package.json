@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Feasibility prototypes for the webrun-vcs / webrun-sync plan (X0–X18).",
+  "description": "Feasibility prototypes for the webrun-vcs / webrun-sync plan (X0\u2013X18).",
   "bugs": {
     "url": "https://github.com/statewalker/statewalker-sandbox/issues"
   },
@@ -15,11 +15,12 @@
     "directory": "apps/vcs-protos"
   },
   "scripts": {
-    "test": "pnpm run typecheck && vitest run --no-file-parallelism",
+    "test": "pnpm run typecheck && vitest run --no-file-parallelism && pnpm run test:browser",
     "typecheck": "tsc --noEmit",
     "bench": "node --expose-gc --import tsx lib/run-bench.ts",
     "lint": "biome check --write .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "test:browser": "vitest run --config vitest.browser.config.ts"
   },
   "dependencies": {
     "@noble/hashes": "^2.0.1",
@@ -27,6 +28,10 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@vitest/browser-playwright": "catalog:",
+    "esbuild": "^0.28.2",
+    "miniflare": "^4.20260730.0",
+    "playwright": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
