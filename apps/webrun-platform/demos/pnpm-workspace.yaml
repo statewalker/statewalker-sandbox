@@ -1,9 +1,0 @@
-# The platform's demos: whole apps built with real toolchains (Astro), then bundled by the
-# platform and run on Wrangler, celld and cellb. A workspace of its own (own lockfile), outside
-# the sandbox's, because Astro and EmDash bring hundreds of packages the platform does not need.
-packages:
-  - "*"
-onlyBuiltDependencies:
-  - esbuild
-  - workerd
-  - sharp

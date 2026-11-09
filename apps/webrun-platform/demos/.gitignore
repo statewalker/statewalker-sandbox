@@ -1,7 +1,0 @@
-node_modules/
-dist/
-.astro/
-.wrangler/
-.celld/
-.emdash/
-e2e-results.json

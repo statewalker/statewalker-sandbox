@@ -43,7 +43,6 @@ pnpm-workspace.yaml   workspace globs and the dependency catalog
 | [fm-protos](apps/fm-protos) | File-manager prototype ladder over one `fm-core` / `fm-app` / `fm-ui` |
 | [mvc-blueprint-00](apps/mvc-blueprint-00) … [03](apps/mvc-blueprint-03) | MVC blueprint TODO apps, four variants |
 | [flue-workbench](apps/flue-workbench) | Browser Flue agent workbench over a local directory, using Gemini |
-| [webrun-platform](apps/webrun-platform) | Prototype: an ESM CDN, user code as ESM, a bundler and notebooks as Durable Object apps, on Wrangler, celld and cellb (Node and browser), with Astro, EmDash and notebook demos |
 | [notes-demo](apps/notes-demo) | React notes app served without a bundler by `@statewalker/webrun-modules-build` |
 | [openai-proxy.app](apps/openai-proxy.app) | OpenAI v1 HTTP proxy in front of a local llama.cpp server |
 | [byok-config-prototype](apps/byok-config-prototype) | Throwaway UI prototype for editing an LLM connections config file |
