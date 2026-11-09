@@ -43,7 +43,7 @@
     "@statewalker/cellb": "0.5.2",
     "@statewalker/webrun-files-mem": "catalog:",
     "@statewalker/webrun-files-node": "catalog:",
-    "esbuild": "^0.27.0",
+    "esbuild": "^0.28.1",
     "playwright": "catalog:",
     "typescript": "catalog:",
     "wrangler": "4.158.0"
