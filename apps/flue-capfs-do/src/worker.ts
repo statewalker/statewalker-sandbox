@@ -13,10 +13,11 @@
 //   user   POST /api/agents/:name/run              { workspace, token, transport, chain?, task }
 //   any    GET  /api/runtime                       which runtime answers
 
-import { type AgentEnv, type AttenuationSpec, type Task, toolPolicy } from "./agent.ts";
+import type { AgentEnv, AttenuationSpec, Task } from "./agent.ts";
 import type { CapHandoff } from "./caps.ts";
 import { rebuildError } from "./path.ts";
 import { deploymentToolConfig } from "./tools/config.ts";
+import { toolPolicy } from "./tools/policy.ts";
 
 export { Agent } from "./agent.ts";
 export { Workspace } from "./workspace.ts";
@@ -82,11 +83,21 @@ export default {
 
       if (parts[1] === "runtime") {
         bootId ??= crypto.randomUUID();
+        let tools: Record<string, unknown>;
+        try {
+          const config = deploymentToolConfig(env.TOOL_BUNDLE);
+          // How tool tasks are treated here: none | isolated | bundled-only | refused (see toolPolicy).
+          tools = {
+            toolIsolates: toolPolicy(env, config),
+            requireBundled: config.requireBundled,
+            allowedBundles: config.allowedBundles.length,
+          };
+        } catch (e) {
+          tools = { toolIsolates: "refused", toolConfigError: String((e as Error).message) };
+        }
         return ok({
           workerLoader: !!env.LOADER,
-          // How tool tasks are treated here: none | isolated | bundled-only | refused (see toolPolicy).
-          toolIsolates: toolPolicy(env, deploymentToolConfig(env.TOOL_BUNDLE)),
-          requireBundled: deploymentToolConfig(env.TOOL_BUNDLE).requireBundled,
+          ...tools,
           userAgent: navigator.userAgent,
           bootId,
         });

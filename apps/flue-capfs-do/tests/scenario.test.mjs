@@ -6,8 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { Biscuit, generateKeypair } from "@statewalker/webrun-biscuit";
-import * as esbuild from "esbuild";
-import { bundleTool } from "../src/tools/bundle.ts";
+import { bundleTodoTool } from "./fixtures/bundle-fixture.mjs";
 
 const BASE = process.env.BASE_URL ?? "http://127.0.0.1:8787";
 const ADMIN = process.env.ADMIN_KEY ?? "dev-admin-key";
@@ -411,29 +410,8 @@ export default class extends WorkerEntrypoint {
       const ws = freshWs();
       await seed(ws, SEED);
       const { token } = await session(ws, "alice", ["/p1", "/proj"]);
-      // Written for Node: node:fs/promises, fs callbacks and node:path.
-      const { code, check } = await bundleTool({
-        esbuild,
-        entry: "/index.ts",
-        sources: {
-          "/index.ts": `import { readdir, readFile, writeFile } from "node:fs/promises";
-import fs from "node:fs";
-import { join } from "node:path";
-export async function run({ dir }: { dir: string }) {
-  const names = await readdir(dir);
-  const todos: string[] = [];
-  for (const n of names) {
-    if (!n.endsWith(".md")) continue;
-    const text = await readFile(join(dir, n), "utf8");
-    todos.push(...text.split("\\n").filter((l) => l.includes("TODO")));
-  }
-  let write = "allowed";
-  try { await writeFile(join(dir, "report.txt"), todos.join("\\n")); } catch (e: any) { write = e.code; }
-  const p1 = await new Promise((ok) => fs.readFile("/p1/a.txt", "utf8", (e: any) => ok(e ? e.code : "readable")));
-  return { names, todos, write, p1 };
-}`,
-        },
-      });
+      // Written for Node: node:fs/promises, fs callbacks and node:path (tests/fixtures/todo-tool.ts).
+      const { code, check } = await bundleTodoTool();
       assert.equal(check.ok, true, check.problems.join("; "));
       const chain = [{ scope: "/proj", readOnly: true }];
       const r = await run(
@@ -454,7 +432,29 @@ export async function run({ dir }: { dir: string }) {
         todos: ["TODO: write tests"],
         write: "EACCES",
         p1: "EACCES",
+        env: "production",
       });
+      // A bundle that passes the check but is not the approved one: refused where approval is needed.
+      const other = await run(`bt-${ws}`, ws, token, transport, {
+        kind: "tool",
+        code: `${code}\n// changed`,
+        bundled: true,
+        input: { dir: "/proj" },
+      });
+      if (rt.toolIsolates === "bundled-only") {
+        assert.equal(other.code, "EPERM", other.error);
+        assert.match(other.error, /allowedBundles/);
+      } else assert.equal(other.ok, true, other.error);
+      // The review's exploit: aliasing the global object to reach process. Refused by the check.
+      const alias = `${code}\nexport const leak = () => { const { process: p } = globalThis; return p; };`;
+      const leak = await run(`bt-${ws}`, ws, token, transport, {
+        kind: "tool",
+        code: alias,
+        bundled: true,
+        input: {},
+      });
+      assert.equal(leak.code, "EPERM", leak.error);
+      assert.match(leak.error, /use of globalThis/);
       // A bundle that fails the acceptance check is refused before it is loaded.
       const tampered = `${code}\nexport const sneak = () => import("node:fs");`;
       const bad = await run(`bt-${ws}`, ws, token, transport, {

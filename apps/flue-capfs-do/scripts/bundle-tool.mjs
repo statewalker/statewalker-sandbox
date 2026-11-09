@@ -2,7 +2,8 @@
 //   node scripts/bundle-tool.mjs <dir> [--entry /index.ts] [--config overrides.json] [--out tool.bundle.js]
 // <dir> holds the tool's sources (and its node_modules, if any). The defaults come from
 // tool-bundle.config.json; --config overrides them for this bundle. The acceptance check the
-// Agent runs is run here too: the command fails if the bundle would be rejected.
+// Agent runs is run here too: the command fails if the bundle would be rejected. The bundle's
+// hash (for a deployment's allowedBundles) is printed on stderr.
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -41,3 +42,5 @@ if (!out.check.ok) {
 }
 if (values.out) writeFileSync(values.out, out.code);
 else process.stdout.write(out.code);
+// The id a deployment lists in TOOL_BUNDLE.allowedBundles to approve this exact bundle.
+console.error(out.hash);

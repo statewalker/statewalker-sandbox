@@ -6,15 +6,20 @@
   "modules": {},
   "external": ["cloudflare:workers"],
   "define": {
-    "process": "undefined",
-    "require": "undefined",
-    "global": "undefined"
+    "process": "__capfs_process",
+    "global": "globalThis",
+    "require": "undefined"
+  },
+  "processEnv": {
+    "NODE_ENV": "production"
   },
   "check": {
     "forbidIdentifiers": ["eval", "Function", "require", "process", "global", "importScripts"],
     "forbidDynamicImport": true,
-    "forbidImportMeta": true
+    "forbidImportMeta": true,
+    "restrictGlobalObject": true
   },
   "hostFsRuntimes": "refuse",
+  "allowedBundles": [],
   "requireBundled": false
 }

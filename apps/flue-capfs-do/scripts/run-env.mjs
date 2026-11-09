@@ -11,6 +11,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { bundleTodoTool } from "../tests/fixtures/bundle-fixture.mjs";
 
 const env = process.argv[2];
 const dir = fileURLToPath(new URL("..", import.meta.url));
@@ -51,19 +52,23 @@ const commands = {
       join(state, "objects.sqlite3"),
     ],
   ],
-  // cellb, accepting tools that pass the bundle check (hostFsRuntimes: "bundled-only").
-  "cellb-bundled-only": [
-    "node",
-    [
-      "scripts/serve-cellb.mjs",
-      "--port",
-      String(port),
-      "--data",
-      state,
-      "--var",
-      'TOOL_BUNDLE={"hostFsRuntimes":"bundled-only"}',
-    ],
-  ],
+  // cellb, accepting APPROVED bundles: the fixture tool's hash is the one allowed bundle.
+  "cellb-bundled-only": async () => {
+    const { hash } = await bundleTodoTool();
+    const toolBundle = JSON.stringify({ hostFsRuntimes: "bundled-only", allowedBundles: [hash] });
+    return [
+      "node",
+      [
+        "scripts/serve-cellb.mjs",
+        "--port",
+        String(port),
+        "--data",
+        state,
+        "--var",
+        `TOOL_BUNDLE=${toolBundle}`,
+      ],
+    ];
+  },
   // celld: CELLD_BIN (default `celld` on PATH); CELLD_ARGS replaces the default arguments.
   celld: [
     process.env.CELLD_BIN ?? "celld",
@@ -76,7 +81,7 @@ if (!commands[env]) {
   console.error(`usage: run-env.mjs ${Object.keys(commands).join(" | ")}`);
   process.exit(2);
 }
-const [cmd, args] = commands[env];
+const [cmd, args] = typeof commands[env] === "function" ? await commands[env]() : commands[env];
 const base = `http://127.0.0.1:${port}`;
 
 async function startRuntime() {

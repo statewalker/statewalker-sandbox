@@ -4,8 +4,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as esbuild from "esbuild";
 import { bundleTool } from "../../src/tools/bundle.ts";
-import { checkToolBundle } from "../../src/tools/check.ts";
+import { bundleHash, checkToolBundle, matchesPattern } from "../../src/tools/check.ts";
 import { toolConfig } from "../../src/tools/config.ts";
+import { admitTool, toolPolicy } from "../../src/tools/policy.ts";
 
 const RUN_IN_NODE = {
   external: [],
@@ -70,7 +71,7 @@ export async function run(input: { dir: string }) {
   try { fs.readFileSync(input.dir + "/in.txt"); } catch (e: any) { sync = e.code; }
   let osUse = "";
   try { os.homedir(); } catch (e: any) { osUse = e.message; }
-  return { viaCallback, denied, sync, osUse, same: fs.readFile === readFile, ext: path.extname("a/b.md") };
+  return { viaCallback, denied, sync, osUse, same: fs.promises.readFile === readFile, ext: path.extname("a/b.md") };
 }`;
 
 test("node:fs, fs, fs/promises and node:path are rewritten; other builtins denied", async () => {
@@ -151,8 +152,8 @@ export default class extends WorkerEntrypoint { run() { return o.process + o.eva
   assert.equal(checkToolBundle("not js {", config).ok, false);
 });
 
-test("known limit: computed access on ordinary objects passes the check", () => {
-  // Why hostFsRuntimes defaults to "refuse": the check is not a sandbox.
+test("known limit: function constructors pass the check (why host-fs runtimes need approved bundles)", () => {
+  // The check is not a sandbox; admitTool requires allowedBundles where it would matter.
   const sneaky = `export const f = () => ({}).constructor.constructor("return 1")();`;
   assert.equal(checkToolBundle(sneaky, toolConfig()).ok, true);
 });
@@ -163,4 +164,187 @@ test("defaults ← overrides", () => {
   assert.equal(c.check.forbidImportMeta, false);
   assert.equal(c.check.forbidDynamicImport, true, "other check keys keep their defaults");
   assert.deepEqual(toolConfig().fsModules, ["node:fs", "fs", "node:fs/promises", "fs/promises"]);
+});
+
+// ---- regressions from the PR #46 review ----
+
+const build = (src, config = {}) =>
+  bundleTool({
+    esbuild,
+    sources: { "/index.ts": src },
+    entry: "/index.ts",
+    config: { ...RUN_IN_NODE, ...config },
+  });
+const runTool = async (out, files = fakeFiles(), input = {}) =>
+  new (await load(out.code))().run(files, input);
+
+test("the check rejects aliasing the global object and allows locals named like globals", () => {
+  const config = toolConfig();
+  for (const code of [
+    "const { process: p } = globalThis; export const f = () => p;",
+    "const g = globalThis; export const f = () => g.process;",
+    "export const f = () => Reflect.get(globalThis, 'process');",
+    "export const f = () => Object.getOwnPropertyDescriptor(globalThis, 'process');",
+    "export const f = () => [self][0];",
+    "export const f = () => (0, globalThis).process;",
+  ]) {
+    assert.equal(checkToolBundle(code, config).ok, false, code);
+  }
+  for (const code of [
+    "export const f = (process) => process.env;", // a CommonJS-style parameter
+    "var global = 1; export const f = () => global;",
+    "export const f = () => globalThis.queueMicrotask;",
+    "function require(x) { return x; } export const r = require('a');",
+  ]) {
+    assert.deepEqual(checkToolBundle(code, config).problems, [], code);
+  }
+  // Libraries that test for the global object need the rule relaxed (allowlisting is the real gate).
+  const relaxed = toolConfig({ check: { restrictGlobalObject: false } });
+  assert.deepEqual(
+    checkToolBundle("export const root = typeof globalThis == 'object' && globalThis;", relaxed)
+      .problems,
+    [],
+  );
+  assert.equal(
+    checkToolBundle("export const p = () => globalThis.process;", relaxed).ok,
+    false,
+    "forbidden keys stay forbidden",
+  );
+  assert.equal(matchesPattern("cloudflare:workers", ["cloudflare:*"]), true);
+  assert.equal(matchesPattern("@scope/x/lib", ["@scope/*/lib"]), true);
+  assert.equal(matchesPattern("node:fs", ["cloudflare:*"]), false);
+});
+
+test("process.env.NODE_ENV and global work; process has no host access", async () => {
+  const out =
+    await build(`export const run = () => ({ env: process.env.NODE_ENV, g: global.queueMicrotask === globalThis.queueMicrotask,
+    cwd: process.cwd(), keys: Object.keys(process.env) });`);
+  assert.equal(out.check.ok, true, out.check.problems.join("; "));
+  assert.deepEqual(await runTool(out), {
+    env: "production",
+    g: true,
+    cwd: "/",
+    keys: ["NODE_ENV"],
+  });
+});
+
+test("named imports from denied builtins link, and throw on use", async () => {
+  const out =
+    await build(`import { Buffer } from "node:buffer"; import { createHash } from "crypto";
+import { EventEmitter } from "events"; import { homedir } from "os";
+export const run = () => { const r: string[] = [];
+  for (const f of [() => Buffer.from("x"), () => createHash("sha1"), () => new EventEmitter(), () => homedir()])
+    try { f(); r.push("ran"); } catch (e: any) { r.push(e.message); }
+  return r; };`);
+  assert.equal(out.check.ok, true, out.check.problems.join("; "));
+  assert.deepEqual(await runTool(out), [
+    "ENOSYS: node:buffer is not available to tools",
+    "ENOSYS: crypto is not available to tools",
+    "ENOSYS: events is not available to tools",
+    "ENOSYS: os is not available to tools",
+  ]);
+});
+
+test("fs shim: Buffer-like reads, encodings, binary writes, fs/promises, constants, stats, errors", async () => {
+  const out =
+    await build(`import fs, { lstatSync, realpath } from "node:fs"; import fsp from "node:fs/promises";
+export async function run() {
+  const r: any = {};
+  const buf: any = await fsp.readFile("/allowed/a.json");
+  r.text = buf.toString(); r.json = JSON.parse(buf).k; r.hex = buf.toString("hex");
+  r.latin1 = await fsp.readFile("/allowed/a.json", "latin1"); r.b64 = await fsp.readFile("/allowed/a.json", { encoding: "base64" });
+  await fsp.writeFile("/allowed/u16.txt", new Uint8Array([104, 105]));
+  try { await fsp.writeFile("/allowed/bin", new Uint8Array([0xff, 0xfe])); r.bin = "stored"; } catch (e: any) { r.bin = e.code; }
+  r.promises = fs.promises === fsp; r.F_OK = fs.constants.F_OK;
+  r.mtimeMs = typeof (await fsp.stat("/allowed/a.json")).mtimeMs;
+  try { lstatSync("/allowed/a.json"); } catch (e: any) { r.sync = e.code; }
+  try { await fsp.readFile("/secret"); } catch (e: any) { r.err = [e.code, e.errno, e.syscall, e.path]; }
+  r.realpath = typeof realpath;
+  return r;
+}`);
+  assert.equal(out.check.ok, true, out.check.problems.join("; "));
+  const files = fakeFiles({ "/allowed/a.json": '{"k":"é"}' });
+  assert.deepEqual(await runTool(out, files), {
+    text: '{"k":"é"}',
+    json: "é",
+    hex: "7b226b223a22c3a9227d",
+    latin1: '{"k":"Ã©"}',
+    b64: "eyJrIjoiw6kifQ==",
+    bin: "EINVAL",
+    promises: true,
+    F_OK: 0,
+    mtimeMs: "number",
+    sync: "ENOSYS",
+    err: ["EACCES", -13, "readFile", "/secret"],
+    realpath: "function",
+  });
+  assert.equal(files.data.get("/allowed/u16.txt"), "hi");
+  assert.equal(files.data.has("/allowed/bin"), false);
+});
+
+test("fs shim without a bound capability fails with EACCES; path shim parses and formats", async () => {
+  const out = await build(`import { readdir } from "node:fs/promises"; import path from "node:path";
+export async function run() {
+  let e1 = ""; try { await readdir("/"); } catch (e: any) { e1 = e.code; }
+  return { e1, parse: path.parse("/a/b.md"), format: path.format({ dir: "/a", name: "b", ext: ".md" }),
+    trailing: path.normalize("a/"), posix: path.posix.posix === path.posix, rel: path.relative("/a/b", "/a/c/d") };
+}`);
+  const Tool = await load(out.code);
+  const r = await new Tool().run(null, {}); // no capability bound
+  assert.deepEqual(r, {
+    e1: "EACCES",
+    parse: { root: "/", dir: "/a", base: "b.md", ext: ".md", name: "b" },
+    format: "/a/b.md",
+    trailing: "a/",
+    posix: true,
+    rel: "../c/d",
+  });
+});
+
+test("a default-exported class is refused with EINVAL; the generated entry is removed", async () => {
+  const { MemFilesApi } = await import("@statewalker/webrun-files-mem");
+  const files = new MemFilesApi();
+  const out = await bundleTool({
+    esbuild,
+    files,
+    root: "/t",
+    sources: { "/index.ts": "export default class T { run() { return 1; } }" },
+    entry: "/index.ts",
+    config: RUN_IN_NODE,
+  });
+  await assert.rejects(runTool(out), /EINVAL: the tool's default export is a class/);
+  assert.equal(await files.exists("/t/__capfs_tool_entry__.js"), false);
+});
+
+test("admitTool: the policy comes from the deployment; host-fs runtimes need approved bundles", async () => {
+  const LOADER = {};
+  const bundle = (
+    await build("export const run = () => 1;", { external: ["cloudflare:workers"], modules: {} })
+  ).code;
+  const hash = await bundleHash(bundle);
+  const raw = "export default class {}";
+  const eperm = (p) => assert.rejects(p, /^Error: EPERM/);
+  const admit = (code, bundled, policy, overrides) =>
+    admitTool({ code, bundled }, policy, toolConfig(overrides));
+
+  assert.equal(toolPolicy({}, toolConfig(), false), "none");
+  assert.equal(toolPolicy({ LOADER }, toolConfig(), false), "isolated");
+  assert.equal(toolPolicy({ LOADER }, toolConfig(), true), "refused");
+  assert.equal(
+    toolPolicy({ LOADER }, toolConfig({ hostFsRuntimes: "bundled-only" }), true),
+    "bundled-only",
+  );
+  assert.equal(toolPolicy({ LOADER, ALLOW_HOST_FS_TOOLS: "1" }, toolConfig(), true), "isolated");
+
+  await admit(raw, false, "isolated"); // workerd: raw modules run
+  await admit(bundle, true, "isolated");
+  await eperm(admit(raw, false, "isolated", { requireBundled: true }));
+  await admit(bundle, true, "isolated", { requireBundled: true });
+  await eperm(admit(`${bundle}\nexport const x = () => import("y");`, true, "isolated")); // fails the check
+  await eperm(admit(bundle, true, "refused"));
+  await eperm(admit(bundle, true, "bundled-only")); // a checked bundle is not enough: not approved
+  await eperm(admit(raw, false, "bundled-only", { allowedBundles: [hash] }));
+  await admit(bundle, true, "bundled-only", { allowedBundles: [hash] });
+  await eperm(admit(`${bundle}\n`, true, "bundled-only", { allowedBundles: [hash] })); // any change → new hash
+  await eperm(admit(raw, false, "isolated", { allowedBundles: [hash] })); // a list applies everywhere
 });

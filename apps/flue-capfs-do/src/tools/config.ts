@@ -12,6 +12,13 @@ export interface ToolCheckConfig {
   forbidDynamicImport: boolean;
   /** Reject `import.meta`. */
   forbidImportMeta: boolean;
+  /**
+   * Reject any use of globalThis/self/global/window other than reading a plain, non-forbidden
+   * property (aliasing, passing it, computed access). Off: only forbidden keys are rejected,
+   * which lets libraries that test for the global object (`typeof globalThis == "object" &&
+   * globalThis`) pass, and lets the aliases through.
+   */
+  restrictGlobalObject: boolean;
 }
 
 export interface ToolBundleConfig {
@@ -25,16 +32,27 @@ export interface ToolBundleConfig {
   modules: Record<string, string>;
   /** Specifiers left as imports in the bundle — and the only imports the check accepts. */
   external: string[];
-  /** esbuild `define`: free globals replaced at build time. */
+  /**
+   * esbuild `define`: free globals replaced at build time. By default `process` becomes a frozen
+   * stub (`env` from `processEnv`, no host access), `global` becomes `globalThis` and `require`
+   * becomes `undefined`.
+   */
   define: Record<string, string>;
+  /** `process.env` of the process stub. */
+  processEnv: Record<string, string>;
   check: ToolCheckConfig;
   /**
-   * Runtimes whose tool isolates can reach the host file system (cellb on Node):
-   * "refuse" every tool, or "bundled-only" — accept bundles that pass the check. The check is
-   * not a sandbox (computed property access can still reach the realm), so "bundled-only" is
-   * for trusted or reviewed tools only.
+   * Runtimes whose tool isolates can reach the host file system (cellb on Node): "refuse" every
+   * tool, or "bundled-only": run bundles that the deployment APPROVED (their hash is in
+   * `allowedBundles`) and that pass the check. The check alone is not a sandbox, so a client's
+   * own bundle never runs there.
    */
   hostFsRuntimes: "refuse" | "bundled-only";
+  /**
+   * Run side: hashes ("sha256-<hex>", from bundleTool / the CLI) of approved bundles. When not
+   * empty, only these bundles run, on every runtime. "bundled-only" needs it.
+   */
+  allowedBundles: string[];
   /** Run side: every tool must pass the check (a raw module is then refused even on workerd). */
   requireBundled: boolean;
 }
@@ -57,11 +75,21 @@ export function toolConfig(...overrides: (ToolBundleOverrides | undefined)[]): T
 }
 
 /** The run-side config of a deployment: defaults ← TOOL_BUNDLE (JSON). */
-export function deploymentToolConfig(json: string | undefined): ToolBundleConfig {
-  if (!json) return toolConfig();
-  try {
-    return toolConfig(JSON.parse(json) as ToolBundleOverrides);
-  } catch {
-    throw new Error("EINVAL: TOOL_BUNDLE is not valid JSON");
+const parsed = new Map<string, ToolBundleConfig>();
+
+/** TOOL_BUNDLE may be a JSON string or (wrangler object `vars`) an object. */
+export function deploymentToolConfig(value: unknown): ToolBundleConfig {
+  if (value === undefined || value === null || value === "") return toolConfig();
+  if (typeof value === "object") return toolConfig(value as ToolBundleOverrides);
+  const json = String(value);
+  let config = parsed.get(json);
+  if (!config) {
+    try {
+      config = toolConfig(JSON.parse(json) as ToolBundleOverrides);
+    } catch {
+      throw new Error("EINVAL: TOOL_BUNDLE is not valid JSON");
+    }
+    parsed.set(json, config);
   }
+  return config;
 }

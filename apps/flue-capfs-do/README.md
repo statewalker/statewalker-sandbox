@@ -48,7 +48,7 @@ again.
 | `test:unit` | the authorization core and the store on `node:sqlite`, without a runtime |
 | `test:wrangler` | `wrangler dev` (workerd 2026-11-04) |
 | `test:cellb` | `@statewalker/cellb` 0.5.2 `loadProject`, cells in `node:sqlite` files |
-| `test:cellb-bundled-only` | cellb with `TOOL_BUNDLE={"hostFsRuntimes":"bundled-only"}`: checked tool bundles run, raw tools are refused |
+| `test:cellb-bundled-only` | cellb with `TOOL_BUNDLE={"hostFsRuntimes":"bundled-only","allowedBundles":[<hash of tests/fixtures/todo-tool.ts>]}`: that approved bundle runs, other bundles and raw tools are refused |
 | `test:cellb-celld-bucket` | cellb with `celldBucket(sqliteObjectStore(...))`: cells as celld writes them (LTX logs, `own.json` ownership records), in the object store `celld dev` keeps |
 | `test:celld` | `celld dev --listen 127.0.0.1:<port>`. Set `CELLD_BIN` (default `celld` on PATH). `CELLD_ARGS` replaces the arguments, with `{port}` substituted. `TRANSPORTS=token` skips the stub transport |
 
@@ -82,7 +82,7 @@ curl -H "$A" -H "$J" localhost:8787/api/w/acme/sessions/<session>/mode -d '{"mod
 | `POST /api/w/:ws/sessions/:sid/mode` `{mode}` | admin | `yolo` · `prototyping` · `plan` · `readonly` |
 | `POST /api/w/:ws/sessions/:sid/revoke` `{rid?}` | admin | revokes one capability (and its descendants), or the whole session |
 | `POST /api/agents/:name/run` `{workspace, token, transport, chain?, task}` | user | runs a task in the agent cell |
-| `GET /api/runtime` | any | `{workerLoader, toolIsolates, requireBundled, userAgent, bootId}`; `toolIsolates` is `isolated`, `bundled-only`, `refused` or `none` |
+| `GET /api/runtime` | any | `{workerLoader, toolIsolates, requireBundled, allowedBundles, userAgent, bootId}`; `toolIsolates` is `isolated`, `bundled-only`, `refused` or `none`; `allowedBundles` is a count; an invalid `TOOL_BUNDLE` shows `toolConfigError` and `refused` |
 
 Admin routes need `Authorization: Bearer <key>` and fail closed:
 
@@ -146,7 +146,7 @@ shim per bundle, with no realm-global registry.
 import * as esbuild from "esbuild"; // or an initialized esbuild-wasm
 import { bundleTool } from "./src/tools/bundle.ts";
 
-const { code, check } = await bundleTool({
+const { code, hash, check } = await bundleTool({
   esbuild,
   sources: { "/index.ts": `import { readFile } from "node:fs/promises";
     export async function run({ path }) { return (await readFile(path, "utf8")).length; }` },
@@ -154,49 +154,81 @@ const { code, check } = await bundleTool({
   config: { /* overrides of tool-bundle.config.json */ },
 });
 // POST /api/agents/:name/run { …, task: { kind: "tool", code, bundled: true, input: { path: "/proj/a.md" } } }
+// `hash` ("sha256-…") is what a deployment lists in allowedBundles to approve this exact bundle.
 ```
 
 Or from the command line: `pnpm bundle-tool <dir> [--entry /index.ts] [--config overrides.json]
-[--out tool.bundle.js]`. It exits 1 when the bundle would fail the Agent's check.
+[--out tool.bundle.js]`. It prints the hash on stderr, and exits 1 when the bundle would fail
+the Agent's check. Bundling runs wherever esbuild runs (Node, a browser with esbuild-wasm), not
+inside the Durable Objects. The generated entry file is removed from the source tree afterwards.
 
-The tool module exports `run(input)` or a default function. The bundle's entry is a generated
-`WorkerEntrypoint` whose `run(files, input)` binds `files` to the shim and calls it. The shim
-implements the async `node:fs` API: `readFile`, `writeFile`, `appendFile`, `readdir` (with
-`withFileTypes`), `stat`, `mkdir`, `rm`, `unlink`, `rmdir`, `access`, `copyFile`, `cp` and
-`rename`. Each works with a trailing callback or as a promise, and `promises` holds the same
-functions. The `*Sync` and stream functions throw `ENOSYS`. Errors carry `code` (`EACCES`,
-`ENOENT`, …).
+**The tool contract:** the module exports `run(input)` or a default function; a default-exported
+class is refused with `EINVAL`. The bundle's entry is a generated `WorkerEntrypoint` whose
+`run(files, input)` binds `files` to the shim, then calls the tool.
+
+**The modules a tool gets:**
+
+- **`fs` and `node:fs`:** the async API (`readFile`, `writeFile`, `appendFile`, `readdir` with
+  `withFileTypes`, `stat`/`lstat`, `mkdir`, `rm`, `unlink`, `rmdir`, `realpath`, `access`,
+  `copyFile`, `cp`, `rename`, `exists`). Each works with a trailing callback or as a promise,
+  plus `promises` and `constants`. The sync, stream, fd, link and chmod functions exist but
+  throw `ENOSYS`.
+- **`fs/promises` and `node:fs/promises`:** the promise functions of the same shim (its default
+  export is `fs.promises`).
+- **Errors** carry `code`, `errno`, `syscall` and `path`. `access` checks existence only: the
+  capability authorizes the actual write when it happens.
+- **Data:** the store holds UTF-8 text.
+  - `readFile` without an encoding returns a Buffer-like `Uint8Array` with `toString(encoding)`
+    (`utf8`, `latin1`, `ascii`, `hex`, `base64`), so `JSON.parse(buf)` works.
+  - With an encoding it returns that string.
+  - Writing bytes that are not valid UTF-8, or a string with a non-utf8 encoding, is refused
+    with `EINVAL` instead of corrupting the file.
+- **`path`:** a pure POSIX path (`join`, `resolve` from `/`, `normalize`, `relative`, `parse`,
+  `format`, …). `path.win32` throws.
+- **`process`:** a frozen stub. `process.env` is `processEnv` (`NODE_ENV=production` by default),
+  `cwd()` is `/`, and `nextTick` works. `global` is `globalThis`.
+- **Other builtins** (with `builtins: "deny"`): imports link, both default and the builtin's
+  own named exports (`import { Buffer } from "node:buffer"`), and any use throws `ENOSYS`. With
+  `builtins: "external"`, the imports stay and the check rejects them. A CommonJS
+  `require("x")` of a builtin compiles to a call of `undefined` and fails when it runs.
 
 **Configuration:** [`tool-bundle.config.json`](tool-bundle.config.json) holds the defaults.
-`bundleTool({config})` and `--config` override them for one bundle, and the `TOOL_BUNDLE` var (a
-JSON string) overrides them for what a deployment accepts.
+`bundleTool({config})` and `--config` override them for one bundle. The `TOOL_BUNDLE` var (a
+JSON string, or an object in wrangler `vars`) overrides them for what a deployment accepts.
+Nothing in a request changes the run side.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `fsModules` | `node:fs`, `fs`, `node:fs/promises`, `fs/promises` | specifiers that become the capability shim (one shared instance) |
-| `pathModules` | `node:path`, `path`, `node:path/posix`, `path/posix` | specifiers that become a pure POSIX `path` |
-| `builtins` | `"deny"` | every other Node builtin: `"deny"` (importing works, any use throws `ENOSYS`) or `"external"` (left as an import, so the check rejects it unless it is listed in `external`) |
+| `fsModules` | `node:fs`, `fs`, `node:fs/promises`, `fs/promises` | specifiers that become the fs shim (`…/promises` gets the promise API) |
+| `pathModules` | `node:path`, `path`, `node:path/posix`, `path/posix` | specifiers that become the POSIX path |
+| `builtins` | `"deny"` | every other Node builtin: `"deny"` or `"external"` (above) |
 | `modules` | `{}` | your own module sources by specifier; they win over the rules above |
-| `external` | `["cloudflare:workers"]` | imports left in the bundle, and the only imports the check accepts |
-| `define` | `process`, `require`, `global` → `undefined` | free globals replaced at build time |
-| `check.forbidIdentifiers` | `eval`, `Function`, `require`, `process`, `global`, `importScripts` | free references the check rejects (also as `globalThis.x`; any computed `globalThis[…]` is rejected) |
+| `external` | `["cloudflare:workers"]` | imports left in the bundle, and the only imports the check accepts (`*` matches any run of characters) |
+| `define` | `process` → stub, `global` → `globalThis`, `require` → `undefined` | free globals replaced at build time |
+| `processEnv` | `{ "NODE_ENV": "production" }` | `process.env` of the stub |
+| `check.forbidIdentifiers` | `eval`, `Function`, `require`, `process`, `global`, `importScripts` | FREE references the check rejects (locals of the same name are fine), also as `globalThis.x` |
 | `check.forbidDynamicImport`, `check.forbidImportMeta` | `true` | reject `import()` and `import.meta` |
-| `hostFsRuntimes` | `"refuse"` | run side, on runtimes whose isolates see the host file system: `"refuse"` every tool, or `"bundled-only"` |
+| `check.restrictGlobalObject` | `true` | reject any use of `globalThis`/`self`/`global`/`window` other than reading a plain property: aliasing (`const { process: p } = globalThis`), passing it (`Reflect.get(globalThis, …)`), computed access. Turn it off for libraries that test for the global object; forbidden keys stay rejected |
+| `hostFsRuntimes` | `"refuse"` | run side, on runtimes whose isolates see the host file system: `"refuse"` every tool, or `"bundled-only"`, meaning approved bundles only |
+| `allowedBundles` | `[]` | run side: hashes of approved bundles. When not empty, only these run, on every runtime. `"bundled-only"` needs it |
 | `requireBundled` | `false` | run side: every tool must be a bundle that passes the check, even on workerd |
 
 **What runs where (`toolIsolates`):**
 
-| | raw module | checked bundle |
-|---|---|---|
-| `isolated` (workerd) | runs (`requireBundled: true` refuses it) | runs |
-| `bundled-only` (cellb with `hostFsRuntimes: "bundled-only"`) | `EPERM` | runs |
-| `refused` (cellb, default) | `EPERM` | `EPERM` |
+| | raw module | bundle that passes the check | approved bundle (hash in `allowedBundles`) |
+|---|---|---|---|
+| `isolated` (workerd) | runs (refused with `requireBundled`, or when `allowedBundles` is set) | runs (when `allowedBundles` is set: refused) | runs |
+| `bundled-only` (cellb, opt-in) | `EPERM` | `EPERM` | runs |
+| `refused` (cellb, default) | `EPERM` | `EPERM` | `EPERM` |
 
-The check is static, so it is **not a sandbox**. Computed property access on ordinary objects
-(`({}).constructor.constructor("…")()`) passes it, and a unit test pins that limit. On workerd
-this does not matter, because the isolate has no host file system. On cellb, `bundled-only`
-still runs the code in a worker thread with the real `node:fs`, so use it for trusted or
-reviewed tools only. `ALLOW_HOST_FS_TOOLS = "1"` lets every tool run there, for experiments.
+**The check is defense in depth, not the gate.** It uses acorn plus eslint-scope, so it sees
+free references, not names. It still cannot remove code evaluation through the constructors of
+ordinary functions (`({}).constructor.constructor("…")()`, `(async () => {}).constructor`), and a
+unit test pins that limit. On workerd this does not matter, because the isolate has no host file
+system. On cellb the code would run beside the real `node:fs`. That is why `bundled-only` admits
+only bundles a deployment approved by hash, never a client's own bundle. Approve only bundles
+you have reviewed: an approved bundle runs with the host access a cellb tool isolate has.
+`ALLOW_HOST_FS_TOOLS = "1"` lets every tool run there, for experiments only.
 
 ## Examples
 
@@ -235,11 +267,13 @@ src/flue-compat.ts  `rg` shim so Flue's grep tool works on just-bash
 src/tools/config.ts  ToolBundleConfig: defaults (tool-bundle.config.json) ← overrides ← TOOL_BUNDLE
 src/tools/shims.ts   fs shim over `files`, POSIX path, deny modules, the WorkerEntrypoint wrapper
 src/tools/bundle.ts  bundleTool(): webrun-bundler with the shims (build side; not in the Worker)
-src/tools/check.ts   acceptance check (acorn), run by the Agent before loading a bundle
+src/tools/check.ts   acceptance check (acorn + eslint-scope), bundle hash
+src/tools/policy.ts  toolPolicy() and admitTool(): what may run here, from the deployment config only
 scripts/bundle-tool.mjs    CLI around bundleTool
 tests/scenario.test.mjs    the cross-runtime suite (HTTP)
 tests/durability.test.mjs  write → restart → check
-tests/unit/                the core on node:sqlite
+tests/unit/                the core on node:sqlite; tool bundling, check and policy
+tests/fixtures/            the Node-style tool the scenario bundles (approved in cellb-bundled-only)
 scripts/run-env.mjs        start runtime, run suites, restart, stop (process group)
 scripts/serve-cellb.mjs    cellb on node:http (optionally on a celld bucket; --var overrides vars)
 ```
@@ -254,9 +288,10 @@ scripts/serve-cellb.mjs    cellb on node:http (optionally on a celld bucket; --v
 | durability across a restart | ✅ | ✅ | ✅ | ✅ | not run |
 | `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run | not run |
 
-The 20 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
-asserts the `EPERM` refusal, the bundled-tool test asserts `EPERM` (default) or a run
-(`bundled-only`), and the cross-caller isolate test is skipped because raw tools are refused.
+The 27 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
+asserts the `EPERM` refusal. The bundled-tool test asserts `EPERM` by default; under
+`bundled-only` it asserts a run of the approved bundle, `EPERM` for a changed one, and `EPERM`
+for the global-object alias. The cross-caller isolate test is skipped there.
 
 celld was not run in the session that built this: its release binary and container image could
 not be fetched or run there. cellb-on-celld-bucket checks the storage half of celld
@@ -270,8 +305,9 @@ files under the data directory, including the Workspace's root secret key in `ca
 that key it could mint any token and read every workspace. So the Agent refuses tool tasks on
 that runtime by default (`EPERM`, `toolIsolates: "refused"`). On workerd, each isolate sees only
 its own virtual `/bundle`, `/tmp` and `/dev`, has no network, and cannot re-delegate; the test
-asserts that. `hostFsRuntimes: "bundled-only"` admits checked bundles on cellb. That narrows the
-routes, but it is not a sandbox (see [Bundled tools](#bundled-tools)). A real fix still needs
+asserts that. `hostFsRuntimes: "bundled-only"` admits bundles that the deployment approved by
+hash, so a client cannot bring its own code. An approved bundle still runs beside the real
+`node:fs`, so approve only reviewed code (see [Bundled tools](#bundled-tools)). A real fix needs
 shim-only isolates in cellb, or yesterday's vm runner.
 
 ### Decisions a reader would otherwise undo
