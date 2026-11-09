@@ -1,0 +1,17 @@
+{
+  // One Worker project, unmodified across runtimes: wrangler (workerd), cellb, celld.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "flue-capfs-do",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "WORKSPACE", "class_name": "Workspace" },
+      { "name": "AGENT", "class_name": "Agent" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Workspace", "Agent"] }],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "vars": { "DEV_ADMIN_KEY": "dev-admin-key" }
+}
