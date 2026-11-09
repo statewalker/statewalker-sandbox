@@ -16,7 +16,7 @@ reference vectors and to `git lfs`, in bounded memory, at a usable speed?
 Rejected if any of these hold:
 
 - any official BLAKE3 test vector (hash, keyed_hash, derive_key) differs;
-- any SHA-256 digest or LFS pointer differs from `sha256sum` / `git lfs pointer`;
+- any SHA-256 digest or LFS pointer differs from `sha256sum` / `git lfs pointer` (the SHA-256 oracle became `node:crypto` after review: same function, no host dependency);
 - digests depend on chunking, or streaming needs memory proportional to input;
 - noble BLAKE3 runs below 20 MB/s in Node (a 5 GB file would take over four minutes to hash, making
   a WASM tier mandatory rather than optional).
@@ -62,14 +62,14 @@ Measured 2026-11-09, Node v22.23.4, 4-core Xeon @ 2.1 GHz, one run (`pnpm bench 
 
 ## Verified
 
-All 118 tests pass (`pnpm test 03-sha256-blake3`).
+All 123 tests pass on Node 22.23 and 24.22 (`pnpm test 03-sha256-blake3`). The R2 every-offset loop and the R4 restructuring followed the independent review of #50 and the first CI run.
 
 | # | Result |
 |---|---|
 | R1 | 35 official vectors × 3 modes (105 tests) match at 131-byte output; the fixture is checked to be the official file (35 cases) |
-| R2 | Every 2-way split of inputs up to 4097 bytes (every offset to 1100 bytes, every 37th above), 1-byte chunks for all vectors and modes; SHA-256 splits equal `sha256sum` |
+| R2 | Every 2-way split at every offset of inputs up to 4097 bytes, 1-byte chunks for all vectors and modes; SHA-256 splits equal `node:crypto` |
 | R3 | `clone()` mid-stream: prefix digest and full digest both correct, for SHA-256 and keyed BLAKE3 |
-| R4 | SHA-256 and LFS pointers equal `sha256sum` and `git lfs pointer --file` (git-lfs 3.4.1) for empty, text and 3 MiB inputs |
+| R4 | Always: SHA-256 equals `node:crypto`, a hard-coded v1 pointer for a known input, `""` for empty input. Where git-lfs is installed (local 3.4.1, GitHub's runner): pointers equal `git lfs pointer --file` for empty, text and 3 MiB inputs |
 | R5 | 128 MiB in fresh chunks with forced GC: growth under 32 MiB for all three hashers |
 | R6 | No `node:` imports in `src/` |
 | R7 | Throughput table above |
@@ -89,6 +89,11 @@ All 118 tests pass (`pnpm test 03-sha256-blake3`).
 the pointer spec makes an empty file its own pointer, and clean filters leave empty files as they
 are. The first implementation produced a pointer with `size 0` and R4 failed against git-lfs.
 `lfsPointer` now returns `""` for empty content, with the reason in a comment at the site.
+
+**git-lfs's exit status for that case differs by version.** Locally (3.4.1) `git lfs pointer` on an
+empty file exits 0 with no output; on GitHub's runner it exits 1 with no output, which failed the
+first CI run of #50. The oracle now compares stdout only for the empty file and asserts a zero exit
+status for the others, with git-lfs's stderr in every failure message.
 
 ## Corrections
 

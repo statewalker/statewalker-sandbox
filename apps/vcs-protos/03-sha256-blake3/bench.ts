@@ -6,18 +6,18 @@ export async function bench03(): Promise<string> {
   const TOTAL = 256 * 1024 * 1024;
   const buf = new Uint8Array(randomBytes(CHUNK));
   const key = new Uint8Array(32).fill(7);
-  const nodeSha256 = (): Hasher => {
-    const h = createHash("sha256");
+  const wrapNode = (h: ReturnType<typeof createHash>): Hasher => {
     const self: Hasher = {
       update(b) {
         h.update(b);
         return self;
       },
       digest: () => new Uint8Array(h.digest()),
-      clone: () => self,
+      clone: () => wrapNode(h.copy()),
     };
     return self;
   };
+  const nodeSha256 = () => wrapNode(createHash("sha256"));
   const cases: Array<[string, () => Hasher]> = [
     ["SHA-256 noble", createSha256],
     ["SHA-256 node:crypto", nodeSha256],

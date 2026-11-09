@@ -44,6 +44,7 @@ export interface InflaterPool {
 
 const OUT_SIZE = 64 * 1024;
 const MAX_IDLE = 4; // JGit InflaterCache.SZ
+const EMPTY = new Uint8Array(0);
 
 type State = "active" | "finished" | "closed";
 
@@ -86,8 +87,13 @@ export function createInflaterPool(): InflaterPool {
   let allocated = 0;
 
   const release = (strm: ZStream) => {
-    if (idle.length < MAX_IDLE) {
-      zlibInflateReset(strm);
+    // pako's inflateReset does not clear strm.input, so an idle state would keep the caller's
+    // last chunk (often a whole pack buffer) alive. Java's Inflater.reset() drops its input,
+    // which is why JGit's InflaterCache has no such step. Found by the review of #50 (R7).
+    strm.input = EMPTY;
+    strm.next_in = 0;
+    strm.avail_in = 0;
+    if (idle.length < MAX_IDLE && zlibInflateReset(strm) === Z_OK) {
       idle.push(strm);
     } else {
       zlibInflateEnd(strm);
