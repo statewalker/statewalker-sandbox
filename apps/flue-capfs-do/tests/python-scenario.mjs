@@ -203,5 +203,110 @@ r.append("|".join(sorted(os.listdir("/workspace"))))
     assert.equal(after.value, 2);
   });
 
+  // ---- regressions from the PR #47 review ----
+
+  add(
+    "a run with another capability gets a fresh engine: no files, builtins or tasks of the previous caller",
+    async () => {
+      const ws = freshWs();
+      await admin(`/api/w/${ws}/seed`, { files: SEED });
+      const a = await admin(`/api/w/${ws}/sessions`, { user: "alice", rights: ["/proj"] });
+      const b = await admin(`/api/w/${ws}/sessions`, { user: "bob", rights: ["/proj", "/hr"] });
+      // Same agent name for both callers (the agent cell, and its engine, are shared by name).
+      const run = (token, code) =>
+        api(`/api/agents/shared-${ws}/run`, {
+          workspace: ws,
+          token,
+          transport: "token",
+          task: { kind: "python", code },
+        });
+      ok(
+        await run(
+          a.token,
+          `import builtins, asyncio, os, capfs
+os.makedirs("/tmp/a", exist_ok=True); open("/tmp/a/secret.txt", "w").write("ALICE")
+builtins._mark = "alice"
+async def later():
+    await asyncio.sleep(1.0)
+    await capfs.write_text("/hr/leak.txt", "written with bob's rights")
+task = asyncio.ensure_future(later())  # not the last expression: the run must not await it`,
+        ),
+      );
+      const r = ok(
+        await run(
+          b.token,
+          `import builtins, os, asyncio
+await asyncio.sleep(2)
+f"{os.path.exists('/tmp/a/secret.txt')}|{getattr(builtins, '_mark', None)}"`,
+        ),
+      );
+      assert.equal(r.value, "False|None");
+      assert.equal(
+        (await files(ws))["/hr/leak.txt"],
+        undefined,
+        "alice's task never ran with bob's capability",
+      );
+    },
+  );
+
+  add("tasks a run leaves behind are cancelled; their capfs calls are refused", async () => {
+    const { ws, token } = await setup();
+    ok(
+      await py(ws, token, "token", {
+        code: `import asyncio, capfs
+async def later():
+    try:
+        await asyncio.sleep(1.0)
+    except asyncio.CancelledError:
+        pass
+    await capfs.write_text("/proj/late.txt", "after the run")
+task = asyncio.ensure_future(later())  # not the last expression: the run must not await it`,
+      }),
+    );
+    ok(await py(ws, token, "token", { code: "import asyncio\nawait asyncio.sleep(2)" }));
+    assert.equal((await files(ws))["/proj/late.txt"], undefined);
+  });
+
+  add("no network from the engine", async () => {
+    const { ws, token } = await setup();
+    const r = ok(
+      await py(ws, token, "stub", {
+        code: `out = []
+try:
+    import socket
+    socket.create_connection(("127.0.0.1", 9), timeout=1); out.append("socket-open")
+except Exception as e:
+    out.append("socket-" + type(e).__name__)
+try:
+    from pyodide.http import pyfetch
+    await pyfetch("/pyodide/package.json"); out.append("fetch-ok")
+except Exception as e:
+    out.append("fetch-failed")
+"|".join(out)`,
+      }),
+    );
+    const [socket, fetched] = String(r.value).split("|");
+    assert.match(socket, /^socket-(OSError|ConnectionRefusedError|TimeoutError|BlockingIOError)/);
+    assert.equal(fetched, "fetch-failed");
+  });
+
+  add("a removed tree is removed from the store; oversized output is truncated", async () => {
+    const { ws, token } = await setup();
+    const r = ok(
+      await py(ws, token, "stub", {
+        code: `import shutil
+shutil.rmtree("/workspace/proj/sub")
+print("x" * 2_000_000)`,
+      }),
+    );
+    assert.deepEqual(r.deleted, ["/proj/sub"]);
+    assert.ok(r.stdout.length < 1.1 * 1024 * 1024, `stdout ${r.stdout.length}`);
+    assert.match(r.stdout, /truncated/);
+    const after = ok(
+      await py(ws, token, "stub", { code: "import capfs\nsorted(await capfs.listdir('/proj'))" }),
+    );
+    assert.equal(after.value, "['data.csv', 'lib']");
+  });
+
   return cases;
 }

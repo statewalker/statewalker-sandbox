@@ -246,9 +246,10 @@ engine of its own, never in the cell's realm. It works on the same filtered file
    `exists`, `stat`, `mkdir`, `remove`), with paths in the capability's namespace (a
    `/workspace/…` path is accepted too).
 3. **After the run**, the engine reports what changed. The Agent writes it back through the
-   capability: each new directory, write and deletion is authorized again, and the result lists
-   what was `written`, `deleted` and `denied` (with the error), as well as `stdout`, `stderr`,
-   `value` (the last expression) and `error` (the traceback).
+   capability: each new directory, write and deletion (a removed tree as one recursive delete)
+   is authorized again. The result lists what was `written`, `deleted` and `denied` (with the
+   error), as well as `stdout`, `stderr`, `value` (the last expression; when it is awaitable, the
+   run waits for it) and `error` (the traceback).
 
 ```json
 { "workspace": "acme", "token": "…", "transport": "token", "chain": [{ "scope": "/proj" }],
@@ -257,22 +258,35 @@ engine of its own, never in the cell's realm. It works on the same filtered file
 
 | Runtime | Engine | What confines it |
 |---|---|---|
-| cellb on Node | a child process (`node --permission`), one per agent cell | it may only read Pyodide's directory and the engine script: no writes, no child processes or workers. Code generation from strings is disabled, so Pyodide's FFI cannot reach `Function("…")`. Its environment is empty |
-| cellb in a browser | a module Worker (`/python/engine.mjs`), one per agent cell | served with a CSP (`default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'`), so there is no eval and no other origin. After Pyodide loads, the network and storage APIs (`fetch`, `WebSocket`, `indexedDB`, `navigator.storage`, …) are removed from its global scope |
+| cellb on Node | a child process (`node --permission`) | it may only read Pyodide's directory and the engine script: no writes, no child processes or workers. Code generation from strings is disabled, so Pyodide's FFI cannot reach `Function("…")`. Its environment is empty |
+| cellb in a browser | a module Worker (`/python/engine.mjs`) | served with a CSP (`default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'`), so there is no eval and no other origin. After Pyodide loads, the network and storage APIs (`fetch`, `WebSocket`, `indexedDB`, `navigator.storage`, …) are removed from its global scope |
 | workerd (wrangler) | none | `ENOSYS`: no child processes, and workerd does not compile fetched WebAssembly |
 
 In every engine, the `js` module is empty (`jsglobals: {}`). The engine never holds the
 capability: it only sends file requests by message, and the Agent answers them with the
 capability.
 
-- **Each run starts clean:** fresh globals, the modules and `sys.path` of a fresh interpreter,
-  and a fresh `/workspace`. The interpreter is reused within one agent cell (about 2 s to start
-  the first time); `fresh: true` starts a new engine for one run.
+- **One engine per capability:** an agent cell (one per agent name, so callers with different
+  rights can share it) keeps its engine only while the same capability (the same revocation id)
+  runs. A run with another capability gets a new engine. So nothing one caller left in the
+  interpreter is seen by another: files outside `/workspace`, patched builtins, background tasks.
+  Within one capability, each run gets fresh globals, the modules and `sys.path` of a fresh
+  interpreter, and a fresh `/workspace`. Files elsewhere (`/tmp`) and changes to builtins
+  persist only for that same capability. `fresh: true` starts a new engine anyway. Starting an
+  engine takes about 2 s.
+- **`capfs` calls belong to their run.** Each call carries the id of the run that started the
+  calling code: a `contextvars` value, copied into every task that code creates. At the end of
+  a run its leftover tasks are cancelled. A call from a task that outlived its run is refused
+  (`EACCES`), even while another run is active, and is never answered with another run's
+  capability.
 - **Limits:**
   - A run that exceeds `timeoutMs` (default 30 s) ends with `ETIMEDOUT`, and its engine is
     replaced.
   - An idle engine stops after 5 minutes.
   - The copy into `/workspace` stops at 5000 files or 16 MB (`synced.truncated`).
+  - A run's write-back stops at 5000 files or 16 MB (`truncated`).
+  - `stdout` and `stderr` are cut at 1 MB each, and the value at 64 KB. The engine enforces these
+    limits, and the Agent checks them again.
   - The store holds UTF-8 text, so binary output is refused (`EINVAL`).
 
 **Configuration** (vars):
@@ -284,12 +298,13 @@ capability.
 
 **Remaining exposure:**
 
-- On Node 22 the permission model does not restrict the network, so a Python run can make
-  outbound connections (Pyodide's `pyodide.http` loses `fetch` after loading, but raw sockets
-  through Node are not ruled out). Node 25 adds `--allow-net`; until then, run the host where
-  egress is filtered if that matters.
+- On Node 22 the permission model does not restrict the network. With `js` empty, Python has no
+  JS bridge to it: sockets fail ("Host is unreachable"), and `pyodide.http` loses `fetch` after
+  loading. A test asserts both. Node 25 adds `--allow-net` for a hard guarantee.
 - In the browser, the engine runs on the page's origin. The removed APIs are the known routes,
   and the CSP blocks eval and other origins.
+- **The CSP is the host's job.** `scripts/serve-browser.mjs` sends it with `/python/engine.mjs`;
+  any other host that serves the engine must send the same `Content-Security-Policy` header.
 
 ### In a browser
 
@@ -367,10 +382,15 @@ tests/python-scenario.mjs  the Python cases, shared by tests/python.test.mjs (HT
 | scenario, runtime and admin (2) | ✅ | ✅ | ✅ | ✅ | not run |
 | durability across a restart | ✅ | ✅ | ✅ | ✅ | not run |
 | `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run | not run |
-| python (9 cases) | `ENOSYS` (as designed) | ✅ 9 | not run | not run | not run |
+| python (13 cases) | `ENOSYS` (as designed) | ✅ 13 | ✅ 13 | ✅ 13 | not run |
 
-In Chromium on cellb (`test:browser`), 12/12 pass: the runtime check, the capability check
-(rights, both transports, Flue tools with delegation), the 9 Python cases, and no page errors.
+In Chromium on cellb (`test:browser`), 16/16 pass: the runtime check, the capability check
+(rights, both transports, Flue tools with delegation), the 13 Python cases, and no page errors.
+The Python cases include the review's findings:
+- a caller's files, builtins and tasks are not seen by a run with another capability;
+- a task that outlives its run cannot use `capfs`;
+- there is no network from the engine;
+- a removed tree is removed from the store, and oversized output is truncated.
 
 The 27 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
 asserts the `EPERM` refusal. The bundled-tool test asserts `EPERM` by default; under

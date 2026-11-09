@@ -29,6 +29,8 @@ export interface PythonRunResult {
   written: string[];
   deleted: string[];
   denied: { path: string; op: string; error: string }[];
+  /** More than the write-back limits (5000 files, 16 MB) was produced: the rest was dropped. */
+  truncated: boolean;
 }
 
 export interface EngineHost {
@@ -43,7 +45,7 @@ export interface EngineHost {
 type EngineMessage =
   | { type: "ready"; version: string }
   | { type: "failed"; error: string }
-  | { type: "cap"; id: number; method: string; args: unknown[] }
+  | { type: "cap"; id: number; run: number | null; method: string; args: unknown[] }
   | {
       type: "result";
       id: number;
@@ -51,13 +53,18 @@ type EngineMessage =
       stderr: string;
       value: unknown;
       error?: string;
-      changes: {
-        written: Record<string, string>;
-        binary: string[];
-        deleted: string[];
-        dirs: string[];
-      };
+      changes: Changes;
     };
+
+type Changes = {
+  written: Record<string, string>;
+  binary: string[];
+  deleted: string[];
+  dirs: string[];
+  /** The topmost directory of each removed tree. */
+  deletedDirs?: string[];
+  truncated?: boolean;
+};
 
 const LIMITS = { files: 5000, bytes: 16 * 1024 * 1024 };
 /** An engine with nothing to do is stopped after this long (its memory is released). */
@@ -88,6 +95,8 @@ export class PythonKernel {
   #nextRun = 0;
   #busy: Promise<unknown> = Promise.resolve();
   #idle?: ReturnType<typeof setTimeout>;
+  /** The capability (its revocation id) the current engine serves: one engine per capability. */
+  #owner?: string;
 
   constructor(host: EngineHost) {
     this.#host = host;
@@ -131,6 +140,7 @@ export class PythonKernel {
       (e) => e.kill(),
       () => {},
     );
+    this.#owner = undefined;
     this.#crash("stopped");
   }
 
@@ -146,9 +156,13 @@ export class PythonKernel {
     } else if (m?.type === "cap") void this.#answerCap(m);
   }
 
-  /** A live `capfs` call from Python: only the file methods, always through the capability. */
+  /**
+   * A live `capfs` call from Python: only the file methods, answered with the capability of the
+   * run the call names. A call naming no active run (a task an earlier run left behind) is
+   * refused, never served with another run's capability.
+   */
   async #answerCap(m: EngineMessage & { type: "cap" }) {
-    const run = [...this.#runs.values()].at(-1); // runs are serialized: the current one
+    const run = typeof m.run === "number" ? this.#runs.get(m.run) : undefined;
     const reply = (ok: boolean, value?: unknown, error?: string) =>
       this.#engine?.then((e) => e.post({ type: "capResult", id: m.id, ok, value, error }));
     if (!run || !CAP_METHODS.has(m.method) || !Array.isArray(m.args)) {
@@ -179,11 +193,15 @@ export class PythonKernel {
 
   async #run(cap: Cap, req: PythonRunRequest): Promise<PythonRunResult> {
     if (typeof req.code !== "string") throw fsError("EINVAL", "python: code is required");
-    if (req.fresh) this.stop();
+    // One engine per capability: state a run leaves in the interpreter (files outside
+    // /workspace, patched builtins, tasks) is never seen by a run holding another capability.
+    const owner = await cap.revocationId();
+    if (req.fresh || this.#owner !== owner) this.stop();
     const root = normalise(req.root ?? "/");
     const cwd = normalise(req.cwd ?? root);
     const { files, synced } = await syncIn(cap, root);
     const engine = await this.#start();
+    this.#owner = owner;
     const id = ++this.#nextRun;
     const timeoutMs = Math.min(Math.max(Number(req.timeoutMs) || 30_000, 100), 300_000);
     const result = await new Promise<EngineMessage & { type: "result" }>((resolve, reject) => {
@@ -246,7 +264,7 @@ async function syncIn(cap: Cap, root: string) {
         try {
           const text = (await cap.call("readFile", p)) as string;
           files[p] = text;
-          bytes += st.size ?? text.length;
+          bytes += utf8Length(text);
         } catch {}
       }
     }
@@ -261,14 +279,18 @@ async function syncIn(cap: Cap, root: string) {
   return { files, synced: { files: Object.keys(files).length, bytes, truncated } };
 }
 
-/** Applies a run's changes through the capability; each refused change is reported, not fatal. */
-async function writeBack(
-  cap: Cap,
-  changes: { written: Record<string, string>; binary: string[]; deleted: string[]; dirs: string[] },
-) {
+const utf8Length = (s: string) => new TextEncoder().encode(s).length;
+
+/**
+ * Applies a run's changes through the capability; each refused change is reported, not fatal.
+ * The engine is untrusted once user code has run, so its report is bounded and checked here
+ * too; every path goes through the capability (normalised and authorized there).
+ */
+async function writeBack(cap: Cap, changes: Changes) {
   const written: string[] = [];
   const deleted: string[] = [];
   const denied: { path: string; op: string; error: string }[] = [];
+  let truncated = !!changes?.truncated;
   const attempt = async (op: string, path: string, fn: () => Promise<unknown>) => {
     try {
       await fn();
@@ -278,19 +300,40 @@ async function writeBack(
       return false;
     }
   };
-  for (const d of changes.dirs ?? [])
+  const list = (v: unknown) =>
+    (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []).slice(
+      0,
+      LIMITS.files,
+    );
+  for (const d of list(changes?.dirs))
     await attempt("mkdir", d, () => cap.call("mkdir", d, { recursive: true }));
-  for (const [p, text] of Object.entries(changes.written ?? {})) {
+  let files = 0;
+  let bytes = 0;
+  for (const [p, text] of Object.entries(changes?.written ?? {})) {
+    if (typeof text !== "string") continue;
+    files += 1;
+    bytes += utf8Length(text);
+    if (files > LIMITS.files || bytes > LIMITS.bytes) {
+      truncated = true;
+      break;
+    }
     if (await attempt("write", p, () => cap.call("writeFile", p, text))) written.push(p);
   }
-  for (const p of changes.binary ?? [])
+  for (const p of list(changes?.binary)) {
     denied.push({
       path: p,
       op: "write",
       error: "EINVAL: binary data that is not UTF-8 cannot be stored",
     });
-  for (const p of changes.deleted ?? []) {
-    if (await attempt("delete", p, () => cap.call("rm", p, { recursive: true }))) deleted.push(p);
   }
-  return { written, deleted, denied };
+  // Removed trees: one recursive rm each; then the single files outside them.
+  const goneDirs = list(changes?.deletedDirs);
+  for (const d of goneDirs) {
+    if (await attempt("delete", d, () => cap.call("rm", d, { recursive: true }))) deleted.push(d);
+  }
+  for (const p of list(changes?.deleted)) {
+    if (goneDirs.some((d) => p.startsWith(`${d}/`))) continue;
+    if (await attempt("delete", p, () => cap.call("rm", p, {}))) deleted.push(p);
+  }
+  return { written, deleted, denied, truncated };
 }

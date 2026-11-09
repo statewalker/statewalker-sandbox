@@ -31,13 +31,29 @@ if (IN_NODE) {
 }
 
 // ---- live capability calls (the `capfs` Python module) ----
+// Every call carries the id of the run it belongs to; the kernel answers it with THAT run's
+// capability, or refuses it. Outside a run (a task left behind by an earlier run) nothing is sent.
 let nextCap = 0;
+let currentRun = null;
 const pendingCaps = new Map();
-function capCall(method, ...args) {
+/**
+ * `run` is the run that started the calling Python code (a contextvar copied into every task it
+ * creates); a call from a task an earlier run left behind is refused, even while another run is
+ * active.
+ */
+function capCall(run, method, ...args) {
+  if (currentRun === null || run !== currentRun) {
+    return Promise.reject(new Error("EACCES: capfs call outside its run"));
+  }
   const id = ++nextCap;
-  send({ type: "cap", id, method, args });
-  return new Promise((ok, ko) => pendingCaps.set(id, { ok, ko }));
+  send({ type: "cap", id, run, method, args });
+  return new Promise((ok, ko) => pendingCaps.set(id, { ok, ko, run }));
 }
+
+// What one run may send back (the kernel checks again).
+const LIMITS = { stream: 1024 * 1024, value: 64 * 1024, files: 5000, bytes: 16 * 1024 * 1024 };
+const clip = (s, n) =>
+  s.length > n ? `${s.slice(0, n)}\n… [truncated ${s.length - n} characters]` : s;
 
 let pyodide;
 let baselineModules;
@@ -66,7 +82,8 @@ async function init(indexURL) {
     stdout: (s) => out.stdout.push(s),
     stderr: (s) => out.stderr.push(s),
   });
-  pyodide.registerJsModule("capfs", capfsModule());
+  pyodide.registerJsModule("_capfs_js", capfsModule());
+  pyodide.runPython(CAPFS_PY);
   pyodide.FS.mkdirTree(WORKSPACE);
   baselineModules = new Set(pyodide.runPython("import sys\nlist(sys.modules)").toJs());
   baselinePath = pyodide.runPython("import sys, json\njson.dumps(sys.path)");
@@ -111,23 +128,50 @@ function lockdown() {
   }
 }
 
-/** Python: `import capfs; await capfs.read_text("/proj/a.txt")`: live, authorized calls. */
+/** The JS half of `capfs`: every function takes the caller's run id first. */
 function capfsModule() {
   const p = (x) => {
     const s = String(x);
     return s === WORKSPACE ? "/" : s.startsWith(`${WORKSPACE}/`) ? s.slice(WORKSPACE.length) : s;
   };
   return {
-    read_text: (path) => capCall("readFile", p(path)),
-    write_text: (path, text) => capCall("writeFile", p(path), String(text)),
-    append_text: (path, text) => capCall("appendFile", p(path), String(text)),
-    listdir: async (path = "/") => pyodide.toPy(await capCall("readdir", p(path))),
-    exists: (path) => capCall("exists", p(path)),
-    stat: async (path) => pyodide.toPy(await capCall("stat", p(path))),
-    mkdir: (path) => capCall("mkdir", p(path), { recursive: true }),
-    remove: (path) => capCall("rm", p(path), { recursive: true }),
-    WORKSPACE,
+    read_text: (run, path) => capCall(run, "readFile", p(path)),
+    write_text: (run, path, text) => capCall(run, "writeFile", p(path), String(text)),
+    append_text: (run, path, text) => capCall(run, "appendFile", p(path), String(text)),
+    listdir: async (run, path) => pyodide.toPy(await capCall(run, "readdir", p(path))),
+    exists: (run, path) => capCall(run, "exists", p(path)),
+    stat: async (run, path) => pyodide.toPy(await capCall(run, "stat", p(path))),
+    mkdir: (run, path) => capCall(run, "mkdir", p(path), { recursive: true }),
+    remove: (run, path) => capCall(run, "rm", p(path), { recursive: true }),
   };
+}
+
+/** Python: `import capfs; await capfs.read_text("/proj/a.txt")`: live, authorized calls. */
+const CAPFS_PY = `
+import sys, types, contextvars, _capfs_js
+_run = contextvars.ContextVar("capfs_run", default=None)
+capfs = types.ModuleType("capfs", "Live calls through the agent's file capability (paths in its namespace).")
+capfs._run = _run
+capfs.WORKSPACE = "${WORKSPACE}"
+async def read_text(path): return await _capfs_js.read_text(_run.get(), path)
+async def write_text(path, text): return await _capfs_js.write_text(_run.get(), path, text)
+async def append_text(path, text): return await _capfs_js.append_text(_run.get(), path, text)
+async def listdir(path="/"): return await _capfs_js.listdir(_run.get(), path)
+async def exists(path): return await _capfs_js.exists(_run.get(), path)
+async def stat(path): return await _capfs_js.stat(_run.get(), path)
+async def mkdir(path): return await _capfs_js.mkdir(_run.get(), path)
+async def remove(path): return await _capfs_js.remove(_run.get(), path)
+for f in (read_text, write_text, append_text, listdir, exists, stat, mkdir, remove):
+    setattr(capfs, f.__name__, f)
+sys.modules["capfs"] = capfs
+del sys.modules["_capfs_js"]
+`;
+
+/** Sets the run id in the interpreter's main context (tasks copy it when they are created). */
+function setRun(id) {
+  const ns = pyodide.toPy({ ID: id });
+  pyodide.runPython("import capfs\ncapfs._run.set(ID)", { globals: ns });
+  ns.destroy?.();
 }
 
 const utf8 = new TextDecoder("utf-8", { fatal: true });
@@ -144,13 +188,19 @@ function writeWorkspace(files) {
   }
 }
 
-/** What changed under /workspace: written (text), binary (not UTF-8: refused), deleted, dirs. */
+/**
+ * What changed under /workspace: written (text), binary (not UTF-8: refused), deleted files,
+ * new dirs, removed dirs (the topmost of each removed tree). Bounded by LIMITS.
+ */
 function changes(before) {
   const FS = pyodide.FS;
   const written = {};
   const binary = [];
   const dirs = [];
   const seen = new Set();
+  let files = 0;
+  let bytes = 0;
+  let truncated = false;
   const walk = (dir) => {
     for (const name of FS.readdir(dir)) {
       if (name === "." || name === "..") continue;
@@ -162,22 +212,39 @@ function changes(before) {
         walk(full);
       } else if (FS.isFile(mode)) {
         seen.add(rel);
-        const bytes = FS.readFile(full);
+        const content = FS.readFile(full);
         let text;
         try {
-          text = utf8.decode(bytes);
+          text = utf8.decode(content);
         } catch {
           binary.push(rel);
           continue;
         }
-        if (before[rel] !== text) written[rel] = text;
+        if (before[rel] !== text) {
+          files += 1;
+          bytes += bytes0(text);
+          if (files > LIMITS.files || bytes > LIMITS.bytes) {
+            truncated = true;
+            continue;
+          }
+          written[rel] = text;
+        }
       }
     }
   };
   walk(WORKSPACE);
   const deleted = Object.keys(before).filter((p) => !seen.has(p));
-  return { written, binary, deleted, dirs };
+  // Directories that held synced files and are gone now: report the topmost of each tree.
+  const exists = (p) => FS.analyzePath(WORKSPACE + p).exists;
+  const gone = new Set();
+  for (const p of deleted) {
+    for (let d = p.slice(0, p.lastIndexOf("/")); d; d = d.slice(0, d.lastIndexOf("/")))
+      if (!exists(d)) gone.add(d);
+  }
+  const deletedDirs = [...gone].filter((d) => !gone.has(d.slice(0, d.lastIndexOf("/")))).sort();
+  return { written, binary, deleted, dirs, deletedDirs, truncated };
 }
+const bytes0 = (s) => new TextEncoder().encode(s).length;
 const hasPrefix = (files, dir) => Object.keys(files).some((p) => p.startsWith(`${dir}/`));
 
 async function run({ id, code, files, cwd }) {
@@ -185,6 +252,8 @@ async function run({ id, code, files, cwd }) {
   out.stderr.length = 0;
   let value;
   let error;
+  currentRun = id;
+  setRun(id);
   try {
     writeWorkspace(files);
     const dir = WORKSPACE + (cwd && cwd !== "/" ? cwd : "");
@@ -193,15 +262,30 @@ async function run({ id, code, files, cwd }) {
     const globals = pyodide.toPy({ __name__: "__main__" });
     const r = await pyodide.runPythonAsync(code, { globals });
     value = r === undefined || r === null ? null : typeof r === "object" && r.toJs ? String(r) : r;
+    if (typeof value === "string") value = clip(value, LIMITS.value);
+    r?.destroy?.();
     globals.destroy?.();
   } catch (e) {
     error = String(e?.message ?? e);
+  }
+  // The run is over: tasks it left behind are cancelled, and their capfs calls are refused.
+  currentRun = null;
+  setRun(null);
+  try {
+    pyodide.runPython(
+      "import asyncio\nfor t in asyncio.all_tasks(asyncio.get_event_loop()):\n    t.cancel()",
+    );
+  } catch {}
+  for (const [capId, p] of pendingCaps) {
+    if (p.run !== id) continue;
+    pendingCaps.delete(capId);
+    p.ko(new Error("EACCES: the run is over"));
   }
   let result;
   try {
     result = changes(files);
   } catch (e) {
-    result = { written: {}, binary: [], deleted: [], dirs: [] };
+    result = { written: {}, binary: [], deleted: [], dirs: [], deletedDirs: [], truncated: false };
     error = `${error ? `${error}\n` : ""}cannot read /workspace: ${e?.message ?? e}`;
   }
   // Modules a run imported (its own, or stdlib) are dropped: the next run starts from the baseline.
@@ -216,8 +300,8 @@ async function run({ id, code, files, cwd }) {
   send({
     type: "result",
     id,
-    stdout: out.stdout.join("\n"),
-    stderr: out.stderr.join("\n"),
+    stdout: clip(out.stdout.join("\n"), LIMITS.stream),
+    stderr: clip(out.stderr.join("\n"), LIMITS.stream),
     value,
     error,
     changes: result,
