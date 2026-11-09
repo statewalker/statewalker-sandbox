@@ -1,0 +1,23 @@
+{
+  "name": "@statewalker/webrun-demo-astro",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A small Astro SSR app with a React island and a Durable Object: built by Astro, bundled by the webrun platform, run on Wrangler, celld and cellb",
+  "engines": {
+    "node": ">=22.23.4"
+  },
+  "scripts": {
+    "build": "astro build && node ../emdash/scripts/apply-assetsignore.mjs dist/client"
+  },
+  "dependencies": {
+    "@astrojs/cloudflare": "^14.3.1",
+    "@astrojs/react": "^7.0.0",
+    "astro": "^7.3.2",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "wrangler": "^4.158.0"
+  }
+}

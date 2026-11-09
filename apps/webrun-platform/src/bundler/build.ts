@@ -19,6 +19,10 @@ import type { FilesApi } from "@statewalker/webrun-files";
 import { readFile, tryReadText } from "@statewalker/webrun-files";
 import { npmRegistrySource } from "@statewalker/webrun-modules";
 import { listFiles, parseJsonc } from "../core/util.js";
+import { COMPAT_ENTRY, compatEntrySource, overlay } from "./compat.js";
+
+/** Part of every build id: a change to the build changes the ids, so no stale build is served. */
+export const BUILDER_VERSION = "webrun-platform-builder/2";
 
 export interface BuildSpec {
   /** The entry module (default: wrangler config's `main`). */
@@ -28,6 +32,8 @@ export interface BuildSpec {
   minify?: boolean;
   /** Write `worker.js.map` (default true). */
   sourcemap?: boolean;
+  /** Wrap the Worker's entry with the host compatibility layer (./compat.ts). Default true. */
+  hostCompat?: boolean;
   /** Lower `await` to generators (AsyncLocalStorage polyfills follow it). Default false. */
   lowerAwait?: boolean;
   conditions?: string[];
@@ -105,6 +111,50 @@ const NODE_BUILTINS = [
   "zlib",
 ];
 
+/**
+ * `node:module` with a `createRequire` that works on every host: the runtime's where it has one
+ * (workerd, cellb), else a `require` that serves the common Node built-ins (imported statically) and throws
+ * at the call site for anything else, as Node does for a missing module. celld 0.6.3 throws "not implemented" from `createRequire` itself, which libraries call
+ * at module initialization (EmDash does) and only use behind try/catch. The shim imports the
+ * runtime's module as bare `module`, which `modules` does not intercept.
+ */
+const SHIM_BUILTINS = [
+  "assert",
+  "buffer",
+  "crypto",
+  "events",
+  "path",
+  "stream",
+  "string_decoder",
+  "url",
+  "util",
+];
+const NODE_MODULE_SHIM = `import * as real from "module";
+${SHIM_BUILTINS.map((n, i) => `import * as b${i} from "node:${n}";`).join("\n")}
+const builtins = { ${SHIM_BUILTINS.map((n, i) => `${JSON.stringify(n)}: b${i}`).join(", ")} };
+export * from "module";
+export function createRequire(url) {
+  try {
+    return real.createRequire(url);
+  } catch {
+    const require = (id) => {
+      const m = builtins[id.replace(/^node:/, "")];
+      if (m) return m.default ?? m;
+      const e = new Error("Cannot find module '" + id + "' (require is not available on this host)");
+      e.code = "MODULE_NOT_FOUND";
+      throw e;
+    };
+    require.resolve = (id) => {
+      if (builtins[id.replace(/^node:/, "")]) return id;
+      return require(id);
+    };
+    require.cache = {};
+    return require;
+  }
+}
+export default { ...(real.default ?? real), createRequire };
+`;
+
 /** Reads `wrangler.jsonc` / `wrangler.json` at the project root (`{}` when there is none). */
 export async function readWranglerConfig(files: FilesApi, root = "/"): Promise<WranglerConfig> {
   for (const name of ["wrangler.jsonc", "wrangler.json"]) {
@@ -167,12 +217,16 @@ export async function buildProject(opts: {
     ...(spec.external ?? []),
   ];
   const outfile = worker ? "worker.js" : "bundle.js";
+  const d1 = (config.d1_databases ?? []).map((d) => d.binding);
+  const compat = worker && spec.hostCompat !== false;
   const result = await bundle({
     esbuild: opts.esbuild,
-    files,
-    entry: `/${entry.replace(/^\.?\/+/, "")}`,
+    files: compat ? overlay(files, new Map([[COMPAT_ENTRY, compatEntrySource(entry, d1)]])) : files,
+    entry: compat ? COMPAT_ENTRY : `/${entry.replace(/^\.?\/+/, "")}`,
     packages,
     external,
+    modules: (specifier) =>
+      worker && nodeCompat && specifier === "node:module" ? NODE_MODULE_SHIM : undefined,
     conditions: spec.conditions ?? (worker ? ["workerd", "worker", "browser"] : ["browser"]),
     platform: "browser",
     lowerAwait: spec.lowerAwait ?? false,
@@ -196,6 +250,14 @@ export async function buildProject(opts: {
   delete built.rules;
   delete built.find_additional_modules;
   delete built.base_dir;
+
+  // Bindings that `wrangler dev` provisions on its own but a deployment names: a KV namespace
+  // without an `id` (Astro's adapter adds `SESSION` so) gets a stable one, which celld requires.
+  const kv = config.kv_namespaces as { binding: string; id?: string }[] | undefined;
+  if (kv?.length)
+    built.kv_namespaces = kv.map((n) =>
+      n.id ? n : { ...n, id: `${config.name ?? "worker"}-${n.binding}`.toLowerCase() },
+    );
 
   // Static assets travel with the build.
   if (config.assets?.directory) {

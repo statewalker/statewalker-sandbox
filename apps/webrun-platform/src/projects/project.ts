@@ -31,7 +31,7 @@ import {
 import { passthroughCss } from "../cdn/cdn.js";
 import { registryFetch } from "../core/registry.js";
 import { SqlFilesApi } from "../core/sql-files.js";
-import { json, sha256Hex, subtree, text, unzip, zip } from "../core/util.js";
+import { json, sha256Hex, subtree, text, unzip, zipStream } from "../core/util.js";
 import { ensureLightningCss, hasLightningCss } from "../core/wasm.js";
 import type { PlatformEnv } from "../platform.js";
 
@@ -130,12 +130,11 @@ export class Project extends DurableObject<PlatformEnv> {
       const snap = rest[0] === "live" || !rest[0] ? await this.snapshot() : rest[0];
       const dir = `/snap/${snap}`;
       if (!(await this.store.exists(dir))) return text(`no snapshot ${snap}\n`, 404);
-      const files: [string, Uint8Array][] = [];
-      for (const p of this.store.filePaths(dir))
-        files.push([p.slice(dir.length), await readFile(this.store, p)]);
-      return new Response(zip(files) as BodyInit, {
-        headers: { "content-type": "application/zip", "x-snapshot": snap },
-      });
+      const paths = this.store.filePaths(dir).map((p) => p.slice(dir.length));
+      return new Response(
+        zipStream(paths, (p) => readFile(this.store, `${dir}${p}`)),
+        { headers: { "content-type": "application/zip", "x-snapshot": snap } },
+      );
     }
 
     if (area === "live") {

@@ -25,11 +25,11 @@ import { DurableObject } from "cloudflare:workers";
 import { readFile } from "@statewalker/webrun-files";
 import { registryFetch } from "../core/registry.js";
 import { SqlFilesApi } from "../core/sql-files.js";
-import { json, mimeOf, sha256Hex, text, unzip, zip } from "../core/util.js";
+import { json, mimeOf, sha256Hex, text, unzip, zip, zipStream } from "../core/util.js";
 import { getEsbuild } from "../core/wasm.js";
 import type { PlatformEnv } from "../platform.js";
 import { readUpload } from "../projects/project.js";
-import { type BuildSpec, buildProject, defaultPackages } from "./build.js";
+import { BUILDER_VERSION, type BuildSpec, buildProject, defaultPackages } from "./build.js";
 
 const QUEUE = "_queue";
 
@@ -60,6 +60,7 @@ export async function handleBuilds(request: Request, env: PlatformEnv): Promise<
   if (parts.length === 1 && request.method === "POST") {
     let files: Map<string, Uint8Array>;
     let bodySpec: BuildSpec | undefined;
+    let original: Uint8Array | undefined;
     const project = url.searchParams.get("project");
     if (project) {
       const snap = url.searchParams.get("snapshot") ?? "live";
@@ -72,14 +73,21 @@ export async function handleBuilds(request: Request, env: PlatformEnv): Promise<
       const body = (await request.clone().json()) as { spec?: BuildSpec };
       bodySpec = body.spec;
       files = await readUpload(request);
-    } else files = await readUpload(request);
+    } else {
+      // A ZIP body travels on as it came: no second copy of a large upload in this isolate.
+      original = new Uint8Array(await request.arrayBuffer());
+      files = await unzip(original);
+    }
     const spec = specFrom(url, bodySpec);
     const tier = url.searchParams.get("tier") ?? "auto";
     const sorted = [...files.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
     const hashes: string[] = [];
     for (const [p, b] of sorted) hashes.push(`${p}\0${await sha256Hex(b)}`);
-    const id = (await sha256Hex(`${hashes.join("\n")}\n${JSON.stringify(spec)}`)).slice(0, 20);
-    const input = zip(sorted);
+    const id = (
+      await sha256Hex(`${BUILDER_VERSION}\n${hashes.join("\n")}\n${JSON.stringify(spec)}`)
+    ).slice(0, 20);
+    const input = original ?? zip(sorted);
+    files.clear();
     return stubOf(env.BUILDS, id).fetch(
       new Request(`${url.origin}/builds/${id}/create?tier=${tier}`, {
         method: "POST",
@@ -203,11 +211,12 @@ export class BuildJob extends DurableObject<PlatformEnv> {
       });
     }
     if (action === "input.zip") {
-      const files: [string, Uint8Array][] = [];
-      for (const p of this.input.filePaths("/")) files.push([p, await readFile(this.input, p)]);
-      return new Response(zip(files) as BodyInit, {
-        headers: { "content-type": "application/zip", "x-build-spec": this.#get("spec") ?? "{}" },
-      });
+      return new Response(
+        zipStream(this.input.filePaths("/"), (p) => readFile(this.input, p)),
+        {
+          headers: { "content-type": "application/zip", "x-build-spec": this.#get("spec") ?? "{}" },
+        },
+      );
     }
     if (action === "output" && request.method === "PUT") {
       const entries = await unzip(new Uint8Array(await request.arrayBuffer()));
@@ -271,14 +280,15 @@ export class BuildJob extends DurableObject<PlatformEnv> {
     if (this.#get("status") !== "done") return json(this.#status(id, origin), { status: 404 });
     if (path === "") return json(this.output.filePaths("/"));
     if (path === "project.zip") {
-      const files: [string, Uint8Array][] = [];
-      for (const p of this.output.filePaths("/")) files.push([p, await readFile(this.output, p)]);
-      return new Response(zip(files) as BodyInit, {
-        headers: {
-          "content-type": "application/zip",
-          "content-disposition": `attachment; filename="build-${id}.zip"`,
+      return new Response(
+        zipStream(this.output.filePaths("/"), (p) => readFile(this.output, p)),
+        {
+          headers: {
+            "content-type": "application/zip",
+            "content-disposition": `attachment; filename="build-${id}.zip"`,
+          },
         },
-      });
+      );
     }
     if (path === "loader.json") {
       const config = JSON.parse(
