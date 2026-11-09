@@ -92,7 +92,7 @@ describe("R2b the pool retains at most 4 idle states (JGit InflaterCache SZ = 4)
   });
 });
 
-describe("R3 state is clean after a failed stream", () => {
+describe("R3 state is clean, and reused, after a failed stream", () => {
   const good = streams[4] ?? new Uint8Array();
   const goodInput = inputs[4] ?? new Uint8Array();
   it("after truncation", () => {
@@ -103,6 +103,8 @@ describe("R3 state is clean after a failed stream", () => {
     const [r] = inflateAll(pool, [good], 1);
     expect(r && eq(r.data, goodInput)).toBe(true);
     expect(r?.compressedLength).toBe(good.length);
+    // The failed state was reset and reused, not leaked and replaced.
+    expect(pool.allocated).toBe(1);
   });
   it("after corruption", () => {
     const pool = createInflaterPool();
@@ -115,6 +117,7 @@ describe("R3 state is clean after a failed stream", () => {
     }).toThrow(InflateError);
     const [r] = inflateAll(pool, [good], 1);
     expect(r && eq(r.data, goodInput)).toBe(true);
+    expect(pool.allocated).toBe(1);
   });
 });
 
