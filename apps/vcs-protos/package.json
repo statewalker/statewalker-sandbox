@@ -19,7 +19,8 @@
     "typecheck": "tsc --noEmit",
     "bench": "node --expose-gc --import tsx lib/run-bench.ts",
     "lint": "biome check --write .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "test:browser": "vitest run --project browser"
   },
   "dependencies": {
     "@noble/hashes": "^2.0.1",
@@ -27,6 +28,10 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@vitest/browser-playwright": "catalog:",
+    "esbuild": "^0.28.2",
+    "miniflare": "^4.20260730.0",
+    "playwright": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

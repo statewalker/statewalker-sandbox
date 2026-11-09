@@ -130,6 +130,6 @@ function toHex(bytes: Uint8Array): string;
 
 ## Open threads (ranked by how much later work they would invalidate)
 
-1. **BLAKE3 speed for Xet**: 37 MB/s in pure JS. Measure a WASM BLAKE3 (e.g. hash-wasm) in Node, Chromium and workerd before X11 fixes its upload path.
+1. **BLAKE3 speed for Xet**: 37 MB/s in pure JS in Node — and, per X0a (05), only 12 MB/s in Chromium and 15 MB/s in workerd, below this prototype's own 20 MB/s line. A WASM BLAKE3 is therefore required for browser and Durable Object Xet uploads; measure one (e.g. hash-wasm) in all runtimes before X11 fixes its upload path.
 2. **Browser, worker, CellB, workerd** numbers missing (X0).
 3. **LFS pointer parsing** (the inverse: validating pointers read from history, extension lines, key order) is not covered; it belongs to X10.
