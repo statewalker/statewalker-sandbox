@@ -13,9 +13,10 @@
 //   user   POST /api/agents/:name/run              { workspace, token, transport, chain?, task }
 //   any    GET  /api/runtime                       which runtime answers
 
-import { type AgentEnv, type AttenuationSpec, isolatesSeeHostFs, type Task } from "./agent.ts";
+import { type AgentEnv, type AttenuationSpec, type Task, toolPolicy } from "./agent.ts";
 import type { CapHandoff } from "./caps.ts";
 import { rebuildError } from "./path.ts";
+import { deploymentToolConfig } from "./tools/config.ts";
 
 export { Agent } from "./agent.ts";
 export { Workspace } from "./workspace.ts";
@@ -83,13 +84,9 @@ export default {
         bootId ??= crypto.randomUUID();
         return ok({
           workerLoader: !!env.LOADER,
-          // "isolated": tool isolates have no host file system; "refused": they would, so tool
-          // tasks are refused (ALLOW_HOST_FS_TOOLS=1 overrides, for experiments only).
-          toolIsolates: !env.LOADER
-            ? "none"
-            : isolatesSeeHostFs() && env.ALLOW_HOST_FS_TOOLS !== "1"
-              ? "refused"
-              : "isolated",
+          // How tool tasks are treated here: none | isolated | bundled-only | refused (see toolPolicy).
+          toolIsolates: toolPolicy(env, deploymentToolConfig(env.TOOL_BUNDLE)),
+          requireBundled: deploymentToolConfig(env.TOOL_BUNDLE).requireBundled,
           userAgent: navigator.userAgent,
           bootId,
         });

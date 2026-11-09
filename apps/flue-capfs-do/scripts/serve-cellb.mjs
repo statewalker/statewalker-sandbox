@@ -2,11 +2,13 @@
 // and the Durable Objects run on node:sqlite.
 //   node scripts/serve-cellb.mjs [--port 8788] [--data .data/cellb]
 //   node scripts/serve-cellb.mjs --celld-bucket .celld/dev/objects.sqlite3
+//   node scripts/serve-cellb.mjs --var 'TOOL_BUNDLE={"hostFsRuntimes":"bundled-only"}'
 // --celld-bucket keeps every cell in celld's own format (LTX logs, ownership records) in the
 // SQLite object store `celld dev` uses, so `celld dev` can take the same cells over.
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -24,9 +26,26 @@ const { values } = parseArgs({
     port: { type: "string", default: "8788" },
     data: { type: "string" },
     "celld-bucket": { type: "string" },
+    var: { type: "string", multiple: true, default: [] },
   },
 });
-const dir = fileURLToPath(new URL("..", import.meta.url));
+const projectDir = fileURLToPath(new URL("..", import.meta.url));
+// --var KEY=VALUE overrides wrangler.jsonc `vars` (cellb reads vars from the config only): the
+// project is loaded from a temporary copy of the config whose `main` points back here.
+let dir = projectDir;
+if (values.var.length) {
+  const config = JSON.parse(
+    readFileSync(join(projectDir, "wrangler.jsonc"), "utf8").replace(/^\s*\/\/.*$/gm, ""),
+  );
+  for (const kv of values.var) {
+    const i = kv.indexOf("=");
+    config.vars = { ...config.vars, [kv.slice(0, i)]: kv.slice(i + 1) };
+  }
+  config.main = join(projectDir, config.main);
+  delete config.$schema;
+  dir = mkdtempSync(join(tmpdir(), "flue-capfs-cellb-config-"));
+  writeFileSync(join(dir, "wrangler.json"), JSON.stringify(config, null, 2));
+}
 
 let project;
 if (values["celld-bucket"]) {

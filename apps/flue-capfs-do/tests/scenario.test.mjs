@@ -6,6 +6,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { Biscuit, generateKeypair } from "@statewalker/webrun-biscuit";
+import * as esbuild from "esbuild";
+import { bundleTool } from "../src/tools/bundle.ts";
 
 const BASE = process.env.BASE_URL ?? "http://127.0.0.1:8787";
 const ADMIN = process.env.ADMIN_KEY ?? "dev-admin-key";
@@ -379,8 +381,9 @@ export default class extends WorkerEntrypoint {
       const r = await run(`tool-${ws}`, ws, token, transport, { kind: "tool", code }, [
         { scope: "/proj", readOnly: true },
       ]);
-      if (rt.toolIsolates === "refused") {
-        // cellb on Node: loaded code would see the real node:fs, so the agent refuses tools.
+      if (rt.toolIsolates !== "isolated") {
+        // cellb on Node: loaded code would see the real node:fs, so the agent refuses raw tools
+        // ("refused": every tool; "bundled-only": tools that are not checked bundles).
         assert.equal(r.ok, false);
         assert.equal(r.code, "EPERM", r.error);
         return;
@@ -400,6 +403,68 @@ export default class extends WorkerEntrypoint {
         Array.isArray(o.nodeFsRoot) &&
         o.nodeFsRoot.some((e) => !["bundle", "tmp", "dev"].includes(e));
       assert.equal(hostFs, false, `tool isolate sees host files: ${o.nodeFsRoot}`);
+    });
+
+    test("a Node-style tool bundled with webrun-bundler runs on the capability", async (t) => {
+      const rt = (await http("/api/runtime")).value;
+      if (rt.toolIsolates === "none") return t.skip("no Worker Loader binding in this runtime");
+      const ws = freshWs();
+      await seed(ws, SEED);
+      const { token } = await session(ws, "alice", ["/p1", "/proj"]);
+      // Written for Node: node:fs/promises, fs callbacks and node:path.
+      const { code, check } = await bundleTool({
+        esbuild,
+        entry: "/index.ts",
+        sources: {
+          "/index.ts": `import { readdir, readFile, writeFile } from "node:fs/promises";
+import fs from "node:fs";
+import { join } from "node:path";
+export async function run({ dir }: { dir: string }) {
+  const names = await readdir(dir);
+  const todos: string[] = [];
+  for (const n of names) {
+    if (!n.endsWith(".md")) continue;
+    const text = await readFile(join(dir, n), "utf8");
+    todos.push(...text.split("\\n").filter((l) => l.includes("TODO")));
+  }
+  let write = "allowed";
+  try { await writeFile(join(dir, "report.txt"), todos.join("\\n")); } catch (e: any) { write = e.code; }
+  const p1 = await new Promise((ok) => fs.readFile("/p1/a.txt", "utf8", (e: any) => ok(e ? e.code : "readable")));
+  return { names, todos, write, p1 };
+}`,
+        },
+      });
+      assert.equal(check.ok, true, check.problems.join("; "));
+      const chain = [{ scope: "/proj", readOnly: true }];
+      const r = await run(
+        `bt-${ws}`,
+        ws,
+        token,
+        transport,
+        { kind: "tool", code, bundled: true, input: { dir: "/proj" } },
+        chain,
+      );
+      if (rt.toolIsolates === "refused") {
+        assert.equal(r.code, "EPERM", r.error); // cellb on Node by default
+        return;
+      }
+      assert.equal(r.ok, true, r.error);
+      assert.deepEqual(r.value.result, {
+        names: ["readme.md", "src"],
+        todos: ["TODO: write tests"],
+        write: "EACCES",
+        p1: "EACCES",
+      });
+      // A bundle that fails the acceptance check is refused before it is loaded.
+      const tampered = `${code}\nexport const sneak = () => import("node:fs");`;
+      const bad = await run(`bt-${ws}`, ws, token, transport, {
+        kind: "tool",
+        code: tampered,
+        bundled: true,
+        input: {},
+      });
+      assert.equal(bad.code, "EPERM", bad.error);
+      assert.match(bad.error, /dynamic import/);
     });
 
     test("tool isolates keep no state between callers", async (t) => {

@@ -51,6 +51,19 @@ const commands = {
       join(state, "objects.sqlite3"),
     ],
   ],
+  // cellb, accepting tools that pass the bundle check (hostFsRuntimes: "bundled-only").
+  "cellb-bundled-only": [
+    "node",
+    [
+      "scripts/serve-cellb.mjs",
+      "--port",
+      String(port),
+      "--data",
+      state,
+      "--var",
+      'TOOL_BUNDLE={"hostFsRuntimes":"bundled-only"}',
+    ],
+  ],
   // celld: CELLD_BIN (default `celld` on PATH); CELLD_ARGS replaces the default arguments.
   celld: [
     process.env.CELLD_BIN ?? "celld",

@@ -48,6 +48,7 @@ again.
 | `test:unit` | the authorization core and the store on `node:sqlite`, without a runtime |
 | `test:wrangler` | `wrangler dev` (workerd 2026-11-04) |
 | `test:cellb` | `@statewalker/cellb` 0.5.2 `loadProject`, cells in `node:sqlite` files |
+| `test:cellb-bundled-only` | cellb with `TOOL_BUNDLE={"hostFsRuntimes":"bundled-only"}`: checked tool bundles run, raw tools are refused |
 | `test:cellb-celld-bucket` | cellb with `celldBucket(sqliteObjectStore(...))`: cells as celld writes them (LTX logs, `own.json` ownership records), in the object store `celld dev` keeps |
 | `test:celld` | `celld dev --listen 127.0.0.1:<port>`. Set `CELLD_BIN` (default `celld` on PATH). `CELLD_ARGS` replaces the arguments, with `{port}` substituted. `TRANSPORTS=token` skips the stub transport |
 
@@ -81,7 +82,7 @@ curl -H "$A" -H "$J" localhost:8787/api/w/acme/sessions/<session>/mode -d '{"mod
 | `POST /api/w/:ws/sessions/:sid/mode` `{mode}` | admin | `yolo` · `prototyping` · `plan` · `readonly` |
 | `POST /api/w/:ws/sessions/:sid/revoke` `{rid?}` | admin | revokes one capability (and its descendants), or the whole session |
 | `POST /api/agents/:name/run` `{workspace, token, transport, chain?, task}` | user | runs a task in the agent cell |
-| `GET /api/runtime` | any | `{workerLoader, toolIsolates, userAgent, bootId}`; `toolIsolates` is `isolated`, `refused` or `none` |
+| `GET /api/runtime` | any | `{workerLoader, toolIsolates, requireBundled, userAgent, bootId}`; `toolIsolates` is `isolated`, `bundled-only`, `refused` or `none` |
 
 Admin routes need `Authorization: Bearer <key>` and fail closed:
 
@@ -99,11 +100,12 @@ Tasks:
 
 - `{kind: "bash", script, cwd?}` runs a just-bash shell over the capability.
 - `{kind: "flue", calls: [{tool, params}], cwd?}` calls Flue's tools as a model would.
-- `{kind: "tool", code, input?}` runs a module in a new Worker Loader isolate (one per call, so no
-  state survives between callers). The module exports
-  `default class extends WorkerEntrypoint { run(files, input) }`. On cellb (Node) this answers
-  `EPERM` unless the Worker's env has `ALLOW_HOST_FS_TOOLS = "1"` (for experiments only: see the
-  known gap below).
+- `{kind: "tool", code, input?, bundled?}` runs a module in a new Worker Loader isolate (one per
+  call, so no state survives between callers). The module exports
+  `default class extends WorkerEntrypoint { run(files, input) }`. With `bundled: true` the code
+  is a bundle from `bundleTool` (see [Bundled tools](#bundled-tools)), and the Agent runs the
+  acceptance check before loading it. Whether a raw module or a bundle may run depends on
+  `toolIsolates` (below).
 - `{kind: "revocationId"}` returns the revocation id of the capability the agent holds.
 
 `chain: [{scope?, readOnly?, datalog?}, …]` adds one hop per entry. Each hop attenuates the
@@ -132,6 +134,69 @@ For each path, the authorizer provides `operation(op)` (`read`, `list` or `write
 session's mode and revocations; attenuation blocks cannot change it. Mode policies are `allow` rules that only
 ever restrict what `right` allows. Attenuation blocks are `check`s. A scope also allows `list`
 on its ancestors, so `ls /` shows the delegated branch and nothing else.
+
+### Bundled tools
+
+Tools written for Node (`import { readFile } from "node:fs/promises"`) are bundled with
+`@statewalker/webrun-bundler` so that every Node builtin is rewritten at build time. The fs
+modules become an inline shim over the tool's `files` capability. This is option (a): one
+shim per bundle, with no realm-global registry.
+
+```ts
+import * as esbuild from "esbuild"; // or an initialized esbuild-wasm
+import { bundleTool } from "./src/tools/bundle.ts";
+
+const { code, check } = await bundleTool({
+  esbuild,
+  sources: { "/index.ts": `import { readFile } from "node:fs/promises";
+    export async function run({ path }) { return (await readFile(path, "utf8")).length; }` },
+  entry: "/index.ts",
+  config: { /* overrides of tool-bundle.config.json */ },
+});
+// POST /api/agents/:name/run { …, task: { kind: "tool", code, bundled: true, input: { path: "/proj/a.md" } } }
+```
+
+Or from the command line: `pnpm bundle-tool <dir> [--entry /index.ts] [--config overrides.json]
+[--out tool.bundle.js]`. It exits 1 when the bundle would fail the Agent's check.
+
+The tool module exports `run(input)` or a default function. The bundle's entry is a generated
+`WorkerEntrypoint` whose `run(files, input)` binds `files` to the shim and calls it. The shim
+implements the async `node:fs` API: `readFile`, `writeFile`, `appendFile`, `readdir` (with
+`withFileTypes`), `stat`, `mkdir`, `rm`, `unlink`, `rmdir`, `access`, `copyFile`, `cp` and
+`rename`. Each works with a trailing callback or as a promise, and `promises` holds the same
+functions. The `*Sync` and stream functions throw `ENOSYS`. Errors carry `code` (`EACCES`,
+`ENOENT`, …).
+
+**Configuration:** [`tool-bundle.config.json`](tool-bundle.config.json) holds the defaults.
+`bundleTool({config})` and `--config` override them for one bundle, and the `TOOL_BUNDLE` var (a
+JSON string) overrides them for what a deployment accepts.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `fsModules` | `node:fs`, `fs`, `node:fs/promises`, `fs/promises` | specifiers that become the capability shim (one shared instance) |
+| `pathModules` | `node:path`, `path`, `node:path/posix`, `path/posix` | specifiers that become a pure POSIX `path` |
+| `builtins` | `"deny"` | every other Node builtin: `"deny"` (importing works, any use throws `ENOSYS`) or `"external"` (left as an import, so the check rejects it unless it is listed in `external`) |
+| `modules` | `{}` | your own module sources by specifier; they win over the rules above |
+| `external` | `["cloudflare:workers"]` | imports left in the bundle, and the only imports the check accepts |
+| `define` | `process`, `require`, `global` → `undefined` | free globals replaced at build time |
+| `check.forbidIdentifiers` | `eval`, `Function`, `require`, `process`, `global`, `importScripts` | free references the check rejects (also as `globalThis.x`; any computed `globalThis[…]` is rejected) |
+| `check.forbidDynamicImport`, `check.forbidImportMeta` | `true` | reject `import()` and `import.meta` |
+| `hostFsRuntimes` | `"refuse"` | run side, on runtimes whose isolates see the host file system: `"refuse"` every tool, or `"bundled-only"` |
+| `requireBundled` | `false` | run side: every tool must be a bundle that passes the check, even on workerd |
+
+**What runs where (`toolIsolates`):**
+
+| | raw module | checked bundle |
+|---|---|---|
+| `isolated` (workerd) | runs (`requireBundled: true` refuses it) | runs |
+| `bundled-only` (cellb with `hostFsRuntimes: "bundled-only"`) | `EPERM` | runs |
+| `refused` (cellb, default) | `EPERM` | `EPERM` |
+
+The check is static, so it is **not a sandbox**. Computed property access on ordinary objects
+(`({}).constructor.constructor("…")()`) passes it, and a unit test pins that limit. On workerd
+this does not matter, because the isolate has no host file system. On cellb, `bundled-only`
+still runs the code in a worker thread with the real `node:fs`, so use it for trusted or
+reviewed tools only. `ALLOW_HOST_FS_TOOLS = "1"` lets every tool run there, for experiments.
 
 ## Examples
 
@@ -167,26 +232,31 @@ src/caps.ts         holder side: StubCap, TokenCap, ToolFiles (what a tool isola
 src/capfs.ts        just-bash IFileSystem over a capability; /dev/null sink; safeExec
 src/agent.ts        Agent DO: bash, Flue tools, Worker Loader tools, delegation chain
 src/flue-compat.ts  `rg` shim so Flue's grep tool works on just-bash
+src/tools/config.ts  ToolBundleConfig: defaults (tool-bundle.config.json) ← overrides ← TOOL_BUNDLE
+src/tools/shims.ts   fs shim over `files`, POSIX path, deny modules, the WorkerEntrypoint wrapper
+src/tools/bundle.ts  bundleTool(): webrun-bundler with the shims (build side; not in the Worker)
+src/tools/check.ts   acceptance check (acorn), run by the Agent before loading a bundle
+scripts/bundle-tool.mjs    CLI around bundleTool
 tests/scenario.test.mjs    the cross-runtime suite (HTTP)
 tests/durability.test.mjs  write → restart → check
 tests/unit/                the core on node:sqlite
 scripts/run-env.mjs        start runtime, run suites, restart, stop (process group)
-scripts/serve-cellb.mjs    cellb on node:http (optionally on a celld bucket)
+scripts/serve-cellb.mjs    cellb on node:http (optionally on a celld bucket; --var overrides vars)
 ```
 
 ### Results (9 Nov 2026)
 
-| Check | wrangler | cellb | cellb on celld bucket | celld |
-|---|---|---|---|---|
-| scenario, stub transport (12) | ✅ 12 | ✅ 11, 1 skipped | ✅ 11, 1 skipped | not run |
-| scenario, token transport (12) | ✅ 12 | ✅ 11, 1 skipped | ✅ 11, 1 skipped | not run |
-| scenario, runtime and admin (2) | ✅ | ✅ | ✅ | not run |
-| durability across a restart | ✅ | ✅ | ✅ | not run |
-| `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run |
+| Check | wrangler | cellb | cellb, bundled-only | cellb on celld bucket | celld |
+|---|---|---|---|---|---|
+| scenario, stub transport (13) | ✅ 13 | ✅ 12, 1 skipped | ✅ 12, 1 skipped | ✅ 12, 1 skipped | not run |
+| scenario, token transport (13) | ✅ 13 | ✅ 12, 1 skipped | ✅ 12, 1 skipped | ✅ 12, 1 skipped | not run |
+| scenario, runtime and admin (2) | ✅ | ✅ | ✅ | ✅ | not run |
+| durability across a restart | ✅ | ✅ | ✅ | ✅ | not run |
+| `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run | not run |
 
-The 15 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the tool-isolate
-test asserts the `EPERM` refusal, and the cross-caller isolate test is skipped because tools are
-refused there.
+The 20 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
+asserts the `EPERM` refusal, the bundled-tool test asserts `EPERM` (default) or a run
+(`bundled-only`), and the cross-caller isolate test is skipped because raw tools are refused.
 
 celld was not run in the session that built this: its release binary and container image could
 not be fetched or run there. cellb-on-celld-bucket checks the storage half of celld
@@ -198,10 +268,11 @@ token transport (`TRANSPORTS=token`) is the one to use there.
 thread that resolves the real `node:fs` and `process`. Such a tool could read the cells' SQLite
 files under the data directory, including the Workspace's root secret key in `cap_meta`. With
 that key it could mint any token and read every workspace. So the Agent refuses tool tasks on
-that runtime (`EPERM`, `toolIsolates: "refused"`). On workerd, each isolate sees only its own
-virtual `/bundle`, `/tmp` and `/dev`, has no network, and cannot re-delegate; the test asserts
-that. To run tools on cellb, it needs shim-only isolates, or yesterday's bundle + acceptance check
-+ vm runner.
+that runtime by default (`EPERM`, `toolIsolates: "refused"`). On workerd, each isolate sees only
+its own virtual `/bundle`, `/tmp` and `/dev`, has no network, and cannot re-delegate; the test
+asserts that. `hostFsRuntimes: "bundled-only"` admits checked bundles on cellb. That narrows the
+routes, but it is not a sandbox (see [Bundled tools](#bundled-tools)). A real fix still needs
+shim-only isolates in cellb, or yesterday's vm runner.
 
 ### Decisions a reader would otherwise undo
 

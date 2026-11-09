@@ -24,13 +24,15 @@ import { CapFs, safeExec } from "./capfs.ts";
 import { type Cap, type CapHandoff, capFromHandoff, ToolFiles, type WorkspaceEnv } from "./caps.ts";
 import { rgForFlue } from "./flue-compat.ts";
 import { attenuationBlock } from "./policy.ts";
+import { checkToolBundle } from "./tools/check.ts";
+import { deploymentToolConfig, type ToolBundleConfig } from "./tools/config.ts";
 
 export type AttenuationSpec = { scope?: string | string[]; readOnly?: boolean; datalog?: string };
 
 export type Task =
   | { kind: "bash"; script: string; cwd?: string }
   | { kind: "flue"; calls: { tool: string; params: Record<string, unknown> }[]; cwd?: string }
-  | { kind: "tool"; code: string; input?: unknown }
+  | { kind: "tool"; code: string; input?: unknown; bundled?: boolean }
   | { kind: "revocationId" };
 
 interface WorkerLoader {
@@ -52,6 +54,8 @@ export interface AgentEnv extends WorkspaceEnv {
   LOADER?: WorkerLoader;
   /** "1" allows tool isolates on runtimes whose isolates can reach the host file system (cellb on Node). */
   ALLOW_HOST_FS_TOOLS?: string;
+  /** Run-side tool policy: JSON overrides of tool-bundle.config.json (see src/tools/config.ts). */
+  TOOL_BUNDLE?: string;
 }
 
 /**
@@ -104,7 +108,7 @@ export class Agent extends DurableObject<AgentEnv> {
       case "flue":
         return this.#flue(name, cap, task);
       case "tool":
-        return this.#tool(cap, task.code, task.input);
+        return this.#tool(cap, task.code, task.input, !!task.bundled);
       case "revocationId":
         return cap.revocationId();
       default:
@@ -146,13 +150,23 @@ export class Agent extends DurableObject<AgentEnv> {
   }
 
   /** Tool code in its own isolate: no network, no bindings, only the narrowed capability as an argument. */
-  async #tool(cap: Cap, code: string, input: unknown) {
+  async #tool(cap: Cap, code: string, input: unknown, bundled: boolean) {
     const loader = this.env.LOADER;
     if (!loader) throw new Error("ENOSYS: no Worker Loader binding (LOADER) in this runtime");
-    if (isolatesSeeHostFs() && this.env.ALLOW_HOST_FS_TOOLS !== "1") {
+    const config = deploymentToolConfig(this.env.TOOL_BUNDLE);
+    const policy = toolPolicy(this.env, config);
+    if (policy === "refused") {
       throw new Error(
         "EPERM: tool isolates on this runtime can reach the host file system; refused",
       );
+    }
+    // A bundle (or any tool, under requireBundled / bundled-only) must pass the acceptance check.
+    if (bundled || config.requireBundled || policy === "bundled-only") {
+      if (!bundled)
+        throw new Error("EPERM: this runtime accepts bundled tools only (bundle with bundleTool)");
+      const r = checkToolBundle(code, config);
+      if (!r.ok)
+        throw new Error(`EPERM: tool bundle rejected: ${r.problems.slice(0, 5).join("; ")}`);
     }
     // A fresh isolate per invocation: an isolate keyed by the code would keep its globals between
     // callers, so data one user's capability read could be returned to the next user.
@@ -166,4 +180,20 @@ export class Agent extends DurableObject<AgentEnv> {
     }));
     return worker.getEntrypoint().run(new ToolFiles(cap), input ?? null);
   }
+}
+
+/**
+ * How this runtime treats tool tasks:
+ *   "none"          no Worker Loader binding
+ *   "isolated"      isolates have no host file system: raw modules and bundles run
+ *   "bundled-only"  isolates see the host file system; checked bundles only (config opt-in)
+ *   "refused"       isolates see the host file system; every tool refused (the default there)
+ */
+export function toolPolicy(
+  env: Pick<AgentEnv, "LOADER" | "ALLOW_HOST_FS_TOOLS">,
+  config: ToolBundleConfig,
+): "none" | "isolated" | "bundled-only" | "refused" {
+  if (!env.LOADER) return "none";
+  if (!isolatesSeeHostFs() || env.ALLOW_HOST_FS_TOOLS === "1") return "isolated";
+  return config.hostFsRuntimes === "bundled-only" ? "bundled-only" : "refused";
 }
