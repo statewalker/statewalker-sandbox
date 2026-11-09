@@ -1,0 +1,35 @@
+{
+  "name": "@statewalker/webrun-platform",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Prototype: an ESM CDN, user code as ESM and a bundler, as Durable Object apps that run on Wrangler, celld and cellb (Node and browser).",
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@statewalker/webrun-bundler": "^0.1.1",
+    "@statewalker/webrun-files": "catalog:",
+    "@statewalker/webrun-files-mem": "catalog:",
+    "@statewalker/webrun-modules": "0.3.6",
+    "esbuild-wasm": "0.28.2",
+    "lightningcss-wasm": "^1.33.0",
+    "cjs-module-lexer": "^2.2.1",
+    "@statewalker/webrun-files-node": "catalog:"
+  },
+  "devDependencies": {
+    "@statewalker/cellb": "~0.5.2",
+    "@types/node": "catalog:",
+    "esbuild": "0.28.2",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "^4.158.0"
+  },
+  "bin": {
+    "webrun-build": "bin/webrun-build.ts"
+  }
+}
