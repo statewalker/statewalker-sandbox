@@ -12,7 +12,7 @@ then tests written first (red), then the implementation (green), then findings.
 | `03-sha256-blake3` | X1c — **works; BLAKE3 slow (WASM tier for Xet)** | Can @noble/hashes provide streaming SHA-256 (LFS) and keyed BLAKE3 (Xet) with reference-exact results? |
 | `04-pooled-inflater` | X1d — **works: 3.1× on small objects** | Does reusing pako inflate state (JGit `InflaterCache` style) close the small-object gap without losing exactness? |
 | `05-runtime-matrix` | X0a — **identical in 4 runtimes; browser BLAKE3 too slow** | Do the X1 primitives behave identically in Chromium (page and worker) and workerd, and how fast are they there? |
-| `06-wasm-hash-tier` | X1e | Can a WASM hash tier run in every runtime, including workerd, and is it fast enough for browser Xet? |
+| `06-wasm-hash-tier` | X1e — **works everywhere; BLAKE3 25–40× faster** | Can a WASM hash tier run in every runtime, including workerd, and is it fast enough for browser Xet? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.
