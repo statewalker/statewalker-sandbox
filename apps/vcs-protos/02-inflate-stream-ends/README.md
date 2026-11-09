@@ -32,7 +32,7 @@ Rejected if, for any chunking of the input:
 | R2 | A real pack from `git pack-objects` (with OFS deltas) walks end to end: entry count equals the header, each inflated length equals the entry's declared size, entry offsets equal `git verify-pack -v`, the trailer SHA-1 matches, and exactly one inflater is created per entry — for chunk sizes 1, 4096 and whole. |
 | R3 | A stream truncated at any of several points (inside the header, the body, the Adler-32 trailer) is never reported done; `end()` throws `TruncatedStreamError`. |
 | R4 | A corrupted byte in the body or the Adler-32 trailer throws `InflateError`. |
-| R5 | Traps documented as passing tests: (a) the vendored `decompressBlockPartialPako` returns short data without error on truncated input; (b) `DecompressionStream("deflate")` throws on trailing bytes and exposes no consumed count; (c) Node 22 `zlib.inflateSync` silently accepts trailing bytes. |
+| R5 | Traps documented as passing tests: (a) the vendored `decompressBlockPartialPako` returns short data without error on truncated input; (b) `DecompressionStream("deflate")` throws on trailing bytes and exposes no consumed count; (c) Node `zlib.inflateSync` silently accepts trailing bytes. |
 | R6 | Throughput of the push inflater versus `node:zlib` measured and recorded. |
 
 ## Scope — what this prototype does NOT do
@@ -91,7 +91,7 @@ All 20 tests pass (`pnpm test 02-inflate-stream-ends`, ~4 s).
 |---|---|
 | R5 a | webrun-vcs `decompressBlockPartialPako` returns **short data with no error** on truncated input (10 of 12 000 bytes in the exploration). Its loop stops when input runs out and never checks for `Z_STREAM_END`. |
 | R5 b | `DecompressionStream("deflate")` **throws** `Trailing junk found after the end of the compressed stream` when anything follows the stream, and has no consumed count. It cannot parse packs even if lengths were known approximately. |
-| R5 c | Node 22 `zlib.inflateSync` **silently ignores** trailing bytes and reports no position. |
+| R5 c | Node `zlib.inflateSync` **silently ignores** trailing bytes and reports no position — checked on Node 22.23 and 24.22. |
 | R5 d | Found while going green: returning `subarray` views of a fresh 64 KiB output buffer per push pins the whole buffer per view. With 1-byte chunks a 1 MiB object pins ~64 GiB; the test worker was OOM-killed. Fix: one output buffer per inflater, produced bytes copied out with `slice`. |
 
 ## Corrections
@@ -99,7 +99,7 @@ All 20 tests pass (`pnpm test 02-inflate-stream-ends`, ~4 s).
 | Earlier belief | What the prototype showed |
 |---|---|
 | "DecompressionStream is unusable for packs because it reports no bytes consumed" | Worse: it rejects any trailing bytes outright (R5 b). |
-| "Node 24 zlib throws / returns wrong `bytesRead` on trailing data" (primitives report, static) | On Node 22, `inflateSync` silently accepts trailing data (R5 c). The behaviour differs by Node version; Node 24 was not run here. Either way, node:zlib gives no stream end, so the binary search in `vcs-utils-node` is the wrong tool. |
+| "Node 24 zlib throws / returns wrong `bytesRead` on trailing data" (primitives report, static) | On Node 22.23 **and 24.22**, `inflateSync` silently accepts trailing data (R5 c); the static claim about Node 24 was wrong. Either way, node:zlib gives no stream end, so the binary search in `vcs-utils-node` is the wrong tool. |
 | "pako's low-level API handles trailing data" (comment in `pako-inflate.ts`) | True of the API; false of the wrapper, which ignores the missing `Z_STREAM_END` and returns short data (R5 a). |
 
 ## Functional description
@@ -147,4 +147,3 @@ proposed (`push → { out, done, consumed }`), now exercised.
 1. **Small-object rate is a third of native** (39k vs 118k objects/s). Most pack entries are small, so this sets clone speed. Likely cause: a new `ZStream`, inflate state and 64 KiB buffer per object. Try `zlibInflateReset` on a pooled stream with a shared buffer before X6 commits to this design.
 2. **Browser, worker, CellB and workerd untested** (X0). pako is pure JS, so correctness should carry over; throughput in a DO under CPU limits is the open question.
 3. **A WASM inflater with a consumed count** (e.g. a zlib build) was not measured; it could close the speed gap everywhere, if WASM loads in workerd.
-4. **Node 24 behaviour of `inflateSync` with trailing data** not run here.

@@ -96,7 +96,7 @@ wrapper — R6 only guards the hashers against each other, which is its purpose.
 
 | Earlier belief | What the prototype showed |
 |---|---|
-| "Build on the streaming SHA-1 already in vcs-utils" (session decision) | It is correct and streams properly, but is 4.2× slower than `@noble/hashes` on large inputs and 1.6× on small objects. The decision "plain SHA-1, streaming" stands; the implementation choice should move to noble (to be confirmed by Mikhail). |
+| "Build on the streaming SHA-1 already in vcs-utils" (session decision) | It is correct and streams properly, but is 4.2× slower than `@noble/hashes` on large inputs and 1.6× on small objects. The decision "plain SHA-1, streaming" stands; the implementation choice should move to noble (decided below). |
 | "Hashing needs the content twice because the header needs the size" (current vcs-core write path) | Only the **size** is needed up front, not the content. Every source the plan uses knows it: FilesApi `stats`, pack entry headers, LFS pointers, HTTP `Content-Length`. Where none exists, spool to a volatile store first — that is the only case needing two passes. |
 
 ## Functional description
@@ -132,6 +132,14 @@ class SizeMismatchError extends Error { declared: number; actual: number /* -1 =
 | `src/vendor/sha-1.ts` | **Reference** | Slower than noble; keep only if a zero-dependency fallback is wanted |
 | `bench.ts` | **Source** | Seed of the CI benchmark baseline |
 
+## Decision
+
+**`@noble/hashes` is the default SHA-1 (portable: browser, worker, Node, DO; widely used; already a
+dependency elsewhere in the stack), with `node:crypto` as an optional Node accelerator behind the
+same `Hasher` interface.** The vendored `Sha1` is graded Reference and not carried forward.
+Taken without asking because it is reversible: the `Hasher` seam makes the implementation a
+one-line swap.
+
 ## Open threads (ranked by how much later work they would invalidate)
 
 1. **Browser, worker, CellB and workerd numbers are missing.** noble's lead may differ in V8
@@ -140,4 +148,3 @@ class SizeMismatchError extends Error { declared: number; actual: number /* -1 =
    default for large files (and whether WASM loads in workerd is itself open).
 3. **Objects ≥ 4 GiB not tested** — the vendored class tracks high bytes (`hBytes`); noble's
    length handling should be checked with a synthetic 4 GiB + 1 stream (slow; nightly).
-4. **Decision needed:** noble as default with the vendored class dropped, or kept as fallback.

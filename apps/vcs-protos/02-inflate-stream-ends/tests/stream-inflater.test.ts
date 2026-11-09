@@ -170,7 +170,7 @@ describe("R5 traps, documented as passing tests", () => {
     await expect(new Response(s).arrayBuffer()).rejects.toThrow(/Trailing junk/);
     expect("bytesRead" in new DecompressionStream("deflate")).toBe(false);
   });
-  it("(c) Node 22 zlib.inflateSync silently ignores trailing bytes (no position reported)", () => {
+  it("(c) Node zlib.inflateSync (checked on 22.23 and 24.22) silently ignores trailing bytes, no position", () => {
     const out = inflateSync(concat([z, Uint8Array.of(1, 2, 3)]));
     expect(out.length).toBe(data.length);
   });
