@@ -38,6 +38,7 @@ pnpm-workspace.yaml   workspace globs and the dependency catalog
 | --- | --- |
 | [httpeers-stack](apps/httpeers-stack) | Installable reference deployment of the httpeers mesh (relay, hub, browser pages) |
 | [httpeers-protos](apps/httpeers-protos) | Runnable httpeers demos: HTTP over libp2p with proven peer identity |
+| [flue-capfs-do](apps/flue-capfs-do) | Flue agents on Durable Objects with a Biscuit/Datalog-filtered file capability; runs on wrangler, cellb and celld |
 | [httpeers-lib-protos](apps/httpeers-lib-protos) | Test-suite prototypes for the httpeers library |
 | [httpeers-shell-protos](apps/httpeers-shell-protos) | Test-suite ladder for a shell that renders apps served by peers |
 | [fm-protos](apps/fm-protos) | File-manager prototype ladder over one `fm-core` / `fm-app` / `fm-ui` |

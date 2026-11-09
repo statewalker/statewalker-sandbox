@@ -1,0 +1,37 @@
+{
+  "name": "@statewalker/flue-capfs-do",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Flue agents on Durable Objects with a Biscuit/Datalog-filtered file capability. One Worker project, run on wrangler (workerd), cellb and celld.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/flue-capfs-do"
+  },
+  "license": "MIT",
+  "scripts": {
+    "test": "pnpm run test:unit && pnpm run test:cellb && pnpm run test:cellb-celld-bucket && pnpm run test:wrangler",
+    "test:unit": "node --test tests/unit/*.test.mjs",
+    "test:cellb": "node scripts/run-env.mjs cellb",
+    "test:wrangler": "node scripts/run-env.mjs wrangler",
+    "test:celld": "node scripts/run-env.mjs celld",
+    "dev:wrangler": "wrangler dev",
+    "dev:cellb": "node scripts/serve-cellb.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:cellb-celld-bucket": "node scripts/run-env.mjs cellb-celld-bucket"
+  },
+  "dependencies": {
+    "@flue/runtime": "catalog:",
+    "@statewalker/webrun-biscuit": "catalog:",
+    "just-bash": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@statewalker/cellb": "0.5.2",
+    "@statewalker/webrun-files-mem": "catalog:",
+    "esbuild": "^0.27.0",
+    "typescript": "catalog:",
+    "wrangler": "4.158.0"
+  }
+}
