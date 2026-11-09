@@ -50,11 +50,15 @@ again.
 | `test:cellb-celld-bucket` | cellb with `celldBucket(sqliteObjectStore(...))`: cells as celld writes them (LTX logs, `own.json` ownership records), in the object store `celld dev` keeps |
 | `test:celld` | `celld dev --listen 127.0.0.1:<port>`. Set `CELLD_BIN` (default `celld` on PATH). `CELLD_ARGS` replaces the arguments, with `{port}` substituted. `TRANSPORTS=token` skips the stub transport |
 
-For interactive use, run `pnpm dev:wrangler` or `pnpm dev:cellb` (port 8788). Then:
+For interactive use, start a runtime with `pnpm dev:wrangler` (port 8787) or `pnpm dev:cellb`
+(port 8788). Then run the guided tour, `pnpm example`
+([`examples/walkthrough.mjs`](examples/walkthrough.mjs); set `BASE_URL` for cellb). It covers a
+session, bash, Flue tools, a mode switch, delegation, a tool isolate and revocation, and prints
+each step. You can also call the API by hand:
 
 ```sh
 A='authorization: Bearer dev-admin-key'; J='content-type: application/json'
-curl -H "$A" -H "$J" localhost:8787/api/w/acme/seed -d '{"files":{"/proj/readme.md":"# hi\n","/hr/salaries.csv":"..."}}'
+curl -H "$A" -H "$J" localhost:8787/api/w/acme/seed -d '{"files":{"/proj/readme.md":"# hi\nTODO: spec\n","/hr/salaries.csv":"..."}}'
 curl -H "$A" -H "$J" localhost:8787/api/w/acme/sessions -d '{"user":"alice","rights":["/proj","/plans"],"mode":"yolo"}'
 # → {"value":{"session":"…","token":"…"}}
 curl -H "$J" localhost:8787/api/agents/alice-1/run -d '{"workspace":"acme","token":"…","transport":"stub",
@@ -70,6 +74,8 @@ curl -H "$A" -H "$J" localhost:8787/api/w/acme/sessions/<session>/mode -d '{"mod
 |---|---|---|
 | `POST /api/w/:ws/seed` `{files}` | admin | writes files without rights checks (import) |
 | `GET /api/w/:ws/files` | admin | every file and its contents (audit) |
+| `GET /api/w/:ws/stats` | admin | `{authorizations, verifications}` of the Workspace instance |
+| `GET /api/w/:ws/sessions/:sid` | admin | `{session, user, mode, revokedAll, revokedIds}` |
 | `POST /api/w/:ws/sessions` `{user, rights, mode}` | admin | mints a session token → `{session, token}` |
 | `POST /api/w/:ws/sessions/:sid/mode` `{mode}` | admin | `yolo` · `prototyping` · `plan` · `readonly` |
 | `POST /api/w/:ws/sessions/:sid/revoke` `{rid?}` | admin | revokes one capability (and its descendants), or the whole session |
@@ -157,10 +163,18 @@ scripts/serve-cellb.mjs    cellb on node:http (optionally on a celld bucket)
 
 | Check | wrangler | cellb | cellb on celld bucket | celld |
 |---|---|---|---|---|
-| unit (8) | n/a | n/a | n/a | n/a, ✅ on Node |
 | scenario, stub transport (8) | ✅ | ✅ (1 known gap) | ✅ (1 known gap) | not run |
 | scenario, token transport (8) | ✅ | ✅ (1 known gap) | ✅ (1 known gap) | not run |
 | durability across a restart | ✅ | ✅ | ✅ | not run |
+| `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run |
+
+The 8 unit tests (`tests/unit`) need no runtime and pass on Node 22.
+
+celld was not run in the session that built this: its release binary and container image could
+not be fetched or run there. cellb-on-celld-bucket checks the storage half of celld
+compatibility (the bucket holds `cells/<Class>:<id>/own.json` and `ltx/e<epoch>/…` objects).
+Whether celld passes `RpcTarget`s between cells by reference is unverified; if it does not, the
+token transport (`TRANSPORTS=token`) is the one to use there.
 
 **Known gap:** on cellb (Node), a Worker Loader isolate runs in a worker thread that resolves the
 real `node:fs` and `process`. The tool probe lists the host's `/`, so a tool could bypass the
@@ -185,6 +199,10 @@ acceptance check, and use the vm runner; or use shim-only isolates in cellb.
   `-H`, so Flue's grep finds nothing on any just-bash file system (`InMemoryFs` included). The
   shim answers Flue's `rg --version` probe and translates the call. Remove it once this is fixed
   upstream.
+- **A denied read looks like a missing file in just-bash.** Commands such as `cat` check
+  `exists()` first, and `CapFs.exists()` answers `false` on any error, so the existence of
+  files outside the rights is not revealed. Flue's tools and the raw capability report
+  `EACCES`.
 - **Denied redirects abort the whole `exec()`** (just-bash). `safeExec` fails closed and reports
   them as a failed command. Earlier output in the same script is lost.
 - **Tools get `ToolFiles`, not the capability object.** They can use it but not attenuate or hand

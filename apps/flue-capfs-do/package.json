@@ -19,7 +19,8 @@
     "dev:wrangler": "wrangler dev",
     "dev:cellb": "node scripts/serve-cellb.mjs",
     "typecheck": "tsc --noEmit",
-    "test:cellb-celld-bucket": "node scripts/run-env.mjs cellb-celld-bucket"
+    "test:cellb-celld-bucket": "node scripts/run-env.mjs cellb-celld-bucket",
+    "example": "node examples/walkthrough.mjs"
   },
   "dependencies": {
     "@flue/runtime": "catalog:",
