@@ -165,13 +165,32 @@ export class Agent extends DurableObject<AgentEnv> {
     // A fresh isolate per invocation: an isolate keyed by the code would keep its globals between
     // callers, so data one user's capability read could be returned to the next user.
     const id = `tool-${crypto.randomUUID()}`;
+    // How the tool gets its files: with the stub transport, the narrowed capability as an
+    // RpcTarget argument (the Agent never holds a token); with the token transport, a loopback
+    // service binding in env.FILES (portable: celld cannot pass RpcTargets into isolates). The
+    // tool's `files` argument is then null; `files ?? this.env.FILES` works on every runtime.
+    const handoff = cap.handoff();
+    const exports = (
+      this.ctx as unknown as { exports?: Record<string, (o: { props: unknown }) => unknown> }
+    ).exports;
+    const viaBinding = handoff.transport === "token";
+    if (viaBinding && !exports?.ToolFilesEntrypoint) {
+      throw new Error("ENOSYS: this runtime offers no ctx.exports for the tool's file binding");
+    }
+    const env = viaBinding
+      ? {
+          FILES: exports?.ToolFilesEntrypoint?.({
+            props: { workspace: handoff.workspace, token: handoff.token },
+          }),
+        }
+      : {};
     const worker = loader.get(id, async () => ({
       compatibilityDate: "2026-10-01",
       mainModule: "tool.js",
       modules: { "tool.js": code },
-      env: {},
+      env,
       globalOutbound: null,
     }));
-    return worker.getEntrypoint().run(new ToolFiles(cap), input ?? null);
+    return worker.getEntrypoint().run(viaBinding ? null : new ToolFiles(cap), input ?? null);
   }
 }

@@ -367,6 +367,7 @@ for (const transport of TRANSPORTS) {
       const code = `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint {
   async run(files, input) {
+    files ??= this.env.FILES;
     const out = { list: await files.readdir("/proj") };
     out.readme = await files.call("readFile", "/proj/readme.md");
     try { await files.call("writeFile", "/proj/tool.txt", "x"); out.write = "allowed"; } catch (e) { out.write = String(e.message); }
@@ -479,6 +480,7 @@ export default class extends WorkerEntrypoint {
 globalThis.seen ??= [];
 export default class extends WorkerEntrypoint {
   async run(files, input) {
+    files ??= this.env.FILES;
     try { globalThis.seen.push(await files.call("readFile", "/p10/secret.txt")); } catch {}
     return globalThis.seen;
   }

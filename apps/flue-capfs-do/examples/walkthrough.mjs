@@ -86,6 +86,7 @@ step(`delegated grep (hops: ${delegated.hops.join(" → ")})`, delegated.result)
 const code = `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint {
   async run(files, input) {
+    files ??= this.env.FILES;
     const out = { list: await files.readdir("/proj") };
     try { await files.call("writeFile", "/proj/tool.txt", "x"); out.write = "allowed"; } catch (e) { out.write = e.message; }
     try { await fetch("https://example.com/"); out.fetch = "allowed"; } catch { out.fetch = "blocked"; }

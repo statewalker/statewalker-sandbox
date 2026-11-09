@@ -1,15 +1,16 @@
 // Start one runtime serving this Worker project, run the scenario suite against it, stop it.
 //   node scripts/run-env.mjs wrangler | cellb | celld
 //   node scripts/run-env.mjs cellb-celld-bucket   (cellb, cells stored in celld's format)
-// celld: needs the `celld` binary on PATH or CELLD_BIN (https://github.com/denoland/celld
-// releases, or the ghcr.io/denoland/celld image). Started as `celld dev --listen 127.0.0.1:<port>`;
-// CELLD_ARGS overrides the arguments ("{port}" is replaced). TRANSPORTS=token skips the stub
-// transport if the runtime refuses to pass RpcTargets by reference.
-import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+// celld: CELLD_BIN, or (default) the ghcr.io/denoland/celld:0.6.0 image in Docker (CELLD_IMAGE),
+// started as `celld dev <project> --host 127.0.0.1 --port <port> --no-watch`. It runs with
+// TRANSPORTS=token: celld does not pass RpcTargets between isolates ("RPC stubs cannot cross
+// isolate boundaries yet").
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundleTodoTool } from "../tests/fixtures/bundle-fixture.mjs";
 
@@ -69,19 +70,52 @@ const commands = {
       ],
     ];
   },
-  // celld: CELLD_BIN (default `celld` on PATH); CELLD_ARGS replaces the default arguments.
-  celld: [
-    process.env.CELLD_BIN ?? "celld",
-    process.env.CELLD_ARGS
-      ? process.env.CELLD_ARGS.replaceAll("{port}", String(port)).split(" ")
-      : ["dev", "--listen", `127.0.0.1:${port}`],
-  ],
+  // celld: CELLD_BIN if set, else the image CELLD_IMAGE (default ghcr.io/denoland/celld:0.6.0)
+  // in Docker with host networking and the repository mounted at its own path (pnpm's links).
+  // celld bundles with esbuild: the project's own native esbuild is passed as CELLD_ESBUILD.
+  celld: () => {
+    const args = ["dev", dir, "--host", "127.0.0.1", "--port", String(port), "--no-watch"];
+    if (process.env.CELLD_BIN) return [process.env.CELLD_BIN, args];
+    const repo = join(dir, "../..");
+    const esbuildBin = createRequire(join(dir, "package.json")).resolve(
+      `@esbuild/${process.platform}-${process.arch === "x64" ? "x64" : process.arch}/bin/esbuild`,
+      { paths: [dirname(createRequire(join(dir, "package.json")).resolve("esbuild"))] },
+    );
+    return [
+      "docker",
+      [
+        "run",
+        "--rm",
+        "--name",
+        celldContainer,
+        "--network",
+        "host",
+        "-e",
+        `CELLD_ESBUILD=${esbuildBin}`,
+        "-v",
+        `${repo}:${repo}`,
+        "-w",
+        dir,
+        process.env.CELLD_IMAGE ?? "ghcr.io/denoland/celld:0.6.0",
+        ...args,
+      ],
+    ];
+  },
 };
+const celldContainer = `flue-capfs-celld-${port}`;
+// celld keeps its state in <project>/.celld/dev: start from an empty one (the restart reuses it).
+if (env === "celld") rmSync(join(dir, ".celld/dev"), { recursive: true, force: true });
+// celld cannot pass RpcTargets between isolates yet: the token transport only.
+if (env === "celld") process.env.TRANSPORTS ??= "token";
 if (!commands[env]) {
   console.error(`usage: run-env.mjs ${Object.keys(commands).join(" | ")}`);
   process.exit(2);
 }
 const [cmd, args] = typeof commands[env] === "function" ? await commands[env]() : commands[env];
+const cleanup = () => {
+  if (env === "celld" && cmd === "docker")
+    spawnSync("docker", ["rm", "-f", celldContainer], { stdio: "ignore" });
+};
 const base = `http://127.0.0.1:${port}`;
 
 async function startRuntime() {
@@ -136,6 +170,7 @@ async function stopRuntime(child) {
       await new Promise((r) => setTimeout(r, 250));
     }
   }
+  cleanup();
   if (!(await portFree())) throw new Error(`${env}: still answering on ${base} after SIGKILL`);
 }
 function runTests(file, extraEnv = {}) {
