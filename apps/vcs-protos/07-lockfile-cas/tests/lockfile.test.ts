@@ -182,6 +182,54 @@ describe("R3 native git interop on a real repository", () => {
     expect(git("rev-parse", REF)).toBe(c1);
     expect(git("fsck", "--strict")).toBe("");
   });
+  it("(e) four of our processes and four `git update-ref <new> <old>` racing: exactly one winner overall", async () => {
+    const { repo, git, c1, c2, files } = setup();
+    const gitDir = join(repo, ".git");
+    // Point main back at c1; every contender expects c1 and tries to move it to its own value.
+    git("update-ref", REF, c1);
+    const child = join(import.meta.dirname, "race-child.ts");
+    const startAt = Date.now() + 1500;
+    const ours = Array.from(
+      { length: 4 },
+      (_, i) =>
+        new Promise<boolean>((resolve, reject) => {
+          const p = spawn(
+            process.execPath,
+            ["--import", "tsx", child, gitDir, String(300 + i), c1],
+            {
+              env: { ...process.env, START_AT: String(startAt) },
+            },
+          );
+          let out = "";
+          p.stdout.on("data", (d) => (out += d));
+          p.on("error", reject);
+          p.on("close", () => resolve(out.trim().endsWith(":ok")));
+        }),
+    );
+    // git's contenders all try to set main to c2 (a real commit), expecting c1.
+    const theirs = Array.from(
+      { length: 4 },
+      () =>
+        new Promise<boolean>((resolve) => {
+          setTimeout(
+            () => {
+              const p = spawn("git", ["-C", repo, "update-ref", REF, c2, c1], {
+                env: GIT_ENV,
+                stdio: "ignore",
+              });
+              p.on("close", (code) => resolve(code === 0));
+            },
+            Math.max(0, startAt - Date.now()),
+          );
+        }),
+    );
+    const results = await Promise.all([...ours, ...theirs]);
+    expect(results.filter(Boolean).length, results.join(",")).toBe(1);
+    const final = await readRef(files, REF);
+    const winner = results.indexOf(true);
+    expect(final).toBe(winner < 4 ? String(300 + winner).padStart(40, "0") : c2);
+    expect(await files.exists(`${REF}.lock`)).toBe(false);
+  }, 60_000);
   it("(d) a value written by git update-ref is what we read", async () => {
     const { git, c1, files } = setup();
     git("update-ref", REF, c1);
