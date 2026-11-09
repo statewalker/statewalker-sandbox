@@ -62,6 +62,11 @@ test(`durability phase ${process.env.PHASE}`, async () => {
     const c = await sh(ws, child, "cat /proj/a.md");
     assert.ok(!c.ok || c.value.result.exitCode !== 0, "revocation survived");
     const stub = await sh(ws, token, "cat /proj/a.md", "stub");
-    if (stub.ok) assert.equal(stub.value.result.stdout, "before restart\n");
+    assert.equal(stub.ok, true, stub.error);
+    assert.equal(
+      stub.value.result.stdout,
+      "before restart\n",
+      "the stub transport works after a restart too",
+    );
   }
 });

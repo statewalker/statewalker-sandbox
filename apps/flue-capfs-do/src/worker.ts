@@ -1,6 +1,7 @@
 // The gateway Worker: the HTTP surface of the prototype. In a real deployment it
-// authenticates the user and looks up their rights; here admin routes are guarded by
-// ADMIN_KEY (when set) and the session token is the user's bearer credential.
+// authenticates the user and looks up their rights; here admin routes need a bearer key
+// (ADMIN_KEY secret, or DEV_ADMIN_KEY on a loopback host) and the session token is the user's
+// bearer credential.
 //
 //   admin  POST /api/w/:ws/seed                    { files: { path: content } }
 //   admin  GET  /api/w/:ws/files                   every file (audit)
@@ -12,7 +13,7 @@
 //   user   POST /api/agents/:name/run              { workspace, token, transport, chain?, task }
 //   any    GET  /api/runtime                       which runtime answers
 
-import type { AgentEnv, AttenuationSpec, Task } from "./agent.ts";
+import { type AgentEnv, type AttenuationSpec, isolatesSeeHostFs, type Task } from "./agent.ts";
 import type { CapHandoff } from "./caps.ts";
 import { rebuildError } from "./path.ts";
 
@@ -20,7 +21,30 @@ export { Agent } from "./agent.ts";
 export { Workspace } from "./workspace.ts";
 
 interface Env extends AgentEnv {
+  /** Admin bearer key for deployments: a secret (`wrangler secret put ADMIN_KEY`). */
   ADMIN_KEY?: string;
+  /** Committed development key: honoured only for requests to a loopback host. */
+  DEV_ADMIN_KEY?: string;
+}
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function sameBytes(a: string, b: string): boolean {
+  const x = new TextEncoder().encode(a);
+  const y = new TextEncoder().encode(b);
+  let diff = x.length ^ y.length;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
+  return diff === 0;
+}
+
+/** Fail closed: without a configured key, admin routes are refused. */
+function isAdmin(request: Request, env: Env): boolean {
+  const auth = request.headers.get("authorization") ?? "";
+  const given = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!given) return false;
+  if (env.ADMIN_KEY && sameBytes(given, env.ADMIN_KEY)) return true;
+  const host = new URL(request.url).hostname;
+  return !!env.DEV_ADMIN_KEY && LOOPBACK.has(host) && sameBytes(given, env.DEV_ADMIN_KEY);
 }
 
 const STATUS: Record<string, number> = {
@@ -57,11 +81,22 @@ export default {
 
       if (parts[1] === "runtime") {
         bootId ??= crypto.randomUUID();
-        return ok({ workerLoader: !!env.LOADER, userAgent: navigator.userAgent, bootId });
+        return ok({
+          workerLoader: !!env.LOADER,
+          // "isolated": tool isolates have no host file system; "refused": they would, so tool
+          // tasks are refused (ALLOW_HOST_FS_TOOLS=1 overrides, for experiments only).
+          toolIsolates: !env.LOADER
+            ? "none"
+            : isolatesSeeHostFs() && env.ALLOW_HOST_FS_TOOLS !== "1"
+              ? "refused"
+              : "isolated",
+          userAgent: navigator.userAgent,
+          bootId,
+        });
       }
 
       if (parts[1] === "w" && parts[2]) {
-        if (env.ADMIN_KEY && request.headers.get("authorization") !== `Bearer ${env.ADMIN_KEY}`) {
+        if (!isAdmin(request, env)) {
           return Response.json(
             { ok: false, code: "EACCES", error: "EACCES: admin key required" },
             { status: 401 },

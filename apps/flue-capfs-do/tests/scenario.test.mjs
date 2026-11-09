@@ -51,6 +51,14 @@ async function sh(agent, ws, token, transport, script, opts = {}) {
   return r.value.result;
 }
 
+/** A refused run: an EACCES error, or a shell run that failed and did not print `marker`. */
+function assertRefused(r, marker) {
+  if (!r.ok) return assert.equal(r.code, "EACCES", r.error);
+  const out = r.value.result;
+  assert.notEqual(out.exitCode, 0, `expected a refusal, got: ${out.stdout}`);
+  assert.doesNotMatch(out.stdout, marker);
+}
+
 const SEED = {
   "/p1/a.txt": "hello p1\n",
   "/p10/secret.txt": "p10 secret\n",
@@ -69,6 +77,10 @@ test("runtime answers", async () => {
 test("admin routes need the admin key", async () => {
   const r = await http(`/api/w/${freshWs()}/files`);
   assert.equal(r.status, 401);
+  const res = await fetch(`${BASE}/api/w/${freshWs()}/files`, {
+    headers: { authorization: `Bearer ${ADMIN}x` },
+  });
+  assert.equal(res.status, 401, "a wrong key is refused");
 });
 
 for (const transport of TRANSPORTS) {
@@ -122,8 +134,7 @@ for (const transport of TRANSPORTS) {
         kind: "bash",
         script: "cat /p10/secret.txt",
       });
-      if (r1.ok) assert.doesNotMatch(r1.value.result.stdout, /secret/);
-      else assert.equal(r1.code, "EACCES");
+      assertRefused(r1, /secret/);
       // A valid token of ANOTHER workspace.
       const ws2 = freshWs();
       await seed(ws2, SEED);
@@ -132,20 +143,21 @@ for (const transport of TRANSPORTS) {
         kind: "bash",
         script: "cat /p10/secret.txt",
       });
-      if (r2.ok) assert.doesNotMatch(r2.value.result.stdout, /secret/);
-      else assert.equal(r2.code, "EACCES");
+      assertRefused(r2, /secret/);
       // Tampered bytes.
       const bad = token.slice(0, 40) + (token[40] === "A" ? "B" : "A") + token.slice(41);
       const r3 = await run(`m3-${ws}`, ws, bad, transport, {
         kind: "bash",
         script: "cat /p1/a.txt",
       });
-      if (r3.ok) assert.doesNotMatch(r3.value.result.stdout, /hello/);
-      else assert.equal(r3.code, "EACCES");
+      assertRefused(r3, /hello/);
       // A delegated block cannot widen: right("/") added in an attenuation block grants nothing.
       const widened = Biscuit.fromBase64(token).attenuate(`right("/");`).toBase64();
-      const r4 = await sh(`m4-${ws}`, ws, widened, transport, "cat /p10/secret.txt; cat /p1/a.txt");
+      const r4 = await sh(`m4-${ws}`, ws, widened, transport, "cat /p10/secret.txt");
+      assert.notEqual(r4.exitCode, 0);
       assert.doesNotMatch(r4.stdout, /secret/);
+      const r5 = await sh(`m4-${ws}`, ws, widened, transport, "cat /p1/a.txt");
+      assert.equal(r5.stdout, "hello p1\n", "the widened token still works within its real rights");
     });
 
     test("modes switch at runtime, both ways, for one session only", async () => {
@@ -292,8 +304,7 @@ for (const transport of TRANSPORTS) {
           kind: "bash",
           script: "cat /proj/readme.md",
         });
-        if (r.ok) assert.doesNotMatch(r.value.result.stdout, /proj/);
-        else assert.equal(r.code, "EACCES");
+        assertRefused(r, /proj/);
       }
       assert.equal(
         (await sh(`r-${ws}`, ws, token, transport, "cat /proj/readme.md")).exitCode,
@@ -306,8 +317,7 @@ for (const transport of TRANSPORTS) {
         kind: "bash",
         script: "cat /proj/readme.md",
       });
-      if (r.ok) assert.doesNotMatch(r.value.result.stdout, /proj/);
-      else assert.equal(r.code, "EACCES");
+      assertRefused(r, /proj/);
     });
 
     test("parallel users on one store: independent views, no lost appends", async () => {
@@ -349,7 +359,7 @@ for (const transport of TRANSPORTS) {
 
     test("tool code in a Worker Loader isolate holds only the narrowed capability", async (t) => {
       const rt = (await http("/api/runtime")).value;
-      if (!rt.workerLoader) return t.skip("no Worker Loader binding in this runtime");
+      if (rt.toolIsolates === "none") return t.skip("no Worker Loader binding in this runtime");
       const ws = freshWs();
       await seed(ws, SEED);
       const { token } = await session(ws, "alice", ["/p1", "/proj"]);
@@ -361,7 +371,6 @@ export default class extends WorkerEntrypoint {
     try { await files.call("writeFile", "/proj/tool.txt", "x"); out.write = "allowed"; } catch (e) { out.write = String(e.message); }
     try { await files.call("readFile", "/p1/a.txt"); out.p1 = "readable"; } catch (e) { out.p1 = String(e.message); }
     try { await files.attenuate('check if true;'); out.attenuate = "allowed"; } catch (e) { out.attenuate = "refused"; }
-    out.process = typeof globalThis.process;
     try { const fs = await import("node:fs"); out.nodeFsRoot = fs.readdirSync("/"); } catch (e) { out.nodeFsRoot = "unavailable: " + e.message; }
     try { await fetch("https://example.com/"); out.fetch = "allowed"; } catch (e) { out.fetch = "blocked"; }
     return out;
@@ -370,6 +379,12 @@ export default class extends WorkerEntrypoint {
       const r = await run(`tool-${ws}`, ws, token, transport, { kind: "tool", code }, [
         { scope: "/proj", readOnly: true },
       ]);
+      if (rt.toolIsolates === "refused") {
+        // cellb on Node: loaded code would see the real node:fs, so the agent refuses tools.
+        assert.equal(r.ok, false);
+        assert.equal(r.code, "EPERM", r.error);
+        return;
+      }
       assert.equal(r.ok, true, r.error);
       const o = r.value.result;
       console.log(`# tool isolate probe (${transport}): ${JSON.stringify(o)}`);
@@ -380,18 +395,97 @@ export default class extends WorkerEntrypoint {
       assert.equal(o.attenuate, "refused", "the tool can use the capability, not re-delegate it");
       assert.equal(o.fetch, "blocked");
       assert.equal((await files(ws))["/proj/tool.txt"], undefined);
-
-      // The isolate must have no file system of the host. workerd gives each isolate its own
-      // virtual one (/bundle, /tmp, /dev); cellb on Node runs loaded code in a worker thread
-      // that resolves the real node:fs (KNOWN GAP, see README).
+      // No file system of the host: workerd gives each isolate its own virtual /bundle, /tmp, /dev.
       const hostFs =
         Array.isArray(o.nodeFsRoot) &&
         o.nodeFsRoot.some((e) => !["bundle", "tmp", "dev"].includes(e));
-      if (hostFs && /Node\.js/.test(rt.userAgent)) {
-        t.todo(
-          `KNOWN GAP (cellb on Node): tool isolate sees the host file system: ${o.nodeFsRoot.slice(0, 6).join(",")}…`,
-        );
-      } else assert.equal(hostFs, false, `tool isolate sees host files: ${o.nodeFsRoot}`);
+      assert.equal(hostFs, false, `tool isolate sees host files: ${o.nodeFsRoot}`);
+    });
+
+    test("tool isolates keep no state between callers", async (t) => {
+      const rt = (await http("/api/runtime")).value;
+      if (rt.toolIsolates !== "isolated") return t.skip(`tool isolates: ${rt.toolIsolates}`);
+      const ws = freshWs();
+      await seed(ws, SEED);
+      const alice = await session(ws, "alice", ["/"]);
+      const bob = await session(ws, "bob", ["/proj"]);
+      // The same code for both: it remembers whatever it read in a global.
+      const code = `import { WorkerEntrypoint } from "cloudflare:workers";
+globalThis.seen ??= [];
+export default class extends WorkerEntrypoint {
+  async run(files, input) {
+    try { globalThis.seen.push(await files.call("readFile", "/p10/secret.txt")); } catch {}
+    return globalThis.seen;
+  }
+}`;
+      const a = await run(`ta-${ws}`, ws, alice.token, transport, { kind: "tool", code });
+      assert.deepEqual(a.value.result, ["p10 secret\n"]);
+      const b = await run(`tb-${ws}`, ws, bob.token, transport, { kind: "tool", code });
+      assert.equal(b.ok, true, b.error);
+      assert.deepEqual(b.value.result, [], "bob must not see what alice's run read");
+    });
+
+    test("a datalog attenuation that excludes a subtree also holds for cp -r, mv and rm -r", async () => {
+      const ws = freshWs();
+      await seed(ws, { ...SEED, "/proj/secret/key": "KEY\n" });
+      const { token } = await session(ws, "alice", ["/p1", "/proj"]);
+      const chain = [{ datalog: `check if resource($p), !$p.starts_with("/proj/secret/");` }];
+      const tries = [
+        "cat /proj/secret/key",
+        "cp -r /proj /p1/copy",
+        "mv /proj /p1/moved",
+        "rm -r /proj",
+      ];
+      for (const script of tries) {
+        const r = await sh(`dl-${ws}`, ws, token, transport, script, { chain });
+        assert.notEqual(r.exitCode, 0, `${script} must be refused`);
+        assert.doesNotMatch(r.stdout, /KEY/);
+      }
+      const ok = await sh(
+        `dl-${ws}`,
+        ws,
+        token,
+        transport,
+        "cp -r /proj/src /p1/src && cat /p1/src/main.js",
+        { chain },
+      );
+      assert.equal(ok.exitCode, 0, ok.stderr);
+      const all = await files(ws);
+      assert.equal(all["/proj/secret/key"], "KEY\n");
+      assert.equal(all["/p1/copy/secret/key"], undefined);
+      assert.ok(all["/proj/readme.md"]);
+    });
+
+    test("paths are case-sensitive: rights on /HR never reach /hr", async () => {
+      const ws = freshWs();
+      await seed(ws, { "/hr/salaries.csv": "alice,100\n", "/hr/sub/x": "x\n" });
+      const { token } = await session(ws, "mallory", ["/HR"]);
+      const r = await sh(
+        `case-${ws}`,
+        ws,
+        token,
+        transport,
+        "rm -r /HR; ls /; cat /hr/salaries.csv",
+      );
+      assert.doesNotMatch(r.stdout, /alice/);
+      const all = await files(ws);
+      assert.equal(all["/hr/salaries.csv"], "alice,100\n");
+      assert.equal(all["/hr/sub/x"], "x\n");
+    });
+
+    test("shell cp/mv onto an existing file, and into a directory", async () => {
+      const ws = freshWs();
+      await seed(ws, SEED);
+      const { token } = await session(ws, "alice", ["/proj"]);
+      const r = await sh(
+        `cpmv-${ws}`,
+        ws,
+        token,
+        transport,
+        "echo new > /proj/n.txt && echo old > /proj/o.txt && cp /proj/n.txt /proj/o.txt && mkdir /proj/d && mv /proj/n.txt /proj/d && cat /proj/o.txt /proj/d/n.txt",
+      );
+      assert.equal(r.exitCode, 0, r.stderr);
+      assert.equal(r.stdout, "new\nnew\n");
     });
   });
 }

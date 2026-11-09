@@ -4,7 +4,8 @@
 // Facts provided by the authorizer on every call (always bound as parameters):
 //   operation({op})    "read" | "list" | "write"
 //   resource({path})   normalised absolute path + "/"
-//   session({sid})     the session the owner is serving (a token can only be used in its own)
+//   (the session is read from the token's authority block; the owner then loads THAT session's
+//    mode and revocations, which is what binds a token to its session and workspace)
 //
 // Modes only ever restrict what the token's right($r) facts allow; attenuation blocks
 // (checks) narrow further. No matching `allow` → deny.

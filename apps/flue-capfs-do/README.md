@@ -26,8 +26,9 @@ makes them a real deployment shape:
 - Delegation goes across real Durable Object cells over the runtime's RPC.
 - The agent side is Flue's own toolset (`read`, `write`, `edit`, `grep`, `glob`, `bash`), running
   on the same sandbox a Flue agent's `useSandbox(bash(...))` gets.
-- Untrusted tool code runs in a Worker Loader isolate. It has no network, no bindings, and only
-  the narrowed capability.
+- Untrusted tool code runs in a fresh Worker Loader isolate for each call. It has no network,
+  no bindings, and only the narrowed capability. On runtimes whose isolates can see the host's
+  files (cellb on Node), tool tasks are refused.
 
 ## How to run it
 
@@ -80,23 +81,36 @@ curl -H "$A" -H "$J" localhost:8787/api/w/acme/sessions/<session>/mode -d '{"mod
 | `POST /api/w/:ws/sessions/:sid/mode` `{mode}` | admin | `yolo` · `prototyping` · `plan` · `readonly` |
 | `POST /api/w/:ws/sessions/:sid/revoke` `{rid?}` | admin | revokes one capability (and its descendants), or the whole session |
 | `POST /api/agents/:name/run` `{workspace, token, transport, chain?, task}` | user | runs a task in the agent cell |
-| `GET /api/runtime` | any | `{workerLoader, userAgent, bootId}` |
+| `GET /api/runtime` | any | `{workerLoader, toolIsolates, userAgent, bootId}`; `toolIsolates` is `isolated`, `refused` or `none` |
 
-Admin routes need `Authorization: Bearer $ADMIN_KEY` when `ADMIN_KEY` is set (it is set to
-`dev-admin-key` in `wrangler.jsonc`). In production, the gateway authenticates the user and reads
-their rights from the namespace configuration.
+Admin routes need `Authorization: Bearer <key>` and fail closed:
+
+- `ADMIN_KEY`: the deployment key. Set it as a secret (`wrangler secret put ADMIN_KEY`).
+- `DEV_ADMIN_KEY`: the development key (`dev-admin-key` in `wrangler.jsonc`). It is accepted only
+  for requests addressed to `localhost`, `127.0.0.1` or `[::1]`, so a project deployed as-is has
+  no working admin key.
+- Neither set: every admin route answers 401. Keys are compared in constant time.
+
+In production, the gateway authenticates the user and reads their rights from the namespace
+configuration. Starting a session also creates the right directories (`/proj`, …), because
+agents cannot create directories above their rights.
 
 Tasks:
 
 - `{kind: "bash", script, cwd?}` runs a just-bash shell over the capability.
 - `{kind: "flue", calls: [{tool, params}], cwd?}` calls Flue's tools as a model would.
-- `{kind: "tool", code, input?}` runs a module in a Worker Loader isolate. The module exports
-  `default class extends WorkerEntrypoint { run(files, input) }`.
+- `{kind: "tool", code, input?}` runs a module in a new Worker Loader isolate (one per call, so no
+  state survives between callers). The module exports
+  `default class extends WorkerEntrypoint { run(files, input) }`. On cellb (Node) this answers
+  `EPERM` unless the Worker's env has `ALLOW_HOST_FS_TOOLS = "1"` (for experiments only: see the
+  known gap below).
 - `{kind: "revocationId"}` returns the revocation id of the capability the agent holds.
 
 `chain: [{scope?, readOnly?, datalog?}, …]` adds one hop per entry. Each hop attenuates the
 capability and hands it to a new sub-agent cell (`<name>/sub`, `<name>/sub/sub`, …), and the
-last hop runs the task.
+last hop runs the task. `datalog` is any Biscuit check, for example
+`check if resource($p), !$p.starts_with("/proj/secret/");`. It holds for recursive operations
+too, because every entry they touch is authorized.
 
 ### The two capability transports
 
@@ -112,9 +126,10 @@ the mode and the revocations are identical.
 
 ### Datalog (`src/policy.ts`)
 
-On each call, the authorizer provides `operation(op)` (`read`, `list` or `write`),
-`resource(path + "/")` and `check if session(sid)`, all bound as parameters. The authority
-block holds `user`, `session` and `right("/p1/")` facts. Mode policies are `allow` rules that only
+For each path, the authorizer provides `operation(op)` (`read`, `list` or `write`) and
+`resource(path + "/")`, bound as parameters. The authority block holds `user`, `session` and
+`right("/p1/")` facts. The owner reads the session from the authority block and applies THAT
+session's mode and revocations; attenuation blocks cannot change it. Mode policies are `allow` rules that only
 ever restrict what `right` allows. Attenuation blocks are `check`s. A scope also allows `list`
 on its ancestors, so `ls /` shows the delegated branch and nothing else.
 
@@ -163,12 +178,15 @@ scripts/serve-cellb.mjs    cellb on node:http (optionally on a celld bucket)
 
 | Check | wrangler | cellb | cellb on celld bucket | celld |
 |---|---|---|---|---|
-| scenario, stub transport (8) | ✅ | ✅ (1 known gap) | ✅ (1 known gap) | not run |
-| scenario, token transport (8) | ✅ | ✅ (1 known gap) | ✅ (1 known gap) | not run |
+| scenario, stub transport (12) | ✅ 12 | ✅ 11, 1 skipped | ✅ 11, 1 skipped | not run |
+| scenario, token transport (12) | ✅ 12 | ✅ 11, 1 skipped | ✅ 11, 1 skipped | not run |
+| scenario, runtime and admin (2) | ✅ | ✅ | ✅ | not run |
 | durability across a restart | ✅ | ✅ | ✅ | not run |
 | `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run |
 
-The 8 unit tests (`tests/unit`) need no runtime and pass on Node 22.
+The 15 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the tool-isolate
+test asserts the `EPERM` refusal, and the cross-caller isolate test is skipped because tools are
+refused there.
 
 celld was not run in the session that built this: its release binary and container image could
 not be fetched or run there. cellb-on-celld-bucket checks the storage half of celld
@@ -176,17 +194,24 @@ compatibility (the bucket holds `cells/<Class>:<id>/own.json` and `ltx/e<epoch>/
 Whether celld passes `RpcTarget`s between cells by reference is unverified; if it does not, the
 token transport (`TRANSPORTS=token`) is the one to use there.
 
-**Known gap:** on cellb (Node), a Worker Loader isolate runs in a worker thread that resolves the
-real `node:fs` and `process`. The tool probe lists the host's `/`, so a tool could bypass the
-capability on that runtime. On workerd, the same isolate sees only its own virtual `/bundle`,
-`/tmp` and `/dev`, has no network, and cannot re-delegate. The test reports this as a `todo`
-on cellb and fails anywhere else. Yesterday's fix still applies: bundle the tool, run the
-acceptance check, and use the vm runner; or use shim-only isolates in cellb.
+**Known gap, closed by refusal:** on cellb (Node), a Worker Loader isolate runs in a worker
+thread that resolves the real `node:fs` and `process`. Such a tool could read the cells' SQLite
+files under the data directory, including the Workspace's root secret key in `cap_meta`. With
+that key it could mint any token and read every workspace. So the Agent refuses tool tasks on
+that runtime (`EPERM`, `toolIsolates: "refused"`). On workerd, each isolate sees only its own
+virtual `/bundle`, `/tmp` and `/dev`, has no network, and cannot re-delegate; the test asserts
+that. To run tools on cellb, it needs shim-only isolates, or yesterday's bundle + acceptance check
++ vm runner.
 
 ### Decisions a reader would otherwise undo
 
 - **The store is SQLite in the owner cell.** No caller ever gets it. `FsGate` authorizes every
-  call before reaching it.
+  entry an operation touches before reaching it: the path, every missing parent a write would
+  create, every entry of `rm -r`, and every source and destination entry of `cp -r`/`mv`.
+  Subtree queries compare bytes, not `LIKE` (which ignores case in SQLite).
+- **`cp`/`mv` semantics are the store's.** "Into an existing directory" is resolved once. Copying
+  or moving a tree into itself is `EINVAL`. `mv` onto the same path is a no-op. `stat` returns
+  `ino`/`dev`, so just-bash can tell distinct files apart.
 - **Session state is read fresh on every call.** A mode switch or a revocation applies on the
   next call of every stub and token already handed out.
 - **The session comes from the token's authority block.** The caller does not supply it. A token
@@ -197,13 +222,18 @@ acceptance check, and use the vm runner; or use shim-only isolates in cellb.
   never reaches the store.
 - **The `rg` shim:** Flue 2.3's grep tool runs `grep -rnH`, and just-bash 3.6's grep rejects
   `-H`, so Flue's grep finds nothing on any just-bash file system (`InMemoryFs` included). The
-  shim answers Flue's `rg --version` probe and translates the call. Remove it once this is fixed
-  upstream.
+  shim answers Flue's `rg --version` probe and translates the call; it refuses options it does
+  not know. Remove it once this is fixed upstream.
 - **A denied read looks like a missing file in just-bash.** Commands such as `cat` check
   `exists()` first, and `CapFs.exists()` answers `false` on any error, so the existence of
-  files outside the rights is not revealed. Flue's tools and the raw capability report
-  `EACCES`.
+  files outside the rights is not revealed. Flue's `read`, `write` and `edit`, and the raw
+  capability, report `EACCES`. Flue's `grep` and `glob` simply find nothing there.
 - **Denied redirects abort the whole `exec()`** (just-bash). `safeExec` fails closed and reports
   them as a failed command. Earlier output in the same script is lost.
 - **Tools get `ToolFiles`, not the capability object.** They can use it but not attenuate or hand
-  it off.
+  it off, and each call gets a new isolate. An isolate keyed by the code would keep its globals,
+  so whatever one user's call read could be returned to the next user.
+- **Limits of the prototype:** contents are stored as UTF-8 text (not binary-safe). `readdir`
+  and recursive operations run one Datalog authorization per entry, so a large tree, or a
+  costly attenuation block, makes `ls -R`/`grep -r` slow for the Workspace cell. A revocation id
+  is checked for form only; it cannot be tied to its session without the token.

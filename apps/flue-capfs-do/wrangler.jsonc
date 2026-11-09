@@ -13,5 +13,5 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Workspace", "Agent"] }],
   "worker_loaders": [{ "binding": "LOADER" }],
-  "vars": { "ADMIN_KEY": "dev-admin-key" }
+  "vars": { "DEV_ADMIN_KEY": "dev-admin-key" }
 }

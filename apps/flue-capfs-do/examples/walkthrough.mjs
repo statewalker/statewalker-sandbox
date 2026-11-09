@@ -92,13 +92,17 @@ export default class extends WorkerEntrypoint {
     return out;
   }
 }`;
+// On cellb (Node) tool isolates could reach the host's files, so the agent refuses them (EPERM).
 const tool = await run("alice-1", {
   token,
   transport: "stub",
   chain: [{ scope: "/proj", readOnly: true }],
   task: { kind: "tool", code },
-});
-step("tool isolate", tool.result);
+}).then(
+  (r) => r.result,
+  (e) => e.message,
+);
+step("tool isolate", tool);
 
 // 7. Alice hands a narrowed token to someone offline, then the admin revokes it.
 const child = Biscuit.fromBase64(token)

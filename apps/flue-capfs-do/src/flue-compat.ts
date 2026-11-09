@@ -25,7 +25,13 @@ export const rgForFlue = defineCommand("rg", async (args, ctx) => {
     else if (a.startsWith("--color=")) continue;
     else if (a === "--fixed-strings" || a === "-F") fixed = true;
     else if (a === "--glob" || a === "-g") glob = args[++i];
-    else rest.push(a);
+    else if (a.startsWith("-") && rest.length === 0) {
+      return {
+        stdout: "",
+        stderr: `rg (just-bash shim): unsupported option '${a}'\n`,
+        exitCode: 2,
+      };
+    } else rest.push(a);
   }
   const [pattern, ...paths] = rest;
   if (pattern === undefined) return { stdout: "", stderr: "rg: no pattern given\n", exitCode: 2 };

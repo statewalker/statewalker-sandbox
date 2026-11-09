@@ -1,9 +1,10 @@
 // The real store: a small file system on the owner Durable Object's own SQLite
 // (`ctx.storage.sql`). It is durable (survives eviction and restarts), it never leaves the
 // owner cell, and it is the only thing that touches file data. It knows nothing about
-// rights: FilteredFiles authorizes every call before reaching it.
+// rights: FsGate authorizes every entry an operation touches before calling it.
 //
-// Paths given to it are already normalised by the caller. Contents are stored as UTF-8 text.
+// Paths given to it are already normalised by the caller. Contents are stored as UTF-8 text
+// (binary data written through CapFs is decoded as UTF-8 first: not binary-safe).
 
 import { dirname, fsError, join } from "./path.ts";
 
@@ -12,6 +13,9 @@ interface SqlLike {
 }
 
 export interface PlainStat {
+  /** Stable per path while it exists (the row id): just-bash compares (dev, ino) for "same file". */
+  ino: number;
+  dev: number;
   isFile: boolean;
   isDirectory: boolean;
   isSymbolicLink: boolean;
@@ -20,7 +24,24 @@ export interface PlainStat {
   mtime: string;
 }
 
-type Row = { path: string; kind: "file" | "dir"; data: string | null; mode: number; mtime: number };
+export interface Entry {
+  path: string;
+  kind: "file" | "dir";
+}
+
+type Row = {
+  id: number;
+  path: string;
+  kind: "file" | "dir";
+  data: string | null;
+  mode: number;
+  mtime: number;
+};
+
+// Subtree queries compare bytes (case-sensitive), never LIKE: SQLite's LIKE ignores ASCII
+// case, so `/HR/%` would also match `/hr/…`.
+const SUBTREE = "(path = ? OR substr(path, 1, ?) = ?)";
+const subtreeArgs = (path: string) => [path, path.length + 1, `${path}/`];
 
 const enc = new TextEncoder();
 
@@ -35,9 +56,12 @@ export class SqlFs {
   }
 
   #get(path: string): Row | undefined {
-    if (path === "/") return { path: "/", kind: "dir", data: null, mode: 0o755, mtime: 0 };
+    if (path === "/") return { id: 0, path: "/", kind: "dir", data: null, mode: 0o755, mtime: 0 };
     return this.#sql
-      .exec("SELECT path, kind, data, mode, mtime FROM fs_entries WHERE path = ?", path)
+      .exec(
+        "SELECT rowid AS id, path, kind, data, mode, mtime FROM fs_entries WHERE path = ?",
+        path,
+      )
       .toArray()[0] as Row | undefined;
   }
   #must(path: string): Row {
@@ -74,6 +98,13 @@ export class SqlFs {
       .map((r) => String(r.path).slice(path === "/" ? 1 : path.length + 1));
   }
 
+  /** The ancestors of `path` that do not exist yet, outermost first (they would be created). */
+  async missingParents(path: string): Promise<string[]> {
+    const out: string[] = [];
+    for (let p = dirname(path); p !== "/" && !this.#get(p); p = dirname(p)) out.unshift(p);
+    return out;
+  }
+
   async readFile(path: string): Promise<string> {
     const row = this.#must(path);
     if (row.kind === "dir")
@@ -102,6 +133,8 @@ export class SqlFs {
   async stat(path: string): Promise<PlainStat> {
     const row = this.#must(path);
     return {
+      ino: row.id + 1,
+      dev: 1,
       isFile: row.kind === "file",
       isDirectory: row.kind === "dir",
       isSymbolicLink: false,
@@ -129,8 +162,11 @@ export class SqlFs {
       throw fsError("EEXIST", `file already exists '${path}'`);
     }
     if (opts?.recursive) this.#ensureParents(path);
-    else if (!this.#get(dirname(path)))
-      throw fsError("ENOENT", `no such file or directory '${dirname(path)}'`);
+    else {
+      const parent = this.#get(dirname(path));
+      if (!parent) throw fsError("ENOENT", `no such file or directory '${dirname(path)}'`);
+      if (parent.kind !== "dir") throw fsError("ENOTDIR", `not a directory '${dirname(path)}'`);
+    }
     this.#put(path, "dir", null);
   }
   async rm(path: string, opts?: { recursive?: boolean; force?: boolean }): Promise<void> {
@@ -141,14 +177,10 @@ export class SqlFs {
       throw fsError("ENOENT", `no such file or directory '${path}'`);
     }
     if (row.kind === "dir") {
-      const hasChildren = this.#children(path).length > 0;
-      if (hasChildren && !opts?.recursive)
+      if (this.#children(path).length > 0 && !opts?.recursive) {
         throw fsError("ENOTEMPTY", `directory not empty '${path}'`);
-      this.#sql.exec(
-        "DELETE FROM fs_entries WHERE path = ? OR path LIKE ? ESCAPE '\\'",
-        path,
-        `${likeEscape(path)}/%`,
-      );
+      }
+      this.#sql.exec(`DELETE FROM fs_entries WHERE ${SUBTREE}`, ...subtreeArgs(path));
     } else this.#sql.exec("DELETE FROM fs_entries WHERE path = ?", path);
   }
   async chmod(path: string, mode: number): Promise<void> {
@@ -165,24 +197,47 @@ export class SqlFs {
           : Date.now();
     this.#sql.exec("UPDATE fs_entries SET mtime = ? WHERE path = ?", t, path);
   }
-  async cp(src: string, dst: string, opts?: { recursive?: boolean }): Promise<void> {
-    const row = this.#must(src);
-    if (row.kind === "file") return this.writeFile(this.#target(src, dst), row.data ?? "");
-    if (!opts?.recursive) throw fsError("EISDIR", `'${src}' is a directory (not copied)`);
-    const target = this.#target(src, dst);
-    await this.mkdir(target, { recursive: true });
-    for (const name of this.#children(src))
-      await this.cp(join(src, name), join(target, name), opts);
+
+  /** `path` and everything under it, parents before children. ENOENT if `path` does not exist. */
+  async entries(path: string): Promise<Entry[]> {
+    const row = this.#must(path);
+    if (row.kind === "file") return [{ path, kind: "file" }];
+    const rows = this.#sql
+      .exec(
+        `SELECT path, kind FROM fs_entries WHERE ${SUBTREE} ORDER BY path`,
+        ...subtreeArgs(path),
+      )
+      .toArray() as unknown as Entry[];
+    return path === "/" ? [{ path: "/", kind: "dir" }, ...rows] : rows;
   }
-  async mv(src: string, dst: string): Promise<void> {
-    const target = this.#target(src, dst);
-    await this.cp(src, target, { recursive: true });
-    await this.rm(src, { recursive: true });
-  }
-  // `cp a dir/` copies into dir.
-  #target(src: string, dst: string): string {
+
+  /** `cp a dir` / `mv a dir` put `a` INTO an existing directory. Resolved once, at the top. */
+  async resolveTarget(src: string, dst: string): Promise<string> {
     return this.#get(dst)?.kind === "dir" ? join(dst, src.slice(src.lastIndexOf("/") + 1)) : dst;
   }
-}
 
-const likeEscape = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+  /** Copy `src` to exactly `dst` (already resolved). Refuses copying a tree into itself. */
+  async cp(src: string, dst: string, opts?: { recursive?: boolean }): Promise<void> {
+    if (src === "/") throw fsError("EINVAL", "cannot copy '/'");
+    const list = await this.entries(src); // snapshot BEFORE the target exists
+    if (list[0]?.kind === "dir" && !opts?.recursive)
+      throw fsError("EISDIR", `'${src}' is a directory (not copied)`);
+    if (dst === src || dst.startsWith(`${src}/`))
+      throw fsError("EINVAL", `cannot copy '${src}' into itself`);
+    for (const e of list) {
+      const target = dst + e.path.slice(src.length);
+      if (e.kind === "dir") await this.mkdir(target, { recursive: true });
+      else await this.writeFile(target, this.#get(e.path)?.data ?? "");
+    }
+  }
+
+  /** Move `src` to exactly `dst` (already resolved). Same path: no-op. Into itself: EINVAL. */
+  async mv(src: string, dst: string): Promise<void> {
+    if (src === "/") throw fsError("EINVAL", "cannot move '/'");
+    this.#must(src);
+    if (dst === src) return;
+    if (dst.startsWith(`${src}/`)) throw fsError("EINVAL", `cannot move '${src}' into itself`);
+    await this.cp(src, dst, { recursive: true });
+    await this.rm(src, { recursive: true });
+  }
+}

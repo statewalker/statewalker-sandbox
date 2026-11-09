@@ -148,3 +148,96 @@ test("SqlFs: directories, rm, errors carry codes", async () => {
   await store.rm("/a_b", { recursive: true });
   assert.equal(await store.exists("/aXb/y"), true, "LIKE wildcards are escaped");
 });
+
+// ---- regressions from the PR #41 review ----
+
+test("rm -r is case-sensitive: /HR never deletes /hr", async () => {
+  const s = sql();
+  const store = new SqlFs(s);
+  const auth = new Authority(s);
+  await store.writeFile("/hr/salaries.csv", "secret");
+  await store.writeFile("/hr/sub/x", "secret");
+  const { token } = auth.startSession("mallory", ["/HR"]);
+  const g = new FsGate(store, auth, token);
+  await g.call("mkdir", "/HR", {});
+  await g.call("rm", "/HR", { recursive: true });
+  assert.equal(await store.readFile("/hr/salaries.csv"), "secret");
+  assert.equal(await store.readFile("/hr/sub/x"), "secret");
+});
+
+test("recursive cp/mv/rm authorize every entry (non-prefix attenuation holds)", async () => {
+  const { gate, token, store } = await setup();
+  await store.writeFile("/proj/secret/k", "KEY");
+  const noSecret = Biscuit.fromBase64(token)
+    .attenuate(`check if resource($p), !$p.starts_with("/proj/secret/");`)
+    .toBase64();
+  await denied(gate(noSecret).call("readFile", "/proj/secret/k"));
+  await denied(gate(noSecret).move("cp", "/proj", "/p1/copy", { recursive: true }));
+  assert.equal(await store.exists("/p1/copy"), false);
+  await denied(gate(noSecret).move("mv", "/proj", "/p1/moved"));
+  await denied(gate(noSecret).call("rm", "/proj", { recursive: true }));
+  assert.equal(await store.readFile("/proj/secret/k"), "KEY");
+  // without the secret subtree the same operations work
+  await gate(noSecret).move("cp", "/proj/x", "/p1/copy", { recursive: true });
+  assert.equal(await store.readFile("/p1/copy/y.md"), "3");
+});
+
+test("cp/mv into itself is refused, mv onto itself keeps the file, cp -r merges", async () => {
+  const { gate, store } = await setup();
+  await assert.rejects(
+    gate().move("cp", "/proj", "/proj/inner", { recursive: true }),
+    (e) => e.code === "EINVAL",
+  );
+  await assert.rejects(gate().move("mv", "/proj", "/proj/x/inner"), (e) => e.code === "EINVAL");
+  await gate().move("mv", "/proj/x/y.md", "/proj/x/y.md");
+  await gate().move("mv", "/proj/x/y.md", "/proj/x"); // "into" its own directory: same path
+  assert.equal(await store.readFile("/proj/x/y.md"), "3");
+  await store.mkdir("/proj/b");
+  await gate().move("cp", "/proj/x", "/proj/b", { recursive: true });
+  await gate().move("cp", "/proj/x", "/proj/b", { recursive: true });
+  assert.deepEqual(
+    (await store.entries("/proj/b")).map((e) => e.path),
+    ["/proj/b", "/proj/b/x", "/proj/b/x/y.md"],
+  );
+});
+
+test("writes do not create parent directories outside the rights", async () => {
+  const s = sql();
+  const store = new SqlFs(s);
+  const auth = new Authority(s);
+  const { token } = auth.startSession("alice", ["/q/r"]);
+  const g = new FsGate(store, auth, token);
+  await denied(g.call("writeFile", "/q/r/f", "x")); // would create /q
+  assert.equal(await store.exists("/q"), false);
+  await store.mkdir("/q/r", { recursive: true }); // what Workspace.startSession does
+  await g.call("writeFile", "/q/r/sub/f", "x");
+  assert.equal(await store.readFile("/q/r/sub/f"), "x");
+});
+
+test("mkdir under a file is ENOTDIR; methods are looked up on own properties only", async () => {
+  const { gate, store } = await setup();
+  await assert.rejects(store.mkdir("/p1/a/sub"), (e) => e.code === "ENOTDIR");
+  for (const m of ["toString", "constructor", "__proto__"]) {
+    await assert.rejects(gate().call(m, "/p1/a"), (e) => e.code === "ENOSYS");
+  }
+});
+
+test("a capability already handed out sees mode switches and revocation on its next call", async () => {
+  const { gate, auth, session } = await setup();
+  const g = gate(); // one long-lived gate, like a stub held by another cell
+  await g.call("writeFile", "/proj/w", "1");
+  auth.setMode(session, "readonly");
+  await denied(g.call("writeFile", "/proj/w", "2"));
+  assert.equal(await g.call("readFile", "/proj/w"), "1");
+  auth.setMode(session, "yolo");
+  await g.call("writeFile", "/proj/w", "3");
+  auth.revoke(session);
+  await denied(g.call("readFile", "/proj/w"));
+});
+
+test("admin input is validated", async () => {
+  const { auth, session } = await setup();
+  assert.throws(() => auth.revoke(session, "not-a-revocation-id"), /EINVAL/);
+  assert.throws(() => auth.startSession("bob", "/p1"), /EINVAL/);
+  assert.throws(() => auth.startSession("", ["/p1"]), /EINVAL/);
+});

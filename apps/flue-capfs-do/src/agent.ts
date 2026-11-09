@@ -50,7 +50,17 @@ interface WorkerLoader {
 export interface AgentEnv extends WorkspaceEnv {
   AGENT: DurableObjectNamespace<Agent>;
   LOADER?: WorkerLoader;
+  /** "1" allows tool isolates on runtimes whose isolates can reach the host file system (cellb on Node). */
+  ALLOW_HOST_FS_TOOLS?: string;
 }
+
+/**
+ * Whether Worker Loader isolates on this runtime can reach the host's files. cellb on Node runs
+ * loaded code in a worker thread with the real node:fs — there a tool could read the cells'
+ * SQLite files, including the Workspace root key — so tools are refused unless explicitly allowed.
+ */
+export const isolatesSeeHostFs = (): boolean =>
+  /Node\.js/.test(globalThis.navigator?.userAgent ?? "");
 
 export interface RunResult {
   hops: string[];
@@ -139,10 +149,14 @@ export class Agent extends DurableObject<AgentEnv> {
   async #tool(cap: Cap, code: string, input: unknown) {
     const loader = this.env.LOADER;
     if (!loader) throw new Error("ENOSYS: no Worker Loader binding (LOADER) in this runtime");
-    const digest = new Uint8Array(
-      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code)),
-    );
-    const id = `tool-${Array.from(digest.slice(0, 12), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+    if (isolatesSeeHostFs() && this.env.ALLOW_HOST_FS_TOOLS !== "1") {
+      throw new Error(
+        "EPERM: tool isolates on this runtime can reach the host file system; refused",
+      );
+    }
+    // A fresh isolate per invocation: an isolate keyed by the code would keep its globals between
+    // callers, so data one user's capability read could be returned to the next user.
+    const id = `tool-${crypto.randomUUID()}`;
     const worker = loader.get(id, async () => ({
       compatibilityDate: "2026-10-01",
       mainModule: "tool.js",

@@ -90,7 +90,13 @@ async function startRuntime() {
       await new Promise((r) => setTimeout(r, 500));
     }
   })();
-  await Promise.race([ready, failed]);
+  try {
+    await Promise.race([ready, failed]);
+  } catch (e) {
+    await stopRuntime(child).catch(() => {});
+    throw e;
+  }
+  failed.catch(() => {}); // a late 'error' event must not become an unhandled rejection
   return child;
 }
 async function stopRuntime(child) {
@@ -124,22 +130,41 @@ function runTests(file, extraEnv = {}) {
 }
 
 let child;
+let stopping;
+const shutdown = async (code) => {
+  stopping ??= child
+    ? stopRuntime(child).catch((e) => console.error(e.message))
+    : Promise.resolve();
+  await stopping;
+  process.exit(code);
+};
+process.on("SIGINT", () => shutdown(130));
+process.on("SIGTERM", () => shutdown(143));
+
 try {
   child = await startRuntime();
 } catch (e) {
   console.error(`${env}: ${e.message}`);
-  process.exit(3);
+  await shutdown(3);
 }
 console.log(`${env}: ready on ${base} (state: ${state})`);
 const durability = { DURABILITY_FILE: join(state, "durability.json") };
+// A test run killed by a signal exits with code null: count it as a failure.
+const failed = (code) => code !== 0;
 let code = await runTests("tests/scenario.test.mjs");
-code ||= await runTests("tests/durability.test.mjs", { ...durability, PHASE: "write" });
+if (!failed(code))
+  code = await runTests("tests/durability.test.mjs", { ...durability, PHASE: "write" });
 await stopRuntime(child);
-if (!code) {
+child = undefined;
+if (!failed(code)) {
   console.log(`${env}: restarted on the same state`);
-  child = await startRuntime();
+  try {
+    child = await startRuntime();
+  } catch (e) {
+    console.error(`${env}: ${e.message}`);
+    await shutdown(3);
+  }
   code = await runTests("tests/durability.test.mjs", { ...durability, PHASE: "check" });
   await stopRuntime(child);
 }
-if (code !== 0 && process.env.SHOW_LOG) console.log(child.log);
-process.exit(code ?? 1);
+process.exit(failed(code) ? (code ?? 1) : 0);

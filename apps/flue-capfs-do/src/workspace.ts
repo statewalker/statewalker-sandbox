@@ -62,8 +62,15 @@ export class Workspace extends DurableObject {
 
   // ---- issuer / admin (called by the gateway after it authenticated the user) ----
 
-  startSession(user: string, rights: string[], mode?: string) {
-    return this.#auth.startSession(user, rights, mode);
+  /** Mints the session token and creates the right directories (an admin act, unlike agent writes). */
+  async startSession(user: string, rights: string[], mode?: string) {
+    const started = this.#auth.startSession(user, rights, mode);
+    for (const r of rights) {
+      const p = normalise(r);
+      if (p !== "/" && !(await this.#store.exists(p)))
+        await this.#store.mkdir(p, { recursive: true });
+    }
+    return started;
   }
   setMode(session: string, mode: string) {
     return this.#auth.setMode(session, mode);
