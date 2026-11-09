@@ -6,6 +6,8 @@ export default defineConfig({
     environment: "node",
     include: ["[0-9][0-9]-*/tests/**/*.test.ts"],
     exclude: ["node_modules", "dist", "coverage"],
+    // --expose-gc: R4b samples memory after forced collections to catch retained references.
+    execArgv: ["--expose-gc"],
     testTimeout: 60_000,
     hookTimeout: 60_000,
   },

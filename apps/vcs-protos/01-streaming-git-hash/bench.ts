@@ -1,7 +1,12 @@
 import { randomBytes } from "node:crypto";
-import { hashGitObject, type Sha1Impl } from "./src/git-object-hash.js";
+import { createSha1, type Hasher, hashGitObject } from "./src/git-object-hash.js";
+import { createNodeSha1 } from "./src/node-sha1.js";
 
-const IMPLS: Sha1Impl[] = ["vcs", "noble", "node"];
+const IMPLS: Array<[string, () => Hasher]> = [
+  ["vcs", () => createSha1("vcs")],
+  ["noble", () => createSha1("noble")],
+  ["node", createNodeSha1],
+];
 
 export async function bench01(): Promise<string> {
   const CHUNK = 64 * 1024;
@@ -15,7 +20,7 @@ export async function bench01(): Promise<string> {
     "| impl | 256 MiB stream (MB/s) | 20k × 200 B objects (objects/s) |",
     "|---|---|---|",
   ];
-  for (const impl of IMPLS) {
+  for (const [name, impl] of IMPLS) {
     await hashGitObject("blob", 1024, [new Uint8Array(1024)], impl); // warm-up
     let t = performance.now();
     await hashGitObject("blob", TOTAL, big(), impl);
@@ -23,7 +28,7 @@ export async function bench01(): Promise<string> {
     t = performance.now();
     for (const o of small) await hashGitObject("blob", o.length, [o], impl);
     const ops = small.length / ((performance.now() - t) / 1000);
-    rows.push(`| ${impl} | ${mbps.toFixed(0)} | ${ops.toFixed(0)} |`);
+    rows.push(`| ${name} | ${mbps.toFixed(0)} | ${ops.toFixed(0)} |`);
   }
   return rows.join("\n");
 }

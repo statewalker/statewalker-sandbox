@@ -7,12 +7,12 @@
  * chunk by chunk, and never retained — that is what removes vcs-core's current
  * "store, read back, hash" double pass.
  */
-import { createHash } from "node:crypto";
 import { sha1 as nobleSha1 } from "@noble/hashes/legacy.js";
 import { Sha1 } from "./vendor/sha-1.js";
 
 export type GitObjectType = "blob" | "tree" | "commit" | "tag";
-export type Sha1Impl = "vcs" | "noble" | "node";
+/** Portable implementations; the Node accelerator lives in node-sha1.ts. */
+export type Sha1Impl = "vcs" | "noble";
 
 /** Minimal incremental hasher — the shape PlatformServices.hash.create() is expected to return. */
 export interface Hasher {
@@ -54,17 +54,6 @@ export function createSha1(impl: Sha1Impl): Hasher {
       };
       return self;
     }
-    case "node": {
-      const h = createHash("sha1");
-      const self: Hasher = {
-        update(b) {
-          h.update(b);
-          return self;
-        },
-        digest: () => new Uint8Array(h.digest()),
-      };
-      return self;
-    }
   }
 }
 
@@ -79,9 +68,12 @@ export async function hashGitObject(
   type: GitObjectType,
   size: number,
   content: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
-  impl: Sha1Impl,
+  createHasher: () => Hasher = () => createSha1("noble"),
 ): Promise<string> {
-  const hasher = createSha1(impl);
+  if (!Number.isSafeInteger(size) || size < 0) {
+    throw new RangeError(`object size must be a non-negative safe integer, got ${size}`);
+  }
+  const hasher = createHasher();
   hasher.update(new TextEncoder().encode(`${type} ${size}\0`));
   let seen = 0;
   for await (const chunk of content) {

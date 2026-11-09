@@ -40,7 +40,7 @@ The approach is rejected if **any** of these hold:
 
 - No SHA-256 or BLAKE3 (separate prototype, X1c).
 - No WASM tier (`hash-wasm`) and no SHA-1 collision detection (future issue).
-- No browser, worker, CellB or workerd runs — the runtime-matrix harness is X0; this runs in Node 22 only.
+- No browser, worker, CellB or workerd runs — the runtime-matrix harness is X0; this runs in Node (22.23 locally, 24.22 in CI) only.
 - No integration into vcs-core, no pack trailer checksums, no object storage.
 
 ## Answer
@@ -65,7 +65,7 @@ overhead dominates. For a 1 GiB file the difference is about 18 s (vcs) versus 4
 
 ## Verified
 
-All 43 tests pass (`pnpm test 01-streaming-git-hash`, ~7 s).
+All 51 tests pass on Node 22.23 and 24.22 (`pnpm test 01-streaming-git-hash`, ~10 s). R4b, R5b and R8 were added after the independent review of PR #49.
 
 | # | Result |
 |---|---|
@@ -75,7 +75,10 @@ All 43 tests pass (`pnpm test 01-streaming-git-hash`, ~7 s).
 | R4 | 256 MiB through a reused 64 KiB buffer: `arrayBuffers` growth under 16 MiB for all three |
 | R5 | Over- and under-length streams reject with `SizeMismatchError` |
 | R6 | 200 random inputs: the three implementations agree |
+| R4b | 128 MiB in **fresh** 64 KiB chunks, memory sampled after a forced GC every 64 chunks: growth under 32 MiB (backing stores are freed lazily; a 16 MiB limit flaked once at 16.06 MiB on Node 24) — catches a hasher that retains references (R4 alone could not, because it reuses one buffer) |
+| R5b | Negative, fractional, NaN and ≥ 2^53 sizes reject with `RangeError` before hashing |
 | R7 | Throughput table above |
+| R8 | No portable module in `src/` imports from `node:`; the Node accelerator lives alone in `node-sha1.ts` |
 
 ### Mutation check
 
@@ -88,6 +91,7 @@ The suite passed on its first green run, so deliberate defects were injected one
 | M3 iterate the stream twice (count, then hash) | R1 R2 R3 R4 R6 |
 | M4 header separator space instead of NUL | R1 R2 R3 |
 | M5 drop the first byte of each chunk | R1 R2 R3 |
+| M6 keep a reference to every chunk (added after review) | R4b (134 MB vs 32 MB limit) |
 
 No mutation survived. R6 does not catch M4/M5 because all implementations share the
 wrapper — R6 only guards the hashers against each other, which is its purpose.
@@ -105,7 +109,7 @@ wrapper — R6 only guards the hashers against each other, which is its purpose.
 incremental hasher, then feeds each chunk as it arrives and keeps nothing. It counts bytes
 and throws `SizeMismatchError` as soon as the stream overruns the declared size (no
 further bytes are hashed) or, at the end, if it fell short. The three hashers sit behind a
-two-method `Hasher` interface, the shape `PlatformServices.hash.create()` is expected to
+two-method `Hasher` interface injected as a factory (default noble), the shape `PlatformServices.hash.create()` is expected to
 return.
 
 Difficulty: the vendored class fails this workspace's `noUncheckedIndexedAccess`; it is
@@ -115,11 +119,13 @@ kept byte-identical under a `@ts-nocheck` header rather than edited.
 
 ```ts
 type GitObjectType = "blob" | "tree" | "commit" | "tag";
-type Sha1Impl = "vcs" | "noble" | "node";
+type Sha1Impl = "vcs" | "noble";                       // portable, git-object-hash.ts
 interface Hasher { update(bytes: Uint8Array): Hasher; digest(): Uint8Array }
 function createSha1(impl: Sha1Impl): Hasher;
+function createNodeSha1(): Hasher;                      // Node only, node-sha1.ts
 function hashGitObject(type: GitObjectType, size: number,
-  content: AsyncIterable<Uint8Array> | Iterable<Uint8Array>, impl: Sha1Impl): Promise<string>;
+  content: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
+  createHasher?: () => Hasher /* default: noble */): Promise<string>;
 class SizeMismatchError extends Error { declared: number; actual: number /* -1 = overrun */ }
 ```
 
@@ -128,7 +134,7 @@ class SizeMismatchError extends Error { declared: number; actual: number /* -1 =
 | File | Grade | Why |
 |---|---|---|
 | `tests/git-object-hash.test.ts` | **Adopt** | Becomes the X4 / R2 acceptance suite in vcs-core, run per runtime |
-| `src/git-object-hash.ts` | **Source** | The single-pass loop and `SizeMismatchError` move into vcs-core's object writer |
+| `src/git-object-hash.ts` | **Source** (portable: no `node:` imports, enforced by R8) | The single-pass loop and `SizeMismatchError` move into vcs-core's object writer |
 | `src/vendor/sha-1.ts` | **Reference** | Slower than noble; keep only if a zero-dependency fallback is wanted |
 | `bench.ts` | **Source** | Seed of the CI benchmark baseline |
 

@@ -108,9 +108,13 @@ export function createInflater(format: "zlib" | "raw" = "zlib"): StreamInflater 
   };
 }
 
-/** Pull-side helper over a chunked source: hands out chunks, accepts the unconsumed tail back. */
+/**
+ * Pull-side helper over a chunked source: hands out chunks and accepts back the unconsumed
+ * tail of the chunk it just handed out. It holds at most one pushed-back chunk; a second
+ * `unshift` before `next()` throws rather than silently reordering bytes.
+ */
 export class ChunkReader {
-  private readonly pending: Uint8Array[] = [];
+  private pending: Uint8Array | undefined;
   private readonly it: AsyncIterator<Uint8Array> | Iterator<Uint8Array>;
   constructor(source: AsyncIterable<Uint8Array> | Iterable<Uint8Array>) {
     this.it =
@@ -119,8 +123,11 @@ export class ChunkReader {
         : (source as Iterable<Uint8Array>)[Symbol.iterator]();
   }
   async next(): Promise<Uint8Array | undefined> {
-    const p = this.pending.pop();
-    if (p) return p;
+    const p = this.pending;
+    if (p) {
+      this.pending = undefined;
+      return p;
+    }
     for (;;) {
       const r = await this.it.next();
       if (r.done) return undefined;
@@ -128,7 +135,9 @@ export class ChunkReader {
     }
   }
   unshift(chunk: Uint8Array): void {
-    if (chunk.length > 0) this.pending.push(chunk);
+    if (chunk.length === 0) return;
+    if (this.pending) throw new Error("ChunkReader: only one chunk can be pushed back");
+    this.pending = chunk;
   }
 }
 
@@ -139,6 +148,7 @@ export class ChunkReader {
 export async function inflateOne(
   reader: ChunkReader,
   onConsumed?: (bytes: Uint8Array) => void,
+  onOutput?: (bytes: Uint8Array) => void,
 ): Promise<{ data: Uint8Array[]; compressedLength: number }> {
   const inf = createInflater();
   const data: Uint8Array[] = [];
@@ -150,7 +160,8 @@ export async function inflateOne(
       break;
     }
     const r = inf.push(chunk);
-    data.push(...r.out);
+    if (onOutput) for (const o of r.out) onOutput(o);
+    else data.push(...r.out);
     compressedLength += r.consumed;
     onConsumed?.(chunk.subarray(0, r.consumed));
     if (r.done) {

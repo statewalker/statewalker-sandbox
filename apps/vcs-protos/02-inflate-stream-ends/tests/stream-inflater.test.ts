@@ -1,12 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deflateSync, inflateSync } from "node:zlib";
-import { beforeAll, describe, expect, it } from "vitest";
-import { walkPack } from "../src/pack-walk.js";
+import { deflateRawSync, deflateSync, inflateSync } from "node:zlib";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { PackFormatError, walkPack } from "../src/pack-walk.js";
 import {
+  ChunkReader,
   createInflater,
   InflateError,
   inflaterStats,
@@ -57,37 +58,48 @@ describe("R1 exact stream ends under every chunking", () => {
   }
 });
 
-describe("R2 a real git pack walks end to end", () => {
-  let pack: Uint8Array;
-  let expected: Array<{ offset: number; type: string; size: number }>;
-  beforeAll(() => {
-    const dir = mkdtempSync(join(tmpdir(), "x1b-"));
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-C", dir, ...args], {
-        env: {
-          ...process.env,
-          GIT_AUTHOR_NAME: "a",
-          GIT_AUTHOR_EMAIL: "a@x",
-          GIT_COMMITTER_NAME: "a",
-          GIT_COMMITTER_EMAIL: "a@x",
-        },
-      });
-    git("init", "-q");
-    let text = "line\n".repeat(2000);
-    for (let v = 0; v < 5; v++) {
-      text = text.replace("line\n", `edit ${v}\n`) + `appended ${v}\n`.repeat(50);
-      writeFileSync(join(dir, "big.txt"), text);
-      writeFileSync(join(dir, `random-${v}.bin`), randomBytes(20_000));
-      writeFileSync(join(dir, "empty"), "");
-      git("add", "-A");
-      git("commit", "-q", "-m", `v${v}`);
-    }
-    const base = join(dir, "out");
-    execFileSync("git", ["-C", dir, "pack-objects", "--revs", "-q", base], { input: "HEAD\n" });
-    const name = readdirSync(dir).find((f) => f.startsWith("out-") && f.endsWith(".pack"));
+// Isolate git from the developer's global/system config (e.g. commit.gpgsign with no agent).
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_AUTHOR_NAME: "a",
+  GIT_AUTHOR_EMAIL: "a@x",
+  GIT_COMMITTER_NAME: "a",
+  GIT_COMMITTER_EMAIL: "a@x",
+};
+
+interface PackFixture {
+  pack: Uint8Array;
+  expected: Array<{ offset: number; type: string; size: number }>;
+}
+const packs: Record<"ofs" | "ref", PackFixture> = {} as Record<"ofs" | "ref", PackFixture>;
+let fixtureDir = "";
+
+beforeAll(() => {
+  fixtureDir = mkdtempSync(join(tmpdir(), "x1b-"));
+  const dir = fixtureDir;
+  const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { env: GIT_ENV });
+  git("init", "-q");
+  let text = "line\n".repeat(2000);
+  for (let v = 0; v < 5; v++) {
+    text = text.replace("line\n", `edit ${v}\n`) + `appended ${v}\n`.repeat(50);
+    writeFileSync(join(dir, "big.txt"), text);
+    writeFileSync(join(dir, `random-${v}.bin`), randomBytes(20_000));
+    writeFileSync(join(dir, "empty"), "");
+    git("add", "-A");
+    git("commit", "-q", "-m", `v${v}`);
+  }
+  for (const kind of ["ofs", "ref"] as const) {
+    const base = join(dir, kind);
+    const flags = kind === "ofs" ? ["--delta-base-offset"] : [];
+    execFileSync("git", ["-C", dir, "pack-objects", "--revs", "-q", ...flags, base], {
+      input: "HEAD\n",
+      env: GIT_ENV,
+    });
+    const name = readdirSync(dir).find((f) => f.startsWith(`${kind}-`) && f.endsWith(".pack"));
     if (!name) throw new Error("pack not produced");
-    pack = new Uint8Array(readFileSync(join(dir, name)));
-    expected = execFileSync("git", ["verify-pack", "-v", join(dir, name)])
+    const expected = execFileSync("git", ["verify-pack", "-v", join(dir, name)], { env: GIT_ENV })
       .toString()
       .split("\n")
       .filter((l) => /^[0-9a-f]{40} /.test(l))
@@ -96,27 +108,37 @@ describe("R2 a real git pack walks end to end", () => {
         return { type: type ?? "", size: Number(size), offset: Number(offset) };
       })
       .sort((a, b) => a.offset - b.offset);
-    expect(expected.some((e) => e.type === "blob")).toBe(true);
-  });
+    packs[kind] = { pack: new Uint8Array(readFileSync(join(dir, name))), expected };
+  }
+});
+afterAll(() => {
+  if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
+});
 
-  for (const size of [1, 4096, Number.MAX_SAFE_INTEGER]) {
-    it(`chunk size ${size === Number.MAX_SAFE_INTEGER ? "whole" : size}`, async () => {
-      inflaterStats.created = 0;
-      const walk = await walkPack(chunked(pack, size));
-      expect(walk.version).toBe(2);
-      expect(walk.count).toBe(expected.length);
-      expect(walk.entries.map((e) => e.offset)).toEqual(expected.map((e) => e.offset));
-      for (const e of walk.entries) expect(e.inflatedLength).toBe(e.size);
-      expect(walk.trailerOk).toBe(true);
-      expect(inflaterStats.created).toBe(expected.length);
-      // verify-pack reports ofs-delta entries with the *result* type and size, so compare sizes
-      // only for non-delta entries, where both describe the same bytes.
-      const nonDelta = walk.entries.filter((e) => e.type < 6);
-      expect(nonDelta.length).toBeGreaterThan(0);
-      for (const e of nonDelta) {
-        expect(e.size).toBe(expected.find((x) => x.offset === e.offset)?.size);
-      }
-    }, 300_000);
+describe("R2 a real git pack walks end to end", () => {
+  for (const kind of ["ofs", "ref"] as const) {
+    for (const size of [1, 4096, Number.MAX_SAFE_INTEGER]) {
+      it(`${kind}-delta pack, chunk size ${size === Number.MAX_SAFE_INTEGER ? "whole" : size}`, async () => {
+        const { pack, expected } = packs[kind];
+        inflaterStats.created = 0;
+        const walk = await walkPack(chunked(pack, size));
+        expect(walk.version).toBe(2);
+        expect(walk.count).toBe(expected.length);
+        expect(walk.entries.map((e) => e.offset)).toEqual(expected.map((e) => e.offset));
+        for (const e of walk.entries) expect(e.inflatedLength).toBe(e.size);
+        expect(walk.trailerOk).toBe(true);
+        expect(inflaterStats.created).toBe(expected.length);
+        // The pack must actually contain the delta kind under test.
+        expect(walk.entries.some((e) => e.type === (kind === "ofs" ? 6 : 7))).toBe(true);
+        // verify-pack reports delta entries with the *result* size, so compare sizes only for
+        // non-delta entries, where both describe the same bytes.
+        const nonDelta = walk.entries.filter((e) => e.type < 6);
+        expect(nonDelta.length).toBeGreaterThan(0);
+        for (const e of nonDelta) {
+          expect(e.size).toBe(expected.find((x) => x.offset === e.offset)?.size);
+        }
+      }, 300_000);
+    }
   }
 });
 
@@ -167,7 +189,8 @@ describe("R5 traps, documented as passing tests", () => {
     const s = new Blob([withTrailing as Uint8Array<ArrayBuffer>])
       .stream()
       .pipeThrough(new DecompressionStream("deflate"));
-    await expect(new Response(s).arrayBuffer()).rejects.toThrow(/Trailing junk/);
+    // The message is runtime-specific ("Trailing junk found…" in Node 22/24); only rejection is asserted.
+    await expect(new Response(s).arrayBuffer()).rejects.toThrow();
     expect("bytesRead" in new DecompressionStream("deflate")).toBe(false);
   });
   it("(c) Node zlib.inflateSync (checked on 22.23 and 24.22) silently ignores trailing bytes, no position", () => {
@@ -188,5 +211,59 @@ describe("R5 (d) trap found while going green: output views must not pin the out
     // With per-push 64 KiB buffers returned as views, ~4096 views pin ~256 MiB.
     expect(process.memoryUsage().arrayBuffers - base).toBeLessThan(32 * 1024 * 1024);
     expect(kept.reduce((n, k) => n + k.length, 0)).toBe(input.length);
+  });
+});
+
+describe("R7 malformed packs are rejected", () => {
+  const header = (version: number, count: number) => {
+    const h = new Uint8Array(12);
+    h.set(enc.encode("PACK"));
+    new DataView(h.buffer).setUint32(4, version);
+    new DataView(h.buffer).setUint32(8, count);
+    return h;
+  };
+  it("unsupported version", async () => {
+    const bad = packs.ref.pack.slice();
+    new DataView(bad.buffer).setUint32(4, 4);
+    await expect(walkPack([bad])).rejects.toBeInstanceOf(PackFormatError);
+  });
+  for (const type of [0, 5]) {
+    it(`reserved object type ${type}`, async () => {
+      const bad = concat([header(2, 1), Uint8Array.of(type << 4), new Uint8Array(32)]);
+      await expect(walkPack([bad])).rejects.toBeInstanceOf(PackFormatError);
+    });
+  }
+  it("bytes after the trailer", async () => {
+    const bad = concat([packs.ref.pack, Uint8Array.of(1, 2, 3)]);
+    await expect(walkPack(chunked(bad, 4096))).rejects.toBeInstanceOf(PackFormatError);
+  });
+});
+
+describe("R8 ChunkReader holds at most one pushed-back chunk", () => {
+  it("a second unshift before next() throws instead of reordering", async () => {
+    const r = new ChunkReader([Uint8Array.of(9)]);
+    r.unshift(Uint8Array.of(1));
+    expect(() => r.unshift(Uint8Array.of(2))).toThrow();
+    expect(Array.from((await r.next()) ?? [])).toEqual([1]);
+    expect(Array.from((await r.next()) ?? [])).toEqual([9]);
+  });
+});
+
+describe("R9 raw deflate format", () => {
+  it("raw stream followed by trailing bytes: exact end", () => {
+    const input = enc.encode("raw deflate ".repeat(300));
+    const z = new Uint8Array(deflateRawSync(input));
+    const inf = createInflater("raw");
+    const out: Uint8Array[] = [];
+    let consumed = 0;
+    for (const c of chunked(concat([z, Uint8Array.of(7, 7, 7)]), 5)) {
+      const r = inf.push(c);
+      out.push(...r.out);
+      consumed += r.consumed;
+      if (r.done) break;
+    }
+    inf.end();
+    expect(consumed).toBe(z.length);
+    expect(Buffer.from(concat(out)).equals(Buffer.from(input))).toBe(true);
   });
 });

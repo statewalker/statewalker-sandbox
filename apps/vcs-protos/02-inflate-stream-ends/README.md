@@ -29,7 +29,7 @@ Rejected if, for any chunking of the input:
 | # | Requirement |
 |---|---|
 | R1 | Concatenated zlib streams (empty, 1 byte, text, 1 MiB incompressible, 1 MiB zeros) followed by trailing bytes, pushed in chunks of 1, 2, 7, 64, 4096 bytes and whole: each stream's output equals its input and its reported compressed length is exact; the bytes after the last stream are left unconsumed. |
-| R2 | A real pack from `git pack-objects` (with OFS deltas) walks end to end: entry count equals the header, each inflated length equals the entry's declared size, entry offsets equal `git verify-pack -v`, the trailer SHA-1 matches, and exactly one inflater is created per entry — for chunk sizes 1, 4096 and whole. |
+| R2 | Real packs from `git pack-objects` — one with OFS deltas (`--delta-base-offset`), one with REF deltas — walk end to end: entry count equals the header, each inflated length equals the entry's declared size, entry offsets equal `git verify-pack -v`, the trailer SHA-1 matches, and exactly one inflater is created per entry — for chunk sizes 1, 4096 and whole. |
 | R3 | A stream truncated at any of several points (inside the header, the body, the Adler-32 trailer) is never reported done; `end()` throws `TruncatedStreamError`. |
 | R4 | A corrupted byte in the body or the Adler-32 trailer throws `InflateError`. |
 | R5 | Traps documented as passing tests: (a) the vendored `decompressBlockPartialPako` returns short data without error on truncated input; (b) `DecompressionStream("deflate")` throws on trailing bytes and exposes no consumed count; (c) Node `zlib.inflateSync` silently accepts trailing bytes. |
@@ -38,16 +38,16 @@ Rejected if, for any chunking of the input:
 ## Scope — what this prototype does NOT do
 
 - No delta resolution, no object ids, no pack index (`.idx`) writing — those are X6.
-- No 64-bit sizes: the pack walker uses the varint as is (the 2^31 fix is an R1 release item).
+- No sizes beyond 2^53: the walker accumulates the size varint with multiplication (no 2^31 wrap) but makes no attempt at > 2^53 or > 4 GiB packs.
 - No deflate side, no gzip, no fflate comparison (deflate is a separate, smaller question).
-- No browser, worker, CellB or workerd runs (runtime matrix is X0); Node 22 only.
+- No browser, worker, CellB or workerd runs (runtime matrix is X0); Node only (22.23 locally, 24.22 in CI).
 
 ## Answer
 
-**Yes.** Driven through a push interface, pako 3's low-level `zlibInflate` reports the exact
+**Yes, in Node.** Driven through a push interface, pako 3's low-level `zlibInflate` reports the exact
 end of every zlib stream under any chunking (down to 1 byte), every pack entry is inflated
-exactly once, and truncation or corruption is always an error. This is the portable
-inflater the pack reader needs in browsers, workers and Durable Objects.
+exactly once, and truncation or corruption is always an error. Being pure JS it is expected to be the portable inflater the pack
+reader needs in browsers, workers and Durable Objects — unverified until the X0 runtime matrix runs it.
 
 The cost is speed: pure-JS inflate runs at roughly a quarter of `node:zlib` on text and a
 third on small objects. That is a reason to keep a native accelerator where one exists —
@@ -64,16 +64,19 @@ Measured 2026-11-09, Node v22.23.4, 4-core Xeon @ 2.1 GHz, one run (`pnpm bench 
 
 ## Verified
 
-All 20 tests pass (`pnpm test 02-inflate-stream-ends`, ~4 s).
+All 29 tests pass on Node 22.23 and 24.22 (`pnpm test 02-inflate-stream-ends`, ~5 s). R7–R9 and the second R2 pack were added after the independent review of PR #49.
 
 | # | Result |
 |---|---|
 | R1 | 5 streams + trailing bytes, chunk sizes 1/2/7/64/4096/whole: exact outputs, exact compressed lengths, trailing bytes untouched |
-| R2 | A real `git pack-objects` pack with OFS deltas (5 commits, a growing text file, random binaries, an empty file): entry offsets equal `git verify-pack -v`, inflated lengths equal declared sizes, trailer SHA-1 verified, one inflater per entry — at chunk sizes 1, 4096 and whole |
+| R2 | Two real `git pack-objects` packs, one with OFS and one with REF deltas — each asserted to contain that delta type (5 commits, a growing text file, random binaries, an empty file): entry offsets equal `git verify-pack -v`, inflated lengths equal declared sizes, trailer SHA-1 verified, one inflater per entry — at chunk sizes 1, 4096 and whole |
 | R3 | Cuts inside the header, the body and the Adler-32 trailer: never `done`, `end()` throws `TruncatedStreamError` |
 | R4 | Flipped Adler-32 byte and garbage body: `InflateError` |
 | R5 | Four traps, documented as passing tests (below) |
 | R6 | Throughput table above |
+| R7 | Malformed packs rejected with `PackFormatError`: unsupported version, reserved types 0 and 5, bytes after the trailer |
+| R8 | `ChunkReader` holds one pushed-back chunk; a second `unshift` throws instead of reordering |
+| R9 | Raw deflate (`format: "raw"`) with trailing bytes: exact end |
 
 ### Mutation check
 
@@ -90,7 +93,7 @@ All 20 tests pass (`pnpm test 02-inflate-stream-ends`, ~4 s).
 | # | Trap |
 |---|---|
 | R5 a | webrun-vcs `decompressBlockPartialPako` returns **short data with no error** on truncated input (10 of 12 000 bytes in the exploration). Its loop stops when input runs out and never checks for `Z_STREAM_END`. |
-| R5 b | `DecompressionStream("deflate")` **throws** `Trailing junk found after the end of the compressed stream` when anything follows the stream, and has no consumed count. It cannot parse packs even if lengths were known approximately. |
+| R5 b | `DecompressionStream("deflate")` **rejects** when anything follows the stream (Node 22/24 message: `Trailing junk found after the end of the compressed stream`; the test asserts only rejection, since the message is runtime-specific), and has no consumed count. It cannot parse packs even if lengths were known approximately. |
 | R5 c | Node `zlib.inflateSync` **silently ignores** trailing bytes and reports no position — checked on Node 22.23 and 24.22. |
 | R5 d | Found while going green: returning `subarray` views of a fresh 64 KiB output buffer per push pins the whole buffer per view. With 1-byte chunks a 1 MiB object pins ~64 GiB; the test worker was OOM-killed. Fix: one output buffer per inflater, produced bytes copied out with `slice`. |
 
@@ -114,7 +117,8 @@ belonged to the stream. `end()` throws `TruncatedStreamError` if that never happ
 reader (the next entry header, or the next stream) starts exactly where the last stream ended.
 `walkPack` uses it to read the 12-byte header, each entry header (type, size varint, OFS/REF
 base), one inflater per entry, and the 20-byte trailer, feeding every preceding byte to an
-incremental SHA-1. Sizes are accumulated with multiplication, not shifts, so they do not wrap at 2^31.
+incremental SHA-1. It rejects unsupported versions, reserved types and bytes after the trailer, and
+counts inflated bytes instead of holding them. Sizes are accumulated with multiplication, not shifts, so they do not wrap at 2^31.
 
 ## Interfaces produced
 
@@ -122,12 +126,13 @@ incremental SHA-1. Sizes are accumulated with multiplication, not shifts, so the
 interface InflatePush { out: Uint8Array[]; done: boolean; consumed: number }
 interface StreamInflater { push(chunk: Uint8Array): InflatePush; end(): void }
 function createInflater(format?: "zlib" | "raw"): StreamInflater;
-class ChunkReader { constructor(source); next(): Promise<Uint8Array | undefined>; unshift(chunk): void }
-function inflateOne(reader: ChunkReader, onConsumed?: (bytes: Uint8Array) => void):
+class ChunkReader { constructor(source); next(): Promise<Uint8Array | undefined>; unshift(chunk): void /* one slot */ }
+function inflateOne(reader: ChunkReader, onConsumed?: (bytes: Uint8Array) => void,
+  onOutput?: (bytes: Uint8Array) => void /* when given, output is streamed, not kept */):
   Promise<{ data: Uint8Array[]; compressedLength: number }>;
 function inflateSequence(source, count): AsyncGenerator<{ data: Uint8Array; compressedLength: number }>;
 function walkPack(source): Promise<{ version; count; entries: PackEntry[]; trailerOk: boolean }>;
-class TruncatedStreamError extends Error {}  class InflateError extends Error {}
+class TruncatedStreamError extends Error {}  class InflateError extends Error {}  class PackFormatError extends Error {}
 ```
 
 This is the `Inflater` shape the plan's `PlatformServices.compression.inflater()` contract

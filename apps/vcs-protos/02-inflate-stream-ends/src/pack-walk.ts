@@ -55,12 +55,16 @@ export async function walkPack(
   const view = new DataView(head.buffer, head.byteOffset, 12);
   const version = view.getUint32(4);
   const count = view.getUint32(8);
+  if (version !== 2 && version !== 3)
+    throw new PackFormatError(`unsupported pack version ${version}`);
 
   const entries: PackEntry[] = [];
   for (let i = 0; i < count; i++) {
     const offset = pos;
     let b = await byte();
     const type = (b >> 4) & 7;
+    if (type === 0 || type === 5)
+      throw new PackFormatError(`reserved object type ${type} at ${offset}`);
     // Arithmetic, not shifts: sizes above 2^31 must not wrap (the bug found in vcs-utils).
     let size = b & 0x0f;
     let mul = 16;
@@ -75,13 +79,21 @@ export async function walkPack(
     } else if (type === 7) {
       await readBytes(20);
     }
-    const { data, compressedLength } = await inflateOne(reader, (bytes) => hasher.update(bytes));
+    // Count output instead of holding it: the walker only needs lengths.
+    let inflatedLength = 0;
+    const { compressedLength } = await inflateOne(
+      reader,
+      (bytes) => hasher.update(bytes),
+      (out) => {
+        inflatedLength += out.length;
+      },
+    );
     pos += compressedLength;
-    const inflatedLength = data.reduce((n, d) => n + d.length, 0);
     entries.push({ offset, type, size, inflatedLength, totalLength: pos - offset });
   }
 
   const trailer = await readBytes(20, false);
+  if (await reader.next()) throw new PackFormatError("bytes after the pack trailer");
   const digest = hasher.digest();
   const trailerOk = digest.every((v, i) => v === trailer[i]);
   return { version, count, entries, trailerOk };

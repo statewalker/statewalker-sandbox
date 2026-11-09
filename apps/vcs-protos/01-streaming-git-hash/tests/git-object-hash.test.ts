@@ -1,9 +1,29 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { hashGitObject, type Sha1Impl, SizeMismatchError } from "../src/git-object-hash.js";
+import {
+  createSha1,
+  type Hasher,
+  hashGitObject as hashWith,
+  SizeMismatchError,
+} from "../src/git-object-hash.js";
+import { createNodeSha1 } from "../src/node-sha1.js";
 
+type Sha1Impl = "vcs" | "noble" | "node";
 const IMPLS: Sha1Impl[] = ["vcs", "noble", "node"];
+const FACTORIES: Record<Sha1Impl, () => Hasher> = {
+  vcs: () => createSha1("vcs"),
+  noble: () => createSha1("noble"),
+  node: createNodeSha1,
+};
+const hashGitObject = (
+  type: "blob" | "commit",
+  size: number,
+  content: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
+  impl: Sha1Impl,
+) => hashWith(type, size, content, FACTORIES[impl]);
 
 /** The oracle: real git. */
 function gitHashObject(type: string, content: Uint8Array): string {
@@ -57,7 +77,7 @@ describe("R1 ids equal git hash-object", () => {
     for (const impl of IMPLS) {
       it(`${impl}: ${name}`, async () => {
         const id = await hashGitObject(
-          type as "blob",
+          type as "blob" | "commit",
           bytes.length,
           chunked(bytes, [65536, 7, 1, 4096]),
           impl,
@@ -158,6 +178,56 @@ describe("R6 implementations agree", () => {
         IMPLS.map((impl) => hashGitObject("blob", size, chunked(bytes, sizes), impl)),
       );
       expect(new Set(ids).size).toBe(1);
+    }
+  });
+});
+
+describe("R4b bounded memory when every chunk is a fresh buffer (catches retained references)", () => {
+  const gc = (globalThis as { gc?: () => void }).gc;
+  for (const impl of IMPLS) {
+    it(`${impl}: 128 MiB in fresh 64 KiB chunks`, async () => {
+      expect(gc, "tests must run with --expose-gc (vitest.config.ts execArgv)").toBeTypeOf(
+        "function",
+      );
+      const CHUNK = 64 * 1024;
+      const TOTAL = 128 * 1024 * 1024;
+      gc?.();
+      const base = process.memoryUsage().arrayBuffers;
+      let peak = base;
+      let n = 0;
+      async function* source(): AsyncIterable<Uint8Array> {
+        for (let off = 0; off < TOTAL; off += CHUNK) {
+          if (++n % 64 === 0) {
+            gc?.();
+            peak = Math.max(peak, process.memoryUsage().arrayBuffers);
+          }
+          yield new Uint8Array(CHUNK).fill(off & 0xff);
+        }
+      }
+      await hashGitObject("blob", TOTAL, source(), impl);
+      // ArrayBuffer backing stores are released lazily after gc(), so samples include some
+      // recent garbage (16.06 MiB seen once on Node 24 with a 16 MiB limit). Retaining every
+      // chunk shows ~134 MiB, so 32 MiB still separates the two cleanly.
+      expect(peak - base).toBeLessThan(32 * 1024 * 1024);
+    }, 300_000);
+  }
+});
+
+describe("R5b invalid declared sizes are rejected before hashing", () => {
+  for (const size of [-1, 1.5, Number.NaN, 2 ** 53]) {
+    it(`size ${size}`, async () => {
+      await expect(hashGitObject("blob", size, [], "noble")).rejects.toBeInstanceOf(RangeError);
+    });
+  }
+});
+
+describe("R8 portable modules import nothing from node:", () => {
+  it("every src module except node-sha1.ts and vendor/ is free of node: imports", () => {
+    const dir = join(import.meta.dirname, "../src");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".ts") && f !== "node-sha1.ts");
+    expect(files).toContain("git-object-hash.ts");
+    for (const f of files) {
+      expect(readFileSync(join(dir, f), "utf8"), f).not.toMatch(/from\s+["']node:/);
     }
   });
 });
