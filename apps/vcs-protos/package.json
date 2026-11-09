@@ -20,7 +20,8 @@
     "bench": "node --expose-gc --import tsx lib/run-bench.ts",
     "lint": "biome check --write .",
     "format": "biome format --write .",
-    "test:browser": "vitest run --project browser"
+    "test:browser": "vitest run --project browser",
+    "extract-wasm": "tsx 06-wasm-hash-tier/scripts/extract-wasm.ts"
   },
   "dependencies": {
     "@noble/hashes": "^2.0.1",
@@ -30,6 +31,7 @@
     "@types/node": "catalog:",
     "@vitest/browser-playwright": "catalog:",
     "esbuild": "^0.28.2",
+    "hash-wasm": "4.13.0",
     "miniflare": "^4.20260730.0",
     "playwright": "catalog:",
     "tsx": "catalog:",
