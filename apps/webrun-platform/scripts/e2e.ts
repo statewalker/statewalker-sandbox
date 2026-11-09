@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { unzip, zip } from "../src/core/util.js";
 import { HOSTS, startHost } from "./hosts.mjs";
+import { readTree } from "./tree.js";
 
 const root = resolve(import.meta.dirname, "..");
 const args = process.argv.slice(2);
@@ -48,17 +49,6 @@ async function check(host: string, name: string, fn: () => Promise<string>) {
 }
 function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
-}
-
-export function readTree(dir: string, base = dir): Map<string, Uint8Array> {
-  const out = new Map<string, Uint8Array>();
-  for (const n of readdirSync(dir)) {
-    if (n === "node_modules" || n.startsWith(".")) continue;
-    const f = join(dir, n);
-    if (statSync(f).isDirectory()) for (const [p, b] of readTree(f, base)) out.set(p, b);
-    else out.set(`/${relative(base, f)}`, readFileSync(f));
-  }
-  return out;
 }
 
 async function runPlatform(host: string) {
@@ -84,6 +74,20 @@ async function runPlatform(host: string) {
       ).text();
       assert(css.includes("--pico-font-family"), "css module");
       return `${graph.length} modules`;
+    });
+
+    await check(host, "cdn: a large graph (@observablehq/plot, d3)", async () => {
+      const graph = (await (
+        await fetch(`${base}/npm/browser/@observablehq/plot@0.6?graph`)
+      ).json()) as string[];
+      assert(graph.length > 50, `graph too small: ${graph.length}`);
+      let bytes = 0;
+      for (const u of graph) {
+        const m = await fetch(`${base}${u}`);
+        assert(m.status === 200, `${u}: ${m.status}`);
+        bytes += (await m.arrayBuffer()).byteLength;
+      }
+      return `${graph.length} modules, ${(bytes / 1e6).toFixed(1)} MB`;
     });
 
     let pageUrl = "";

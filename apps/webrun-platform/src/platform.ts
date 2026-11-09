@@ -7,9 +7,10 @@ import { BuildJob, handleBuilds } from "./bundler/job.js";
 import { handleCdn, ModuleHost } from "./cdn/cdn.js";
 import { handleRegistry, PackageRegistry } from "./core/registry.js";
 import { CORS, text, withCors } from "./core/util.js";
+import { handleNotebooks, NotebookSite } from "./notebooks/notebooks.js";
 import { handleProjects, Project } from "./projects/project.js";
 
-export { BuildJob, ModuleHost, PackageRegistry, Project };
+export { BuildJob, ModuleHost, NotebookSite, PackageRegistry, Project };
 
 export interface PlatformEnv {
   REGISTRY: DurableObjectNamespace;
@@ -24,43 +25,49 @@ export interface PlatformEnv {
 }
 
 type Handler = (req: Request, env: PlatformEnv, ctx: ExecutionContext) => Promise<Response>;
-const routes: [string, Handler][] = [
-  ["/registry/", (r, e) => handleRegistry(r, e)],
-  ["/npm/", (r, e) => handleCdn(r, e)],
-  ["/p/", (r, e) => handleProjects(r, e)],
-  ["/builds", (r, e) => handleBuilds(r, e)],
-  ["/b/", (r, e) => handleBuilds(r, e)],
-];
 
-export function addRoute(prefix: string, handler: Handler) {
-  routes.push([prefix, handler]);
-}
+/** The apps, each with the routes it serves. The package store (`registry`) backs all of them. */
+export const APPS = {
+  registry: [["/registry/", (r, e) => handleRegistry(r, e)]],
+  cdn: [["/npm/", (r, e) => handleCdn(r, e)]],
+  projects: [["/p/", (r, e) => handleProjects(r, e)]],
+  bundler: [
+    ["/builds", (r, e) => handleBuilds(r, e)],
+    ["/b/", (r, e) => handleBuilds(r, e)],
+  ],
+  notebooks: [["/nb/", (r, e) => handleNotebooks(r, e)]],
+} satisfies Record<string, [string, Handler][]>;
+export type AppName = keyof typeof APPS;
 
-export async function handlePlatform(
-  request: Request,
-  env: PlatformEnv,
-  ctx: ExecutionContext,
-): Promise<Response> {
-  const url = new URL(request.url);
-  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-  for (const [prefix, handler] of routes) {
-    if (url.pathname.startsWith(prefix) || `${url.pathname}/` === prefix) {
-      try {
-        return withCors(await handler(request, env, ctx));
-      } catch (e) {
-        return withCors(text(`${(e as Error).stack ?? e}\n`, 500));
+const INDEX_HEAD = "webrun platform\n";
+const APP_LINES: Record<AppName, string> = {
+  registry: "/registry/<name>                    npm registry, cached (package store)",
+  cdn: "/npm/<browser|node>/<spec>          ESM CDN (webrun-modules)",
+  projects: "/p/<project>/…                      user code as ESM (webrun-modules)",
+  bundler: "/builds, /b/<build>/…               bundler (webrun-bundler)",
+  notebooks: "/nb/<site>/…                        Observable notebooks compiled to pages",
+};
+
+/** A fetch handler serving `apps` (default: all of them). */
+export function createHandler(apps: AppName[] = Object.keys(APPS) as AppName[]) {
+  const routes = apps.flatMap((a) => APPS[a] as [string, Handler][]);
+  const index = `${INDEX_HEAD}\n${apps.map((a) => `  ${APP_LINES[a]}`).join("\n")}\n`;
+  return async (request: Request, env: PlatformEnv, ctx: ExecutionContext): Promise<Response> => {
+    const url = new URL(request.url);
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+    for (const [prefix, handler] of routes) {
+      if (url.pathname.startsWith(prefix) || `${url.pathname}/` === prefix) {
+        try {
+          return withCors(await handler(request, env, ctx));
+        } catch (e) {
+          return withCors(text(`${(e as Error).stack ?? e}\n`, 500));
+        }
       }
     }
-  }
-  if (url.pathname === "/") return text(INDEX);
-  return text("not found\n", 404);
+    if (url.pathname === "/") return text(index);
+    return text("not found\n", 404);
+  };
 }
 
-const INDEX = `webrun platform
-
-  /registry/<name>                    npm registry, cached (package store)
-  /npm/<browser|node>/<spec>          ESM CDN (webrun-modules)
-  /p/<project>/…                      user code as ESM (webrun-modules)
-  /builds, /b/<build>/…               bundler (webrun-bundler)
-  /nb/<site>/…                        Observable notebooks compiled to pages
-`;
+/** The composed platform: every app. */
+export const handlePlatform = createHandler();

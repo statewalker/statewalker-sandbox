@@ -8,7 +8,11 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "build:browser": "node scripts/build-browser.mjs",
+    "e2e": "tsx scripts/e2e.ts all",
+    "e2e:browser": "tsx scripts/e2e-browser.ts",
+    "build:apps": "node scripts/build.mjs src/entries/cdn.ts deploy/cdn.jsonc cdn && node scripts/build.mjs src/entries/bundler.ts deploy/bundler.jsonc bundler"
   },
   "dependencies": {
     "@statewalker/webrun-bundler": "^0.1.1",
@@ -18,7 +22,13 @@
     "esbuild-wasm": "0.28.2",
     "lightningcss-wasm": "^1.33.0",
     "cjs-module-lexer": "^2.2.1",
-    "@statewalker/webrun-files-node": "catalog:"
+    "@statewalker/webrun-files-node": "catalog:",
+    "@statewalker/notebook-build": "^0.1.1",
+    "@statewalker/notebook-site": "^0.1.2",
+    "@statewalker/webrun-builder": "^0.2.1",
+    "@statewalker/webrun-site-builder": "^0.2.2",
+    "linkedom": "^0.18.15",
+    "urlpattern-polyfill": "catalog:"
   },
   "devDependencies": {
     "@statewalker/cellb": "~0.5.2",
@@ -27,7 +37,8 @@
     "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "wrangler": "^4.158.0"
+    "wrangler": "^4.158.0",
+    "@sqlite.org/sqlite-wasm": "^3.54.1-build1"
   },
   "bin": {
     "webrun-build": "bin/webrun-build.ts"

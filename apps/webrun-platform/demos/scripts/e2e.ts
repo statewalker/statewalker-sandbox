@@ -22,12 +22,18 @@ import { notebooksDemo } from "./notebooks.js";
 const demos = resolve(import.meta.dirname, "..");
 const platformRoot = resolve(demos, "..");
 const args = process.argv.slice(2);
-const positional = args.filter((a) => !a.startsWith("--"));
+// Positional arguments: the host, then the demos; `--emdash-tier <tier>` takes a value.
+const positional = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--emdash-tier");
 const hostArg =
   HOSTS.includes(positional[0]) || positional[0] === "all" ? positional.shift() : "all";
 const hosts = hostArg === "all" ? HOSTS : [hostArg as string];
 const apps = positional.length ? positional : ["astro", "emdash", "notebooks"];
 const browserOn = !args.includes("--no-browser");
+// `--emdash-tier object` bundles EmDash inside the BuildJob object instead of on the Node runner
+// (celld needs CELLD_V8_HEAP_LIMIT_MB=2048 for it; Cloudflare's 128 MB isolates cannot).
+const emdashTier = args.includes("--emdash-tier")
+  ? args[args.indexOf("--emdash-tier") + 1]
+  : "auto";
 
 const results: { host: string; check: string; ok: boolean; detail: string }[] = [];
 async function check(host: string, name: string, fn: () => Promise<string>) {
@@ -170,7 +176,7 @@ async function emdashDemo(host: string, base: string) {
   const built = await check(host, "emdash: bundled by the platform", async () => {
     const files = astroProject(join(demos, "emdash"));
     const bytes = [...files.values()].reduce((n, b) => n + b.length, 0);
-    const s = await bundleOnPlatform(base, files);
+    const s = await bundleOnPlatform(base, files, `?tier=${emdashTier}`);
     id = s.id;
     return `build ${s.id}, ${files.size} input files (${(bytes / 1e6).toFixed(1)} MB), tier ${s.tier}, worker ${((s.stats?.workerBytes as number) / 1e6).toFixed(1)} MB`;
   });

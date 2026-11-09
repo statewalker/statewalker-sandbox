@@ -14,11 +14,13 @@
       { "name": "REGISTRY", "class_name": "PackageRegistry" },
       { "name": "CDN", "class_name": "ModuleHost" },
       { "name": "PROJECTS", "class_name": "Project" },
-      { "name": "BUILDS", "class_name": "BuildJob" }
+      { "name": "BUILDS", "class_name": "BuildJob" },
+      { "name": "NOTEBOOKS", "class_name": "NotebookSite" }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["PackageRegistry", "ModuleHost", "Project", "BuildJob"] }
+    { "tag": "v1", "new_sqlite_classes": ["PackageRegistry", "ModuleHost", "Project", "BuildJob"] },
+    { "tag": "v2", "new_sqlite_classes": ["NotebookSite"] }
   ],
   "vars": { "PACKUMENT_TTL_S": "600", "IN_OBJECT_BUILD_MAX_BYTES": "8000000" }
 }
