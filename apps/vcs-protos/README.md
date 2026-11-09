@@ -7,7 +7,7 @@ then tests written first (red), then the implementation (green), then findings.
 
 | Folder | Plan id | Question |
 |---|---|---|
-| `01-streaming-git-hash` | X1a | Can the existing streaming SHA-1 compute git object ids in one bounded-memory pass? |
+| `01-streaming-git-hash` | X1a — **works; use noble** | Can the existing streaming SHA-1 compute git object ids in one bounded-memory pass? |
 | `02-inflate-stream-ends` | X1b | Can pako's low-level inflater, fed arbitrary chunks, report exactly where each zlib stream ends? |
 
 `pnpm test` runs typecheck + all tests. `pnpm test 01-streaming-git-hash` runs one.

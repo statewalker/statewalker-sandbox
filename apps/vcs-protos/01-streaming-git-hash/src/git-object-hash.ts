@@ -1,7 +1,15 @@
 /**
  * X1a — single-pass git object hashing over a byte stream with a declared size.
- * STUB (red phase): every export throws until implemented.
+ *
+ * git object id = sha1("<type> <size>\0" + content). Because the header needs the
+ * size, the caller must declare it up front (from FilesApi stats, a pack entry
+ * header, or Content-Length). The content is then fed to the hasher exactly once,
+ * chunk by chunk, and never retained — that is what removes vcs-core's current
+ * "store, read back, hash" double pass.
  */
+import { createHash } from "node:crypto";
+import { sha1 as nobleSha1 } from "@noble/hashes/legacy.js";
+import { Sha1 } from "./vendor/sha-1.js";
 
 export type GitObjectType = "blob" | "tree" | "commit" | "tag";
 export type Sha1Impl = "vcs" | "noble" | "node";
@@ -22,15 +30,66 @@ export class SizeMismatchError extends Error {
   }
 }
 
-export function createSha1(_impl: Sha1Impl): Hasher {
-  throw new Error("not implemented");
+export function createSha1(impl: Sha1Impl): Hasher {
+  switch (impl) {
+    case "vcs": {
+      const h = new Sha1();
+      const self: Hasher = {
+        update(b) {
+          h.update(b);
+          return self;
+        },
+        digest: () => h.finalize(),
+      };
+      return self;
+    }
+    case "noble": {
+      const h = nobleSha1.create();
+      const self: Hasher = {
+        update(b) {
+          h.update(b);
+          return self;
+        },
+        digest: () => h.digest(),
+      };
+      return self;
+    }
+    case "node": {
+      const h = createHash("sha1");
+      const self: Hasher = {
+        update(b) {
+          h.update(b);
+          return self;
+        },
+        digest: () => new Uint8Array(h.digest()),
+      };
+      return self;
+    }
+  }
+}
+
+const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+export function toHex(bytes: Uint8Array): string {
+  let s = "";
+  for (const b of bytes) s += HEX[b];
+  return s;
 }
 
 export async function hashGitObject(
-  _type: GitObjectType,
-  _size: number,
-  _content: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
-  _impl: Sha1Impl,
+  type: GitObjectType,
+  size: number,
+  content: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
+  impl: Sha1Impl,
 ): Promise<string> {
-  throw new Error("not implemented");
+  const hasher = createSha1(impl);
+  hasher.update(new TextEncoder().encode(`${type} ${size}\0`));
+  let seen = 0;
+  for await (const chunk of content) {
+    seen += chunk.length;
+    // Fail as soon as the stream overruns — do not hash bytes we already know are wrong.
+    if (seen > size) throw new SizeMismatchError(size, -1);
+    hasher.update(chunk);
+  }
+  if (seen !== size) throw new SizeMismatchError(size, seen);
+  return toHex(hasher.digest());
 }

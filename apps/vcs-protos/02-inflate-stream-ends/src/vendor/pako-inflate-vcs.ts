@@ -1,3 +1,5 @@
+// @ts-nocheck — vendored verbatim from statewalker/webrun-vcs@f1abdd3; it predates this
+// workspace's noUncheckedIndexedAccess and is kept byte-identical below this header.
 /**
  * Pako-based partial decompression implementation
  *
