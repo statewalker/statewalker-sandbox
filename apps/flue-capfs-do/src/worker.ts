@@ -16,6 +16,7 @@
 import type { AgentEnv, AttenuationSpec, Task } from "./agent.ts";
 import type { CapHandoff } from "./caps.ts";
 import { rebuildError } from "./path.ts";
+import { pythonRuntime } from "./python/hosts.ts";
 import { deploymentToolConfig } from "./tools/config.ts";
 import { toolPolicy } from "./tools/policy.ts";
 
@@ -97,6 +98,7 @@ export default {
         }
         return ok({
           workerLoader: !!env.LOADER,
+          python: env.PYTHON === "off" ? "off" : pythonRuntime(),
           ...tools,
           userAgent: navigator.userAgent,
           bootId,

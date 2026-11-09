@@ -2,3 +2,4 @@
 .celld/
 .data/
 node_modules/
+dist/
