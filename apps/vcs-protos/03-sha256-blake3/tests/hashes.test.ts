@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,9 +39,12 @@ const MODES: Array<[string, () => Hasher, keyof Vector]> = [
   ["keyed_hash", () => createBlake3({ key: KEY, dkLen: OUT }), "keyed_hash"],
   ["derive_key", () => createBlake3({ context: CONTEXT, dkLen: OUT }), "derive_key"],
 ];
+/** SHA-256 oracle: node:crypto (host-independent, unlike sha256sum). */
 function sha256Ref(b: Uint8Array): string {
-  return execFileSync("sha256sum", { input: b }).toString().split(" ")[0] ?? "";
+  return createHash("sha256").update(b).digest("hex");
 }
+const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+const HAS_GIT_LFS = spawnSync("git", ["lfs", "version"], { env: GIT_ENV }).status === 0;
 
 describe("R1 official BLAKE3 vectors", () => {
   it("fixture is the official file (35 cases, 131-byte outputs)", () => {
@@ -63,7 +66,7 @@ describe("R2 digests independent of chunking", () => {
     for (const v of small) {
       const input = vectorInput(v.input_len);
       for (const [, make, field] of MODES) {
-        for (let cut = 0; cut <= input.length; cut += input.length > 1100 ? 37 : 1) {
+        for (let cut = 0; cut <= input.length; cut++) {
           expect(digestOf(make, [input.subarray(0, cut), input.subarray(cut)])).toBe(v[field]);
         }
       }
@@ -120,16 +123,38 @@ describe("R4 SHA-256 and LFS pointers equal the references", () => {
     ["text", enc.encode("hello lfs\n")],
     ["3 MiB random", new Uint8Array(randomBytes(3 << 20))],
   ];
+
+  // Host-independent checks: always run.
+  it("pointer for a known input (spec v1 format, hard-coded expectation)", async () => {
+    const oid = sha256Ref(enc.encode("hello lfs\n"));
+    expect(await lfsPointer([enc.encode("hello lfs\n")])).toBe(
+      `version https://git-lfs.github.com/spec/v1\noid sha256:${oid}\nsize 10\n`,
+    );
+  });
+  it("an empty file has no pointer", async () => {
+    expect(await lfsPointer([])).toBe("");
+  });
   for (const [name, bytes] of corpus) {
-    it(name, async () => {
+    it(`SHA-256 of ${name} equals node:crypto`, () => {
+      expect(digestOf(createSha256, chunked(bytes, 65536))).toBe(sha256Ref(bytes));
+    });
+  }
+
+  // git-lfs oracle: runs where git-lfs is installed (it is on GitHub's ubuntu runners).
+  for (const [name, bytes] of corpus) {
+    it.skipIf(!HAS_GIT_LFS)(`pointer of ${name} equals git lfs pointer --file`, async () => {
       const file = join(dir, name.replace(/\W/g, "_"));
       writeFileSync(file, bytes);
-      expect(digestOf(createSha256, chunked(bytes, 65536))).toBe(sha256Ref(bytes));
-      const gitPointer = execFileSync("git", ["lfs", "pointer", `--file=${file}`], {
-        stdio: ["ignore", "pipe", "ignore"],
-        env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
-      }).toString();
-      expect(await lfsPointer(chunked(bytes, 65536))).toBe(gitPointer);
+      const r = spawnSync("git", ["lfs", "pointer", `--file=${file}`], { env: GIT_ENV });
+      const stdout = r.stdout.toString();
+      if (bytes.length === 0) {
+        // git-lfs prints no pointer for an empty file. Its exit status differs by version
+        // (3.4.1 exits 0; the version on GitHub's runner exits 1), so only stdout is compared.
+        expect(stdout, r.stderr.toString()).toBe("");
+      } else {
+        expect(r.status, r.stderr.toString()).toBe(0);
+      }
+      expect(await lfsPointer(chunked(bytes, 65536))).toBe(stdout);
     });
   }
 });

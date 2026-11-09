@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
@@ -106,6 +108,30 @@ describe("R3 state is clean, and reused, after a failed stream", () => {
     // The failed state was reset and reused, not leaked and replaced.
     expect(pool.allocated).toBe(1);
   });
+  it("after corruption of the header and of the body (not only the trailer)", () => {
+    for (const at of [0, Math.floor(good.length / 2)]) {
+      const pool = createInflaterPool();
+      const bad = good.slice();
+      bad[at] = (bad[at] ?? 0) ^ 0xff;
+      if (at > 0) bad.fill(0xff, at, at + 8); // an invalid block mid-stream
+      const a = pool.acquire();
+      // A corrupted header is an InflateError. A corrupted body may instead decode as garbage
+      // that never reaches a stream end, so end() reports truncation. Both are rejections;
+      // the point is that the state comes back clean either way.
+      let err: unknown;
+      try {
+        a.push(bad);
+        a.end();
+      } catch (e) {
+        err = e;
+      }
+      expect(err instanceof InflateError || err instanceof TruncatedStreamError).toBe(true);
+      if (at === 0) expect(err).toBeInstanceOf(InflateError);
+      const [r] = inflateAll(pool, [good], 1);
+      expect(r && eq(r.data, goodInput)).toBe(true);
+      expect(pool.allocated).toBe(1);
+    }
+  });
   it("after corruption", () => {
     const pool = createInflaterPool();
     const bad = good.slice();
@@ -151,6 +177,54 @@ describe("R5 no use after release", () => {
     const a = pool.acquire();
     a.push(streams[1] ?? new Uint8Array());
     a.end();
-    expect(() => a.push(Uint8Array.of(1))).toThrow();
+    expect(() => a.push(Uint8Array.of(1))).toThrow(/returned to the pool/);
+  });
+  it("a stale handle cannot disturb the inflater that now owns its state", () => {
+    const pool = createInflaterPool();
+    const a = pool.acquire();
+    a.push(streams[1] ?? new Uint8Array());
+    a.end();
+    const b = pool.acquire(); // reuses a's state
+    expect(pool.allocated).toBe(1);
+    const s = streams[4] ?? new Uint8Array();
+    const out: Uint8Array[] = [];
+    const parts = [...chunked(s, 5)];
+    out.push(...b.push(parts[0] ?? new Uint8Array()).out);
+    expect(() => a.push(Uint8Array.of(0x78, 0x9c))).toThrow(/returned to the pool/);
+    for (const p of parts.slice(1)) out.push(...b.push(p).out);
+    b.end();
+    expect(eq(concat(out), inputs[4] ?? new Uint8Array())).toBe(true);
+  });
+});
+
+describe("R7 an idle pooled state does not keep the caller's input alive", () => {
+  const gc = (globalThis as { gc?: () => void }).gc;
+  it("the last input chunk is collectable after its stream ends", async () => {
+    expect(gc).toBeTypeOf("function");
+    const pool = createInflaterPool();
+    const ref = (() => {
+      const big = concat([streams[4] ?? new Uint8Array(), new Uint8Array(4 << 20)]);
+      const inf = pool.acquire();
+      inf.push(big); // stream ends inside `big`; the tail is trailing data
+      inf.end();
+      return new WeakRef(big);
+    })();
+    expect(pool.idle).toBe(1);
+    for (let i = 0; i < 5 && ref.deref(); i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      gc?.();
+    }
+    expect(ref.deref()).toBeUndefined();
+  });
+});
+
+describe("R8 portable modules import nothing from node:", () => {
+  it("src/ is free of node: imports", () => {
+    const srcDir = join(import.meta.dirname, "../src");
+    const files = readdirSync(srcDir).filter((f) => f.endsWith(".ts"));
+    expect(files).toContain("pooled-inflater.ts");
+    for (const f of files) {
+      expect(readFileSync(join(srcDir, f), "utf8"), f).not.toMatch(/from\s+["']node:/);
+    }
   });
 });
