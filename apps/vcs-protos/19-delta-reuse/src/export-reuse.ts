@@ -9,14 +9,24 @@
  *  - stored as a delta whose base the receiver has (`thin`): copied as a REF_DELTA against it — a
  *    thin pack, completed by the receiver (`index-pack --fix-thin`, X6b's externalBase);
  *  - otherwise (loose, or a delta whose base goes nowhere): inflated and deflated whole (X6c).
- * Copied entries are checked against their idx CRC as they stream (git checks it before reusing):
- * a mismatch fails the export with a PackError — a corrupt entry is never passed on. Deltas copied
- * from different packs can form a cycle (pack 1 stores A against B, pack 2 B against A): the
- * decisions are checked, and an object on a cycle is sent whole.
+ * A copied entry is checked against its idx CRC before any of its bytes are sent (git checks it
+ * before reusing): entries up to 1 MiB compressed are buffered, larger ones read twice (a CRC
+ * pass, then the copy, checked again as it streams). A copy that fails is marked bad and the object
+ * is sent whole from another copy (`get` skips bad copies); with none, the export fails before
+ * the entry starts — a corrupt entry is never passed on.
+ * Deltas copied from different packs can form a cycle (pack 1 stores A against B, pack 2 B against
+ * A): the decisions are checked, and an object on a cycle is sent whole. Chains are cut at git's
+ * default depth (50): a delta deeper is sent whole. Each copied delta's base is written before it.
+ * A copied delta's type is not checked against the listed type (its result type is the base's,
+ * known only by resolving it); whole copies are.
+ * Shallow receivers: pass their shallow commits (`shallow`) so `receiverHas` holds only objects
+ * they have — a thin base is taken from that set only.
+ * Cost: the decision pass reads one entry header per object and keeps a plan per object (O(N)).
  */
+
 import { sha1 } from "@noble/hashes/legacy.js";
 import { Deflate } from "pako";
-import type { PackedEntry } from "../../13-pack-reader/src/pack-reader.js";
+import { PackError, type PackedEntry } from "../../13-pack-reader/src/pack-reader.js";
 import type { ObjectType, Repository } from "../../17-repository/src/object-store.js";
 import {
   listObjectsWithEdges,
@@ -39,6 +49,10 @@ export interface ReuseOptions {
 
 const TYPE_CODE: Record<ObjectType, number> = { commit: 1, tree: 2, blob: 3, tag: 4 };
 const REF_DELTA = 7;
+/** git pack-objects' default --depth */
+const MAX_DEPTH = 50;
+/** copied entries up to this compressed size are buffered for the CRC check; larger are read twice */
+const BUFFER_MAX = 2 ** 20;
 const unhex = (h: string) =>
   Uint8Array.from(h.match(/../g) as string[], (x) => Number.parseInt(x, 16));
 
@@ -99,6 +113,27 @@ export async function* writePackReusing(
     if (cur && state.get(cur) === "visiting") plan.set(cur, { mode: "deflate" }); // break the cycle here
     for (const c of chain) state.set(c, "done");
   }
+  // --- depth cap and base-first order (bases among the copied deltas, now acyclic)
+  const depth = new Map<string, number>();
+  const order: ToSend[] = [];
+  const byOid = new Map(objects.map((o) => [o.oid, o]));
+  const place = (oid: string): number => {
+    const known = depth.get(oid);
+    if (known !== undefined) return known;
+    const p = plan.get(oid) as Plan;
+    let d = 0;
+    if (p.mode === "delta") {
+      d = place(p.base) + 1; // depth ≤ MAX_DEPTH bounds this recursion
+      if (d > MAX_DEPTH) {
+        plan.set(oid, { mode: "deflate" });
+        d = 0;
+      }
+    } else if (p.mode === "thin") d = 1;
+    depth.set(oid, d);
+    order.push(byOid.get(oid) as ToSend);
+    return d;
+  };
+  for (const o of objects) place(o.oid);
   // --- write
   const hash = sha1.create();
   const emit = (b: Uint8Array) => {
@@ -113,26 +148,34 @@ export async function* writePackReusing(
   yield emit(head);
   let unstarted: AsyncIterable<Uint8Array> | undefined;
   try {
-    for (const { oid, type } of objects) {
+    for (const { oid, type } of order) {
       signal?.throwIfAborted();
       const p = plan.get(oid) as Plan;
       if (p.mode !== "deflate") {
-        yield emit(
-          p.mode === "whole"
-            ? entryHeader(TYPE_CODE[type], p.entry.size)
-            : entryHeader(REF_DELTA, p.entry.size, p.base),
-        );
-        // the compressed bytes as stored, CRC-checked as they stream (throws at the end on a mismatch)
-        for await (const c of p.entry.raw()) {
-          signal?.throwIfAborted();
-          yield emit(c);
+        // the CRC is checked before the first byte goes out
+        const buffered = await checkedCopy(p.entry, signal).catch((e) => {
+          if (e instanceof PackError) return undefined; // a bad copy: sent whole from another
+          throw e;
+        });
+        if (buffered !== undefined) {
+          yield emit(
+            p.mode === "whole"
+              ? entryHeader(TYPE_CODE[type], p.entry.size)
+              : entryHeader(REF_DELTA, p.entry.size, p.base),
+          );
+          if (buffered === "large")
+            for await (const c of p.entry.raw()) {
+              signal?.throwIfAborted();
+              yield emit(c);
+            }
+          else for (const c of buffered) yield emit(c);
+          if (stats) {
+            if (p.mode === "whole") stats.reusedWhole++;
+            else if (p.mode === "delta") stats.reusedDelta++;
+            else stats.thinDelta++;
+          }
+          continue;
         }
-        if (stats) {
-          if (p.mode === "whole") stats.reusedWhole++;
-          else if (p.mode === "delta") stats.reusedDelta++;
-          else stats.thinDelta++;
-        }
-        continue;
       }
       const o = await repo.objects.get(oid);
       if (!o) throw new Error(`object ${oid} is not in this repository`);
@@ -165,6 +208,26 @@ export async function* writePackReusing(
     if (unstarted) await unstarted[Symbol.asyncIterator]().return?.();
   }
   yield hash.digest();
+}
+
+/**
+ * Reads a stored entry through, checking its CRC: its bytes when at most BUFFER_MAX, else "large"
+ * (to be copied by a second read). Throws the PackError of a mismatch.
+ */
+async function checkedCopy(
+  entry: PackedEntry,
+  signal?: AbortSignal,
+): Promise<Uint8Array[] | "large"> {
+  let parts: Uint8Array[] | undefined = [];
+  let n = 0;
+  for await (const c of entry.raw()) {
+    signal?.throwIfAborted();
+    if (!parts) continue;
+    n += c.length;
+    if (n > BUFFER_MAX) parts = undefined;
+    else parts.push(c.slice());
+  }
+  return parts ?? "large";
 }
 
 export async function* exportPackReusing(

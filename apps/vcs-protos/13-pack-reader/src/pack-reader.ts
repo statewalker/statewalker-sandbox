@@ -222,13 +222,25 @@ export async function openPack(
     }
     return -1;
   };
+  // git's reverse index, typed: offsets in pack order and, for each, its position in the idx
   let sorted: Float64Array | undefined;
-  const endOf = (offset: number): number => {
+  let perm: Uint32Array | undefined;
+  const revIndex = (): Float64Array => {
     if (!sorted) {
-      sorted = new Float64Array(n);
-      for (let i = 0; i < n; i++) sorted[i] = offsetOf(i);
-      sorted.sort();
+      const offs = new Float64Array(n);
+      for (let i = 0; i < n; i++) offs[i] = offsetOf(i);
+      const order = new Uint32Array(n);
+      for (let i = 0; i < n; i++) order[i] = i;
+      order.sort((a, b) => (offs[a] as number) - (offs[b] as number));
+      const s = new Float64Array(n);
+      for (let k = 0; k < n; k++) s[k] = offs[order[k] as number] as number;
+      sorted = s;
+      perm = order;
     }
+    return sorted;
+  };
+  const endOf = (offset: number): number => {
+    const sorted = revIndex();
     let lo = 0;
     let hi = n;
     while (lo < hi) {
@@ -466,13 +478,17 @@ export async function openPack(
     yield b;
   }
 
-  let byOffset: Map<number, number> | undefined;
+  /** The idx position of the entry at `offset` (-1 if none starts there). */
   const indexAt = (offset: number): number => {
-    if (!byOffset) {
-      byOffset = new Map();
-      for (let i = 0; i < n; i++) byOffset.set(offsetOf(i), i);
+    const s = revIndex();
+    let lo = 0;
+    let hi = n;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if ((s[mid] as number) < offset) lo = mid + 1;
+      else hi = mid;
     }
-    return byOffset.get(offset) ?? -1;
+    return lo < n && s[lo] === offset ? ((perm as Uint32Array)[lo] as number) : -1;
   };
   const oidAt = (i: number) => hex(idx.subarray(oidsAt + i * 20, oidsAt + i * 20 + 20));
 
