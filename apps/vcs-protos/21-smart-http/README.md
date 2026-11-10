@@ -81,11 +81,32 @@ repo, { refspecs, depth, shallow })` and `clone(url, repo)` use global `fetch`.
 | our clone from `git http-backend` | refs and HEAD equal; `fsck --strict` clean; `depth: 1` → one commit and git's shallow file; incremental fetch: the new objects and the followed tag |
 | our client ↔ our server (SQL → files) | logs equal |
 | negotiation, 3 new commits on 300 | 16 haves, 1 round, 9 objects |
-| streaming (64 × 512 KiB blobs) | search: progress after 5 of 202 reads, pack after 137; reuse: pack after 5 of 70; abort: reads stop at 2 |
+| streaming (64 × 512 KiB blobs) | search: progress after 5 of 202 reads, pack after 137; reuse: pack after 5 of 70; abort during the search or the pack: the reads stop |
 
 ## Verified
 
 All 11 Node tests pass (`pnpm test 21-smart-http`). The tests were written first (red commit).
+
+### Mutation check
+
+| Mutation | Caught by |
+|---|---|
+| H1 no "not our ref" check | R7 |
+| H2 never "ready" | R6 |
+| H3 no ACK lines | R6 (no give-up after the ACK) |
+| H4 deepen ignored | R2 (shallow clone) |
+| H5 haves ignored | R6 (whole history sent) |
+| H6 the pack's abort signal not passed | R5 (abort during the search) |
+| C1 commons not re-sent each round | R6 (stateless: the final pack) |
+| C2 flush not doubling | R6 (496) |
+| C3 give up without an ACK | R6 (600 unrelated haves) |
+| C4 no tag auto-follow | R3 |
+| P1 lengths 1–4 accepted | R1 |
+| P2 band 3 ignored | R1 |
+
+The mutation run found that progress was only flushed with the first pack chunk; it now goes
+straight into the response while the search reads (band 2), and an abort during the search stops
+it.
 
 ## Promotion grades
 

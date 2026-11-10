@@ -71,6 +71,12 @@ function channel(highWater = 8) {
         await new Promise<void>((r) => (drained = r));
       abort.signal.throwIfAborted();
     },
+    /** queues a small chunk without waiting (progress from synchronous callbacks) */
+    push(chunk: Uint8Array) {
+      if (abort.signal.aborted || closed) return;
+      queue.push(chunk);
+      wake?.();
+    },
     close(err?: unknown) {
       closed = true;
       failure = err;
@@ -409,7 +415,6 @@ async function fetchCommand(
     }
     await say(`Enumerating objects: ${objects.length}, done.\n`);
     let last = -1;
-    const pending: Uint8Array[] = [];
     const pack =
       opts.search === false
         ? writePackReusing(repo, objects, {
@@ -427,14 +432,16 @@ async function fetchCommand(
               const pct = Math.floor((100 * i) / Math.max(1, n));
               if (progress && pct !== last) {
                 last = pct;
-                pending.push(
-                  ...sideband(2, enc.encode(`Compressing objects: ${pct}% (${i}/${n})\r`)),
-                );
+                // straight into the response: the client sees progress while the search reads
+                for (const p of sideband(
+                  2,
+                  enc.encode(`Compressing objects: ${pct}% (${i}/${n})\r`),
+                ))
+                  ch.push(p);
               }
             },
           });
     for await (const chunk of pack) {
-      while (pending.length) await ch.write(pending.shift() as Uint8Array);
       for (const p of sideband(1, chunk)) await ch.write(p);
     }
     await ch.write(FLUSH);

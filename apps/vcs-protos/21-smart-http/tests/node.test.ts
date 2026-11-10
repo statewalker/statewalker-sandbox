@@ -394,18 +394,32 @@ describe("R5 streaming", () => {
     }
     return { progress, pack, total: c.reads };
   }
+  /** Aborts once the generation is under way: a "Compressing objects" message (search) or pack data. */
   async function abortAfterFirstBytes(url: string, head: string, c: { reads: number }) {
     const before = c.reads;
     const ac = new AbortController();
     const res = await post(url, fetchRequest([head], [], false), ac.signal);
-    const it = (res.body as unknown as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
-    await it.next();
+    const reader = new PktReader(res.body as unknown as AsyncIterable<Uint8Array>);
+    let inPack = false;
+    for (;;) {
+      const p = await reader.read();
+      if (!p) break;
+      if (p.kind !== "data") continue;
+      if (!inPack) {
+        inPack = dec.decode(p.data) === "packfile\n";
+        continue;
+      }
+      if (p.data[0] === 1) break;
+      if (p.data[0] === 2 && /^Compressing objects: [1-9]/.test(dec.decode(p.data.subarray(1))))
+        break;
+    }
+    const atBreak = c.reads - before;
     ac.abort();
-    await it.return?.().catch(() => {});
-    await new Promise((r) => setTimeout(r, 500));
+    await reader.close().catch(() => {});
+    await new Promise((r) => setTimeout(r, 1500));
     const atAbort = c.reads - before;
     await new Promise((r) => setTimeout(r, 1000));
-    return { atAbort, later: c.reads - before };
+    return { atBreak, atAbort, later: c.reads - before };
   }
   it("bytes flow before half of the objects are read (progress while searching; pack data at once with reuse); abort stops the reads", async () => {
     const d = emptyRepo();
@@ -435,10 +449,11 @@ describe("R5 streaming", () => {
     ] as const) {
       const a = await abortAfterFirstBytes(url, head, c);
       console.log(
-        `R5 abort (${name}): ${a.atAbort} reads at abort, ${a.later} a second later, of ${total}`,
+        `R5 abort (${name}): ${a.atBreak} when aborting, ${a.atAbort} after 1.5 s, ${a.later} a second later, of ${total}`,
       );
       expect(a.later).toBe(a.atAbort);
-      expect(a.later).toBeLessThan(total);
+      // the generation stopped mid-way (the search included), not after reading everything
+      expect(a.later).toBeLessThan(total / 2);
     }
   }, 120_000);
 });
@@ -502,11 +517,13 @@ describe("R6 negotiation", () => {
     // rounds of 16, 32, 64, 128: 224 in vain after the ACK; the next request adds 256 more and,
     // past 256 in vain, says done (git decides "done" as it builds a request): 496 of 606
     expect(s2.haves).toBe(16 + 32 + 64 + 128 + 256);
+    // the commons were re-sent with "done" (stateless): only the new commit's objects came
+    expect(s2.objects).toBe(3);
     expect(rev(d, "refs/heads/main")).toBe(rev(src, "HEAD"));
     // an unrelated repository: no ACK ever, so every have is sent (git gives up only after an ACK)
     const u = emptyRepo();
     let alone = "";
-    for (let i = 0; i < 300; i++) {
+    for (let i = 0; i < 600; i++) {
       const data = `alone ${i}\n`;
       alone += `commit refs/heads/main\ncommitter a <a@x> ${1100000000 + i} +0000\ndata 2\na\n`;
       alone += `M 100644 inline y.txt\ndata ${data.length}\n${data}\n`;
@@ -517,7 +534,7 @@ describe("R6 negotiation", () => {
       refspecs: ["+refs/heads/main:refs/remotes/origin/main"],
       stats: s3,
     });
-    expect(s3.haves).toBe(300);
+    expect(s3.haves).toBe(600); // past 496: no give-up without an ACK
     expect(rev(u, "refs/remotes/origin/main")).toBe(rev(src, "HEAD"));
   }, 180_000);
 });
