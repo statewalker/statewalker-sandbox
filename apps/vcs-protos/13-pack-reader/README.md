@@ -74,10 +74,10 @@ Findings:
 2. **Delta memory = cache budget + working set.** Resolving holds the base being patched, the new
    result and the caller's copy; forced-GC readings of process memory also include buffers awaiting
    release and vary widely (no cache: +16–28 MiB for 4 MiB objects; 16 MiB cache: +17–38 MiB on
-   Node 22, +42 MiB on Node 24 in CI). The criterion's "< 24 MiB with a 16 MiB cache" ignored the
+   Node 22, +42–64 MiB on Node 24 in CI; the test asserts only < cache + 64 MiB, against 200 MiB for an unbounded chain cache). The criterion's "< 24 MiB with a 16 MiB cache" ignored the
    working set: **not met as written**. The test asserts deterministically that the cache never
    holds more than its budget and that its accounting matches its entries; process memory only as a
-   loose bound (budget + 8 objects).
+   loose bound (budget + 16 objects).
 3. **Hostile packs must not crash the process.** Review findings, now fixed and tested: a REF_DELTA
    cycle across two packs recursed through `externalBase` without bound (out of memory after ~46 s)
    — bases now carry the set of ids being resolved; a delta base declaring 1.5 GiB was allocated
