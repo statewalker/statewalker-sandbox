@@ -49,7 +49,10 @@ export async function openObjectDatabase(
   const isBad = (p: PackReader, oid: string) => bad.get(p)?.has(oid) ?? false;
   const markBad = (p: PackReader, oid: string) => {
     let s = bad.get(p);
-    if (!s) bad.set(p, (s = new Set()));
+    if (!s) {
+      s = new Set();
+      bad.set(p, s);
+    }
     s.add(oid);
   };
   const db: ObjectDatabase = {
