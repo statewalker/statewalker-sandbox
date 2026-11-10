@@ -53,7 +53,20 @@ atomic, pushOptions })` uses global `fetch` with a streamed request body.
   branch must fast-forward from a remote tip known here — "fetch first" otherwise; a tag is not
   replaced without force; an atomic push refused locally sends nothing), one POST with the
   commands and a thin pack (X6e's search against the remote's refs) streamed as produced
-  (`duplex: "half"`), report-status per ref.
+  (`duplex: "half"`: Node and Chromium; other browsers do not stream request bodies yet), report-status per ref.
+- **After the review of #82**: shallow clones push (their `shallow` lines are accepted); a branch
+  must point at a commit; a ref named twice in one push gets a report line per command (applied in
+  order, each with its own compare-and-set, as git; atomic: the transaction refuses duplicates); deleting a ref that does not exist is a no-op; one connectivity walk
+  for the whole push (as git's `rev-list --not --all`), per tip only when it fails — 200 refs ×
+  200 commands: linear reads instead of 41 200; installs run concurrently (17's composed store
+  orders only the pack-database reopen), so a stalled upload holds no one, and a body silent for
+  `idleTimeoutMs` (60 s) is abandoned; hook messages stay on one report line; at most
+  `maxCommands` (65 536) commands. Client: git's refspec rules (no colon: the same name, `HEAD`
+  the current branch; short destinations matched against the remote's refs, else by the source's
+  kind; sources resolved tags before heads; `rev~n`, `^{tree}`), the fast-forward rule for every
+  ref outside `refs/tags/` and "needs force" when either end is not a commit, only advertised
+  capabilities asked (no side-band → plain report; no report-status → assumed ok, as git), the
+  remote's band-2 messages to `onMessage`.
 
 | | |
 |---|---|
@@ -67,7 +80,7 @@ atomic, pushOptions })` uses global `fetch` with a streamed request body.
 
 ## Verified
 
-All 8 Node tests pass (`pnpm test 22-receive-pack`). The tests were written first (red commit).
+All 15 Node tests pass (8 for R1–R7, 7 from the review of #82) (`pnpm test 22-receive-pack`). The tests were written first (red commit).
 The test harness's request stream tolerates an early cancel (a handler stopping at its size limit
 made Node's `Readable.toWeb` throw "Controller is already closed").
 
@@ -86,6 +99,24 @@ made Node's `Readable.toWeb` throw "Controller is already closed").
 | Q9 client: no fast-forward check | R2 |
 | Q10 client: not thin | R5 |
 | Q11 client: atomic not requested | R7 |
+
+### Review of #82
+
+| Finding | Resolution |
+|---|---|
+| A shallow clone's push failed (its `shallow` lines refused) | Accepted |
+| A tree or blob accepted as a branch tip (a mirror clone then failed fsck) | Refused: a branch points at a commit |
+| Connectivity checked per command against every ref: O(commands × refs) (1000 × 1000: 210 s) | One walk for the push; per tip only on failure |
+| A stalled upload blocked every other push (installs serialized per handle) | Installs concurrent; only the reopen is ordered; idle timeout |
+| Client refspecs: no colon, short destinations, tags-first resolution diverged from git | git's rules |
+| Client: the fast-forward rule only for refs/heads; no "needs force" | All refs outside refs/tags; needs force |
+| Client asked for unadvertised capabilities | Only advertised ones; plain report without side-band |
+| The same ref twice reported the second result for both | Per-command status (an explicit duplicate refusal was dropped after its mutation survived: git applies such commands in order) |
+| Deleting a missing ref failed | A no-op (ok) |
+| Hook messages with newlines broke report framing | One line |
+| Commands buffered without a count limit | `maxCommands` |
+| A fresh SQL repository has no HEAD | Noted: X16b (17's `sqlRepository` should set HEAD as `git init` does) |
+| Quarantine, fsck of received objects | Open threads 2 and 3 |
 
 ## Promotion grades
 

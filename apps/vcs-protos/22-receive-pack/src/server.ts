@@ -215,11 +215,9 @@ export function receivePackHandler(
     const current = head && "symref" in head ? head.symref : undefined;
     const known = new Set<string>();
     for await (const r of repo.refs.list("refs/")) known.add(r.oid);
-    const seenRef = new Set<string>();
     for (const [c, i] of open()) {
       if (!c.ref.startsWith("refs/") || !checkRefFormat(c.ref)) fail(i, "funny refname");
       else if (!OID.test(c.old) || !OID.test(c.new)) fail(i, "invalid id");
-      else if (seenRef.has(c.ref)) fail(i, "failed to update ref (the same ref twice in one push)");
       else if (c.new === ZERO && c.ref === current)
         fail(i, "deletion of the current branch prohibited");
       else if (
@@ -228,7 +226,6 @@ export function receivePackHandler(
         (await typeOf(repo, c.new)) !== "commit"
       )
         fail(i, "failed to update ref (not a commit: a branch must point at a commit)");
-      seenRef.add(c.ref);
     }
     // one walk for every new tip; only if it fails, one per tip to name the broken ones
     const tips = open().filter(([c]) => c.new !== ZERO);
