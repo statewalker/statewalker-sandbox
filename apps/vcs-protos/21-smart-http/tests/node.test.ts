@@ -1,10 +1,11 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { gzipSync } from "node:zlib";
 import { newNodeSqliteDb } from "@statewalker/db-sqlite-node";
 import { afterAll, describe, expect, it } from "vitest";
 import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-files.js";
@@ -544,9 +545,12 @@ describe("R7 hostile requests", () => {
     const src = repoWithHistory(3);
     const repo = await open(src);
     const url = await serve(uploadPackHandler(repo));
-    const inner = rev(src, "HEAD~1"); // reachable but not a ref tip: not advertised
+    // a commit in the repository that no ref reaches (git v2 serves reachable non-tips)
+    const dangling = git(src, ["commit-tree", "-m", "dangling", `${rev(src, "HEAD")}^{tree}`])
+      .toString()
+      .trim();
     const bodies: [string, Uint8Array][] = [
-      ["not our ref", fetchRequest([inner])],
+      ["not our ref", fetchRequest([dangling])],
       ["unknown object", fetchRequest(["1".repeat(40)])],
       ["malformed length", enc.encode("00zzcommand=fetch\n")],
       ["oversized", enc.encode(`fff0${"a".repeat(100)}`)],
@@ -568,4 +572,200 @@ describe("R7 hostile requests", () => {
     const v0 = await fetch(`${url}/info/refs?service=git-upload-pack`);
     expect(v0.status).toBeGreaterThanOrEqual(400);
   });
+});
+
+describe("review cases (#81)", () => {
+  const commitAll = (d: string, msg: string) => {
+    git(d, ["add", "-A"]);
+    git(d, ["commit", "-q", "-m", msg]);
+  };
+  it("gzip request bodies (git compresses POSTs over 1 KiB): native clone of 30 branches, fetch with 600 haves", async () => {
+    const src = repoWithHistory(5);
+    for (let i = 0; i < 30; i++) git(src, ["branch", `b${i}`, `HEAD~${i % 4}`]);
+    const url = await serve(uploadPackHandler(await open(src)));
+    const dst = join(tmp(), "c");
+    await gitAsync(tmpdir(), ["clone", "-q", "--bare", url, dst]);
+    expect(refsOf(dst)).toBe(refsOf(src));
+    // and a gzip body sent directly
+    const res = await fetch(`${url}/git-upload-pack`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-git-upload-pack-request",
+        "content-encoding": "gzip",
+        "git-protocol": "version=2",
+      },
+      body: gzipSync(fetchRequest([rev(src, "HEAD")])) as unknown as BodyInit,
+    });
+    expect(dec.decode(new Uint8Array(await res.arrayBuffer()))).toContain("packfile");
+  }, 120_000);
+  it("tag chains: include-tag sends every tag of the chain; auto-follow needs the whole chain", async () => {
+    const src = repoWithHistory(3);
+    git(src, ["tag", "-a", "inner", "-m", "inner"]);
+    git(src, ["tag", "-a", "outer", "-m", "outer", "inner"]);
+    git(src, ["tag", "-d", "inner"]); // only the outer tag is a ref: the inner one exists only as an object
+    const url = await serve(uploadPackHandler(await open(src)));
+    const d = emptyRepo();
+    const repo = await open(d);
+    await fetchFrom(url, repo, { refspecs: ["+refs/heads/main:refs/heads/main"] });
+    expect(rev(d, "refs/tags/outer")).toBe(rev(src, "refs/tags/outer"));
+    git(d, ["fsck", "--strict"]);
+  }, 60_000);
+  it("deepening a shallow clone: native --depth 5 and --unshallow, and our client's depth", async () => {
+    const src = repoWithHistory(14);
+    const url = await serve(uploadPackHandler(await open(src)));
+    const sh = join(tmp(), "s");
+    await gitAsync(tmpdir(), ["clone", "-q", "--bare", "--depth", "1", url, sh]);
+    await gitAsync(sh, ["fetch", "-q", "--depth", "5", url, "+refs/heads/*:refs/heads/*"]);
+    expect(git(sh, ["rev-list", "--count", "HEAD"]).toString().trim()).toBe("5");
+    git(sh, ["fsck"]);
+    await gitAsync(sh, ["fetch", "-q", "--unshallow", url, "+refs/heads/*:refs/heads/*"]);
+    expect(git(sh, ["rev-list", "--count", "HEAD"]).toString().trim()).toBe("14");
+    expect(git(sh, ["rev-parse", "--is-shallow-repository"]).toString().trim()).toBe("false");
+    git(sh, ["fsck", "--strict"]);
+    // our client: depth 1, then depth 5 with the tips already here
+    const d = emptyRepo();
+    const repo = await open(d);
+    const shallow = filesShallow(new StreamingNodeFilesApi(join(d, ".git")), "/shallow");
+    await clone(url, repo, { depth: 1, shallow });
+    await fetchFrom(url, repo, {
+      refspecs: ["+refs/heads/main:refs/heads/main"],
+      depth: 5,
+      shallow,
+    });
+    expect(git(d, ["rev-list", "--count", "HEAD"]).toString().trim()).toBe("5");
+    git(d, ["fsck"]);
+    // depth without a shallow store would leave a broken repository: refused
+    await expect(clone(url, await open(emptyRepo()), { depth: 1 })).rejects.toThrow(/shallow/);
+  }, 120_000);
+  it("a producer error while the client cancels does not crash the process", async () => {
+    // the search queues progress past the channel's high-water mark, then a read fails; the
+    // error's write waits, and the client's cancel then rejects it
+    const d = emptyRepo();
+    for (let i = 0; i < 64; i++) writeFileSync(join(d, `b${i}.bin`), noise(4096, i + 1));
+    commitAll(d, "blobs");
+    const repo = await open(d);
+    const get = repo.objects.get.bind(repo.objects);
+    let n = 0;
+    repo.objects.get = async (oid, o) => {
+      if (++n >= 120) throw new Error("disk read error");
+      return get(oid, o);
+    };
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => unhandled.push(e);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const res = await uploadPackHandler(repo)(
+        new Request("http://x/repo.git/git-upload-pack", {
+          method: "POST",
+          headers: { "git-protocol": "version=2" },
+          body: fetchRequest([rev(d, "HEAD")], [], false) as unknown as BodyInit,
+        }),
+      );
+      await new Promise((r) => setTimeout(r, 1000));
+      await res.body?.cancel();
+      await new Promise((r) => setTimeout(r, 500));
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(unhandled.map(String)).toEqual([]);
+  });
+  it("annotated tags do not leak file descriptors", async () => {
+    const src = repoWithHistory(3);
+    for (let i = 0; i < 50; i++) git(src, ["tag", "-a", `t${i}`, "-m", `t${i}`]);
+    const url = await serve(uploadPackHandler(await open(src)));
+    const lsRefs = concat([pkt("command=ls-refs\n"), DELIM, pkt("peel\n"), FLUSH]);
+    const fds = () => readdirSync("/proc/self/fd").length;
+    await (await post(url, lsRefs)).arrayBuffer();
+    const before = fds();
+    for (let i = 0; i < 5; i++) await (await post(url, lsRefs)).arrayBuffer();
+    expect(fds() - before).toBeLessThan(10);
+  });
+  it("duplicate wants and haves cost no more than one", async () => {
+    const src = repoWithHistory(30);
+    const repo = await open(src);
+    const c = counted(repo);
+    const url = await serve(uploadPackHandler(repo));
+    const head = rev(src, "HEAD");
+    const root = git(src, ["rev-list", "--max-parents=0", "HEAD"]).toString().trim();
+    const ask = async (k: number) => {
+      c.reads = 0;
+      const body = concat([
+        pkt("command=fetch\n"),
+        DELIM,
+        ...Array.from({ length: k }, () => pkt(`want ${head}\n`)),
+        ...Array.from({ length: k }, () => pkt(`have ${root}\n`)),
+        FLUSH,
+      ]);
+      await (await post(url, body)).arrayBuffer();
+      return c.reads;
+    };
+    const one = await ask(1);
+    expect(await ask(2000)).toBeLessThanOrEqual(one + 2);
+  });
+  it("the negotiator propagates common to ancestors (git's): 16 haves even without ready", async () => {
+    const src = emptyRepo();
+    let stream = "";
+    for (let i = 0; i < 300; i++) {
+      const data = `c ${i}\n`;
+      stream += `commit refs/heads/main\ncommitter c <c@x> ${1700000000 + i} +0000\ndata 2\nc\n`;
+      stream += `M 100644 inline f.txt\ndata ${data.length}\n${data}\n`;
+    }
+    execFileSync("git", ["fast-import", "--quiet"], { cwd: src, input: stream });
+    git(src, ["checkout", "-q", "main"]);
+    const url = await serve(uploadPackHandler(await open(src), { neverReady: true }));
+    const d = emptyRepo();
+    const repo = await open(d);
+    await clone(url, repo);
+    for (let i = 0; i < 3; i++) {
+      writeFileSync(join(src, "new.txt"), `new ${i}\n`);
+      commitAll(src, `n${i}`);
+    }
+    const stats: FetchStats = { haves: 0, rounds: 0, objects: 0 };
+    await fetchFrom(url, repo, { refspecs: ["+refs/heads/*:refs/heads/*"], stats });
+    expect(stats.haves).toBeLessThanOrEqual(16);
+    expect(rev(d, "refs/heads/main")).toBe(rev(src, "HEAD"));
+  }, 120_000);
+  it("a want reachable from the refs (not a tip) is served, as git v2: fetch by commit id", async () => {
+    const src = repoWithHistory(5);
+    const url = await serve(uploadPackHandler(await open(src)));
+    const sh = emptyRepo();
+    await gitAsync(sh, ["fetch", "-q", "--depth", "1", url, rev(src, "HEAD~2")]);
+    expect(rev(sh, "FETCH_HEAD")).toBe(rev(src, "HEAD~2"));
+  }, 60_000);
+  it("one non-fast-forward ref is rejected; the others still update", async () => {
+    const src = repoWithHistory(4);
+    git(src, ["branch", "b"]);
+    const url = await serve(uploadPackHandler(await open(src)));
+    const d = emptyRepo();
+    const repo = await open(d);
+    await fetchFrom(url, repo, { refspecs: ["refs/heads/*:refs/remotes/o/*"] });
+    git(src, ["reset", "-q", "--hard", "HEAD~1"]);
+    writeFileSync(join(src, "file0.txt"), "rewritten\n");
+    commitAll(src, "rewrite main");
+    git(src, ["checkout", "-q", "b"]);
+    writeFileSync(join(src, "file1.txt"), "b moves on\n");
+    commitAll(src, "b forward");
+    const r = await fetchFrom(url, repo, { refspecs: ["refs/heads/*:refs/remotes/o/*"] });
+    expect(r.rejected.map((x) => x.name)).toEqual(["refs/remotes/o/main"]);
+    expect(rev(d, "refs/remotes/o/b")).toBe(rev(src, "refs/heads/b"));
+    expect(rev(d, "refs/remotes/o/main")).not.toBe(rev(src, "refs/heads/main"));
+  }, 60_000);
+  it("a refspec without a destination fetches the objects; an empty remote's clone takes its unborn HEAD", async () => {
+    const src = repoWithHistory(3);
+    const url = await serve(uploadPackHandler(await open(src)));
+    const d = emptyRepo();
+    const repo = await open(d);
+    await fetchFrom(url, repo, { refspecs: ["refs/heads/main"] });
+    expect(
+      git(d, ["cat-file", "-t", rev(src, "HEAD")])
+        .toString()
+        .trim(),
+    ).toBe("commit");
+    const empty = emptyRepo();
+    git(empty, ["symbolic-ref", "HEAD", "refs/heads/trunk"]);
+    const eurl = await serve(uploadPackHandler(await open(empty)));
+    const e = emptyRepo();
+    await clone(eurl, await open(e));
+    expect(git(e, ["symbolic-ref", "HEAD"]).toString().trim()).toBe("refs/heads/trunk");
+  }, 60_000);
 });

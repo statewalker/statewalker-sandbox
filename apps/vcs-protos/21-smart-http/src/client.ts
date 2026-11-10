@@ -343,7 +343,13 @@ export async function fetchFrom(url: string, repo: Repository, opts: FetchOption
     const res = await repo.refs.batch(commands, { message: `fetch: ${url}` });
     if (!res.ok) throw new Error(`ref update rejected: ${JSON.stringify(res.rejected)}`);
   }
-  return { refs: remoteRefs, updated: commands.map((c) => c.name), shallow: shallowAfter };
+  const rejected: { name: string; reason: string }[] = [];
+  return {
+    refs: remoteRefs,
+    updated: commands.map((c) => c.name),
+    rejected,
+    shallow: shallowAfter,
+  };
 }
 
 async function readFetchResponse(r: PktReader, neg: Negotiator, done: boolean) {
