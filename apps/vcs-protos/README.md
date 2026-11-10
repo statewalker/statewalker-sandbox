@@ -28,6 +28,7 @@ then tests written first (red), then the implementation (green), then findings.
 | `19-delta-reuse` | X6d — **reused entries and deltas: export at 1.05× git's pack (from 3.8×), CRC-checked, cycle-free, thin packs** | Can export reuse what packs already hold — compressed entries and deltas — as git does? |
 | `20-delta-search` | X6e — **git's delta search: incremental and loose exports at 0.84–0.99× git's pack, bounded window, big files left alone** | Can export compute new deltas, as git's pack-objects does, to come near git's size where nothing is reusable? |
 | `21-smart-http` | X8a — **git's smart protocol v2 over a fetch handler: native git clones, deepens and fetches from ours, ours from `git http-backend`; shallow, gzip, streamed, git's negotiation** | Can git's smart protocol (v2) run over a plain fetch handler, both ways, with native git? |
+| `22-receive-pack` | X8b — **git push over the same handler: native `git push` to ours (files, SQL), ours to `git http-backend`; atomic, CAS, connectivity-checked, thin (1.07× git), streamed (+2 MiB for 64 MiB), hooks** | Can git push run over the same fetch handler, both ways, with native git? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.
