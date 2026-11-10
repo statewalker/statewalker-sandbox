@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,7 @@ import { git, noise, packAll, repoWithHistory } from "../../12-index-pack/src/gi
 import { log } from "../../17-repository/src/commands.js";
 import type { Repository } from "../../17-repository/src/object-store.js";
 import { filesRepository, sqlRepository } from "../../17-repository/src/repository.js";
-import { exportPack, listObjects, writePack } from "../src/export.js";
+import { exportPack, listObjects, listObjectsWithEdges, writePack } from "../src/export.js";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -49,6 +49,7 @@ function receiveNative(pack: Uint8Array, head: string, into = tmp()) {
   git(into, ["fsck", "--full", "--strict"]);
   return into;
 }
+const execMkdir = (p: string) => mkdirSync(p, { recursive: true });
 const emptyRepo = () => {
   const d = tmp();
   git(d, ["init", "-q", "-b", "main", "."]);
@@ -294,4 +295,197 @@ describe("R7 export inside a Durable Object", () => {
       await mf.dispose();
     }
   }, 300_000);
+});
+
+/** Review of #73: git's sets across shapes, non-commit haves, explicit shallow, a limited walk. */
+describe("review cases (#73)", () => {
+  const revListArgs = (dir: string, args: string[]) =>
+    git(dir, ["rev-list", ...args])
+      .toString()
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => l.slice(0, 40))
+      .sort();
+  /** A random history: branches, merges (criss-cross too), files shared and edited across branches. */
+  function randomRepo(seed: number) {
+    let x = seed;
+    const rnd = (n: number) => {
+      x = (x * 1103515245 + 12345) >>> 0;
+      return x % n;
+    };
+    const d = emptyRepo();
+    const commitOn = (msg: string) => {
+      for (let k = 0; k < 3; k++) writeFileSync(join(d, `f${rnd(6)}.txt`), `${msg} ${rnd(1000)}\n`);
+      const sub = join(d, "x", "y");
+      if (rnd(3) === 0) {
+        execMkdir(sub);
+        writeFileSync(join(sub, `g${rnd(3)}.txt`), `${msg}\n`);
+      }
+      git(d, ["add", "-A"]);
+      git(d, ["commit", "-q", "-m", msg]);
+    };
+    commitOn("root");
+    const branches = ["main"];
+    for (let i = 0; i < 18; i++) {
+      const r = rnd(10);
+      if (r < 2 && branches.length < 4) {
+        const name = `b${i}`;
+        git(d, ["checkout", "-q", "-b", name]);
+        branches.push(name);
+      } else if (r < 4 && branches.length > 1) {
+        const other = branches[rnd(branches.length)] as string;
+        const cur = git(d, ["rev-parse", "--abbrev-ref", "HEAD"]).toString().trim();
+        if (other !== cur)
+          git(d, ["merge", "-q", "--no-ff", "-X", "theirs", "-m", `merge ${other}`, other]);
+      } else if (r < 5) {
+        git(d, ["checkout", "-q", branches[rnd(branches.length)] as string]);
+      }
+      commitOn(`c${i}`);
+    }
+    const commits = git(d, ["rev-list", "--all"]).toString().trim().split("\n");
+    return { d, commits, rnd };
+  }
+  it("random histories: exactly git's --objects-edge-aggressive set; never more than rev-list, never missing what the haves lack", async () => {
+    for (let seed = 1; seed <= 6; seed++) {
+      const { d, commits, rnd } = randomRepo(seed);
+      const repo = await open(d);
+      for (let q = 0; q < 6; q++) {
+        const wants = [commits[rnd(commits.length)] as string];
+        const haves = [commits[rnd(commits.length)] as string];
+        const ours = (await listObjects(repo, wants, haves)).map((o) => o.oid).sort();
+        const args = [...wants, ...haves.map((h) => `^${h}`)];
+        const plain = revListArgs(d, ["--objects", ...args]);
+        const wantClosure = new Set(revListArgs(d, ["--objects", ...wants]));
+        const haveClosure = new Set(revListArgs(d, ["--objects", ...haves]));
+        const label = `seed ${seed} want ${wants[0]?.slice(0, 7)} have ${haves[0]?.slice(0, 7)}`;
+        for (const o of ours) expect(plain, label).toContain(o);
+        for (const o of wantClosure) if (!haveClosure.has(o)) expect(ours, label).toContain(o);
+        // the want is not below the have (git's aggressive mode marks such a want's tree too)
+        const wantBelowHave = revListArgs(d, [...haves]).includes(wants[0] as string);
+        if (!wantBelowHave)
+          expect(ours, label).toEqual(
+            revListArgs(d, ["--objects-edge-aggressive", ...args]).filter(
+              (l) => !l.startsWith("-"),
+            ),
+          );
+      }
+    }
+  }, 300_000);
+  it("trees, blobs and tags are honoured as haves", async () => {
+    const src = repoWithHistory(6);
+    git(src, ["tag", "-a", "t", "-m", "t", "HEAD^{tree}"]);
+    const repo = await open(src);
+    const head = git(src, ["rev-parse", "HEAD"]).toString().trim();
+    for (const have of ["HEAD^{tree}", "HEAD:file0.txt", "t"]) {
+      const id = git(src, ["rev-parse", have]).toString().trim();
+      const ours = (await listObjects(repo, [head], [id])).map((o) => o.oid).sort();
+      expect(ours, have).toEqual(revListArgs(src, ["--objects", "HEAD", `^${id}`]));
+    }
+    const tag = git(src, ["rev-parse", "t"]).toString().trim();
+    expect(await listObjects(repo, [tag], [tag])).toEqual([]);
+  });
+  it("a missing object fails the export unless it is below a declared shallow commit", async () => {
+    const src = repoWithHistory(8);
+    const repo = await open(src);
+    const head = git(src, ["rev-parse", "HEAD"]).toString().trim();
+    const gone = git(src, ["rev-parse", "HEAD~3"]).toString().trim();
+    rmSync(join(src, ".git", "objects", gone.slice(0, 2), gone.slice(2)));
+    await expect(listObjects(repo, [head], [])).rejects.toThrow(/missing|not in/);
+    const shallow = git(src, ["rev-parse", "HEAD~2"]).toString().trim();
+    const ok = await listObjects(repo, [head], [], { shallow: [shallow] });
+    expect(ok.filter((o) => o.type === "commit").length).toBe(3);
+  });
+  it("an incremental export reads only what it needs, not the whole history", async () => {
+    const d = emptyRepo();
+    writeFileSync(join(d, "f.txt"), "v0\n");
+    git(d, ["add", "-A"]);
+    git(d, ["commit", "-q", "-m", "c0"]);
+    for (let i = 1; i < 400; i++) {
+      writeFileSync(join(d, "f.txt"), `v${i}\n`);
+      git(d, ["commit", "-q", "-am", `c${i}`]);
+    }
+    const repo = await open(d);
+    let gets = 0;
+    const get = repo.objects.get.bind(repo.objects);
+    repo.objects.get = (oid, o) => {
+      gets++;
+      return get(oid, o);
+    };
+    const head = git(d, ["rev-parse", "HEAD"]).toString().trim();
+    const have = git(d, ["rev-parse", "HEAD~1"]).toString().trim();
+    const list = await listObjects(repo, [head], [have]);
+    expect(list.map((o) => o.oid).sort()).toEqual(revListArgs(d, ["--objects", "HEAD", "^HEAD~1"]));
+    expect(gets).toBeLessThan(50);
+  }, 300_000);
+  it("an abort during the walk stops it", async () => {
+    const src = repoWithHistory(20);
+    const repo = await open(src);
+    const ac = new AbortController();
+    let gets = 0;
+    const get = repo.objects.get.bind(repo.objects);
+    repo.objects.get = (oid, o) => {
+      if (++gets === 10) ac.abort();
+      return get(oid, o);
+    };
+    const head = git(src, ["rev-parse", "HEAD"]).toString().trim();
+    const err = await listObjects(repo, [head], [], { signal: ac.signal }).catch((e) => e);
+    expect(err?.name).toBe("AbortError");
+    expect(gets).toBeLessThan(15);
+  });
+  it("streaming, not buffering: stopping after the first data chunk of an 8 MiB object read ≤ 2 MiB of it", async () => {
+    for (const kind of ["files", "sql"] as const) {
+      const d = emptyRepo();
+      writeFileSync(join(d, "big.bin"), noise(8 * 2 ** 20, 9));
+      git(d, ["add", "big.bin"]);
+      git(d, ["commit", "-q", "-m", "big"]);
+      git(d, ["gc", "-q"]);
+      let repo = await open(d);
+      if (kind === "sql") {
+        const sql = await sqlRepository(await newNodeSqliteDb());
+        await sql.objects.installPack(chunks(packAll(d, true)));
+        repo = sql;
+      }
+      const blob = git(d, ["rev-parse", "HEAD:big.bin"]).toString().trim();
+      let read = 0;
+      const get = repo.objects.get.bind(repo.objects);
+      repo.objects.get = async (oid, o) => {
+        const r = await get(oid, o);
+        if (!r || oid !== blob) return r;
+        const content = r.content;
+        return {
+          ...r,
+          content: (async function* () {
+            for await (const c of content) {
+              read += c.length;
+              yield c;
+            }
+          })(),
+        };
+      };
+      const it = writePack(repo, [{ oid: blob, type: "blob" }])[Symbol.asyncIterator]();
+      await it.next(); // pack header
+      await it.next(); // entry header
+      await it.next(); // first deflated bytes
+      await it.return?.(undefined);
+      expect(read, kind).toBeLessThanOrEqual(2 * 2 ** 20);
+      expect(read, kind).toBeGreaterThan(0);
+    }
+  }, 300_000);
+  it("the list carries paths and the walk's edges (for delta search and thin packs)", async () => {
+    const src = repoWithHistory(8);
+    const repo = await open(src);
+    const head = git(src, ["rev-parse", "HEAD"]).toString().trim();
+    const have = git(src, ["rev-parse", "HEAD~3"]).toString().trim();
+    const { objects, edges } = await listObjectsWithEdges(repo, [head], [have]);
+    expect(edges).toEqual([have]);
+    const named = git(src, ["rev-list", "--objects", "HEAD", "^HEAD~3"])
+      .toString()
+      .trim()
+      .split("\n");
+    for (const line of named) {
+      const [oid, path] = [line.slice(0, 40), line.slice(41)];
+      if (path) expect(objects.find((o) => o.oid === oid)?.path, oid).toBe(path);
+    }
+  });
 });
