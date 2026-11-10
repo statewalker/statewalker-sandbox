@@ -143,6 +143,9 @@ export function agentCases({ api, transports = ["stub", "token"], label = "" }) 
         assert.equal((await key(own, "user-tok-1")).reply, "KEY: Bearer hop-tok-2");
         assert.equal((await key(own)).reply, "KEY: Bearer hop-tok-2");
         assert.equal((await key([])).reply, "KEY: Bearer sk-fake", "without one: the deployment's");
+        // A hop that only hands down a token keeps the capability as it is.
+        const only = await key([{ llmToken: "hop-only-5" }], "user-tok-1");
+        assert.equal(only.reply, "KEY: Bearer hop-only-5");
       },
     );
 
@@ -150,9 +153,19 @@ export function agentCases({ api, transports = ["stub", "token"], label = "" }) 
     const { ws, token } = await setup();
     const bad = await ask(ws, token, "token", { prompt: "KEY" }, [], undefined, "a b");
     assert.equal(bad.code, "EINVAL");
+    assert.equal(
+      (await ask(ws, token, "token", { prompt: "KEY" }, [], undefined, "short")).code,
+      "EINVAL",
+    );
     const r = ok(await ask(ws, token, "token", { prompt: "FAIL" }, [], undefined, "user-tok-3"));
-    assert.ok(r.error, "the provider's error is reported");
+    assert.match(r.error, /<redacted>/, "the provider's error is reported, redacted");
     assert.doesNotMatch(JSON.stringify(r), /user-tok-3/);
+    const dep = ok(await ask(ws, token, "token", { prompt: "FAIL", session: "f1" }));
+    assert.match(dep.error, /<redacted>/);
+    assert.doesNotMatch(JSON.stringify(dep), /sk-fake/, "nor the deployment's key");
+    const after = ok(await ask(ws, token, "token", { prompt: "HISTORY", session: "f1" }));
+    // system, FAIL (its failed reply is not kept), HISTORY
+    assert.equal(after.reply, "MESSAGES: 3");
     // A session through a hop with its own token is the same session as without the token.
     const chain = (t) => [{ readOnly: true, ...(t ? { llmToken: t } : {}) }];
     ok(await ask(ws, token, "token", { prompt: "OK", session: "t1" }, chain("hop-tok-4")));

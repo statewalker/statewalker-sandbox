@@ -39,7 +39,7 @@ import { trimHistory } from "./agent-history.ts";
 import { CapFs } from "./capfs.ts";
 import type { Cap } from "./caps.ts";
 import { rgForFlue } from "./flue-compat.ts";
-import { type LlmConfig, llmConfig, llmCredentials } from "./llm-config.ts";
+import { type LlmConfig, llmConfig, llmCredentials, redactor } from "./llm-config.ts";
 
 export interface AgentLoopRequest {
   prompt: string;
@@ -193,10 +193,7 @@ export async function runAgentLoop(
   if (!config) throw new Error("ENOSYS: no model configured for this deployment (LLM)");
   const credentials = llmCredentials(config, env.LLM_API_KEY, llmToken);
   // Neither credential may come back in an error.
-  const redact = (s: string) =>
-    [credentials.apiKey, llmToken]
-      .filter((v): v is string => !!v && v.length >= 4)
-      .reduce((t, v) => t.split(v).join("<redacted>"), s);
+  const redact = redactor([credentials.apiKey, llmToken, env.LLM_API_KEY]);
   const cwd = req.cwd ?? "/";
   const sandbox = await flueBash(
     () => new Bash({ fs: new CapFs(cap) as never, cwd, customCommands: [rgForFlue] }) as never,
@@ -211,6 +208,7 @@ export async function runAgentLoop(
   ].map((make) => make(sandbox));
 
   const sessionKey = req.session ? `agent-session:${scope}:${String(req.session)}` : undefined;
+  // Whatever fails below, its message carries no credential.
   return withSessionLock(sessionKey && `${sandboxId}\n${sessionKey}`, async (hold) => {
     const model = modelOf(config, credentials.headers);
     // What is sent back each turn stays within the context, leaving room for the reply.
@@ -350,5 +348,7 @@ export async function runAgentLoop(
       usage,
       session: req.session ? { name: String(req.session), messages: kept } : undefined,
     };
+  }).catch((e: unknown) => {
+    throw new Error(redact(String((e as Error)?.message ?? e)));
   });
 }

@@ -344,16 +344,27 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
 - **Callers can bring their own model credential.** Send it in the `x-llm-token` header of
   `/api/agents/:name/run`. Each hop of the `chain` hands it down to the next, and the last hop's
   `agent` task uses it for its model calls. A hop can replace it from there on with `llmToken`
-  in its chain entry, e.g. `"chain": [{"scope": "/proj", "llmToken": "<team key>"}]`.
+  in its chain entry, e.g. `"chain": [{"scope": "/proj", "llmToken": "<team key>"}]`; an
+  entry with only `llmToken` passes the capability on unchanged. Chain tokens travel in the
+  request body, so unlike the header they are not kept out of body logs.
   - What the deployment accepts is `callerToken` in `LLM`: `"allow"` (default), `"require"`
     (no run without a caller token, so callers spend their own budget) or `"forbid"`.
-  - By default the token replaces the deployment's key (sent as the provider's API key). With
-    `"callerTokenHeader": "x-user-token"` it goes in that header and the deployment's key stays
-    the API key: for a gateway that authenticates each caller and holds the provider key.
+  - By default the token replaces the deployment's key (sent as the provider's API key); the
+    deployment's static `headers` still go with it. An Anthropic OAuth token (`sk-ant-oat…`) is
+    refused there, since pi-ai would switch to another client's mode for it.
+  - With `"callerTokenHeader": "x-user-token"` it goes in that header and the deployment's key
+    stays the API key: for a gateway that authenticates each caller and holds the provider key.
+    Then `require` only makes the header present; the gateway must check it. The header cannot
+    be an auth or transport header (`authorization`, `x-api-key`, `content-*`, `anthropic-*`,
+    …) or one of the deployment's `headers`.
   - The token is never stored (not in sessions, which do not depend on it either), never
-    returned, and never reaches the tools or the model. Provider errors are redacted. It must be
-    printable ASCII without spaces (up to 4096 characters), so it cannot break a header.
-  - `/api/runtime` reports `llm.callerToken`.
+    returned by this code, and never reaches the tools or the model; errors are redacted (the
+    deployment's key too). An endpoint that echoes a credential in a successful reply is the
+    deployment's to fix. A token is 8 to 4096 characters of `A-Z a-z 0-9 . _ ~ + / = : -`, so it
+    cannot break a header or hide in an escaped error.
+  - The endpoint should not redirect: a cross-origin redirect may drop `Authorization` but keep
+    other headers, such as a `callerTokenHeader`.
+  - `/api/runtime` reports `llm.callerToken` and whether a `callerTokenHeader` is set.
 - **Limits:** `maxTurns` (default 12, at most 50) and `timeoutMs` (default 120 s, at most
   600 s; a tool that ignores the abort gets 5 s more, then the run returns, its calls without
   a result marked as errors; such a tool can still finish after the run returned, and its

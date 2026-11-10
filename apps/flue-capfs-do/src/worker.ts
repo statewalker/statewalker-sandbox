@@ -83,6 +83,8 @@ function llmSummary(env: Env) {
           host: new URL(c.baseUrl).host,
           // Whether callers may (or must) bring their own model token (x-llm-token).
           callerToken: c.callerToken ?? "allow",
+          // Whether it goes to a gateway beside the deployment's key, or is the provider key.
+          callerTokenHeader: !!c.callerTokenHeader,
         }
       : null;
   } catch (e) {
@@ -178,7 +180,7 @@ export default {
             body.task as Task,
             undefined,
             // The caller's model credential: a header, so it stays out of logged bodies.
-            request.headers.get("x-llm-token") ?? undefined,
+            request.headers.get("x-llm-token") || undefined,
           ),
         );
       }

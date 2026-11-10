@@ -117,6 +117,8 @@ export class Agent extends DurableObject<AgentEnv> {
      */
     llmToken?: string,
   ): Promise<RunResult> {
+    if (!Array.isArray(chain) || chain.some((h) => typeof h !== "object" || h === null))
+      throw new Error("EINVAL: chain is a list of objects");
     const cap = capFromHandoff(this.env, handoff);
     // An agent session belongs to the capability the request brought and the chain it named:
     // the token a later hop holds is minted afresh (new block keys) on every run.
@@ -125,12 +127,16 @@ export class Agent extends DurableObject<AgentEnv> {
     if (chain.length > 0) {
       const [first, ...rest] = chain as [AttenuationSpec, ...AttenuationSpec[]];
       const { llmToken: hopToken, ...block } = first;
-      const narrower = await cap.attenuate(attenuationBlock(block));
+      // A hop that only hands down a model token passes the capability on as it is.
+      const next =
+        Object.keys(block).length === 0
+          ? handoff
+          : (await cap.attenuate(attenuationBlock(block))).handoff();
       const subName = `${name}/sub`;
       const sub = this.env.AGENT.get(this.env.AGENT.idFromName(subName));
       const r = (await sub.run(
         subName,
-        narrower.handoff(),
+        next,
         rest,
         task,
         scope,

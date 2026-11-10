@@ -12,6 +12,21 @@ export interface LlmConfig {
   callerTokenHeader?: string;
 }
 
+const RESERVED_HEADERS = new Set([
+  "authorization",
+  "x-api-key",
+  "api-key",
+  "host",
+  "cookie",
+  "connection",
+  "transfer-encoding",
+  "user-agent",
+  "accept",
+]);
+
+/** Caller tokens: at least 8 characters a header and a JSON string carry as they are. */
+const TOKEN = /^[A-Za-z0-9._~+/=:-]{8,4096}$/;
+
 /** The deployment's model, or undefined when none is configured. */
 export function llmConfig(env: { LLM?: unknown }): LlmConfig | undefined {
   const raw = env.LLM;
@@ -27,8 +42,20 @@ export function llmConfig(env: { LLM?: unknown }): LlmConfig | undefined {
   }
   if (c.callerToken !== undefined && !["allow", "require", "forbid"].includes(c.callerToken))
     throw new Error("EINVAL: LLM callerToken is allow, require or forbid");
-  if (c.callerTokenHeader !== undefined && !/^[A-Za-z0-9-]{1,64}$/.test(c.callerTokenHeader))
-    throw new Error("EINVAL: LLM callerTokenHeader is not a header name");
+  if (c.callerTokenHeader !== undefined) {
+    const h = c.callerTokenHeader;
+    if (typeof h !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(h))
+      throw new Error("EINVAL: LLM callerTokenHeader is not a header name");
+    // The caller's token must not take the place of the deployment's credentials or of a header
+    // the deployment sets (pi-ai merges model headers last).
+    const lower = h.toLowerCase();
+    if (
+      RESERVED_HEADERS.has(lower) ||
+      /^(content-|anthropic-|openai-|x-stainless-|sec-|proxy-)/.test(lower) ||
+      Object.keys(c.headers ?? {}).some((k) => k.toLowerCase() === lower)
+    )
+      throw new Error(`EINVAL: LLM callerTokenHeader cannot be '${h}'`);
+  }
   return c as LlmConfig;
 }
 
@@ -39,13 +66,26 @@ export function llmConfig(env: { LLM?: unknown }): LlmConfig | undefined {
 export function llmCredentials(c: LlmConfig, deploymentKey: string | undefined, llmToken?: string) {
   const policy = c.callerToken ?? "allow";
   if (llmToken !== undefined) {
-    if (typeof llmToken !== "string" || !/^[\x21-\x7e]{1,4096}$/.test(llmToken))
+    if (typeof llmToken !== "string" || !TOKEN.test(llmToken))
       throw new Error("EINVAL: the model token is not a valid credential");
     if (policy === "forbid") throw new Error("EACCES: this deployment does not take model tokens");
     if (c.callerTokenHeader)
       return { apiKey: deploymentKey, headers: { [c.callerTokenHeader]: llmToken } };
+    // An Anthropic OAuth token would switch pi-ai into another client's mode (its system prompt,
+    // tool names, headers): not the deployment's choice.
+    if ((c.api ?? "openai-completions") === "anthropic-messages" && llmToken.includes("sk-ant-oat"))
+      throw new Error("EINVAL: OAuth tokens are not taken as the model's API key");
     return { apiKey: llmToken, headers: {} };
   }
   if (policy === "require") throw new Error("EACCES: this deployment needs a model token");
   return { apiKey: deploymentKey, headers: {} };
+}
+
+/** Replaces each credential (as is, and as a JSON string would escape it) in a message. */
+export function redactor(secrets: (string | undefined)[]) {
+  const forms = secrets
+    .filter((v): v is string => typeof v === "string" && v.length >= 4)
+    .flatMap((v) => [v, JSON.stringify(v).slice(1, -1)])
+    .sort((a, b) => b.length - a.length);
+  return (s: string) => forms.reduce((t, v) => t.split(v).join("<redacted>"), s);
 }
