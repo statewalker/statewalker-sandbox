@@ -20,7 +20,33 @@ export interface SessionInfo {
   mode: string;
   revokedAll: boolean;
   revokedIds: string[];
+  model: ModelInfo;
 }
+
+/** The session's model right and budget (null: unlimited), and what it has used. */
+export interface ModelInfo {
+  allowed: boolean;
+  turnsLeft: number | null;
+  tokensLeft: number | null;
+  used: { turns: number; input: number; output: number };
+}
+
+/** `model` when a session starts: false (default), true (unlimited) or a budget. */
+export type ModelGrant = boolean | { turns?: number; tokens?: number };
+
+export interface ModelUsage {
+  input?: number;
+  output?: number;
+}
+
+export type ModelAction = "grant" | "reserve" | "charge";
+
+const budget = (v: unknown, what: string): number | null => {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0)
+    throw fsError("EINVAL", `model ${what} must be a whole number >= 0`);
+  return v;
+};
 
 export class Authority {
   #sql: SqlLike;
@@ -39,6 +65,29 @@ export class Authority {
     sql.exec(
       "CREATE TABLE IF NOT EXISTS cap_revoked (session TEXT NOT NULL, rid TEXT NOT NULL, PRIMARY KEY (session, rid))",
     );
+    // Schema 2 adds the model right and budget to cap_sessions. A store from before has no
+    // 'schema' row: its columns are added once (a column already there, from a run that stopped
+    // before the row was written, is skipped), then the row is written.
+    const schema = Number(
+      sql.exec("SELECT value FROM cap_meta WHERE key = 'schema'").toArray()[0]?.value ?? 1,
+    );
+    if (schema < 2) {
+      for (const [col, type] of [
+        ["model_right", "INTEGER NOT NULL DEFAULT 0"],
+        ["model_turns", "INTEGER"],
+        ["model_tokens", "INTEGER"],
+        ["used_turns", "INTEGER NOT NULL DEFAULT 0"],
+        ["used_input", "INTEGER NOT NULL DEFAULT 0"],
+        ["used_output", "INTEGER NOT NULL DEFAULT 0"],
+      ] as const) {
+        try {
+          sql.exec(`ALTER TABLE cap_sessions ADD COLUMN ${col} ${type}`);
+        } catch (e) {
+          if (!/duplicate column/i.test(String((e as Error)?.message ?? e))) throw e;
+        }
+      }
+      sql.exec("INSERT OR REPLACE INTO cap_meta (key, value) VALUES ('schema', '2')");
+    }
     // The root key never leaves this cell.
     const rows = sql
       .exec("SELECT key, value FROM cap_meta WHERE key IN ('secret', 'public')")
@@ -61,25 +110,39 @@ export class Authority {
 
   // ---- sessions (issuer side) ----
 
-  startSession(user: string, rights: string[], mode = "yolo"): { session: string; token: string } {
+  startSession(
+    user: string,
+    rights: string[],
+    mode = "yolo",
+    model: ModelGrant = false,
+  ): { session: string; token: string } {
     if (!isMode(mode)) throw fsError("EINVAL", `unknown mode '${mode}'`);
     if (typeof user !== "string" || !user) throw fsError("EINVAL", "user is required");
     if (!Array.isArray(rights) || rights.some((r) => typeof r !== "string")) {
       throw fsError("EINVAL", "rights must be an array of paths");
     }
     const clean = rights.map((r) => normalise(r));
+    if (model !== undefined && typeof model !== "boolean" && (typeof model !== "object" || !model))
+      throw fsError("EINVAL", "model is true, false or { turns?, tokens? }");
+    const allowed = model !== false;
+    const limits = typeof model === "object" ? model : {};
+    const turns = budget(limits.turns, "turns");
+    const tokens = budget(limits.tokens, "tokens");
     const session = crypto.randomUUID();
     // Build the token first: a failure leaves no orphan session row.
     const token = Biscuit.build(
       this.#secretKey,
-      authorityBlock({ user, session, rights: clean }),
+      authorityBlock({ user, session, rights: clean, model: allowed }),
     ).toBase64();
     this.#sql.exec(
-      "INSERT INTO cap_sessions (session, user, mode, created) VALUES (?, ?, ?, ?)",
+      "INSERT INTO cap_sessions (session, user, mode, created, model_right, model_turns, model_tokens) VALUES (?, ?, ?, ?, ?, ?, ?)",
       session,
       user,
       mode,
       Date.now(),
+      allowed ? 1 : 0,
+      turns,
+      tokens,
     );
     return { session, token };
   }
@@ -109,6 +172,113 @@ export class Authority {
     return this.sessionInfo(session);
   }
 
+  /**
+   * Sets what is left of a session's model budget: each field given is set (a number, or null
+   * for unlimited); a field left out keeps its value. Only for a session with the model right
+   * (the right is a fact of its token, so a budget cannot add it).
+   */
+  setModelBudget(session: string, limits: { turns?: number | null; tokens?: number | null }) {
+    this.#sessionRow(session);
+    if (!this.#modelInfo(session).allowed)
+      throw fsError("EINVAL", "the session has no model right (start a new session with model)");
+    const l = (limits ?? {}) as Record<string, unknown>;
+    for (const field of ["turns", "tokens"] as const)
+      if (Object.hasOwn(l, field))
+        this.#sql.exec(
+          `UPDATE cap_sessions SET model_${field} = ? WHERE session = ?`,
+          budget(l[field], field),
+          session,
+        );
+    return this.sessionInfo(session);
+  }
+
+  #modelInfo(session: string): ModelInfo {
+    const r = this.#sql
+      .exec(
+        "SELECT model_right, model_turns, model_tokens, used_turns, used_input, used_output FROM cap_sessions WHERE session = ?",
+        session,
+      )
+      .toArray()[0];
+    if (!r) throw fsError("EACCES", "unknown session");
+    const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+    return {
+      allowed: !!r.model_right,
+      turnsLeft: n(r.model_turns),
+      tokensLeft: n(r.model_tokens),
+      used: {
+        turns: Number(r.used_turns),
+        input: Number(r.used_input),
+        output: Number(r.used_output),
+      },
+    };
+  }
+
+  async #requireModel(token: string) {
+    if (!(await this.check(token, "model", "/")))
+      throw fsError("EACCES", "permission denied, model");
+  }
+
+  /**
+   * May this token drive the model, and how much budget is left? The right is the Datalog
+   * decision for operation "model" (the session's model_use fact, minus any attenuation), so
+   * revocation and attenuation apply as for files. `metered`: the run spends the deployment's
+   * budget, so a spent budget refuses it.
+   */
+  async modelGrant(token: string, metered: boolean) {
+    await this.#requireModel(token);
+    const info = this.#modelInfo(await this.sessionOf(token));
+    if (metered && (info.turnsLeft === 0 || info.tokensLeft === 0))
+      throw fsError("EACCES", "the session's model budget is spent");
+    return { turnsLeft: info.turnsLeft, tokensLeft: info.tokensLeft };
+  }
+
+  /**
+   * Before each model request: the right again (revocation stops the next turn), and, when
+   * metered, one turn taken from the budget (refused when no turn or no token is left). The
+   * cell runs one call at a time, so concurrent runs cannot both take the last turn.
+   */
+  async modelReserve(token: string, metered: boolean) {
+    await this.#requireModel(token);
+    const sid = await this.sessionOf(token);
+    const info = this.#modelInfo(sid);
+    if (metered && (info.turnsLeft === 0 || info.tokensLeft === 0))
+      throw fsError("EACCES", "the session's model budget is spent");
+    this.#sql.exec(
+      `UPDATE cap_sessions SET used_turns = used_turns + 1${
+        metered && info.turnsLeft !== null ? ", model_turns = model_turns - 1" : ""
+      } WHERE session = ?`,
+      sid,
+    );
+    const left = this.#modelInfo(sid);
+    return { turnsLeft: left.turnsLeft, tokensLeft: left.tokensLeft };
+  }
+
+  /**
+   * After each model request: the tokens it used (input counts cached and cache-written
+   * prompt tokens), recorded for the token's session whatever its right is now, and taken from
+   * the token budget when metered.
+   */
+  async modelCharge(token: string, usage: ModelUsage, metered: boolean) {
+    const sid = await this.sessionOf(token); // a valid token of this workspace; no right needed
+    const count = (v: unknown) =>
+      typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.min(Math.floor(v), 1e9) : 0;
+    const input = count(usage?.input);
+    const output = count(usage?.output);
+    this.#sql.exec(
+      `UPDATE cap_sessions SET used_input = used_input + ?, used_output = used_output + ?${
+        metered
+          ? ", model_tokens = CASE WHEN model_tokens IS NULL THEN NULL ELSE MAX(model_tokens - ?, 0) END"
+          : ""
+      } WHERE session = ?`,
+      input,
+      output,
+      ...(metered ? [input + output] : []),
+      sid,
+    );
+    const info = this.#modelInfo(sid);
+    return { turnsLeft: info.turnsLeft, tokensLeft: info.tokensLeft };
+  }
+
   sessionInfo(session: string): SessionInfo {
     const row = this.#sessionRow(session);
     const revokedIds = this.#sql
@@ -121,6 +291,7 @@ export class Authority {
       mode: String(row.mode),
       revokedAll: !!row.revoked_all,
       revokedIds,
+      model: this.#modelInfo(session),
     };
   }
 
@@ -206,6 +377,7 @@ export class Authority {
 }
 
 export type FsRequest =
+  | { op: "model"; action: ModelAction; metered?: boolean; usage?: ModelUsage }
   | { op: "call"; method: string; path: string; args?: unknown[] }
   | { op: "readdir"; path: string }
   | { op: "move"; kind: "cp" | "mv"; path: string; dst: string; opts?: unknown };
@@ -288,6 +460,14 @@ export class FsGate {
     return this.#store.mv(s, d);
   }
 
+  /** The model right and budget of this token (see Authority.modelGrant / modelCharge). */
+  model(action: ModelAction, metered: boolean, usage?: ModelUsage): Promise<unknown> {
+    if (action === "grant") return this.#auth.modelGrant(this.#token, metered);
+    if (action === "reserve") return this.#auth.modelReserve(this.#token, metered);
+    if (action === "charge") return this.#auth.modelCharge(this.#token, usage ?? {}, metered);
+    return Promise.reject(fsError("EINVAL", `unknown model action '${String(action)}'`));
+  }
+
   dispatch(req: FsRequest): Promise<unknown> {
     switch (req?.op) {
       case "call":
@@ -296,6 +476,8 @@ export class FsGate {
         return this.readdir(req.path);
       case "move":
         return this.move(req.kind, req.path, req.dst, req.opts);
+      case "model":
+        return this.model(req.action, !!req.metered, req.usage);
       default:
         return Promise.reject(
           fsError("ENOSYS", `unknown request '${String((req as { op?: string })?.op)}'`),

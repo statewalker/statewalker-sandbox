@@ -194,6 +194,20 @@ export async function runAgentLoop(
   const credentials = llmCredentials(config, env.LLM_API_KEY, llmToken);
   // Neither credential may come back in an error.
   const redact = redactor([credentials.apiKey, llmToken, env.LLM_API_KEY]);
+  // A run spends the session's budget, unless the caller's own token is the API key AND the
+  // deployment says such runs are the caller's to pay (callerTokenUnmetered): a token is any
+  // string until the provider rejects it, and some endpoints take none.
+  const metered = !(
+    llmToken !== undefined &&
+    !config.callerTokenHeader &&
+    config.callerTokenUnmetered === true
+  );
+  // The capability must carry the model right (decided in the Workspace cell, like a file
+  // access), and a metered run needs budget left.
+  const grant = (await cap.model("grant", metered)) as {
+    turnsLeft: number | null;
+    tokensLeft: number | null;
+  };
   const cwd = req.cwd ?? "/";
   const sandbox = await flueBash(
     () => new Bash({ fs: new CapFs(cap) as never, cwd, customCommands: [rgForFlue] }) as never,
@@ -220,7 +234,26 @@ export async function runAgentLoop(
     const history = trimHistory(stored, SESSION_MESSAGES, Math.min(SESSION_BYTES, contextBytes));
     const agent = new LoopAgent({
       streamFn: streamSimple as never,
-      getApiKey: () => credentials.apiKey,
+      // pi-agent-core awaits this before every model request: the turn is reserved there (the
+      // right checked again, a turn taken from the budget), so neither a revoked right nor a
+      // spent budget, nor concurrent runs, get a request through.
+      getApiKey: async () => {
+        // A run already stopped (maxTurns, timeout) reserves nothing: pi-agent-core asks for
+        // the key before it looks at the abort.
+        if (stopped) throw new Error("stopped");
+        // The previous request's tokens are charged first, so the reservation sees them.
+        await charges;
+        try {
+          budgetLeft = (await cap.model("reserve", metered)) as typeof budgetLeft;
+        } catch (e) {
+          const message = String((e as Error)?.message ?? e);
+          // A refusal (no right, no budget) ends the run as a limit; anything else is an error.
+          if (/EACCES/.test(message))
+            stopped ??= clip(redact(message).replace(/^(Error: )?E[A-Z]+: /, ""), ERROR_LIMIT);
+          throw e;
+        }
+        return credentials.apiKey;
+      },
       initialState: {
         systemPrompt:
           req.instructions ??
@@ -232,11 +265,31 @@ export async function runAgentLoop(
     } as never);
 
     const maxTurns = Math.min(Math.max(Number(req.maxTurns) || 12, 1), 50);
+    // The tokens of each request are charged after it, in order (input counts cached and
+    // cache-written prompt tokens). Usage is recorded even if the right is gone by then.
+    let charges: Promise<unknown> = Promise.resolve();
+    let chargeError: string | undefined;
+    const charge = (usage: Message["usage"]) => {
+      const u = (usage ?? {}) as Record<string, number | undefined>;
+      const input = (u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
+      const output = u.output ?? 0;
+      charges = charges
+        .then(() => cap.model("charge", metered, { input, output }))
+        .then((r) => {
+          budgetLeft = r as typeof budgetLeft;
+        })
+        .catch((e) => {
+          chargeError ??= `usage not recorded: ${redact(String((e as Error)?.message ?? e))}`;
+        });
+    };
     const timeoutMs = Math.min(Math.max(Number(req.timeoutMs) || 120_000, 1000), 600_000);
     let turns = 0;
     let stopped: string | undefined;
+    let budgetLeft: { turnsLeft: number | null; tokensLeft: number | null } = grant;
     agent.subscribe((e: { type: string; message?: Message; toolResults?: unknown[] }) => {
-      if (e.type !== "turn_end" || stopped) return; // the turn cut short by the abort does not count
+      if (e.type !== "turn_end") return;
+      charge(e.message?.usage); // every request's tokens, the aborted one's too
+      if (stopped) return; // the turn cut short by the abort does not count
       turns += 1;
       // Only a turn that asked for tools leads to another one: a run that ends on its last
       // allowed turn is not a limit stop.
@@ -259,18 +312,29 @@ export async function runAgentLoop(
       }, timeoutMs);
     });
     const loop = (async () => {
-      await agent.prompt(req.prompt);
-      await agent.waitForIdle();
+      try {
+        await agent.prompt(req.prompt);
+        await agent.waitForIdle();
+      } catch (e) {
+        if (!stopped) throw e; // a refused reservation ends the run, it does not fail it
+      }
     })();
-    // A run that outlives the grace period keeps its session locked until it settles: a tool
-    // that ignores the abort may still finish a write, but no other run on the session starts.
-    hold(loop);
+    // A run that outlives the grace period keeps its session locked until it settles (and its
+    // last charges are made): a tool that ignores the abort may still finish a write, but no
+    // other run on the session starts.
+    hold(
+      loop.then(
+        () => charges,
+        () => charges,
+      ),
+    );
     try {
       await Promise.race([loop, deadline]);
     } finally {
       clearTimeout(timer);
       clearTimeout(hard);
     }
+    await charges;
 
     const messages = (agent.state.messages as unknown as Message[]).filter(
       (m) => m.role !== "system",
@@ -330,7 +394,11 @@ export async function runAgentLoop(
             ERROR_LIMIT,
           )
         : undefined;
-    const errors = [stopped, providerError].filter(Boolean);
+    // The provider error repeats a refused reservation (stopped): reported once.
+    const repeats = !!stopped && !!providerError && providerError.includes(stopped);
+    const errors = [stopped, repeats ? undefined : providerError, chargeError].filter(
+      (e): e is string => !!e,
+    );
 
     let kept = messages.length;
     if (sessionKey) {
@@ -346,6 +414,8 @@ export async function runAgentLoop(
       turns,
       toolCalls: toolCalls.map(({ id: _id, done: _done, ...c }) => c),
       usage,
+      // What is left of the session's model budget (null: unlimited), when this run spent it.
+      budget: metered ? budgetLeft : undefined,
       session: req.session ? { name: String(req.session), messages: kept } : undefined,
     };
   }).catch((e: unknown) => {

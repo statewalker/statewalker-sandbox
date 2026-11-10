@@ -17,10 +17,10 @@ export function agentCases({ api, transports = ["stub", "token"], label = "" }) 
     assert.equal(r.ok, true, `${path}: ${r.error}`);
     return r.value;
   };
-  const setup = async (rights = ["/proj"]) => {
+  const setup = async (rights = ["/proj"], model = true) => {
     const ws = `ag-${RUN}-${++n}`;
     await admin(`/api/w/${ws}/seed`, { files: SEED });
-    return { ws, ...(await admin(`/api/w/${ws}/sessions`, { user: "alice", rights })) };
+    return { ws, ...(await admin(`/api/w/${ws}/sessions`, { user: "alice", rights, model })) };
   };
   const files = (ws) => admin(`/api/w/${ws}/files`);
   const ask = (ws, token, transport, task, chain = [], agent = `ag-${ws}`, llmToken) =>
@@ -81,6 +81,64 @@ export function agentCases({ api, transports = ["stub", "token"], label = "" }) 
       },
     );
   }
+
+  for (const transport of transports)
+    add(`[${transport}] the model is a right of the capability`, async () => {
+      const { ws, token } = await setup(["/proj"], false);
+      const r = await ask(ws, token, transport, { prompt: "OK" });
+      assert.equal(r.code, "EACCES", "a session without the model right");
+      const s = await setup();
+      assert.equal(ok(await ask(s.ws, s.token, transport, { prompt: "OK" })).reply, "OK");
+      const none = await ask(s.ws, s.token, transport, { prompt: "OK" }, [{ noModel: true }]);
+      assert.equal(none.code, "EACCES", "a hop can take it away");
+      const two = [{ readOnly: true }, { scope: "/proj" }];
+      assert.equal(ok(await ask(s.ws, s.token, transport, { prompt: "OK" }, two)).reply, "OK");
+    });
+
+  add(
+    "a session's model budget: a turn per request, tokens after, refused once spent",
+    async () => {
+      const { ws, token, session } = await setup(["/proj"], { turns: 3 });
+      const r = ok(await ask(ws, token, "token", { prompt: "LOOP", maxTurns: 10 }));
+      assert.equal(r.stopReason, "limit");
+      assert.equal(r.turns, 3);
+      assert.match(r.error, /budget is spent/);
+      assert.deepEqual(r.budget, { turnsLeft: 0, tokensLeft: null });
+      const spent = await ask(ws, token, "token", { prompt: "OK" });
+      assert.equal(spent.code, "EACCES");
+      assert.match(spent.error, /budget is spent/);
+      // A caller's own token is charged too unless the deployment says otherwise
+      // (callerTokenUnmetered): any string is a token until the provider refuses it.
+      const own = await ask(ws, token, "token", { prompt: "OK" }, [], undefined, "user-tok-6");
+      assert.equal(own.code, "EACCES");
+      const info = await admin(`/api/w/${ws}/sessions/${session}`);
+      assert.deepEqual(info.model.used, { turns: 3, input: 30, output: 15 });
+      await admin(`/api/w/${ws}/sessions/${session}/model`, { turns: null, tokens: 20 });
+      // 15 tokens a request: the third request finds none left.
+      const t = ok(await ask(ws, token, "token", { prompt: "LOOP", maxTurns: 10 }));
+      assert.equal(t.turns, 2);
+      assert.match(t.error, /budget is spent/);
+      assert.deepEqual(t.budget, { turnsLeft: null, tokensLeft: 0 });
+    },
+  );
+
+  add("a run stopped by maxTurns takes no turn past it from the budget", async () => {
+    const { ws, token, session } = await setup(["/proj"], { turns: 5 });
+    const r = ok(await ask(ws, token, "token", { prompt: "LOOP", maxTurns: 2 }));
+    assert.match(r.error, /2 turns/);
+    assert.deepEqual(r.budget, { turnsLeft: 3, tokensLeft: null });
+    const info = await admin(`/api/w/${ws}/sessions/${session}`);
+    assert.equal(info.model.used.turns, 2);
+  });
+
+  add("concurrent runs cannot spend more than the budget", async () => {
+    const { ws, token } = await setup(["/proj"], { turns: 2 });
+    const runs = await Promise.all(
+      [1, 2, 3, 4].map((i) => ask(ws, token, "token", { prompt: "OK" }, [], `ag-${ws}-${i}`)),
+    );
+    const answered = runs.filter((r) => r.ok && r.value.result.reply === "OK").length;
+    assert.equal(answered, 2, JSON.stringify(runs.map((r) => r.error ?? r.value.result.error)));
+  });
 
   add("a run stops after maxTurns", async () => {
     const { ws, token } = await setup();
@@ -182,7 +240,11 @@ export function agentCases({ api, transports = ["stub", "token"], label = "" }) 
     assert.equal(again.reply, "MESSAGES: 6");
     // Stored after the run: those five without the system prompt, plus HISTORY's two.
     assert.equal(again.session.messages, 6);
-    const other = await admin(`/api/w/${ws}/sessions`, { user: "bob", rights: ["/proj"] });
+    const other = await admin(`/api/w/${ws}/sessions`, {
+      user: "bob",
+      rights: ["/proj"],
+      model: true,
+    });
     const bob = ok(await ask(ws, other.token, "token", { prompt: "HISTORY", session: "s1" }));
     assert.equal(bob.reply, "MESSAGES: 2", "bob does not see alice's conversation");
   });

@@ -34,6 +34,8 @@ export type AttenuationSpec = {
   scope?: string | string[];
   readOnly?: boolean;
   datalog?: string;
+  /** No model from this hop on (the `agent` task is refused). */
+  noModel?: boolean;
   /** The model credential from this hop on (replaces the one handed down); not part of the block. */
   llmToken?: string;
 };
