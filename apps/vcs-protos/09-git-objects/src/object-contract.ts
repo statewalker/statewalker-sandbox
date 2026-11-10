@@ -4,6 +4,7 @@
  * for checks uses the platform's DecompressionStream, independent of the kernel's inflater.
  */
 
+import { sha1 } from "@noble/hashes/legacy.js";
 import { gitObjects, type ObjectType } from "./git-objects.js";
 import type { StagingBlobStore } from "./staging.js";
 
@@ -41,6 +42,8 @@ async function* chunked(b: Uint8Array, size: number) {
   for (let i = 0; i < b.length; i += size) yield b.subarray(i, i + size);
 }
 const body = (o: CorpusObject) => o.raw.subarray(o.raw.indexOf(0) + 1);
+const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+const idOf = (raw: Uint8Array) => hex(sha1(raw));
 async function rejects(p: Promise<unknown>, name?: string): Promise<boolean> {
   try {
     await p;
@@ -122,22 +125,29 @@ export async function runObjectContract(
     const ok = await rejects(objs.putRaw(other.id, one(blob.raw)), "ObjectIdMismatchError");
     return ok && (await ids(s)).length === 0;
   });
-  await check("putRaw with a malformed header rejects and stores nothing", async (s) => {
-    const objs = gitObjects(s);
-    const bad = [
-      enc.encode("blub 3\0abc"),
-      enc.encode("blob 3abc"),
-      enc.encode("blob 4\0abc"),
-      enc.encode("blob 2\0abc"),
-      enc.encode("blob 03\0abc"),
-      enc.encode("blob -1\0abc"),
-    ];
-    for (const raw of bad) {
-      if (!(await rejects(objs.putRaw("0".repeat(40), one(raw)))))
-        return new TextDecoder().decode(raw);
-    }
-    return (await ids(s)).length === 0;
-  });
+  await check(
+    "putRaw with a malformed header rejects with CorruptObjectError and stores nothing",
+    async (s) => {
+      const objs = gitObjects(s);
+      // Each id is the real SHA-1 of the malformed bytes, so only header validation can reject them.
+      const bad = [
+        "blub 3\0abc",
+        "blob 3abc",
+        "blob 4\0abc",
+        "blob 2\0abc",
+        "blob 03\0abc",
+        "blob -1\0abc",
+        "blob\0",
+        "",
+      ].map((t) => enc.encode(t));
+      for (const raw of bad) {
+        if (!(await rejects(objs.putRaw(idOf(raw), one(raw)), "CorruptObjectError"))) {
+          return JSON.stringify(new TextDecoder().decode(raw));
+        }
+      }
+      return (await ids(s)).length === 0;
+    },
+  );
   await check("put with a size lie (short or long) rejects and stores nothing", async (s) => {
     const objs = gitObjects(s);
     const b = body(blob);
@@ -163,16 +173,84 @@ export async function runObjectContract(
     ["bytes after the zlib stream", (z) => Uint8Array.of(...z, 1, 2, 3)],
     ["header size disagrees with the body", async () => zlib(enc.encode("blob 5\0abc"))],
     ["not zlib at all", () => enc.encode("plain text, not deflated")],
+    ["an unknown type in the header", async () => zlib(enc.encode("blub 3\0abc"))],
+    ["zero bytes (empty file)", () => new Uint8Array(0)],
+    ["a zlib stream of nothing", async () => zlib(new Uint8Array(0))],
   ];
   for (const [what, corrupt] of corruptions) {
-    await check(`reading an object with ${what} raises an error`, async (s) => {
+    await check(`reading an object with ${what} raises CorruptObjectError`, async (s) => {
       const objs = gitObjects(s);
       await s.put(blob.id, one(await corrupt(await zlib(blob.raw))));
-      const g = await objs.get(blob.id).catch(() => "threw" as const);
-      if (g === "threw") return true;
-      return rejects(collect(g ? g.content : objs.getRaw(blob.id)));
+      if (!(await objs.has(blob.id))) return "planted object not visible";
+      const viaGet = (async () => {
+        const g = await objs.get(blob.id);
+        if (!g) throw new Error("get returned undefined for a stored object");
+        await collect(g.content);
+      })();
+      const ok1 = await rejects(viaGet, "CorruptObjectError");
+      const ok2 = await rejects(collect(objs.getRaw(blob.id)), "CorruptObjectError");
+      return ok1 && ok2 ? true : `get ${ok1}, getRaw ${ok2}`;
     });
   }
+  await check("ids that are not 40 lowercase hex are refused by every method", async (s) => {
+    const objs = gitObjects(s);
+    for (const bad of ["../config", blob.id.toUpperCase(), blob.id.slice(1), `${blob.id}0`]) {
+      if (!(await rejects(objs.has(bad), "InvalidObjectIdError"))) return `has ${bad}`;
+      if (!(await rejects(objs.get(bad), "InvalidObjectIdError"))) return `get ${bad}`;
+      if (!(await rejects(collect(objs.getRaw(bad)), "InvalidObjectIdError")))
+        return `getRaw ${bad}`;
+      if (!(await rejects(objs.putRaw(bad, one(blob.raw)), "InvalidObjectIdError")))
+        return `putRaw ${bad}`;
+    }
+    return true;
+  });
+  await check("a failing store closes the source of put (no dangling pump)", async (s) => {
+    let closed = false;
+    let pulled = 0;
+    const source: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            pulled++;
+            return { done: false, value: crypto.getRandomValues(new Uint8Array(64 * 1024)) };
+          },
+          async return() {
+            closed = true;
+            return { done: true, value: undefined };
+          },
+        };
+      },
+    };
+    const failing: StagingBlobStore = {
+      ...s,
+      async putStaged(bytes) {
+        for await (const _ of bytes) throw new Error("disk full");
+        throw new Error("unreachable");
+      },
+    };
+    const ok = await rejects(gitObjects(failing).put("blob", 1 << 30, source));
+    return ok && closed ? true : `rejected ${ok}, source closed ${closed} after ${pulled} pulls`;
+  });
+  await check("get().content is single-use: a second iteration throws", async (s) => {
+    const objs = gitObjects(s);
+    await objs.putRaw(blob.id, one(blob.raw));
+    const g = await objs.get(blob.id);
+    if (!g) return "absent";
+    await collect(g.content);
+    return rejects(collect(g.content));
+  });
+  await check(
+    "putRaw of an empty stream (no chunks, or one empty chunk) rejects and stores nothing",
+    async (s) => {
+      const objs = gitObjects(s);
+      const id = idOf(new Uint8Array(0));
+      const none = await rejects(objs.putRaw(id, (async function* () {})()), "CorruptObjectError");
+      const empty = await rejects(objs.putRaw(id, one(new Uint8Array(0))), "CorruptObjectError");
+      return none && empty && (await ids(s)).length === 0
+        ? true
+        : `no chunks ${none}, one empty chunk ${empty}`;
+    },
+  );
   await check("get with verify detects an object whose bytes hash to another id", async (s) => {
     const objs = gitObjects(s);
     await s.put(blob.id, one(await zlib(other.raw))); // valid object, wrong name

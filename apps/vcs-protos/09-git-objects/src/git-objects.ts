@@ -22,6 +22,9 @@ export type ObjectType = "blob" | "tree" | "commit" | "tag";
 export class ObjectIdMismatchError extends Error {
   override name = "ObjectIdMismatchError";
 }
+export class InvalidObjectIdError extends Error {
+  override name = "InvalidObjectIdError";
+}
 export class CorruptObjectError extends Error {
   override name = "CorruptObjectError";
 }

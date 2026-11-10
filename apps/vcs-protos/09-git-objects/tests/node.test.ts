@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,11 +22,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import json from "../fixtures/corpus.json" with { type: "json" };
 import { decodeCorpus } from "../src/corpus.js";
 import { gitObjects } from "../src/git-objects.js";
+import { StreamingNodeFilesApi } from "../src/node-streaming-files.js";
 import { collect, runObjectContract } from "../src/object-contract.js";
 import { filesStagingStore, withStaging } from "../src/staging.js";
 
 const corpus = decodeCorpus(json);
-const CASES = 13;
+const CASES = 20;
 const dirs: string[] = [];
 afterAll(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
@@ -142,6 +151,8 @@ describe("R2 native git interop", () => {
     writeFileSync(join(objectsDir, "pack", "pack-0123.pack"), "x");
     writeFileSync(join(objectsDir, "info", "packs"), "x");
     writeFileSync(join(objectsDir, "tmp_obj_AbC123"), "x");
+    mkdirSync(join(objectsDir, "ab"), { recursive: true });
+    writeFileSync(join(objectsDir, "ab", "tmp_obj_XyZ789"), "x"); // git's own placement (create_tmpfile)
     expect(readdirSync(objectsDir)).toContain("pack");
     const ids: string[] = [];
     for await (const id of gitObjects(repoStore(repo)).list()) ids.push(id);
@@ -154,55 +165,162 @@ describe("R2 native git interop", () => {
   });
 });
 
+/** Incompressible bytes, so nothing downstream can hide buffering behind a tiny deflate output. */
+function prng(seed: number) {
+  let x = seed >>> 0 || 1;
+  return (chunk: Uint8Array) => {
+    const w = new Uint32Array(chunk.buffer, chunk.byteOffset, chunk.byteLength >>> 2);
+    for (let i = 0; i < w.length; i++) {
+      x ^= x << 13;
+      x ^= x >>> 17;
+      x ^= x << 5;
+      w[i] = x >>> 0;
+    }
+    return chunk;
+  };
+}
+const mem = () => {
+  const m = process.memoryUsage();
+  return m.heapUsed + m.arrayBuffers;
+};
+const gc = () => (globalThis as { gc?: () => void }).gc?.();
+/** Samples heap + array buffers every 5 ms and once more when `run` resolves. */
+/** Full GC, then a pause so ArrayBuffer backing stores freed by earlier tests are really released. */
+async function settle() {
+  for (let i = 0; i < 3; i++) {
+    gc();
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+async function peakDuring<T>(run: () => Promise<T>): Promise<{ result: T; peak: number }> {
+  await settle();
+  const base = mem();
+  let peak = 0;
+  const timer = setInterval(() => {
+    peak = Math.max(peak, mem() - base);
+  }, 5);
+  try {
+    const result = await run();
+    peak = Math.max(peak, mem() - base);
+    return { result, peak };
+  } finally {
+    clearInterval(timer);
+  }
+}
+function randomSource(mb: number, counters: { passes: number; pulled: number }) {
+  return {
+    async *[Symbol.asyncIterator]() {
+      counters.passes++;
+      const fill = prng(12345);
+      for (let i = 0; i < mb; i++) {
+        const c = fill(new Uint8Array(1 << 20));
+        counters.pulled += c.length;
+        yield c;
+      }
+    },
+  };
+}
+const MiB = 2 ** 20;
+
 describe("R4 one pass over a large blob", () => {
   const MB = Number(process.env.X4_BIG_MB ?? 500);
-  it(`put("blob", ${MB} MB) reads the source once, heap grows < 64 MB, git agrees`, async () => {
+  it(`put("blob", ${MB} MB of incompressible data) reads the source once, memory grows < 64 MB, git agrees`, async () => {
     const repo = newRepo();
-    const objs = gitObjects(repoStore(repo));
-    const CHUNK = 1 << 20;
-    const size = MB * CHUNK;
-    let pulled = 0;
-    let passes = 0;
-    let peak = 0;
-    const gc = (globalThis as { gc?: () => void }).gc;
-    gc?.();
-    const mem = () => {
-      const m = process.memoryUsage();
-      return m.heapUsed + m.arrayBuffers;
-    };
-    const base = mem();
-    const source = {
-      async *[Symbol.asyncIterator]() {
-        passes++;
-        for (let i = 0; i < MB; i++) {
-          const c = new Uint8Array(CHUNK);
-          for (let j = 0; j < CHUNK; j += 4096) c[j] = (i * 31 + j) & 255;
-          pulled += c.length;
-          if (i % 32 === 0) {
-            gc?.();
-            peak = Math.max(peak, mem() - base);
-          }
-          yield c;
-        }
-      },
-    };
+    const objs = gitObjects(filesStagingStore(new StreamingNodeFilesApi(repo), "/.git/objects"));
+    const counters = { passes: 0, pulled: 0 };
     const t0 = performance.now();
-    const id = await objs.put("blob", size, source);
+    const { result: id, peak } = await peakDuring(() =>
+      objs.put("blob", MB * MiB, randomSource(MB, counters)),
+    );
     const ms = performance.now() - t0;
     console.log(
-      `R4 ${MB} MB: ${ms.toFixed(0)} ms (${((MB / ms) * 1000).toFixed(0)} MB/s), heap+arrayBuffers peak +${(peak / 2 ** 20).toFixed(1)} MB`,
+      `R4 ${MB} MB incompressible: ${ms.toFixed(0)} ms (${((MB / ms) * 1000).toFixed(0)} MB/s), heap+arrayBuffers peak +${(peak / MiB).toFixed(1)} MB`,
     );
-    expect(passes).toBe(1);
-    expect(pulled).toBe(size);
-    expect(peak).toBeLessThan(64 * 2 ** 20);
-    expect(git(repo, ["cat-file", "-s", id]).toString().trim()).toBe(String(size));
+    expect(counters.passes).toBe(1);
+    expect(counters.pulled).toBe(MB * MiB);
+    expect(peak).toBeLessThan(64 * MiB);
+    expect(git(repo, ["cat-file", "-s", id]).toString().trim()).toBe(String(MB * MiB));
     const f = fsck(repo);
     expect(f.status, f.output).toBe(0);
     expect(f.output).not.toMatch(/error|warning|mismatch|corrupt|garbage/i); // only "notice: unborn HEAD"
     expect(
       readdirSync(join(repo, ".git", "objects")).filter((n) => n.startsWith("tmp_obj_")),
     ).toEqual([]);
+  }, 600_000);
+  it("trap: webrun-files-node's NodeFilesApi.write collects the whole file before writing", async () => {
+    const MBT = 160;
+    const repo = newRepo();
+    const objs = gitObjects(repoStore(repo)); // the published NodeFilesApi
+    const { peak } = await peakDuring(() =>
+      objs.put("blob", MBT * MiB, randomSource(MBT, { passes: 0, pulled: 0 })),
+    );
+    console.log(
+      `trap: NodeFilesApi, ${MBT} MB incompressible: peak +${(peak / MiB).toFixed(0)} MB`,
+    );
+    // A streaming write stays under the R4 bound (64 MB); this one holds a large share of the file.
+    expect(peak).toBeGreaterThan(MBT * MiB * 0.5);
   }, 300_000);
+  it("reading a 256 MB object retains < 16 MB while its first content chunk is held (SqliteFilesApi, 1 MiB blocks)", async () => {
+    const fs = new SqliteFilesApi(await newNodeSqliteDb(), { compression: null });
+    await fs.init();
+    const objs = gitObjects(filesStagingStore(fs, "/objects"));
+    const size = 256 * MiB;
+    const zeros = new Uint8Array(MiB);
+    const id = await objs.put(
+      "blob",
+      size,
+      (async function* () {
+        for (let i = 0; i < 256; i++) yield zeros;
+      })(),
+    );
+    await settle();
+    const base = mem();
+    const g = await objs.get(id);
+    const it = g?.content[Symbol.asyncIterator]();
+    const first = await it?.next();
+    await settle(); // what the open read retains while the caller holds the first chunk
+    const retained = mem() - base;
+    console.log(`R4b first chunk of a 256 MB object: retained +${(retained / MiB).toFixed(1)} MB`);
+    expect(first?.done).toBe(false);
+    expect(retained).toBeLessThan(16 * MiB);
+    await it?.return?.(undefined);
+  }, 120_000);
+});
+
+describe("R5 an existing object is kept", () => {
+  it("putting an object git already wrote (core.compression=0) leaves git's file byte-for-byte", async () => {
+    const repo = newRepo();
+    const o = corpus.find((x) => x.type === "blob" && body(x.raw).length > 1000) ?? corpus[0];
+    if (!o) throw new Error("no corpus");
+    git(repo, ["-c", "core.compression=0", "hash-object", "-w", "--stdin"], body(o.raw));
+    const file = join(repo, ".git", "objects", o.id.slice(0, 2), o.id.slice(2));
+    const before = readFileSync(file);
+    const id = await gitObjects(repoStore(repo)).put(
+      "blob",
+      body(o.raw).length,
+      [body(o.raw)].values() as never,
+    );
+    expect(id).toBe(o.id);
+    expect(readFileSync(file).equals(before)).toBe(true);
+  });
+});
+
+describe("temporaries left by a crash", () => {
+  it("sweepStaged removes tmp_obj_* older than the given age, at the top level and in fan-out directories", async () => {
+    const repo = newRepo();
+    const objectsDir = join(repo, ".git", "objects");
+    mkdirSync(join(objectsDir, "ab"), { recursive: true });
+    const old = [join(objectsDir, "tmp_obj_old1"), join(objectsDir, "ab", "tmp_obj_old2")];
+    const fresh = join(objectsDir, "tmp_obj_new");
+    for (const f of [...old, fresh]) writeFileSync(f, "partial");
+    const past = new Date(Date.now() - 3 * 3600_000);
+    for (const f of old) utimesSync(f, past, past);
+    const store = repoStore(repo);
+    expect(await store.sweepStaged?.(3600_000)).toBe(2);
+    expect(readdirSync(objectsDir)).toContain("tmp_obj_new");
+    expect(readdirSync(objectsDir)).not.toContain("tmp_obj_old1");
+    expect(readdirSync(join(objectsDir, "ab"))).toEqual([]);
+  });
 });
 
 describe("R6 Durable Object on workerd (SqliteFilesApi on ctx.storage.sql)", () => {

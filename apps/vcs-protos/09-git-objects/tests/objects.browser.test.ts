@@ -9,7 +9,7 @@ import { runObjectContract } from "../src/object-contract.js";
 import { filesStagingStore, withStaging } from "../src/staging.js";
 
 const corpus = decodeCorpus(json);
-const CASES = 13;
+const CASES = 20;
 
 describe("R6 the X4 contract in Chromium", () => {
   it("memBlobStore with generic staging", async () => {

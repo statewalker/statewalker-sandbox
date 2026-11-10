@@ -19,6 +19,8 @@ export interface StagingBlobStore extends BlobStore {
     bytes: ByteStream,
     idOf: () => string | Promise<string>,
   ): Promise<{ id: string; stored: boolean }>;
+  /** Removes staged temporaries older than `olderThanMs` (left by a crash); returns how many. */
+  sweepStaged?(olderThanMs: number): Promise<number>;
 }
 
 /** git's temporary-object name: `tmp_obj_` plus random characters. */
