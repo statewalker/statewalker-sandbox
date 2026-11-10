@@ -24,11 +24,11 @@ describe("R6 OPFS in Chromium", () => {
     expect(await files.exists(`${REF}.lock`)).toBe(false);
   });
 
-  it("two Dedicated Workers racing on the same OPFS directory: exactly one wins", async () => {
+  it("four Dedicated Workers racing on the same OPFS directory: exactly one wins, and they overlapped", async () => {
     const dir = "x2-workers";
     const files = opfsAtomicFiles(await freshDir(dir));
     expect(await casRef(files, REF, undefined, oid(1))).toBe("ok");
-    const startAt = Date.now() + 300;
+    const startAt = Date.now() + 1500; // module workers load within this window
     const race = (next: string) =>
       new Promise<string>((resolve, reject) => {
         const w = new Worker(new URL("./opfs.worker.ts", import.meta.url), { type: "module" });
@@ -46,6 +46,11 @@ describe("R6 OPFS in Chromium", () => {
       race(oid(204)),
     ]);
     expect(results.filter((r) => r === "ok").length, results.join(",")).toBe(1);
+    // Overlap: at least one contender found the lock held (a serial run would only see mismatch).
+    expect(
+      results.some((r) => r === "locked"),
+      results.join(","),
+    ).toBe(true);
     const winner = [201, 202, 203, 204][results.indexOf("ok")] ?? 0;
     expect(await readRef(files, REF)).toBe(oid(winner));
   });

@@ -51,30 +51,45 @@ for (const [name, make] of ADAPTERS) {
     });
   });
 
-  describe(`R4 crash safety (${name})`, () => {
-    const points: FaultPoint[] = [
-      "createExclusive",
-      "after-createExclusive",
-      "replace",
-      "after-replace",
+  describe(`R4 crash safety: the process dies at each step (${name})`, () => {
+    // [point, operation, expected ref value, lock left behind]
+    const cases: Array<[FaultPoint, "update" | "delete", "old" | "new", boolean]> = [
+      ["createExclusive", "update", "old", false],
+      ["after-createExclusive", "update", "old", true],
+      ["replace", "update", "old", true],
+      ["after-replace", "update", "new", false],
+      ["remove", "delete", "old", true],
     ];
-    for (const at of points) {
-      it(`crash at ${at}: old or new value, never torn; a left lock blocks until breakLock`, async () => {
+    for (const [at, op, value, lockLeft] of cases) {
+      it(`${op}, crash at ${at}: ref ${value}, lock ${lockLeft ? "left (locked until breakLock)" : "absent"}`, async () => {
         const files = make();
         expect(await casRef(files, REF, undefined, oid(1))).toBe("ok");
-        await expect(casRef(faultyFiles(files, at), REF, oid(1), oid(2))).rejects.toThrow(
+        const next = op === "update" ? oid(2) : undefined;
+        await expect(casRef(faultyFiles(files, at), REF, oid(1), next)).rejects.toThrow(
           /injected crash/,
         );
-        const value = await readRef(files, REF);
-        expect([oid(1), oid(2)]).toContain(value);
-        if (await files.exists(`${REF}.lock`)) {
-          expect(await casRef(files, REF, value, oid(3))).toBe("locked");
-          expect(await readRef(files, REF)).toBe(value);
+        expect(await readRef(files, REF)).toBe(value === "old" ? oid(1) : next);
+        expect(await files.exists(`${REF}.lock`)).toBe(lockLeft);
+        const current = await readRef(files, REF);
+        if (lockLeft) {
+          expect(await casRef(files, REF, current, oid(3))).toBe("locked");
           expect(await breakLock(files, REF)).toBe(true);
         }
-        expect(await casRef(files, REF, value, oid(3))).toBe("ok");
+        expect(await casRef(files, REF, current, oid(3))).toBe("ok");
       });
     }
+  });
+
+  describe(`R5b ref values are validated, never guessed (${name})`, () => {
+    it("an empty ref, garbage, or a symref is an error, not 'absent' or a value", async () => {
+      for (const bad of ["", "not-an-oid", "ref: refs/heads/other"]) {
+        const files = make();
+        await files.createExclusive(REF, enc.encode(`${bad}\n`));
+        await expect(readRef(files, REF)).rejects.toThrow(/broken|symbolic/);
+        await expect(casRef(files, REF, undefined, oid(1))).rejects.toThrow(/broken|symbolic/);
+        expect(await files.exists(`${REF}.lock`)).toBe(false);
+      }
+    });
   });
 
   describe(`R5 primitives (${name})`, () => {
@@ -129,6 +144,10 @@ describe("R2 eight Node processes racing on one directory", () => {
     );
     const winners = outputs.filter((o) => o.endsWith(":ok"));
     expect(winners.length, outputs.join(" ")).toBe(1);
+    expect(
+      outputs.every((o) => /:(ok|mismatch|locked)$/.test(o)),
+      outputs.join(" "),
+    ).toBe(true);
     const winnerId = Number(winners[0]?.split(":")[0]);
     expect(await readRef(files, REF)).toBe(String(winnerId).padStart(40, "0"));
   }, 60_000);
@@ -230,9 +249,61 @@ describe("R3 native git interop on a real repository", () => {
     expect(final).toBe(winner < 4 ? String(300 + winner).padStart(40, "0") : c2);
     expect(await files.exists(`${REF}.lock`)).toBe(false);
   }, 60_000);
+  it("(f) git holding a transaction lock (update-ref --stdin, prepared) makes casRef report locked", async () => {
+    const { repo, git, c1, c2, files } = setup();
+    const p = spawn("git", ["-C", repo, "update-ref", "--stdin"], { env: GIT_ENV });
+    let out = "";
+    p.stdout.on("data", (d) => (out += d));
+    const until = async (re: RegExp) => {
+      for (let i = 0; i < 200 && !re.test(out); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(out).toMatch(re);
+    };
+    p.stdin.write(`start\nupdate ${REF} ${c1} ${c2}\nprepare\n`);
+    await until(/prepare: ok/);
+    expect(await files.exists(`${REF}.lock`)).toBe(true);
+    expect(await casRef(files, REF, c2, c1)).toBe("locked");
+    p.stdin.end("commit\n");
+    await new Promise((r) => p.on("close", r));
+    expect(git("rev-parse", REF)).toBe(c1);
+  });
+  it("(g) after git pack-refs, reads see the packed value; updates write a loose ref git honours", async () => {
+    const { git, c1, c2, files } = setup();
+    git("pack-refs", "--all");
+    expect(await readRef(files, REF)).toBe(c2);
+    expect(await casRef(files, REF, undefined, c1)).toBe("mismatch");
+    expect(await casRef(files, REF, c2, c1)).toBe("ok");
+    expect(git("rev-parse", REF)).toBe(c1);
+  });
+  it("(h) deleting a ref that is also in packed-refs is refused until packed-refs support (X5)", async () => {
+    const { git, c2, files } = setup();
+    git("pack-refs", "--all");
+    await expect(casRef(files, REF, c2, undefined)).rejects.toThrow(/packed-refs/);
+    expect(git("rev-parse", REF)).toBe(c2);
+    expect(await files.exists(`${REF}.lock`)).toBe(false);
+  });
   it("(d) a value written by git update-ref is what we read", async () => {
     const { git, c1, files } = setup();
     git("update-ref", REF, c1);
     expect(await readRef(files, REF)).toBe(c1);
+  });
+});
+
+describe("R4b a lock whose write fails is rolled back (Node)", () => {
+  it("createExclusive removes the half-written lock and rethrows", async () => {
+    const root = tmp("x2-torn-");
+    const files = nodeAtomicFiles(root, { failWriteForTest: true });
+    await expect(files.createExclusive("refs/heads/x.lock", enc.encode("abc"))).rejects.toThrow(
+      /write failed/,
+    );
+    expect(await nodeAtomicFiles(root).exists("refs/heads/x.lock")).toBe(false);
+  });
+});
+
+describe("R5c remove reports only what it removed (Node)", () => {
+  it("two concurrent removes of one file: exactly one returns true", async () => {
+    const files = nodeAtomicFiles(tmp("x2-rm-"));
+    await files.createExclusive("a", enc.encode("x"));
+    const r = await Promise.all([files.remove("a"), files.remove("a")]);
+    expect(r.filter(Boolean).length).toBe(1);
   });
 });

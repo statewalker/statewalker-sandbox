@@ -7,32 +7,44 @@ export type FaultPoint =
   | "after-replace"
   | "remove";
 
-/** Wraps an AtomicFiles and throws at the chosen point once (a simulated crash). */
+/**
+ * Wraps an AtomicFiles and simulates a process that dies at the chosen point: the call at that
+ * point throws, and so does every call after it (a dead process runs no cleanup).
+ */
 export function faultyFiles(inner: AtomicFiles, at: FaultPoint): AtomicFiles {
-  let fired = false;
-  const crash = (point: FaultPoint) => {
-    if (!fired && point === at) {
-      fired = true;
-      throw new Error(`injected crash at ${point}`);
+  let dead = false;
+  const check = (point: FaultPoint) => {
+    if (dead || point === at) {
+      dead = true;
+      throw new Error(`injected crash at ${at}`);
     }
   };
+  const alive = () => {
+    if (dead) throw new Error(`injected crash at ${at}`);
+  };
   return {
-    read: (p) => inner.read(p),
-    exists: (p) => inner.exists(p),
+    read(p) {
+      alive();
+      return inner.read(p);
+    },
+    async exists(p) {
+      alive();
+      return inner.exists(p);
+    },
     async remove(p) {
-      crash("remove");
+      check("remove");
       return inner.remove(p);
     },
     async createExclusive(p, c) {
-      crash("createExclusive");
+      check("createExclusive");
       const r = await inner.createExclusive(p, c);
-      crash("after-createExclusive");
+      check("after-createExclusive");
       return r;
     },
     async replace(s, t) {
-      crash("replace");
+      check("replace");
       await inner.replace(s, t);
-      crash("after-replace");
+      check("after-replace");
     },
   };
 }
