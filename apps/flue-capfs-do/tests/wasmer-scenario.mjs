@@ -98,6 +98,18 @@ export function wasmerCases({ api, label = "", llm = false }) {
     assert.equal(r.code, "EPERM", r.error);
   });
 
+  add("a large directory is listed in one capability call", async () => {
+    const { ws, token } = await setup();
+    const made = await sh(
+      ws,
+      token,
+      "mkdir -p /workspace/proj/many && cd /workspace/proj/many && for i in $(seq 1 300); do echo $i > f$i.txt; done; ls | wc -l; ls -l f300.txt",
+    );
+    assert.equal(made.exitCode, 0, made.stderr);
+    assert.match(made.stdout, /^300\n/);
+    assert.match(made.stdout, / 4 .*f300\.txt/);
+  });
+
   add("the guest's own `wasmer` command cannot fetch packages", async () => {
     const { ws, token } = await setup();
     const r = await sh(ws, token, "wasmer run syrusakbary/cowsay moo 2>&1; echo rc=$?");

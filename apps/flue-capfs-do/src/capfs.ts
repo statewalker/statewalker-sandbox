@@ -4,6 +4,7 @@
 
 import type { Cap } from "./caps.ts";
 import { fsError, normalise } from "./path.ts";
+import type { DirEntryStat } from "./sql-fs.ts";
 
 const dec = new TextDecoder();
 const enc = new TextEncoder();
@@ -80,14 +81,15 @@ export class CapFs {
   readdir(p: string): Promise<string[]> {
     return this.#cap.readdir(p);
   }
+  /** One capability call (readdirStat), not a stat per entry. */
   async readdirWithFileTypes(p: string) {
-    const names = await this.readdir(p);
-    return Promise.all(
-      names.map(async (name) => {
-        const s = await this.stat(p === "/" ? `/${name}` : `${p}/${name}`);
-        return { name, isFile: s.isFile, isDirectory: s.isDirectory, isSymbolicLink: false };
-      }),
-    );
+    const entries = (await this.#cap.call("readdirStat", p)) as DirEntryStat[];
+    return entries.map((e) => ({
+      name: e.name,
+      isFile: !e.isDirectory,
+      isDirectory: e.isDirectory,
+      isSymbolicLink: false,
+    }));
   }
   async mkdir(p: string, o?: { recursive?: boolean }): Promise<void> {
     await this.#cap.call("mkdir", p, o ?? {});
