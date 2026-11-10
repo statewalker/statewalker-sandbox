@@ -460,7 +460,7 @@ importers:
         specifier: 'catalog:'
         version: 0.10.3
       esbuild:
-        specifier: ^0.28.1
+        specifier: 0.28.2
         version: 0.28.2
       playwright:
         specifier: 'catalog:'

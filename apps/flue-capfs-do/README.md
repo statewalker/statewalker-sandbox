@@ -103,9 +103,10 @@ Tasks:
 
 - `{kind: "bash", script, cwd?}` runs a just-bash shell over the capability.
 - `{kind: "flue", calls: [{tool, params}], cwd?}` calls Flue's tools as a model would.
-- `{kind: "bundle", sources, entry, config?}` bundles a tool's Node-style sources inside the
-  Agent cell and returns `{hash, check, size, code}` (see [Bundling in the cell](#bundling-in-the-cell)).
-- `{kind: "tool", sources, entry, input?}` bundles in the cell, then runs the result as a bundle.
+- `{kind: "bundle", sources, entry, config?}` bundles a tool's Node-style sources in the
+  deployment's bundler Worker and returns `{hash, check, bytes, code}` (see [Bundling in the deployment](#bundling-in-the-deployment)).
+- `{kind: "tool", sources, entry, config?, input?}` bundles in the deployment, then runs the result
+  as a bundle.
 - `{kind: "tool", code, input?, bundled?}` runs a module in a new Worker Loader isolate (one per
   call, so no state survives between callers). The module exports
   `default class extends WorkerEntrypoint { run(files, input) }`. `files` is the narrowed
@@ -183,38 +184,50 @@ const { code, hash, check } = await bundleTool({
 Or from the command line: `pnpm bundle-tool <dir> [--entry /index.ts] [--config overrides.json]
 [--out tool.bundle.js]`. It prints the hash on stderr, and exits 1 when the bundle would fail
 the Agent's check. The generated entry file is removed from the source tree afterwards.
-Bundling runs wherever esbuild runs: Node, a browser with esbuild-wasm, or the Agent cell itself
-(next section).
+Bundling runs wherever esbuild runs: Node, a browser with esbuild-wasm, or the deployment's
+bundler Worker (next section).
 
-#### Bundling in the cell
+#### Bundling in the deployment
 
-The Agent can also bundle: `{kind: "bundle", sources, entry}` runs the same `bundleTool` with
-esbuild-wasm inside the Agent cell, and `{kind: "tool", sources, entry, input}` bundles and runs.
+The deployment can bundle too: `{kind: "bundle", sources, entry, config?}` returns the bundle,
+and `{kind: "tool", sources, entry, config?, input}` bundles and runs it. Both use the same
+`bundleTool`, with esbuild-wasm, in a **bundler Worker** that the Agent loads on demand.
 
 ```bash
 curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/json' -d '{
   "workspace": "acme", "token": "<token>", "transport": "token",
   "task": { "kind": "bundle", "entry": "/index.ts",
             "sources": { "/index.ts": "import { readdir } from \"node:fs/promises\";\nexport default (i) => readdir(i.dir);" } } }'
-# → {"value":{"result":{"hash":"sha256-…","check":{"ok":true,"problems":[]},"size":…,"code":"…"}}}
+# → {"value":{"result":{"hash":"sha256-…","check":{"ok":true,"problems":[]},"bytes":…,"code":"…"}}}
 ```
 
-- **How:** `esbuild.wasm` is imported as a module (workerd's `CompiledWasm` rule; cellb ≥ 0.8,
-  celld and wrangler all apply it), and esbuild-wasm runs in the cell's own thread, initialized
-  once per isolate (about 80 ms on workerd). On cellb's Node host the cell gets a
-  `self = globalThis` alias, which esbuild-wasm needs and workerd and browsers already have.
-- **Same bundle as on a build machine:** esbuild-wasm and esbuild are the same version, so the
-  cell's bundle has the same hash as `bundleTool` on Node; a hash approved in `allowedBundles`
-  admits both (the scenario suite checks this, and on `cellb-bundled-only` runs the cell's
-  bundle under the approved hash).
-- **Nothing is trusted more for being built in the cell:** the result is a bundle like any other,
-  so the Agent runs the acceptance check and the deployment's policy on it; a bundle that fails
-  the check is refused (`EPERM`). A caller can override build-side keys only (`fsModules`,
-  `pathModules`, `builtins`, `modules`, `define`, `processEnv`); `external`, the check and the
-  policy are the deployment's.
-- **Limits:** 200 files, 2 MB of sources, 5 MB of output. The sources are only parsed; esbuild
-  runs no code from them.
-- **Cost:** `esbuild.wasm` is about 14 MB, part of the Worker (and of cellb's browser build).
+- **The bundler Worker** (`src/bundler/program.ts`) is built by `pnpm build:bundler` into
+  `src/bundler/program.gen.js` (generated, not committed; the test runners, `dev:*` scripts and
+  the browser build run it). The main Worker embeds its code (about 280 KB) but not
+  `esbuild.wasm` (about 14 MB). The Agent fetches that once per isolate from the deployment's
+  **`BUNDLER_WASM_URL`**, checks it against the SHA-256 pinned at build, and loads both into a
+  Worker Loader isolate of their own (no bindings, no network), which it keeps between calls.
+  A call that fails other than by its request, or takes over 60 s, retires that isolate.
+- **Opt-in:** without `BUNDLER_WASM_URL` the tasks answer `ENOSYS`, and `/api/runtime` reports
+  `bundler: false`. No cell compiles esbuild unless a tool is bundled, and the deploy stays the
+  size it was. Point the URL at the file in `node_modules/esbuild-wasm/esbuild.wasm` served by
+  the deployment (or a CDN copy of that exact version: the hash decides).
+- **Why not a second script behind a service binding:** cellb binds services only to its own
+  script's entrypoints, so that would not run on cellb. The Worker Loader is on every runtime
+  here (workerd, cellb in Node and in a browser, celld), and keeps esbuild's memory and crashes
+  out of the Agent cell.
+- **Same bundle as on a build machine:** esbuild-wasm and esbuild are the same version (pinned),
+  and the bundler is built with Node's builtin export names, so its bundle has the same hash as
+  `bundleTool` on Node; a hash approved in `allowedBundles` admits both (the scenario suite
+  checks this, and on `cellb-bundled-only` runs the deployment's bundle under the approved hash).
+- **Nothing is trusted more for being built here:** the result is a bundle like any other, so
+  the Agent runs the acceptance check and the deployment's policy on it; where no tool may run
+  (`refused`, `none`) the tool task is refused before bundling. A caller may set build-side keys
+  only (`fsModules`, `pathModules`, `builtins`, `modules`, `define`, `processEnv`, each checked
+  for its shape); `external`, the check and the policy are the deployment's. The bundler runs no
+  code it is given: sources are parsed and transformed.
+- **Limits:** 100 files and 256 KB of UTF-8 sources and config together (esbuild-wasm needs
+  about 100 MB for its first build and more for large inputs), a bundle of at most 2 MB.
 
 **The tool contract:** the module exports `run(input)` or a default function; a default-exported
 class is refused with `EINVAL`. The bundle's entry is a generated `WorkerEntrypoint` whose
@@ -526,9 +539,11 @@ src/llm-config.ts   the LLM var and one run's credentials (deployment key or cal
 src/node-probe-guard.ts  hides process.versions.node from pi-ai's load-time probes in the browser
 src/tools/config.ts  ToolBundleConfig: defaults (tool-bundle.config.json) ← overrides ← TOOL_BUNDLE
 src/tools/shims.ts   fs shim over `files`, POSIX path, deny modules, the WorkerEntrypoint wrapper
-src/tools/bundle.ts  bundleTool(): webrun-bundler with the shims (build side; not in the Worker)
+src/tools/bundle.ts  bundleTool(): webrun-bundler with the shims (build side and the bundler Worker; not in the main Worker)
 src/tools/check.ts   acceptance check (acorn + eslint-scope), bundle hash
-src/tools/in-cell.ts bundleInCell(): esbuild-wasm in the Agent cell behind bundleTool
+src/tools/bundle-request.ts   what a caller may send to be bundled (limits, build-side keys)
+src/tools/bundler-client.ts  the Agent's side: fetch and pin esbuild.wasm, load the bundler Worker
+src/bundler/program.ts       the bundler Worker: bundleTool with esbuild-wasm (pnpm build:bundler)
 src/tools/policy.ts  toolPolicy() and admitTool(): what may run here, from the deployment config only
 src/python/engine.mjs  the Python engine (Pyodide): a Node child process or a browser Worker
 src/python/kernel.ts   Agent side: files into /workspace, live capfs calls, write-back through the capability
