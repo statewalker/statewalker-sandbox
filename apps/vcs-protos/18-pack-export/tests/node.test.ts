@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +9,7 @@ import { Miniflare } from "miniflare";
 import { afterAll, describe, expect, it } from "vitest";
 import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-files.js";
 import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
-import { git, noise, packAll, repoWithHistory } from "../../12-index-pack/src/git-repo.js";
+import { git, gitEnv, noise, packAll, repoWithHistory } from "../../12-index-pack/src/git-repo.js";
 import { log } from "../../17-repository/src/commands.js";
 import type { Repository } from "../../17-repository/src/object-store.js";
 import { filesRepository, sqlRepository } from "../../17-repository/src/repository.js";
@@ -403,7 +404,12 @@ describe("review cases (#73)", () => {
     git(d, ["commit", "-q", "-m", "c0"]);
     for (let i = 1; i < 400; i++) {
       writeFileSync(join(d, "f.txt"), `v${i}\n`);
-      git(d, ["commit", "-q", "-am", `c${i}`]);
+      // distinct dates, as real histories have (equal dates make the walk go on: see above)
+      const date = `${1700000000 + i * 60} +0000`;
+      execFileSync("git", ["commit", "-q", "-am", `c${i}`], {
+        cwd: d,
+        env: { ...gitEnv, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+      });
     }
     const repo = await open(d);
     let gets = 0;

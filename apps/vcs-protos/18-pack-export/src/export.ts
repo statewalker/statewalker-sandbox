@@ -1,32 +1,41 @@
 /**
- * X6c — pack export over X16a's Repository (git files or SQL).
+ * X6c — pack export over X16a's Repository (git files or SQL): `listObjects` (see
+ * listObjectsWithEdges) chooses the objects, `writePack` streams them.
  *
- * `listObjects` walks as `git rev-list --objects <wants> --not <haves>`: commits reachable from
- * the wants and not from the haves (full ancestry; a missing parent is a shallow boundary); then
- * each such commit's tree, recursively, minus the trees and blobs reachable from the trees of the
- * haves (mark_tree_uninteresting on the negative tips) and of the edges — uninteresting parents of
- * listed commits (rev-list's mark_edges_uninteresting) — and minus what was already listed.
- * Annotated tags among the wants are listed with what they point at; gitlinks (160000) are not
- * objects of this repository.
- *
- * `writePack` writes them as a version-2 pack of whole objects, pulled by the consumer: an
- * object is opened only when the consumer asks for the bytes after the previous one, its content
- * streams through a deflater (memory: a deflate window, not the object), the pack's SHA-1 runs
- * over the output, and an AbortSignal is checked between chunks. Leaving the generator early
- * (return, throw, abort) releases the open object's stream.
+ * `writePack` writes a version-2 pack of whole objects, pulled by the consumer: an object is
+ * opened only when the consumer asks for the bytes after the previous one, its content streams
+ * through a deflater (memory: a deflate window; for compressible data the deflater may read a
+ * whole small object before its first output), the pack's SHA-1 runs over the output, and the
+ * AbortSignal is checked between chunks — it throws the signal's reason (an AbortError unless the
+ * caller aborted with another value). Leaving the generator early releases the open object's
+ * stream. The object list is fixed before writing: a gc that removes a listed object during the
+ * export fails it mid-stream.
  */
 import { sha1 } from "@noble/hashes/legacy.js";
 import { Deflate } from "pako";
 import { readCommit, readTree } from "../../17-repository/src/commands.js";
-import { isTreeMode, parseTagTarget } from "../../17-repository/src/git-format.js";
+import { type CommitData, isTreeMode, parseTagTarget } from "../../17-repository/src/git-format.js";
 import type { ObjectType, Repository } from "../../17-repository/src/object-store.js";
 
 export interface ToSend {
   oid: string;
   type: ObjectType;
+  /** The path a tree or blob was reached by (as `rev-list --objects` prints it): for delta search. */
+  path?: string;
+}
+
+export interface WalkOptions {
+  signal?: AbortSignal;
+  /**
+   * Commits whose parents are not followed (the receiver's shallow boundary, or this repository's
+   * own `.git/shallow`). Any other missing object fails the walk, as git's does.
+   */
+  shallow?: Iterable<string>;
 }
 
 const TYPE_CODE: Record<ObjectType, number> = { commit: 1, tree: 2, blob: 3, tag: 4 };
+/** git's SLOP: commits still walked once only uninteresting ones are queued (clock skew). */
+const SLOP = 5;
 
 async function typeOf(
   repo: Repository,
@@ -49,23 +58,41 @@ async function typeOf(
   return { type: "tag", bytes };
 }
 
-/** Follows tags; returns the tags passed and the object they end at. */
-async function peel(repo: Repository, oid: string, tags: ToSend[]): Promise<ToSend | undefined> {
+/** Follows tags; returns the tags passed and the object they end at (undefined: absent). */
+async function peel(repo: Repository, oid: string, tags: string[]): Promise<ToSend | undefined> {
   for (let i = 0; i < 16; i++) {
     const t = await typeOf(repo, oid);
     if (!t) return undefined;
     if (t.type !== "tag") return { oid, type: t.type };
-    tags.push({ oid, type: "tag" });
+    tags.push(oid);
     oid = parseTagTarget(t.bytes as Uint8Array).object;
   }
   throw new Error(`tag chain too long at ${oid}`);
 }
 
-export async function listObjects(
+/**
+ * The objects to send for `wants` given the receiver's `haves`, with the walk's edges
+ * (uninteresting parents of sent commits: the bases a thin pack may delta against).
+ *
+ * Commits: git's limited walk (revision.c limit_list) — one queue by committer date over both
+ * sides, uninteresting propagated to parents, stopped once only uninteresting commits are queued
+ * and none is as new as an interesting commit found (then SLOP more for clock skew): an
+ * incremental export reads the commits near the tips, not the whole history. A have this repository lacks is ignored (a receiver may claim anything); a
+ * missing want or parent fails unless below a declared shallow commit.
+ *
+ * Trees and blobs: those of the sent commits, minus everything reachable from the trees of the
+ * haves and of the edges — git's `rev-list --objects-edge-aggressive` set (plain `rev-list
+ * --objects` marks only the edges' trees and sends more; the difference is objects the receiver
+ * has). Trees, blobs and tags given as haves are uninteresting themselves.
+ */
+export async function listObjectsWithEdges(
   repo: Repository,
   wants: string[],
   haves: string[],
-): Promise<ToSend[]> {
+  opts: WalkOptions = {},
+): Promise<{ objects: ToSend[]; edges: string[] }> {
+  const signal = opts.signal;
+  const shallow = new Set(opts.shallow ?? []);
   const out: ToSend[] = [];
   const seen = new Set<string>();
   const add = (o: ToSend) => {
@@ -74,76 +101,157 @@ export async function listObjects(
     out.push(o);
     return true;
   };
-  // uninteresting: every commit reachable from the haves; the trees/blobs of the haves' trees
-  const uninteresting = new Set<string>();
+  const uninterestingObjects = new Set<string>();
+
+  // --- commits: the limited walk
+  type State = { u: boolean; commit: CommitData; popped: boolean; order: number };
+  const state = new Map<string, State>();
+  const queue: string[] = [];
+  let order = 0;
+  const enqueue = (oid: string) => {
+    const s = state.get(oid) as State;
+    let i = queue.length;
+    while (i > 0) {
+      const o = state.get(queue[i - 1] as string) as State;
+      if (o.commit.committer.when > s.commit.committer.when) break;
+      if (o.commit.committer.when === s.commit.committer.when && o.order < s.order) break;
+      i--;
+    }
+    queue.splice(i, 0, oid);
+  };
+  const markUninteresting = (oid: string) => {
+    const stack = [oid];
+    while (stack.length) {
+      const x = stack.pop() as string;
+      const s = state.get(x);
+      if (!s || s.u) continue;
+      s.u = true;
+      if (s.popped && !shallow.has(x)) stack.push(...s.commit.parents);
+    }
+  };
+  /** false: absent (only allowed for uninteresting commits) */
+  const visit = async (oid: string, u: boolean): Promise<boolean> => {
+    signal?.throwIfAborted();
+    const known = state.get(oid);
+    if (known) {
+      if (u) markUninteresting(oid);
+      return true;
+    }
+    if (!(await repo.objects.has(oid))) {
+      if (u) return false;
+      throw new Error(
+        `commit ${oid} is missing (not in this repository, not below a shallow commit)`,
+      );
+    }
+    state.set(oid, { u, commit: await readCommit(repo, oid), popped: false, order: order++ });
+    enqueue(oid);
+    return true;
+  };
+
   const haveTips: string[] = [];
+  const roots: ToSend[] = [];
   for (const h of haves) {
-    const p = await peel(repo, h, []);
-    if (p?.type === "commit") haveTips.push(p.oid);
+    const tags: string[] = [];
+    const p = await peel(repo, h, tags);
+    for (const t of tags) uninterestingObjects.add(t);
+    if (!p) continue; // a have we do not have
+    if (p.type === "commit") {
+      if (await visit(p.oid, true)) haveTips.push(p.oid);
+    } else if (p.type === "tree") roots.push(p);
+    else uninterestingObjects.add(p.oid);
   }
-  const stack = [...haveTips];
-  while (stack.length) {
-    const c = stack.pop() as string;
-    if (uninteresting.has(c) || !(await repo.objects.has(c))) continue;
-    uninteresting.add(c);
-    stack.push(...(await readCommit(repo, c)).parents);
+  const wantTags: string[] = [];
+  const wantRoots: ToSend[] = [];
+  for (const w of wants) {
+    const tags: string[] = [];
+    const p = await peel(repo, w, tags);
+    if (!p) throw new Error(`want ${w} is missing from this repository`);
+    wantTags.push(...tags);
+    if (p.type === "commit") await visit(p.oid, false);
+    else wantRoots.push(p);
   }
+  const result: string[] = [];
+  let slop = SLOP;
+  while (queue.length) {
+    signal?.throwIfAborted();
+    // Stop when only uninteresting commits are queued AND none of them is as new as an
+    // interesting commit found so far: a queued commit could still reach that one only through
+    // older commits (git's cut-off relies on commit dates; with equal dates it keeps walking, which
+    // the random-history test showed is needed). SLOP more commits cover clock skew.
+    if (queue.every((q) => (state.get(q) as State).u)) {
+      const newestQueued = (state.get(queue[0] as string) as State).commit.committer.when;
+      let oldestInteresting = Number.POSITIVE_INFINITY;
+      for (const r of result) {
+        const rs = state.get(r) as State;
+        if (!rs.u) oldestInteresting = Math.min(oldestInteresting, rs.commit.committer.when);
+      }
+      if (newestQueued < oldestInteresting && --slop < 0) break;
+    } else slop = SLOP;
+    const c = queue.shift() as string;
+    const s = state.get(c) as State;
+    s.popped = true;
+    if (!s.u) result.push(c);
+    if (shallow.has(c)) continue;
+    for (const p of s.commit.parents) await visit(p, s.u);
+  }
+  const commits = result.filter((c) => !(state.get(c) as State).u);
+  const edges: string[] = [];
+  const edgeSet = new Set<string>();
+  for (const c of commits) {
+    if (shallow.has(c)) continue;
+    for (const p of (state.get(c) as State).commit.parents) {
+      const ps = state.get(p);
+      if (ps?.u && !edgeSet.has(p)) {
+        edgeSet.add(p);
+        edges.push(p);
+      }
+    }
+  }
+
+  // --- trees and blobs
   const markTree = async (tree: string) => {
-    if (uninteresting.has(tree)) return;
-    uninteresting.add(tree);
+    if (uninterestingObjects.has(tree)) return;
+    signal?.throwIfAborted();
+    uninterestingObjects.add(tree);
     for (const e of await readTree(repo, tree)) {
       if (Number.parseInt(e.mode, 8) === 0o160000) continue;
       if (isTreeMode(e.mode)) await markTree(e.oid);
-      else uninteresting.add(e.oid);
+      else uninterestingObjects.add(e.oid);
     }
   };
-  for (const c of haveTips) await markTree((await readCommit(repo, c)).tree);
-
-  // interesting commits, then their trees
-  const commits: string[] = [];
-  const roots: ToSend[] = [];
-  for (const w of wants) {
-    const tags: ToSend[] = [];
-    const p = await peel(repo, w, tags);
-    for (const t of tags) if (!uninteresting.has(t.oid)) add(t);
-    if (!p) throw new Error(`want ${w} is not in this repository`);
-    if (p.type === "commit") commits.push(p.oid);
-    else roots.push(p);
+  for (const r of roots) await markTree(r.oid); // trees given as haves
+  for (const c of [...haveTips, ...edges]) {
+    const s = state.get(c);
+    await markTree((s ? s.commit : await readCommit(repo, c)).tree);
   }
-  const queue = [...commits];
-  const visited = new Set<string>();
-  const trees: string[] = [];
-  const edges = new Set<string>();
-  while (queue.length) {
-    const c = queue.shift() as string;
-    if (visited.has(c) || uninteresting.has(c)) continue;
-    visited.add(c);
-    if (!(await repo.objects.has(c))) continue; // shallow boundary
-    const commit = await readCommit(repo, c);
-    add({ oid: c, type: "commit" });
-    trees.push(commit.tree);
-    for (const p of commit.parents) {
-      if (uninteresting.has(p)) edges.add(p);
-      else queue.push(p);
-    }
-  }
-  // git's mark_edges_uninteresting: the trees of the uninteresting parents of interesting commits
-  // (a side branch forked below a have) are not sent either
-  for (const e of edges) await markTree((await readCommit(repo, e)).tree);
-  const walkTree = async (tree: string) => {
-    if (uninteresting.has(tree) || !add({ oid: tree, type: "tree" })) return;
+  for (const t of wantTags) if (!uninterestingObjects.has(t)) add({ oid: t, type: "tag" });
+  for (const c of commits) add({ oid: c, type: "commit" });
+  const walkTree = async (tree: string, path: string) => {
+    if (uninterestingObjects.has(tree)) return;
+    if (!add(path ? { oid: tree, type: "tree", path } : { oid: tree, type: "tree" })) return;
+    signal?.throwIfAborted();
     for (const e of await readTree(repo, tree)) {
       if (Number.parseInt(e.mode, 8) === 0o160000) continue; // a gitlink: another repository's commit
-      if (isTreeMode(e.mode)) await walkTree(e.oid);
-      else if (!uninteresting.has(e.oid)) add({ oid: e.oid, type: "blob" });
+      const p = path ? `${path}/${e.name}` : e.name;
+      if (isTreeMode(e.mode)) await walkTree(e.oid, p);
+      else if (!uninterestingObjects.has(e.oid)) add({ oid: e.oid, type: "blob", path: p });
     }
   };
-  for (const t of trees) await walkTree(t);
-  for (const r of roots) {
-    if (r.type === "tree") await walkTree(r.oid);
-    else if (!uninteresting.has(r.oid)) add(r);
+  for (const c of commits) await walkTree((state.get(c) as State).commit.tree, "");
+  for (const r of wantRoots) {
+    if (r.type === "tree") await walkTree(r.oid, "");
+    else if (!uninterestingObjects.has(r.oid)) add(r);
   }
-  return out;
+  return { objects: out, edges };
+}
+
+export async function listObjects(
+  repo: Repository,
+  wants: string[],
+  haves: string[],
+  opts: WalkOptions = {},
+): Promise<ToSend[]> {
+  return (await listObjectsWithEdges(repo, wants, haves, opts)).objects;
 }
 
 function entryHeader(type: ObjectType, size: number): Uint8Array {
@@ -219,8 +327,8 @@ export async function* exportPack(
   repo: Repository,
   wants: string[],
   haves: string[],
-  opts: { signal?: AbortSignal } = {},
+  opts: WalkOptions = {},
 ): AsyncGenerator<Uint8Array> {
-  const objects = await listObjects(repo, wants, haves);
+  const objects = await listObjects(repo, wants, haves, opts);
   yield* writePack(repo, objects, opts);
 }
