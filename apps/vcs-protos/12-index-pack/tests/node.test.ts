@@ -431,7 +431,12 @@ describe("R3b hostile packs fail fast, without allocating what they declare", ()
 
 describe("R4b memory bounded on deep and branching delta chains", () => {
   const MiB = 2 ** 20;
-  const gc = () => (globalThis as { gc?: () => void }).gc?.();
+  // two collections: after one, V8's concurrent ArrayBuffer sweeper may still count freed
+  // buffers (X6b1 measured +8 MiB alone and +24–38 MiB after heavier test files for this case)
+  const gc = () => {
+    (globalThis as { gc?: () => void }).gc?.();
+    (globalThis as { gc?: () => void }).gc?.();
+  };
   const live = () => {
     const m = process.memoryUsage();
     return m.heapUsed + m.arrayBuffers;
