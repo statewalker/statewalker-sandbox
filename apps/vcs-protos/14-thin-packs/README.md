@@ -35,7 +35,7 @@ entries still need memory of the order of X6a's.
 | R2 | Every X6a native-git pack (OFS, REF, `gc --aggressive`, 4 MiB blob with a delta child) still indexes to an `.idx` byte-identical to `git index-pack`'s; hostile packs are still refused (X6a's R3/R3b cases re-run against this implementation). |
 | R3 | A 200 000-object pack (with OFS and REF deltas) installs with < 40 MiB extra live memory (heap + array buffers, sampled after GC on every storage read) and an `.idx` identical to git's. |
 | R4 | A pack header that declares more entries than the pack's size can hold is refused before anything is allocated. |
-| R5 | Phase 2 reads the stored pack through a bounded window: for the 60-commit history pack (≥ 300 deltas) the number of storage reads is at most a quarter of the number of delta loads. |
+| R5 | Phase 2 reads the stored pack through a bounded window: for the 60-commit history pack (245 deltas; first written "≥ 300", a miscount — X6a records 245) the number of storage reads is at most a quarter of the number of delta loads. |
 | R6 | `sweepPackTemporaries(files, packDir, { olderThanMs })` removes `tmp_*` files in the pack directory older than the threshold (git prune's rule), keeps younger ones and never touches `pack-*` files. |
 | R7 | In Chromium (OPFS) and a Durable Object (SqliteFilesApi) a committed thin-pack fixture is completed from committed base objects to the same pack and `.idx` as on Node. |
 

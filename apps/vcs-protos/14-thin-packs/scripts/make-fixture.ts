@@ -17,7 +17,7 @@ git(receiver, ["init", "-q", "-b", "main", "."]);
 const have = git(sender, ["rev-list", "--objects", "HEAD~2"]);
 git(
   receiver,
-  ["index-pack", "--stdin", "-q"],
+  ["index-pack", "--stdin"],
   git(sender, ["pack-objects", "--stdout", "-q"], have),
 );
 const thin = new Uint8Array(
@@ -28,7 +28,7 @@ const thin = new Uint8Array(
   ),
 );
 const before = new Set(readdirSync(join(receiver, ".git/objects/pack")));
-git(receiver, ["index-pack", "--fix-thin", "--stdin", "-q"], thin);
+git(receiver, ["index-pack", "--fix-thin", "--stdin"], thin);
 const name = readdirSync(join(receiver, ".git/objects/pack")).find(
   (n) => n.endsWith(".pack") && !before.has(n),
 ) as string;
