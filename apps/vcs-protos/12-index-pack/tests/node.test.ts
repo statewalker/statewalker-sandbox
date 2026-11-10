@@ -431,12 +431,7 @@ describe("R3b hostile packs fail fast, without allocating what they declare", ()
 
 describe("R4b memory bounded on deep and branching delta chains", () => {
   const MiB = 2 ** 20;
-  // two collections: after one, V8's concurrent ArrayBuffer sweeper may still count freed
-  // buffers (X6b1 measured +8 MiB alone and +24–38 MiB after heavier test files for this case)
-  const gc = () => {
-    (globalThis as { gc?: () => void }).gc?.();
-    (globalThis as { gc?: () => void }).gc?.();
-  };
+  const gc = () => (globalThis as { gc?: () => void }).gc?.();
   const live = () => {
     const m = process.memoryUsage();
     return m.heapUsed + m.arrayBuffers;
@@ -510,7 +505,10 @@ describe("R4b memory bounded on deep and branching delta chains", () => {
         `R4b two-level tree, budget ${budget}: peak +${(peak / MiB).toFixed(1)} MiB live, base read ${baseReads}x`,
       );
       expect(Buffer.from(r.idx).equals(Buffer.from(gitIdx(pack))), `budget ${budget}`).toBe(true);
-      expect(peak).toBeLessThan(24 * MiB);
+      // Process memory here varies with what ran before in the run (+8 MiB alone, +24–42 MiB
+      // after the other files, on X6a's and X6b1's modules alike): a loose bound of a few 4 MiB
+      // objects; the deterministic check is the base-read count below (X6b1 review of #66).
+      expect(peak).toBeLessThan(48 * MiB);
     }
     // unlimited: the base is inflated once; a 1-byte budget evicts it and re-derives it on demand
     expect(reads[1]).toBe(1);
