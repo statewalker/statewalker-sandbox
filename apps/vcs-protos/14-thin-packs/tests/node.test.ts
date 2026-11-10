@@ -237,6 +237,7 @@ describe("R1b thin-pack refusals and base lookups", () => {
     }).catch((e) => e);
     expect(err).toBeInstanceOf(PackError);
     expect(String(err)).toMatch(/2 (unresolved )?deltas/);
+    expect(calls).toEqual([Aid]); // a miss is remembered: asked once per id
     expect(await listed(files)).toEqual([]);
   });
   it("a base whose content hashes to another id is refused", async () => {
@@ -534,5 +535,162 @@ describe("R7 fixture: the committed thin pack completes to the committed result"
       expect(r.appended).toBeGreaterThan(0);
       expect(r.same).toBe(true);
     });
+  });
+});
+
+/** Review of #66: memory and reads under shapes the first tests did not cover. */
+describe("R3b/R5b review cases", () => {
+  const enc = new TextEncoder();
+  const fill = async (files: MemFilesApi, path: string) => collect(files.read(path));
+  it("a pack declaring as many entries as its size allows, garbage after 100 000 valid entries: refused with < 16 MiB live", async () => {
+    // 100 000 small valid entries (~2 MiB) so the refusal happens chunks after the tables exist
+    const valid = buildPack(
+      Array.from({ length: 100_000 }, (_, i) => ({ kind: 3, data: enc.encode(`v${i}`) })),
+    );
+    const size = 16 * MiB;
+    const p = new Uint8Array(size);
+    p.set(valid.subarray(0, valid.length - 20)); // zeros after the valid entries (type 0)
+    new DataView(p.buffer).setUint32(8, Math.floor((size - 32) / 9));
+    const files = new StreamingNodeFilesApi(tmp());
+    gc();
+    const base = live();
+    let peak = 0;
+    const read = files.read.bind(files);
+    files.read = (path, o) =>
+      (async function* () {
+        for await (const c of read(path, o)) {
+          gc();
+          peak = Math.max(peak, live() - base);
+          yield c;
+        }
+      })();
+    const err = await installPack(files, "/objects/pack", chunks(p)).catch((e) => e);
+    expect(err).toBeInstanceOf(PackError);
+    expect(String(err)).toMatch(/bad object type 0/); // refused at the first garbage entry
+    console.log(`R3b declared-count pack: peak +${(peak / MiB).toFixed(1)} MiB`);
+    expect(peak).toBeLessThan(16 * MiB);
+  });
+  it("a 100 000-deep comb (REF chain, an OFS leaf on every node) installs with < 40 MiB extra live", async () => {
+    const N = 100_000;
+    const prefix = "x".repeat(50);
+    const content = (t: string) => enc.encode(prefix + t.padStart(10, "0"));
+    const d = (tag: string) => {
+      const t = enc.encode(tag.padStart(10, "0"));
+      return delta(60, 60, [0x90, 50, t.length, ...t]); // copy 50 bytes, insert 10
+    };
+    const entries: CraftEntry[] = [{ kind: 3, data: content("c0") }];
+    let prev = content("c0");
+    for (let i = 1; i <= N; i++) {
+      entries.push({ kind: 7, baseOid: oidOf("blob", prev), data: d(`c${i}`) });
+      entries.push({ kind: 6, baseIdx: entries.length - 1, data: d(`l${i}`) });
+      prev = content(`c${i}`);
+    }
+    const pack = buildPack(entries);
+    const ref = gitIdx(pack);
+    const files = new StreamingNodeFilesApi(tmp());
+    const read = files.read.bind(files);
+    let peak = 0;
+    let base = 0;
+    let n = 0;
+    files.read = (path, o) => {
+      if (++n % 500 === 0) {
+        gc();
+        peak = Math.max(peak, live() - base);
+      }
+      return read(path, o);
+    };
+    gc();
+    base = live();
+    const r = await installPack(files, "/objects/pack", chunks(pack), { windowBytes: 64 });
+    console.log(`R3b comb: ${r.stats.storageReads} reads, peak +${(peak / MiB).toFixed(1)} MiB`);
+    expect(Buffer.compare(Buffer.from(r.idx), Buffer.from(ref))).toBe(0);
+    expect(r.stats.storageReads).toBeGreaterThan(10_000); // sampled throughout phase 2
+    expect(peak).toBeLessThan(40 * MiB);
+  }, 600_000);
+  const ext = (b: Uint8Array, tail: string) => {
+    const t = enc.encode(tail);
+    return {
+      data: new Uint8Array([...b, ...t]),
+      d: delta(b.length, b.length + t.length, [...copyAll(b.length), t.length, ...t]),
+    };
+  };
+  for (const big of [false, true]) {
+    it(`an evicted appended base is re-read (${big ? "3 MB, direct read" : "small, windowed"}): git's idx`, async () => {
+      const A = big
+        ? (await import("../../12-index-pack/src/git-repo.js")).noise(3_000_000, 5)
+        : enc.encode("root ".repeat(30));
+      const A2 = enc.encode("second external ".repeat(30));
+      const b = ext(A, "B");
+      const c = ext(A, "C");
+      const e = ext(A2, "E");
+      const f = ext(b.data, "F");
+      const g = ext(c.data, "G");
+      const p = buildPack([
+        { kind: 7, baseOid: oidOf("blob", A), data: b.d },
+        { kind: 7, baseOid: oidOf("blob", A2), data: e.d },
+        { kind: 7, baseOid: oidOf("blob", b.data), data: f.d },
+        { kind: 7, baseOid: oidOf("blob", A), data: c.d },
+        { kind: 7, baseOid: oidOf("blob", c.data), data: g.d },
+      ]);
+      const objs: Record<string, Uint8Array> = { [oidOf("blob", A)]: A, [oidOf("blob", A2)]: A2 };
+      const files = new MemFilesApi();
+      const r = await installPack(files, "/objects/pack", chunks(p), {
+        baseCacheBytes: 1,
+        windowBytes: 4096,
+        externalBase: async (o) => (objs[o] ? { type: "blob", data: objs[o] } : undefined),
+      });
+      expect(r.stats.appended).toBe(2);
+      expect(r.stats.deltaLoads).toBeGreaterThanOrEqual(6); // A was loaded back
+      const bytes = await fill(files, `/objects/pack/pack-${r.packId}.pack`);
+      expect(Buffer.compare(Buffer.from(r.idx), Buffer.from(gitIdx(bytes)))).toBe(0);
+    });
+  }
+  it("50 appended bases are written in a few batches, not one file each", async () => {
+    const bases: Record<string, Uint8Array> = {};
+    const entries: CraftEntry[] = [];
+    for (let k = 0; k < 50; k++) {
+      const A = enc.encode(`external base ${k} `.repeat(40));
+      bases[oidOf("blob", A)] = A;
+      entries.push({ kind: 7, baseOid: oidOf("blob", A), data: ext(A, `+${k}`).d });
+    }
+    const p = buildPack(entries);
+    const files = new MemFilesApi();
+    const write = files.write.bind(files);
+    const written: string[] = [];
+    files.write = (path, content) => {
+      written.push(path);
+      return write(path, content);
+    };
+    const r = await installPack(files, "/objects/pack", chunks(p), {
+      externalBase: async (o) => (bases[o] ? { type: "blob", data: bases[o] } : undefined),
+    });
+    expect(r.stats.appended).toBe(50);
+    expect(r.count).toBe(100);
+    const thinFiles = written.filter((w) => /tmp_thin_/.test(w));
+    expect(thinFiles.length).toBeLessThanOrEqual(2);
+    const bytes = await fill(files, `/objects/pack/pack-${r.packId}.pack`);
+    expect(Buffer.compare(Buffer.from(r.idx), Buffer.from(gitIdx(bytes)))).toBe(0);
+    expect(await listed2(files)).toEqual([`pack-${r.packId}.idx`, `pack-${r.packId}.pack`]);
+  });
+  const listed2 = async (files: MemFilesApi) => {
+    const out: string[] = [];
+    for await (const e of files.list("/objects/pack")) out.push(e.name);
+    return out.sort();
+  };
+  it("the window is bounded: no phase-2 read is longer than windowBytes", async () => {
+    const pack = packAll(history, true);
+    const files = new StreamingNodeFilesApi(tmp());
+    const read = files.read.bind(files);
+    const lengths: number[] = [];
+    files.read = (path, o) => {
+      if (o?.length !== undefined) lengths.push(o.length);
+      return read(path, o);
+    };
+    const r = await installPack(files, "/objects/pack", chunks(pack), { windowBytes: 4 * 1024 });
+    expect(pack.length).toBeGreaterThan(4 * 4 * 1024);
+    expect(Buffer.compare(Buffer.from(r.idx), Buffer.from(gitIdx(pack)))).toBe(0);
+    expect(lengths.length).toBe(r.stats.storageReads);
+    expect(r.stats.storageReads).toBeGreaterThan(1);
+    expect(Math.max(...lengths)).toBeLessThanOrEqual(4 * 1024);
   });
 });
