@@ -373,6 +373,29 @@ describe("review cases (#73)", () => {
       }
     }
   }, 300_000);
+  it("a blob the have's tree holds but the fork point lacks is not sent (aggressive), git's plain set would", async () => {
+    const d = repoWithHistory(8);
+    git(d, ["checkout", "-q", "-b", "side", "HEAD~4"]);
+    writeFileSync(join(d, "same.txt"), "identical on both sides\n");
+    git(d, ["add", "same.txt"]);
+    git(d, ["commit", "-q", "-m", "side adds same.txt"]);
+    const have = git(d, ["rev-parse", "HEAD"]).toString().trim();
+    git(d, ["checkout", "-q", "main"]);
+    writeFileSync(join(d, "same.txt"), "identical on both sides\n");
+    git(d, ["add", "same.txt"]);
+    git(d, ["commit", "-q", "-m", "main adds same.txt"]);
+    const head = git(d, ["rev-parse", "HEAD"]).toString().trim();
+    const blob = git(d, ["rev-parse", "HEAD:same.txt"]).toString().trim();
+    const repo = await open(d);
+    const ours = (await listObjects(repo, [head], [have])).map((o) => o.oid).sort();
+    expect(revListArgs(d, ["--objects", head, `^${have}`])).toContain(blob); // plain rev-list sends it
+    expect(ours).not.toContain(blob); // the receiver has it in the have's tree
+    expect(ours).toEqual(
+      revListArgs(d, ["--objects-edge-aggressive", head, `^${have}`]).filter(
+        (l) => !l.startsWith("-"),
+      ),
+    );
+  });
   it("trees, blobs and tags are honoured as haves", async () => {
     const src = repoWithHistory(6);
     git(src, ["tag", "-a", "t", "-m", "t", "HEAD^{tree}"]);
