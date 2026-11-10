@@ -62,7 +62,7 @@ upload-pack and X8b's receive-pack; `meshFetch(call, peer, token)` turns a
 | clone, fetch, push over `pairedLinks` | logs equal; the serving repository passes `fsck --strict` |
 | reader / member / maintainer | read only (403 on receive-pack) / own namespace only / anywhere |
 | two members | each pushes `refs/peers/<self>/main`, fetches the other's, cannot overwrite it |
-| fetch over the mesh (48 × 256 KiB) | the first byte after 5 of the reads (progress during the search) |
+| fetch over the mesh (48 × 256 KiB) | the first byte after 5 of 154 reads (progress during the search) |
 
 ## Verified
 
