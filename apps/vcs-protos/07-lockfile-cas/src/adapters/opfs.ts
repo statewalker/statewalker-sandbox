@@ -5,7 +5,10 @@ import type { AtomicFiles } from "../lockfile.js";
  * check-then-create inside a Web Lock named after the path; Web Locks are shared by every page and
  * worker of the origin, which is the whole set of OPFS writers (native git cannot reach OPFS).
  * replace writes the target through createWritable, which OPFS commits atomically on close, then
- * removes the source.
+ * removes the source: the target is updated atomically, the source removal may lag (a crash in
+ * between leaves the source behind — for a lock, a stale lock reported as `locked`).
+ * Exclusivity holds only among callers using these Web Lock names in the same origin and storage
+ * partition. (createSyncAccessHandle's exclusive per-file lock is an alternative in workers.)
  */
 export function opfsAtomicFiles(root: FileSystemDirectoryHandle): AtomicFiles {
   const split = (path: string) => {
@@ -63,7 +66,12 @@ export function opfsAtomicFiles(root: FileSystemDirectoryHandle): AtomicFiles {
     createExclusive: (path, content) =>
       withPathLock(path, async () => {
         if (await fileHandle(path)) return false;
-        await writeFile(path, content);
+        try {
+          await writeFile(path, content);
+        } catch (e) {
+          await self.remove(path).catch(() => false); // roll back a half-created lock
+          throw e;
+        }
         return true;
       }),
     async replace(source, target) {
