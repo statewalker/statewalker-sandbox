@@ -524,17 +524,17 @@ tests/python-scenario.mjs  the Python cases, shared by tests/python.test.mjs (HT
 | durability across a restart | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run | not run |
 | python (13 cases) | `ENOSYS` (as designed) | ✅ 13 | ✅ 13 | ✅ 13 | `ENOSYS` (as on workerd) |
-| agent (17 cases, fake model; 10 Nov) | ✅ 17 | ✅ 17 | ✅ 17 | ✅ 17 | ✅ 13 (token transport) |
+| agent (22 cases, fake model; 10 Nov) | ✅ 22 | ✅ 22 | ✅ 22 | ✅ 22 | ✅ 17 (token transport) |
 
-In Chromium on cellb (`test:browser`), 32/32 pass (since the agent task and model tokens, 10 Nov; 16 before): the runtime check, the capability check
-(rights, both transports, Flue tools with delegation), the 13 Python cases, the 16 agent cases, and no page errors.
+In Chromium on cellb (`test:browser`), 37/37 pass (since the agent task, model tokens and the model right, 10 Nov; 16 before): the runtime check, the capability check
+(rights, both transports, Flue tools with delegation), the 13 Python cases, the 21 agent cases, and no page errors.
 The Python cases include the review's findings:
 - a caller's files, builtins and tasks are not seen by a run with another capability;
 - a task that outlives its run cannot use `capfs`;
 - there is no network from the engine;
 - a removed tree is removed from the store, and oversized output is truncated.
 
-The 36 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
+The 39 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
 asserts the `EPERM` refusal. The bundled-tool test asserts `EPERM` by default; under
 `bundled-only` it asserts a run of the approved bundle, `EPERM` for a changed one, and `EPERM`
 for the global-object alias. The cross-caller isolate test is skipped there.
