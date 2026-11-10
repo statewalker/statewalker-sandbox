@@ -90,7 +90,7 @@ export async function listObjectsWithEdges(
   wants: string[],
   haves: string[],
   opts: WalkOptions = {},
-): Promise<{ objects: ToSend[]; edges: string[] }> {
+): Promise<{ objects: ToSend[]; edges: string[]; receiverHas: Set<string> }> {
   const signal = opts.signal;
   const shallow = new Set(opts.shallow ?? []);
   const out: ToSend[] = [];
@@ -242,7 +242,9 @@ export async function listObjectsWithEdges(
     if (r.type === "tree") await walkTree(r.oid, "");
     else if (!uninterestingObjects.has(r.oid)) add(r);
   }
-  return { objects: out, edges };
+  // what the receiver has for sure: the trees and blobs of the haves' and edges' trees (the bases
+  // a thin pack may send deltas against)
+  return { objects: out, edges, receiverHas: uninterestingObjects };
 }
 
 export async function listObjects(

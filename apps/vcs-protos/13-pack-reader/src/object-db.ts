@@ -10,6 +10,7 @@ import { filesStagingStore } from "../../09-git-objects/src/staging.js";
 import {
   openPack,
   PackError,
+  type PackedEntry,
   type PackReader,
   type PackReaderOptions,
   type ReadObject,
@@ -22,6 +23,12 @@ export interface ObjectDatabase {
   ): Promise<ReadObject | undefined>;
   has(oid: string): Promise<boolean>;
   list(): AsyncIterable<string>;
+  /**
+   * The object's entry in the first pack holding a copy not found bad (X6d: reuse when exporting).
+   * A copy whose header fails, or whose `raw()` fails its CRC, is marked bad: later `entry` and
+   * `get` calls skip it.
+   */
+  entry(oid: string): Promise<PackedEntry | undefined>;
   /** Packs that could not be opened (corrupt idx, mismatched pack…), skipped as git does. */
   readonly skipped: { pack: string; error: string }[];
 }
@@ -37,6 +44,17 @@ export async function openObjectDatabase(
   const dir = objectsDir.replace(/\/+$/, "");
   const loose = gitObjects(filesStagingStore(files, dir));
   const packs: PackReader[] = [];
+  /** Copies found corrupt, per pack (by reader: two packs can share a trailer id), skipped by `get` and `entry`. */
+  const bad = new WeakMap<PackReader, Set<string>>();
+  const isBad = (p: PackReader, oid: string) => bad.get(p)?.has(oid) ?? false;
+  const markBad = (p: PackReader, oid: string) => {
+    let s = bad.get(p);
+    if (!s) {
+      s = new Set();
+      bad.set(p, s);
+    }
+    s.add(oid);
+  };
   const db: ObjectDatabase = {
     skipped: [],
     async get(oid, o) {
@@ -48,16 +66,51 @@ export async function openObjectDatabase(
       let failed: unknown;
       for (const p of packs) {
         if (!p.has(oid)) continue;
+        if (isBad(p, oid)) {
+          failed ??= new PackError(`object ${oid}: the copy in pack ${p.packId} is corrupt`);
+          continue;
+        }
         try {
           return await p.get(oid, o);
         } catch (e) {
           if (!(e instanceof PackError)) throw e;
+          markBad(p, oid);
           failed ??= e;
         }
       }
       const fromLoose = await loose.get(oid, { verify: o?.verify });
       if (fromLoose || !failed) return fromLoose;
       throw failed;
+    },
+    async entry(oid) {
+      if (!OID.test(oid)) return undefined;
+      // copies found bad (a header that does not parse, a CRC mismatch while copying) are passed
+      // over, as git's mark_bad_packed_object; `get` then skips them too
+      for (const p of packs) {
+        if (!p.has(oid) || isBad(p, oid)) continue;
+        let e: PackedEntry | undefined;
+        try {
+          e = await p.entry(oid);
+        } catch (err) {
+          if (!(err instanceof PackError)) throw err;
+          markBad(p, oid);
+          continue;
+        }
+        if (!e) continue;
+        const stored = e;
+        return {
+          ...stored,
+          async *raw() {
+            try {
+              yield* stored.raw();
+            } catch (err) {
+              if (err instanceof PackError) markBad(p, oid);
+              throw err;
+            }
+          },
+        };
+      }
+      return undefined;
     },
     async has(oid) {
       if (!OID.test(oid)) return false;
