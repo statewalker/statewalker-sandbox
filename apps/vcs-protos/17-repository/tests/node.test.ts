@@ -61,6 +61,8 @@ async function scenario(repo: Repository) {
     "README.md": enc.encode("hello\n"),
     "src/main.ts": enc.encode("console.log(1)\n"),
     "src/lib/util.ts": enc.encode("export const x = 1;\n"),
+    // "lib.ts" sorts before the tree "lib" only under git's rule (a tree compares as "lib/")
+    "src/lib.ts": enc.encode("export * from './lib/util';\n"),
   });
   const c1 = await commit(repo, {
     ref: "refs/heads/main",
@@ -207,6 +209,7 @@ describe("R2 the same commands give the same ids on both backends, equal to nati
     const util = mktree([`100644 blob ${blob("export const x = 1;\n")}\tutil.ts`]);
     const src = mktree([
       `040000 tree ${util}\tlib`,
+      `100644 blob ${blob("export * from './lib/util';\n")}\tlib.ts`,
       `100644 blob ${blob("console.log(1)\n")}\tmain.ts`,
     ]);
     const t1 = mktree([`100644 blob ${blob("hello\n")}\tREADME.md`, `040000 tree ${src}\tsrc`]);
@@ -325,10 +328,37 @@ describe("R5 the SQL backend inside a Durable Object", () => {
       durableObjects: { REPO: { className: "RepoDo", useSQLite: true } },
     });
     try {
-      // the fixture pack is repoWithHistory(40) packed (X6a): its history is deterministic
-      const src = repoWithHistory(40);
-      const head = git(src, ["rev-parse", "HEAD"]).toString().trim();
-      const expected = git(src, ["log", "--format=%H", "HEAD"]).toString().trim().split("\n");
+      // the fixture pack's history, by native git: index it, take the commit no other commit names
+      const src = tmp();
+      git(src, ["init", "-q", "."]);
+      git(
+        src,
+        ["index-pack", "--stdin"],
+        readFileSync(
+          fileURLToPath(new URL("../../12-index-pack/fixtures/sample.pack", import.meta.url)),
+        ),
+      );
+      const commits = git(src, [
+        "cat-file",
+        "--batch-all-objects",
+        "--batch-check=%(objectname) %(objecttype)",
+      ])
+        .toString()
+        .trim()
+        .split("\n")
+        .filter((l) => l.endsWith(" commit"))
+        .map((l) => l.split(" ")[0] as string);
+      const parents = new Set(
+        commits.flatMap((c) =>
+          git(src, ["rev-parse", `${c}^@`])
+            .toString()
+            .trim()
+            .split("\n")
+            .filter(Boolean),
+        ),
+      );
+      const head = commits.find((c) => !parents.has(c)) as string;
+      const expected = git(src, ["log", "--format=%H", head]).toString().trim().split("\n");
       const r = (await (
         await mf.dispatchFetch(`http://x/run?head=${head}`, { method: "POST" })
       ).json()) as {
