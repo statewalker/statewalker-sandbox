@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -98,6 +99,29 @@ describe("R2 native git reads an installed pack", () => {
   }, 120_000);
 });
 
+describe("R2b install order (git's finish_tmp_packfile)", () => {
+  it("the pack is renamed into place before the idx; temporaries never under final names", async () => {
+    const repo = emptyRepo();
+    const files = new StreamingNodeFilesApi(join(repo, ".git"));
+    const moves: string[] = [];
+    const move = files.move.bind(files);
+    files.move = async (a, b) => {
+      moves.push(
+        `${a
+          .split("/")
+          .pop()
+          ?.replace(/_[0-9a-f]+$/, "_*")} -> ${b
+          .split("/")
+          .pop()
+          ?.replace(/[0-9a-f]{40}/, "<id>")}`,
+      );
+      return move(a, b);
+    };
+    await installPack(files, "/objects/pack", chunks(variants[0]?.[1] as Uint8Array));
+    expect(moves).toEqual(["tmp_pack_* -> pack-<id>.pack", "tmp_idx_* -> pack-<id>.idx"]);
+  });
+});
+
 describe("R3 corrupt packs are refused and leave nothing behind", () => {
   const good = variants[0]?.[1] as Uint8Array;
   const flip = (b: Uint8Array, at: number) => {
@@ -127,8 +151,23 @@ describe("R3 corrupt packs are refused and leave nothing behind", () => {
       git(history, ["pack-objects", "--stdout", "-q", "--thin", "--revs"], "HEAD\n^HEAD~1\n"),
     );
   })();
+  /** The first entry's declared size + 1, with a recomputed trailer: only the size check can catch it. */
+  const sizeLie = (() => {
+    const c = good.slice();
+    const b = c[12] as number;
+    c[12] = (b & 0xf0) | (((b & 0x0f) + 1) & 0x0f);
+    if ((b & 0x0f) === 0x0f) throw new Error("pick another entry");
+    c.set(
+      createHash("sha1")
+        .update(c.subarray(0, c.length - 20))
+        .digest(),
+      c.length - 20,
+    );
+    return c;
+  })();
   const cases: [string, Uint8Array][] = [
     ["truncated", good.subarray(0, good.length - 100)],
+    ["an entry's declared size disagrees with its data (trailer recomputed)", sizeLie],
     ["trailer flipped", flip(good, good.length - 1)],
     ["a compressed byte flipped", flip(good, Math.floor(good.length / 2))],
     ["OFS_DELTA base outside the pack", badOfs],

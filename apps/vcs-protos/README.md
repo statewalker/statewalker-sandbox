@@ -18,6 +18,7 @@ then tests written first (red), then the implementation (green), then findings.
 | `09-git-objects` | X4 — **git's ids and loose objects on every backend; seam needs `putStaged`, FilesApi must stream writes** | Can one raw-bytes git object kernel over BlobStore give git's ids and git's loose objects on every backend? |
 | `10-ref-transactions` | X5 — **atomic ref batches on git files (two-phase packed-refs), SQL and KV; git's rules** | Can one atomic ref-transaction API run on git files, SQL and KV, with git's semantics? |
 | `11-sql-blob-store` | X3b — **native chunked SQL BlobStore wins: ≈3× faster on git-sized objects, atomic putStaged** | Should git objects in SQL go through a native chunked BlobStore or through SqliteFilesApi? |
+| `12-index-pack` | X6a — **index-pack: `.idx` byte-identical to git's, quarantine, 64 MiB pack in < 1 MiB live** | Can a pure-TS index-pack install real git packs byte-identically, in bounded memory, everywhere? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.
