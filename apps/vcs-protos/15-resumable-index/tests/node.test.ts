@@ -303,6 +303,47 @@ describe("R2 a crash inside a step: resume completes to the same result", () => 
   }, 600_000);
 });
 
+describe("R2b storage that loses or corrupts a checkpoint is detected, never replayed", () => {
+  const steps = async (files: FilesApi, id: string, k: number) => {
+    for (let i = 0; i < k; i++) await stepIndexJob(files, "/p", id, { units: 20, cold: true });
+  };
+  it("a missing log segment fails the resume (it would replay as zeroed entries)", async () => {
+    const files = new MemFilesApi();
+    const id = await startIndexJob(files, "/p", chunks(packAll(history, true)));
+    await steps(files, id, 4);
+    const logs = (await listNames(files, "/p")).filter((n) => n.includes("_log_"));
+    expect(logs.length).toBeGreaterThan(1);
+    await files.remove(`/p/${logs[0]}`);
+    await expect(stepIndexJob(files, "/p", id, { units: 20, cold: true })).rejects.toThrow(
+      /missing or torn/,
+    );
+  });
+  it("a log segment truncated by one record fails the resume", async () => {
+    const files = new MemFilesApi();
+    const id = await startIndexJob(files, "/p", chunks(packAll(history, true)));
+    await steps(files, id, 4);
+    const log = (await listNames(files, "/p")).find((n) => n.includes("_log_")) as string;
+    const bytes = await collect(files.read(`/p/${log}`));
+    await files.write(`/p/${log}`, [bytes.subarray(0, bytes.length - 79)]); // whole records only
+    await expect(stepIndexJob(files, "/p", id, { units: 20, cold: true })).rejects.toThrow(
+      /missing or torn/,
+    );
+  });
+  it("a corrupted digit in the newest state is rejected by its checksum", async () => {
+    const files = new MemFilesApi();
+    const id = await startIndexJob(files, "/p", chunks(packAll(history, true)));
+    await steps(files, id, 3);
+    const state = (await listNames(files, "/p")).find((n) => n.includes("_state_")) as string;
+    const text = new TextDecoder().decode(await collect(files.read(`/p/${state}`)));
+    const bad = text.replace(/"i":(\d+)/, (_, d) => `"i":${Number(d) + 1}`);
+    expect(bad).not.toBe(text);
+    await files.write(`/p/${state}`, [new TextEncoder().encode(bad)]);
+    await expect(stepIndexJob(files, "/p", id, { units: 20, cold: true })).rejects.toThrow(
+      /no index job/,
+    );
+  });
+});
+
 describe("R3 checkpoints are log-structured", () => {
   it("log bytes ≤ 2 × 79 per object; state and stack bytes a constant per step", async () => {
     const pack = packAll(history, true);

@@ -69,7 +69,7 @@ against it (R7).
 
 ## Verified
 
-All 14 Node tests and the 24 X6b1 tests re-run against this module pass
+All 17 Node tests and the 24 X6b1 tests re-run against this module pass
 (`pnpm test 15-resumable-index`). The tests were written alongside the implementation rather than
 before it; the mutation table below stands in for the red runs.
 
@@ -77,11 +77,30 @@ before it; the mutation table below stands in for the red runs.
 |---|---|
 | R1 | OFS, REF, `gc --aggressive`, a 4 MiB blob with a delta child, a 300-deep comb, and two thin packs (with `externalBase` over the receiver's object database): in steps of 1, 7 and 1 000 units (7 and 1 000 for the aggressive pack), every step cold, the installed pack, its id and the `.idx` are byte-identical to X6b1's one-shot install; only `pack-*` files remain. A malformed pack ends the job with PackError and leaves nothing. |
 | R2 | A job on Node files (steps of 25 units), failed once at each of its storage operations in turn (reads fail, writes fail after half their first chunk — torn files, removals/moves/stats fail), then resumed cold on healthy storage: every run installs git's `.idx` and leaves only `pack-*` files. |
+| R2b | Storage that loses or corrupts a checkpoint: a missing log segment, a segment truncated by one whole record, a digit changed in the newest state — each fails the resume (never replayed as wrong entries). |
 | R3 | 210 objects in 48 steps of 7 units: 26 612 bytes of log (≤ 2 × 79 × 210 + 8 per step), 29 268 bytes of state (≤ 683 per generation), 561 bytes of stack. |
 | R4 | Steps of 1, 7 and 50 units never use more; a 40 000-entry pack with `budgetMs: 20` (warm) took several steps, each one's work within 20 ms plus its longest unit plus 5 ms. |
 | R5 | X6a's fixture pack indexed in a Durable Object (SqliteFilesApi, Miniflare with persistent storage) in steps of 40 units, the runtime disposed and recreated for every step: git's `.idx`, only `pack-*` files left. |
 | R6 | The SHA-1 state exported after every prefix of 3 000 bytes (every split up to 200, then every 37th) and imported into a fresh hasher finishes to the whole input's digest; also across two exports. |
 | R7 | X6b1's 24 Node tests pass with X6b1's module replaced by this one. |
+
+### Mutation check
+
+Each mutation applied alone to `src/index-job.ts`, the matching tests run (`-t`), file restored.
+
+| Mutation | Caught by |
+|---|---|
+| N1 SHA-1 state not carried across parse steps | R1 (7: checksum mismatch) |
+| N2 state checksum not verified | R2b corrupted digit (added: the crash sweep's torn states never had a newline) |
+| N3 log length not checked on replay | R2b truncated segment (added: a missing file still failed its existence check) |
+| N4 resolver stack not checkpointed | R1 (7) |
+| N5 install not committed before cleanup | R2 |
+| N6 finish not committed before install | R2 |
+| N7 cleanup removals best effort | R2 (a log left behind) |
+| N8 parse ignores the budget | R4 (2) |
+| N9 resolved deltas not logged | R1 (7) |
+| N10 appended bases not logged | R1 thin packs (2) |
+| N12 log segments not chained | R1 (7) |
 
 ## Functional description
 
