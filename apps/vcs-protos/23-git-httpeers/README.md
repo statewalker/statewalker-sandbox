@@ -29,7 +29,7 @@ the whole pack.
 | R2 | Roles: no token → 401; a reader clones but cannot push (403 on receive-pack); a member pushes to `refs/peers/<its peer>/*` and nowhere else (`ng … not allowed`); a maintainer pushes anywhere. |
 | R3 | A push whose upload outlasts the bridge's request timeout (timeout 1.5 s, upload throttled to 3 s) succeeds: the response head comes before the upload ends. |
 | R4 | A fetch over the mesh: the first progress byte arrives before half of the objects are read. |
-| R5 | Hostile tokens: expired, minted for another peer, tampered → 401; a token whose role the rules do not know grants nothing (403). |
+| R5 | Hostile tokens: expired, minted for another peer, tampered → 401; a token whose role the rules do not know grants nothing (403). *Amended: a tampered token is 403 — httpeers' documented refusal table answers 401 only where a fresh token may help (expired, peer binding) and 403 where it cannot (a bad signature); refused either way, the reason in the body.* |
 | R6 | Two members push to their own namespaces; each fetches the other's refs; neither can overwrite the other's. |
 
 ## Scope — what this slice does NOT do

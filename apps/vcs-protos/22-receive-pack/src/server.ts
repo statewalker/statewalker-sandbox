@@ -191,117 +191,140 @@ export function receivePackHandler(
     }
     if (!commands.length) return new Response(new Blob([FLUSH as BlobPart]));
 
-    // --- the pack (unless every command is a delete); a status per command (a ref may appear twice)
-    let unpack = "ok";
-    const status: (string | undefined)[] = commands.map(() => undefined); // undefined: ok so far
-    const fail = (i: number, reason: string) => {
-      status[i] ??= oneLine(reason);
-    };
-    const open = () =>
-      commands.flatMap((c, i) => (status[i] === undefined ? [[c, i] as const] : []));
-    if (commands.some((c) => c.new !== ZERO)) {
-      try {
-        await repo.objects.installPack(reader.rest());
-      } catch (e) {
-        unpack = oneLine(e instanceof Error ? e.message : String(e)).slice(0, 200);
-        commands.forEach((_, i) => {
-          fail(i, "unpacker error");
-        });
+    // The head goes out now, the report when the pack is in and the refs are updated: a relay that
+    // bounds a call until its response head (httpeers' bridge: 30 s) must not time out a long push.
+    const finish = async (): Promise<Uint8Array> => {
+      // --- the pack (unless every command is a delete); a status per command (a ref may appear twice)
+      let unpack = "ok";
+      const status: (string | undefined)[] = commands.map(() => undefined); // undefined: ok so far
+      const fail = (i: number, reason: string) => {
+        status[i] ??= oneLine(reason);
+      };
+      const open = () =>
+        commands.flatMap((c, i) => (status[i] === undefined ? [[c, i] as const] : []));
+      if (commands.some((c) => c.new !== ZERO)) {
+        try {
+          await repo.objects.installPack(reader.rest());
+        } catch (e) {
+          unpack = oneLine(e instanceof Error ? e.message : String(e)).slice(0, 200);
+          commands.forEach((_, i) => {
+            fail(i, "unpacker error");
+          });
+        }
       }
-    }
 
-    // --- checks: names, ids, current branch, branch tips are commits, connectivity, hooks
-    const head = await repo.refs.read("HEAD");
-    const current = head && "symref" in head ? head.symref : undefined;
-    const known = new Set<string>();
-    for await (const r of repo.refs.list("refs/")) known.add(r.oid);
-    for (const [c, i] of open()) {
-      if (!c.ref.startsWith("refs/") || !checkRefFormat(c.ref)) fail(i, "funny refname");
-      else if (!OID.test(c.old) || !OID.test(c.new)) fail(i, "invalid id");
-      else if (c.new === ZERO && c.ref === current)
-        fail(i, "deletion of the current branch prohibited");
-      else if (
-        c.new !== ZERO &&
-        c.ref.startsWith("refs/heads/") &&
-        (await typeOf(repo, c.new)) !== "commit"
-      )
-        fail(i, "failed to update ref (not a commit: a branch must point at a commit)");
-    }
-    // one walk for every new tip; only if it fails, one per tip to name the broken ones
-    const tips = open().filter(([c]) => c.new !== ZERO);
-    if (tips.length && !(await connected(repo, [...new Set(tips.map(([c]) => c.new))], [...known])))
-      for (const [c, i] of tips)
-        if (!(await connected(repo, [c.new], [...known]))) fail(i, "missing necessary objects");
-    if (opts.preReceive && open().length) {
-      const msg = await opts.preReceive(
-        open().map(([c]) => c),
-        pushOptions,
-      );
-      if (msg)
-        commands.forEach((_, i) => {
-          fail(i, `pre-receive hook declined: ${msg}`);
-        });
-    }
-    if (opts.update)
+      // --- checks: names, ids, current branch, branch tips are commits, connectivity, hooks
+      const head = await repo.refs.read("HEAD");
+      const current = head && "symref" in head ? head.symref : undefined;
+      const known = new Set<string>();
+      for await (const r of repo.refs.list("refs/")) known.add(r.oid);
       for (const [c, i] of open()) {
-        const msg = await opts.update(c);
-        if (msg) fail(i, `hook declined: ${msg}`);
+        if (!c.ref.startsWith("refs/") || !checkRefFormat(c.ref)) fail(i, "funny refname");
+        else if (!OID.test(c.old) || !OID.test(c.new)) fail(i, "invalid id");
+        else if (c.new === ZERO && c.ref === current)
+          fail(i, "deletion of the current branch prohibited");
+        else if (
+          c.new !== ZERO &&
+          c.ref.startsWith("refs/heads/") &&
+          (await typeOf(repo, c.new)) !== "commit"
+        )
+          fail(i, "failed to update ref (not a commit: a branch must point at a commit)");
       }
-
-    // --- the ref transaction(s); deleting a ref that does not exist is a no-op (git: a warning)
-    const toCommand = (c: PushCommand) => ({
-      name: c.ref,
-      old: c.old === ZERO ? null : c.old,
-      new: c.new === ZERO ? null : c.new,
-    });
-    const noop = (c: PushCommand) => c.old === ZERO && c.new === ZERO;
-    const reasonOf = (r: string | undefined) =>
-      r === "mismatch"
-        ? "failed to update ref (stale old value)"
-        : r === "locked"
-          ? "failed to lock"
-          : `failed to update ref (${r ?? "rejected"})`;
-    if (requested.has("atomic")) {
-      if (status.some((x) => x !== undefined)) {
-        commands.forEach((_, i) => {
-          fail(i, "atomic push failure");
-        });
-      } else {
-        const todo = commands.filter((c) => !noop(c));
-        const res = todo.length
-          ? await repo.refs.batch(todo.map(toCommand), { message: "push" })
-          : { ok: true, rejected: [] };
-        if (!res.ok)
-          commands.forEach((c, i) => {
-            const own = res.rejected.find((x) => x.name === c.ref);
-            fail(i, own ? reasonOf(own.reason) : "atomic push failure");
+      // one walk for every new tip; only if it fails, one per tip to name the broken ones
+      const tips = open().filter(([c]) => c.new !== ZERO);
+      if (
+        tips.length &&
+        !(await connected(repo, [...new Set(tips.map(([c]) => c.new))], [...known]))
+      )
+        for (const [c, i] of tips)
+          if (!(await connected(repo, [c.new], [...known]))) fail(i, "missing necessary objects");
+      if (opts.preReceive && open().length) {
+        const msg = await opts.preReceive(
+          open().map(([c]) => c),
+          pushOptions,
+        );
+        if (msg)
+          commands.forEach((_, i) => {
+            fail(i, `pre-receive hook declined: ${msg}`);
           });
       }
-    } else
-      for (const [c, i] of open()) {
-        if (noop(c)) continue;
-        const res = await repo.refs.batch([toCommand(c)], { message: "push" });
-        if (!res.ok) fail(i, reasonOf(res.rejected[0]?.reason));
-      }
+      if (opts.update)
+        for (const [c, i] of open()) {
+          const msg = await opts.update(c);
+          if (msg) fail(i, `hook declined: ${msg}`);
+        }
 
-    // --- report-status
-    if (!requested.has("report-status")) return new Response(new Blob([]));
-    const report: Uint8Array[] = [pkt(`unpack ${unpack}\n`)];
-    commands.forEach((c, i) => {
-      const reason = status[i];
-      report.push(pkt(reason !== undefined ? `ng ${c.ref} ${reason}\n` : `ok ${c.ref}\n`));
-    });
-    report.push(FLUSH);
-    const reportBytes = new Uint8Array(await new Blob(report as BlobPart[]).arrayBuffer());
-    const out = requested.has("side-band-64k")
-      ? [...sideband(1, reportBytes), FLUSH]
-      : [reportBytes];
-    return new Response(new Blob(out as BlobPart[]), {
-      headers: {
-        "content-type": "application/x-git-receive-pack-result",
-        "cache-control": "no-cache",
+      // --- the ref transaction(s); deleting a ref that does not exist is a no-op (git: a warning)
+      const toCommand = (c: PushCommand) => ({
+        name: c.ref,
+        old: c.old === ZERO ? null : c.old,
+        new: c.new === ZERO ? null : c.new,
+      });
+      const noop = (c: PushCommand) => c.old === ZERO && c.new === ZERO;
+      const reasonOf = (r: string | undefined) =>
+        r === "mismatch"
+          ? "failed to update ref (stale old value)"
+          : r === "locked"
+            ? "failed to lock"
+            : `failed to update ref (${r ?? "rejected"})`;
+      if (requested.has("atomic")) {
+        if (status.some((x) => x !== undefined)) {
+          commands.forEach((_, i) => {
+            fail(i, "atomic push failure");
+          });
+        } else {
+          const todo = commands.filter((c) => !noop(c));
+          const res = todo.length
+            ? await repo.refs.batch(todo.map(toCommand), { message: "push" })
+            : { ok: true, rejected: [] };
+          if (!res.ok)
+            commands.forEach((c, i) => {
+              const own = res.rejected.find((x) => x.name === c.ref);
+              fail(i, own ? reasonOf(own.reason) : "atomic push failure");
+            });
+        }
+      } else
+        for (const [c, i] of open()) {
+          if (noop(c)) continue;
+          const res = await repo.refs.batch([toCommand(c)], { message: "push" });
+          if (!res.ok) fail(i, reasonOf(res.rejected[0]?.reason));
+        }
+
+      // --- report-status
+      if (!requested.has("report-status")) return new Uint8Array(0);
+      const report: Uint8Array[] = [pkt(`unpack ${unpack}\n`)];
+      commands.forEach((c, i) => {
+        const reason = status[i];
+        report.push(pkt(reason !== undefined ? `ng ${c.ref} ${reason}\n` : `ok ${c.ref}\n`));
+      });
+      report.push(FLUSH);
+      const reportBytes = new Uint8Array(await new Blob(report as BlobPart[]).arrayBuffer());
+      const out = requested.has("side-band-64k")
+        ? [...sideband(1, reportBytes), FLUSH]
+        : [reportBytes];
+      return new Uint8Array(await new Blob(out as BlobPart[]).arrayBuffer());
+    };
+    const result = finish();
+    result.catch(() => {}); // observed by the stream below
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        async start(ctrl) {
+          try {
+            const bytes = await result;
+            if (bytes.length) ctrl.enqueue(bytes);
+            ctrl.close();
+          } catch (e) {
+            ctrl.error(e);
+          }
+        },
+      }),
+      {
+        headers: {
+          "content-type": "application/x-git-receive-pack-result",
+          "cache-control": "no-cache",
+        },
       },
-    });
+    );
   };
 }
 

@@ -229,7 +229,7 @@ describe("R4 first byte before the pack is generated", () => {
 });
 
 describe("R5 hostile tokens", () => {
-  it("expired, foreign, tampered → 401; an unknown role grants nothing", async () => {
+  it("expired and foreign → 401, tampered → 403 (signature); an unknown role grants nothing", async () => {
     const src = repoWithHistory(3);
     const server = await openBare(servingCopy(src));
     const m = await mesh(server);
@@ -247,7 +247,11 @@ describe("R5 hostile tokens", () => {
     expect((await ask(await m.token("Z", ["maintainer"]))).status).toBe(401);
     const good = await m.token("A", ["maintainer"]);
     const tampered = `${good.slice(0, -4)}${good.slice(-4) === "AAAA" ? "BBBB" : "AAAA"}`;
-    expect((await ask(tampered)).status).toBe(401);
+    // httpeers' refusal table: a bad signature is 403 ("a fresh token will not help"); expired and
+    // foreign-peer tokens are 401 (a refresh may) — refused either way, the reason in the body
+    const t = await ask(tampered);
+    expect(t.status).toBe(403);
+    expect(await t.text()).toMatch(/signature/);
     expect((await ask(await m.token("A", ["stranger"]))).status).toBe(403);
     expect((await ask(good)).status).toBe(200);
   }, 60_000);
