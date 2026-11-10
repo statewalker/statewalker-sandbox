@@ -16,8 +16,8 @@
     "test:cellb": "node scripts/run-env.mjs cellb",
     "test:wrangler": "node scripts/run-env.mjs wrangler",
     "test:celld": "node scripts/run-env.mjs celld",
-    "dev:wrangler": "wrangler dev",
-    "dev:cellb": "node scripts/serve-cellb.mjs",
+    "dev:wrangler": "node scripts/build-bundler.mjs && wrangler dev",
+    "dev:cellb": "node scripts/build-bundler.mjs && node scripts/serve-cellb.mjs",
     "typecheck": "tsc --noEmit",
     "test:cellb-celld-bucket": "node scripts/run-env.mjs cellb-celld-bucket",
     "example": "node examples/walkthrough.mjs",
@@ -25,7 +25,10 @@
     "test:cellb-bundled-only": "node scripts/run-env.mjs cellb-bundled-only",
     "build:browser": "node scripts/build-browser.mjs",
     "dev:browser": "node scripts/serve-browser.mjs",
-    "test:browser": "node --test tests/browser.test.mjs"
+    "test:browser": "node --test tests/browser.test.mjs",
+    "build:bundler": "node scripts/build-bundler.mjs",
+    "predeploy": "node scripts/build-bundler.mjs",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "~1.4.0",
@@ -33,8 +36,10 @@
     "@flue/runtime": "catalog:",
     "@statewalker/webrun-biscuit": "catalog:",
     "@statewalker/webrun-bundler": "0.1.1",
+    "@statewalker/webrun-files-mem": "catalog:",
     "acorn": "^8.15.0",
     "acorn-walk": "^8.3.4",
+    "esbuild-wasm": "0.28.2",
     "eslint-scope": "^8.4.0",
     "just-bash": "catalog:",
     "pyodide": "314.0.7"
@@ -43,9 +48,8 @@
     "@cloudflare/workers-types": "^4.20260702.1",
     "@sqlite.org/sqlite-wasm": "3.53.4-build2",
     "@statewalker/cellb": "0.8.0",
-    "@statewalker/webrun-files-mem": "catalog:",
     "@statewalker/webrun-files-node": "catalog:",
-    "esbuild": "^0.28.1",
+    "esbuild": "0.28.2",
     "playwright": "catalog:",
     "typescript": "catalog:",
     "wrangler": "4.158.0"

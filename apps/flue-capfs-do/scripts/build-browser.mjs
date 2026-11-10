@@ -7,6 +7,7 @@ import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url";
 import { buildProject } from "@statewalker/cellb/node";
 import * as esbuild from "esbuild";
+import { buildBundler } from "./build-bundler.mjs";
 
 const dir = fileURLToPath(new URL("..", import.meta.url));
 const out = `${dir}dist`;
@@ -17,6 +18,7 @@ const out = `${dir}dist`;
 export async function buildBrowser({ quiet = false, vars = {} } = {}) {
   rmSync(out, { recursive: true, force: true });
   mkdirSync(`${out}/browser`, { recursive: true });
+  await buildBundler({ quiet: true });
   await buildProject(dir, `${out}/cellb`);
   if (Object.keys(vars).length) {
     const file = `${out}/cellb/wrangler.json`;

@@ -103,6 +103,10 @@ Tasks:
 
 - `{kind: "bash", script, cwd?}` runs a just-bash shell over the capability.
 - `{kind: "flue", calls: [{tool, params}], cwd?}` calls Flue's tools as a model would.
+- `{kind: "bundle", sources, entry, config?}` bundles a tool's Node-style sources in the
+  deployment's bundler Worker and returns `{hash, check, bytes, code}` (see [Bundling in the deployment](#bundling-in-the-deployment)).
+- `{kind: "tool", sources, entry, config?, input?}` bundles in the deployment, then runs the result
+  as a bundle.
 - `{kind: "tool", code, input?, bundled?}` runs a module in a new Worker Loader isolate (one per
   call, so no state survives between callers). The module exports
   `default class extends WorkerEntrypoint { run(files, input) }`. `files` is the narrowed
@@ -179,9 +183,61 @@ const { code, hash, check } = await bundleTool({
 
 Or from the command line: `pnpm bundle-tool <dir> [--entry /index.ts] [--config overrides.json]
 [--out tool.bundle.js]`. It prints the hash on stderr, and exits 1 when the bundle would fail
-the Agent's check. Bundling runs wherever esbuild runs (Node, a browser with esbuild-wasm), not
-inside the Durable Objects. (Since cellb 0.8.0 a cell can import `.wasm`, as on workerd, so an
-esbuild-wasm bundler inside a cell is possible; it is not done here.) The generated entry file is removed from the source tree afterwards.
+the Agent's check. The generated entry file is removed from the source tree afterwards.
+Bundling runs wherever esbuild runs: Node, a browser with esbuild-wasm, or the deployment's
+bundler Worker (next section).
+
+#### Bundling in the deployment
+
+The deployment can bundle too: `{kind: "bundle", sources, entry, config?}` returns the bundle,
+and `{kind: "tool", sources, entry, config?, input}` bundles and runs it. Both use the same
+`bundleTool`, with esbuild-wasm, in a **bundler Worker** that the Agent loads on demand.
+
+```bash
+curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/json' -d '{
+  "workspace": "acme", "token": "<token>", "transport": "token",
+  "task": { "kind": "bundle", "entry": "/index.ts",
+            "sources": { "/index.ts": "import { readdir } from \"node:fs/promises\";\nexport default (i) => readdir(i.dir);" } } }'
+# → {"value":{"result":{"hash":"sha256-…","check":{"ok":true,"problems":[]},"bytes":…,"code":"…"}}}
+```
+
+- **The bundler Worker** (`src/bundler/program.ts`) is built by `pnpm build:bundler` into
+  `src/bundler/program.gen.js` (generated, not committed; the test runners, `dev:*`, `deploy`
+  and the browser build run it, so a deploy never ships a stale bundler). The main Worker embeds its code (about 280 KB) but not
+  `esbuild.wasm` (about 14 MB). The Agent fetches that once per isolate from the deployment's
+  **`BUNDLER_WASM_URL`**, checks it against the SHA-256 pinned at build, and loads both into a
+  Worker Loader isolate of their own (no bindings, no outbound network), which it keeps between
+  calls. Builds run one at a time per Agent isolate. A call that fails other than by its request,
+  or takes over 60 s, retires that isolate; a retired isolate cannot be stopped from here (the
+  Worker Loader has no terminate) and runs until its runtime ends it, so after 3 retirements an
+  Agent isolate stops offering bundling (`EAGAIN`) until it restarts. The wasm fetch has a 30 s
+  timeout and a 32 MB cap; the URL must allow CORS for a browser host.
+- **Opt-in:** without `BUNDLER_WASM_URL` the tasks answer `ENOSYS`, and `/api/runtime` reports
+  `bundler: false`. No cell compiles esbuild unless a tool is bundled, and the deploy stays the
+  size it was. Point the URL at the file in `node_modules/esbuild-wasm/esbuild.wasm` served by
+  the deployment (or a CDN copy of that exact version: the hash decides).
+- **On cellb's Node host** the bundler isolate is a worker thread that sees the host's files and
+  network, as tool isolates do there (`globalOutbound: null` is not a sandbox on that host). The
+  bundler is trusted code that only parses its input (no `eval`, no code from a request runs), so
+  untrusted sources meet esbuild's and acorn's parsers, not the host; the risk left is a bug in
+  those parsers.
+- **Why not a second script behind a service binding:** cellb binds services only to its own
+  script's entrypoints, so that would not run on cellb. The Worker Loader is on every runtime
+  here (workerd, cellb in Node and in a browser, celld), and keeps esbuild's memory and crashes
+  out of the Agent cell.
+- **Same bundle as on a build machine:** esbuild-wasm and esbuild are the same version (pinned),
+  and the bundler is built with Node's builtin export names (those of the Node that ran
+  `build:bundler`: a tool importing `* as` a denied builtin hashes the same only on the same Node
+  major), so its bundle has the same hash as `bundleTool` on Node; a hash approved in `allowedBundles` admits both (the scenario suite
+  checks this, and on `cellb-bundled-only` runs the deployment's bundle under the approved hash).
+- **Nothing is trusted more for being built here:** the result is a bundle like any other, so
+  the Agent runs the acceptance check and the deployment's policy on it; where no tool may run
+  (`refused`, `none`) the tool task is refused before bundling. A caller may set build-side keys
+  only (`fsModules`, `pathModules`, `builtins`, `modules`, `define`, `processEnv`, each checked
+  for its shape); `external`, the check and the policy are the deployment's. The bundler runs no
+  code it is given: sources are parsed and transformed.
+- **Limits:** 100 files and 256 KB of UTF-8 sources and config together (esbuild-wasm needs
+  about 100 MB for its first build and more for large inputs), a bundle of at most 2 MB.
 
 **The tool contract:** the module exports `run(input)` or a default function; a default-exported
 class is refused with `EINVAL`. The bundle's entry is a generated `WorkerEntrypoint` whose
@@ -493,8 +549,11 @@ src/llm-config.ts   the LLM var and one run's credentials (deployment key or cal
 src/node-probe-guard.ts  hides process.versions.node from pi-ai's load-time probes in the browser
 src/tools/config.ts  ToolBundleConfig: defaults (tool-bundle.config.json) ← overrides ← TOOL_BUNDLE
 src/tools/shims.ts   fs shim over `files`, POSIX path, deny modules, the WorkerEntrypoint wrapper
-src/tools/bundle.ts  bundleTool(): webrun-bundler with the shims (build side; not in the Worker)
+src/tools/bundle.ts  bundleTool(): webrun-bundler with the shims (build side and the bundler Worker; not in the main Worker)
 src/tools/check.ts   acceptance check (acorn + eslint-scope), bundle hash
+src/tools/bundle-request.ts   what a caller may send to be bundled (limits, build-side keys)
+src/tools/bundler-client.ts  the Agent's side: fetch and pin esbuild.wasm, load the bundler Worker
+src/bundler/program.ts       the bundler Worker: bundleTool with esbuild-wasm (pnpm build:bundler)
 src/tools/policy.ts  toolPolicy() and admitTool(): what may run here, from the deployment config only
 src/python/engine.mjs  the Python engine (Pyodide): a Node child process or a browser Worker
 src/python/kernel.ts   Agent side: files into /workspace, live capfs calls, write-back through the capability
@@ -518,15 +577,15 @@ tests/python-scenario.mjs  the Python cases, shared by tests/python.test.mjs (HT
 
 | Check | wrangler | cellb | cellb, bundled-only | cellb on celld bucket | celld 0.6.0 |
 |---|---|---|---|---|---|
-| scenario, stub transport (15) | ✅ 15 | ✅ 12, 3 skipped | ✅ 12, 3 skipped | ✅ 12, 3 skipped | n/a: celld refuses RpcTargets across isolates |
-| scenario, token transport (15) | ✅ 15 | ✅ 12, 3 skipped | ✅ 12, 3 skipped | ✅ 12, 3 skipped | ✅ 13 of the 13 before the run-lease tests (9 Nov); not re-run since |
+| scenario, stub transport (16, 10 Nov) | ✅ 16 | ✅ 13, 3 skipped | ✅ 13, 3 skipped | ✅ 13, 3 skipped | n/a: celld refuses RpcTargets across isolates |
+| scenario, token transport (16, 10 Nov) | ✅ 16 | ✅ 13, 3 skipped | ✅ 13, 3 skipped | ✅ 13, 3 skipped | ✅ 16 |
 | scenario, runtime and admin (2) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | durability across a restart | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run | not run |
 | python (13 cases) | `ENOSYS` (as designed) | ✅ 13 | ✅ 13 | ✅ 13 | `ENOSYS` (as on workerd) |
 | agent (22 cases, fake model; 10 Nov) | ✅ 22 | ✅ 22 | ✅ 22 | ✅ 22 | ✅ 17 (token transport) |
 
-In Chromium on cellb (`test:browser`), 37/37 pass (since the agent task, model tokens and the model right, 10 Nov; 16 before): the runtime check, the capability check
+In Chromium on cellb (`test:browser`), 38/38 pass (10 Nov: the agent task, model tokens, the model right, and a tool bundled by the bundler Worker in a browser isolate; 16 before): the runtime check, the capability check
 (rights, both transports, Flue tools with delegation), the 13 Python cases, the 21 agent cases, and no page errors.
 The Python cases include the review's findings:
 - a caller's files, builtins and tasks are not seen by a run with another capability;
@@ -534,7 +593,7 @@ The Python cases include the review's findings:
 - there is no network from the engine;
 - a removed tree is removed from the store, and oversized output is truncated.
 
-The 39 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
+The 42 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
 asserts the `EPERM` refusal. The bundled-tool test asserts `EPERM` by default; under
 `bundled-only` it asserts a run of the approved bundle, `EPERM` for a changed one, and `EPERM`
 for the global-object alias. The cross-caller isolate test is skipped there.

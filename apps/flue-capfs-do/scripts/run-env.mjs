@@ -14,6 +14,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundleTodoTool } from "../tests/fixtures/bundle-fixture.mjs";
 import { startFakeLlm } from "../tests/helpers/fake-llm.mjs";
+import { startWasmServer } from "../tests/helpers/wasm-server.mjs";
+import { buildBundler } from "./build-bundler.mjs";
 
 const env = process.argv[2];
 const dir = fileURLToPath(new URL("..", import.meta.url));
@@ -30,7 +32,11 @@ const state = mkdtempSync(join(tmpdir(), `flue-capfs-${env}-`));
 // given to the runtime as the LLM var, with a dummy key.
 const fakeLlm = await startFakeLlm();
 const LLM = JSON.stringify(fakeLlm.config);
-const LLM_VARS = [`LLM=${LLM}`, "LLM_API_KEY=sk-fake"];
+// The bundler Worker: its program is generated before the runtime builds the project, and
+// esbuild.wasm is served locally as the deployment's BUNDLER_WASM_URL.
+await buildBundler({ quiet: true });
+const wasmServer = await startWasmServer();
+const LLM_VARS = [`LLM=${LLM}`, "LLM_API_KEY=sk-fake", `BUNDLER_WASM_URL=${wasmServer.url}`];
 
 const DEV_VARS_MARK = "# written by scripts/run-env.mjs for a test run (removed when it ends)";
 let ownDevVars = false;
