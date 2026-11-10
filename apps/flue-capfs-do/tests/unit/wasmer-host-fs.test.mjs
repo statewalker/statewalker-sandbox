@@ -32,6 +32,20 @@ function fakeCap(entries = {}) {
             mtime: "2026-01-01T00:00:00Z",
           };
         }
+        case "readdirStat": {
+          const pre = path === "/" ? "/" : `${path}/`;
+          return kids(path)
+            .filter((k) => !k.slice(pre.length).includes("/"))
+            .map((k) => {
+              const v = files.get(k);
+              return {
+                name: k.slice(pre.length),
+                isDirectory: v === null,
+                size: v === null ? 0 : Buffer.byteLength(v),
+                mtime: "2026-01-01T00:00:00Z",
+              };
+            });
+        }
         case "readFile":
           if (!files.has(path)) throw E("ENOENT", path);
           return files.get(path);

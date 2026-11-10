@@ -324,3 +324,31 @@ test("model: a store from before the model columns gets them, once", () => {
   s.exec("DELETE FROM cap_meta WHERE key = 'schema'");
   assert.equal(new Authority(s).sessionInfo("old").mode, "yolo");
 });
+
+test("readdirStat lists what readdir lists, with each entry's stat, in one call", async () => {
+  const { gate, token } = await setup();
+  const scoped = Biscuit.fromBase64(token)
+    .attenuate(attenuationBlock({ scope: "/proj/x" }))
+    .toBase64();
+  for (const t of [token, scoped])
+    for (const dir of ["/", "/proj"]) {
+      const names = await gate(t).readdir(dir);
+      const entries = await gate(t).call("readdirStat", dir);
+      assert.deepEqual(
+        entries.map((e) => e.name),
+        names,
+      );
+      for (const e of entries) {
+        const s = await gate(t).call("stat", dir === "/" ? `/${e.name}` : `${dir}/${e.name}`);
+        assert.deepEqual(
+          { isDirectory: e.isDirectory, size: e.size, mtime: e.mtime },
+          { isDirectory: s.isDirectory, size: s.size, mtime: s.mtime },
+        );
+      }
+    }
+  await gate().call("writeFile", "/proj/é.txt", "é");
+  const e = (await gate().call("readdirStat", "/proj")).find((x) => x.name === "é.txt");
+  assert.equal(e.size, 2, "sizes are UTF-8 bytes");
+  await denied(gate(scoped).call("readdirStat", "/p1"));
+  await assert.rejects(gate().call("readdirStat", "/p1/a"), (err) => err.code === "ENOTDIR");
+});

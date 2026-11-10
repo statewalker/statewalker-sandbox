@@ -161,14 +161,19 @@ export function capHostFs(cap: Cap) {
   const ops: Record<string, (...args: unknown[]) => Promise<unknown>> = {
     stat: (p) => stat(abs(p)),
     async readDir(p) {
-      const dir = abs(p);
-      const names = await cap.readdir(dir);
-      return Promise.all(
-        names.map(async (name) => ({
-          name,
-          ...(await stat(dir === "/" ? `/${name}` : `${dir}/${name}`)),
-        })),
-      );
+      // One capability call for the whole listing (entries the token may not list are left out).
+      const entries = (await cap.call("readdirStat", abs(p))) as (PlainStat & { name: string })[];
+      return entries.map((e) => {
+        const t = nanos(e.mtime);
+        return {
+          name: e.name,
+          kind: e.isDirectory ? "directory" : "file",
+          size: e.size,
+          modified: t,
+          accessed: t,
+          created: t,
+        };
+      });
     },
     async open(p, _read, write, create, createNew, truncate, append) {
       const path = abs(p);

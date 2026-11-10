@@ -24,6 +24,13 @@ export interface PlainStat {
   mtime: string;
 }
 
+export interface DirEntryStat {
+  name: string;
+  isDirectory: boolean;
+  size: number;
+  mtime: string;
+}
+
 export interface Entry {
   path: string;
   kind: "file" | "dir";
@@ -154,6 +161,24 @@ export class SqlFs {
     const row = this.#must(path);
     if (row.kind !== "dir") throw fsError("ENOTDIR", `not a directory '${path}'`);
     return this.#children(path);
+  }
+  /** A directory's entries with what `stat` would say of each, in one query. */
+  async readdirStat(path: string): Promise<DirEntryStat[]> {
+    const row = this.#must(path);
+    if (row.kind !== "dir") throw fsError("ENOTDIR", `not a directory '${path}'`);
+    return this.#sql
+      .exec(
+        `SELECT path, kind, mtime, CASE WHEN kind = 'file' THEN length(CAST(coalesce(data, '') AS BLOB)) ELSE 0 END AS size
+         FROM fs_entries WHERE parent = ? ORDER BY path`,
+        path,
+      )
+      .toArray()
+      .map((r) => ({
+        name: String(r.path).slice(path === "/" ? 1 : path.length + 1),
+        isDirectory: r.kind === "dir",
+        size: Number(r.size),
+        mtime: new Date(Number(r.mtime)).toISOString(),
+      }));
   }
   async mkdir(path: string, opts?: { recursive?: boolean }): Promise<void> {
     const row = this.#get(path);

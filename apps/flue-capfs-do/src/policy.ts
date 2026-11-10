@@ -21,6 +21,7 @@ export const OPS: Record<string, Op> = {
   stat: "list",
   lstat: "list",
   readdir: "list",
+  readdirStat: "list",
   realpath: "list",
   writeFile: "write",
   appendFile: "write",

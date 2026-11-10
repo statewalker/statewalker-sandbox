@@ -5,7 +5,7 @@
 import { Biscuit, generateKeypair, type VerifiedBiscuit } from "@statewalker/webrun-biscuit";
 import { asResource, fsError, join, normalise } from "./path.ts";
 import { authorityBlock, isMode, MODES, OPS, type Op } from "./policy.ts";
-import type { SqlFs } from "./sql-fs.ts";
+import type { DirEntryStat, SqlFs } from "./sql-fs.ts";
 
 interface SqlLike {
   exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] };
@@ -417,6 +417,7 @@ export class FsGate {
     const op = Object.hasOwn(OPS, method) ? OPS[method] : undefined;
     if (!op) throw fsError("ENOSYS", `method not available '${method}'`);
     if (method === "readdir") return this.readdir(p);
+    if (method === "readdirStat") return this.readdirStat(p);
     const path = await this.#authorize(op, p);
     const opts = (args[0] ?? {}) as { recursive?: boolean };
     if (
@@ -441,6 +442,15 @@ export class FsGate {
     const out: string[] = [];
     for (const name of names)
       if (await this.#auth.check(this.#token, "list", join(path, name))) out.push(name);
+    return out;
+  }
+
+  /** readdir with each visible entry's stat, in one call (Wasmer lists directories this way). */
+  async readdirStat(p: string): Promise<DirEntryStat[]> {
+    const path = await this.#authorize("list", p);
+    const out: DirEntryStat[] = [];
+    for (const e of await this.#store.readdirStat(path))
+      if (await this.#auth.check(this.#token, "list", join(path, e.name))) out.push(e);
     return out;
   }
 
