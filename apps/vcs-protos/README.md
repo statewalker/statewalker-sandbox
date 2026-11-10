@@ -20,7 +20,8 @@ then tests written first (red), then the implementation (green), then findings.
 | `11-sql-blob-store` | X3b — **native chunked SQL BlobStore wins: ≈3× faster on git-sized objects, atomic putStaged** | Should git objects in SQL go through a native chunked BlobStore or through SqliteFilesApi? |
 | `12-index-pack` | X6a — **index-pack: `.idx` byte-identical to git's (or git's refusal), quarantine, base-cache-bounded memory** | Can a pure-TS index-pack install real git packs byte-identically, in bounded memory, everywhere? |
 | `13-pack-reader` | X6r — **objects read from packs + loose as git cat-file; checkpoint base cache; 64 MiB blob streams** | Can objects be read from installed packs (and loose objects) as native git reads them, in bounded memory, everywhere? |
-| `14-thin-packs` | X6b1 — open | Can index-pack complete thin packs from the local repository and index 100k+ objects in a Durable Object's memory? |
+| `14-thin-packs` | X6b1 — **thin packs completed as git --fix-thin; 200k entries in +19 MiB; one storage read per window; tmp sweep** | Can index-pack complete thin packs from the local repository and index 100k+ objects in a Durable Object's memory? |
+| `15-resumable-index` | X6b2 — open | Can index-pack run in bounded steps that survive the eviction of a Durable Object? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.
