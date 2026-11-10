@@ -27,7 +27,7 @@ describe("R4 sqlite-wasm with an OPFS database in a Chromium Dedicated Worker", 
     });
     w.terminate();
     expect(r.error).toBeUndefined();
-    expect(r.result?.cases).toBe(8);
+    expect(r.result?.cases).toBe(9);
     expect(r.result?.failed).toEqual([]);
   }, 60_000);
   it("R2 100 concurrent cas: exactly one winner", async () => {
@@ -40,7 +40,7 @@ describe("R4 sqlite-wasm with an OPFS database in a Chromium Dedicated Worker", 
     expect(r.error).toBeUndefined();
     expect(r.winners).toBe(1);
   }, 60_000);
-  it("recorded: a second worker opening the same OPFS database while the first holds it", async () => {
+  it("trap: a second worker cannot open an OPFS (sahpool) database another worker holds", async () => {
     const a = worker();
     expect(await ask(a, { op: "open", path: "/x3a-shared.sqlite" })).toEqual({ opened: true });
     const b = worker();
@@ -51,6 +51,9 @@ describe("R4 sqlite-wasm with an OPFS database in a Chromium Dedicated Worker", 
     console.log("second worker on the same sahpool database:", JSON.stringify(second));
     a.terminate();
     b.terminate();
-    expect(second.opened === true || typeof second.error === "string").toBe(true);
+    // OPFS sync access handles are exclusive per file: one worker owns a sahpool database, so other
+    // tabs/workers must reach it through that owner (SharedWorker or leader election).
+    expect(second.opened).toBeUndefined();
+    expect(second.error).toMatch(/NoModificationAllowedError|Access Handles cannot be created/);
   }, 60_000);
 });

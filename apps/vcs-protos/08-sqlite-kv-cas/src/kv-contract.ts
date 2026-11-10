@@ -92,5 +92,15 @@ export async function runKvContract(
       got.push(`${key.slice(p.length)}=${new TextDecoder().decode(value)}`);
     return got.join(",") === "/a=1,/b=2";
   });
+  await check("list(prefix) treats % and _ in the prefix literally", async (kv) => {
+    const p = k("lit");
+    await kv.put(`${p}/a_b`, enc.encode("1"));
+    await kv.put(`${p}/aXb`, enc.encode("2"));
+    await kv.put(`${p}/a%c`, enc.encode("3"));
+    const keys: string[] = [];
+    for await (const { key } of kv.list(`${p}/a_`)) keys.push(key.slice(p.length));
+    for await (const { key } of kv.list(`${p}/a%`)) keys.push(key.slice(p.length));
+    return keys.join(",") === "/a_b,/a%c";
+  });
   return { cases, failed };
 }

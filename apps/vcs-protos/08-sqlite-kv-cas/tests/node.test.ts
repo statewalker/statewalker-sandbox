@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { newDoSqliteDb } from "@statewalker/db-sqlite-do";
+import { newFakeDoStorage } from "@statewalker/db-sqlite-do/fake";
 import { newNodeSqliteDb } from "@statewalker/db-sqlite-node";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
@@ -24,7 +26,7 @@ afterAll(() => {
 describe("R1 the webrun-storage KvStore contract on node:sqlite", () => {
   it("in memory", async () => {
     const r = await runKvContract(async () => sqlKvStore(await newNodeSqliteDb()));
-    expect(r.cases).toBe(8);
+    expect(r.cases).toBe(9);
     expect(r.failed).toEqual([]);
   });
   it("on a file", async () => {
@@ -141,7 +143,7 @@ describe("R5 Durable Object on workerd (Miniflare, SQLite-backed class)", () => 
       cases: number;
       failed: string[];
     };
-    expect(r.cases).toBe(8);
+    expect(r.cases).toBe(9);
     expect(r.failed).toEqual([]);
   });
   it("100 concurrent requests, one cas each: exactly one winner", async () => {
@@ -176,6 +178,18 @@ describe("R5 Durable Object on workerd (Miniflare, SQLite-backed class)", () => 
     console.log("3 MiB value in a Durable Object:", JSON.stringify(big));
     expect(typeof big.ok).toBe("boolean");
   }, 60_000);
+});
+
+describe("extra: statewalker-db's strict Durable Object fake (DO limits on node:sqlite)", () => {
+  it("R1 contract holds under the DO limits (no BEGIN/PRAGMA, ArrayBuffer BLOBs, 100 params)", async () => {
+    const r = await runKvContract(async () => sqlKvStore(newDoSqliteDb(newFakeDoStorage())));
+    expect(r.failed).toEqual([]);
+  });
+  it("R6 a 3 MiB value is rejected by the DO limit, not stored", async () => {
+    const kv = await sqlKvStore(newDoSqliteDb(newFakeDoStorage()));
+    await expect(kv.put("big", new Uint8Array(3 << 20))).rejects.toThrow();
+    expect(await kv.get("big")).toBeUndefined();
+  });
 });
 
 describe("R6 1 MiB values on node:sqlite", () => {
