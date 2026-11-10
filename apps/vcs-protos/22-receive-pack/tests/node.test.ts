@@ -540,3 +540,175 @@ describe("R7 hostile and invalid requests, hooks", () => {
     void receivePackHandler;
   }, 60_000);
 });
+
+describe("review cases (#82)", () => {
+  it("a shallow clone pushes (shallow lines before the commands)", async () => {
+    const src = repoWithHistory(8);
+    const { repo, url } = await ourServer(src, "files");
+    const sh = join(tmp(), "sh");
+    git(tmpdir(), ["clone", "-q", "--depth", "1", `file://${src}`, sh]);
+    commitFile(sh, "file0.txt", "from a shallow clone\n", "shallow work");
+    await gitAsync(sh, ["push", "-q", url, "HEAD:refs/heads/from-shallow"]);
+    expect(await refOf(repo, "refs/heads/from-shallow")).toBe(rev(sh, "HEAD"));
+  }, 60_000);
+  it("a branch must point at a commit; the same ref twice is reported per command; deleting a missing ref is ok", async () => {
+    const src = repoWithHistory(3);
+    const { repo, url } = await ourServer(src, "files");
+    const h = rev(src, "HEAD");
+    const tree = rev(src, "HEAD^{tree}");
+    const p = rev(src, "HEAD~1");
+    let lines = await report(
+      await postReceive(
+        url,
+        receiveRequest([`${ZERO} ${tree} refs/heads/t`], packOf(src, `${h}^!`)),
+      ),
+    );
+    expect(lines[1]).toMatch(/^ng refs\/heads\/t /);
+    expect(await refOf(repo, "refs/heads/t")).toBe(ZERO);
+    lines = await report(
+      await postReceive(
+        url,
+        receiveRequest(
+          [`${ZERO} ${h} refs/heads/d`, `${ZERO} ${p} refs/heads/d`],
+          packOf(src, `${h}^!`),
+        ),
+      ),
+    );
+    expect(lines.slice(1)).toEqual([
+      "ok refs/heads/d",
+      expect.stringMatching(/^ng refs\/heads\/d /),
+    ]);
+    expect(await refOf(repo, "refs/heads/d")).toBe(h);
+    lines = await report(
+      await postReceive(url, receiveRequest([`${ZERO} ${ZERO} refs/heads/nonexist`])),
+    );
+    expect(lines).toContain("ok refs/heads/nonexist");
+  }, 60_000);
+  it("the connectivity check is one walk: 200 refs, 200 commands → reads linear, not quadratic", async () => {
+    const src = repoWithHistory(3);
+    for (let i = 0; i < 200; i++) git(src, ["update-ref", `refs/heads/old${i}`, "HEAD"]);
+    const { repo, url } = await ourServer(src, "files");
+    const get = repo.objects.get.bind(repo.objects);
+    let reads = 0;
+    repo.objects.get = async (oid, o) => {
+      reads++;
+      return get(oid, o);
+    };
+    const h = rev(src, "HEAD");
+    const cmds = Array.from({ length: 200 }, (_, i) => `${ZERO} ${h} refs/heads/new${i}`);
+    const lines = await report(await postReceive(url, receiveRequest(cmds, packOf(src, `${h}^!`))));
+    expect(lines.filter((l) => l.startsWith("ok ")).length).toBe(200);
+    console.log(`#82 connectivity: ${reads} reads for 200 refs × 200 commands`);
+    expect(reads).toBeLessThan(3000);
+  }, 120_000);
+  it("a stalled push does not block another push", async () => {
+    const src = repoWithHistory(3);
+    const { repo, url } = await ourServer(src, "files");
+    const h = rev(src, "HEAD");
+    const pack = packOf(src, `${h}^!`);
+    const stalled = new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        ctrl.enqueue(receiveRequest([`${ZERO} ${h} refs/heads/stalled`], pack.subarray(0, 40)));
+      },
+    });
+    const ac = new AbortController();
+    const a = fetch(`${url}/git-receive-pack`, {
+      method: "POST",
+      body: stalled,
+      signal: ac.signal,
+      // @ts-expect-error node needs duplex for a streamed body
+      duplex: "half",
+    }).catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 300));
+    const t0 = Date.now();
+    const lines = await report(
+      await postReceive(url, receiveRequest([`${ZERO} ${h} refs/heads/b`], pack)),
+    );
+    const took = Date.now() - t0;
+    ac.abort();
+    await a;
+    expect(lines).toContain("ok refs/heads/b");
+    expect(took).toBeLessThan(5000);
+    expect(await refOf(repo, "refs/heads/stalled")).toBe(ZERO);
+  }, 60_000);
+  it("hook messages stay on one report line; too many commands are refused", async () => {
+    const src = repoWithHistory(3);
+    const { url } = await ourServer(src, "files", {
+      preReceive: async () => "line1\nline2",
+      maxCommands: 100,
+    });
+    const h = rev(src, "HEAD");
+    const lines = await report(
+      await postReceive(url, receiveRequest([`${ZERO} ${h} refs/heads/nl`], packOf(src, `${h}^!`))),
+    );
+    expect(lines).toContain("ng refs/heads/nl pre-receive hook declined: line1 line2");
+    const many = Array.from({ length: 101 }, (_, i) => `${ZERO} ${h} refs/heads/m${i}`);
+    const res = await postReceive(url, receiveRequest(many, packOf(src, `${h}^!`)));
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  }, 60_000);
+  it("client: git's refspec rules (no colon, short names, tags first), fast-forward outside branches, needs force", async () => {
+    const src = repoWithHistory(4);
+    git(src, ["tag", "rel", "HEAD~1"]);
+    const bare = bareCopy(src);
+    const url = await serveNative(bare);
+    const work = join(tmp(), "w");
+    git(tmpdir(), ["clone", "-q", src, work]);
+    git(work, ["checkout", "-q", "-b", "topic"]);
+    commitFile(work, "file0.txt", "topic\n", "topic");
+    git(work, ["tag", "v1"]);
+    const repo = await open(work);
+    let r = await push(url, repo, { refspecs: ["HEAD"] });
+    expect(r).toEqual([{ ref: "refs/heads/topic", ok: true }]);
+    r = await push(url, repo, { refspecs: ["v1"] });
+    expect(r).toEqual([{ ref: "refs/tags/v1", ok: true }]);
+    r = await push(url, repo, { refspecs: [":rel"] });
+    expect(r).toEqual([{ ref: "refs/tags/rel", ok: true }]);
+    expect(() => rev(bare, "refs/tags/rel")).toThrow();
+    r = await push(url, repo, { refspecs: ["topic:feature"] }); // a new short destination: a branch
+    expect(r[0]?.ref).toBe("refs/heads/feature");
+    // refs/notes: the fast-forward rule applies outside refs/heads too
+    git(bare, ["update-ref", "refs/notes/x", rev(work, "HEAD")]);
+    r = await push(url, repo, { refspecs: ["HEAD~1:refs/notes/x"] });
+    expect(r[0]).toMatchObject({ ok: false, reason: expect.stringMatching(/non-fast-forward/) });
+    // needs force: replacing a commit with a tree
+    r = await push(url, repo, { refspecs: [`${rev(work, "HEAD^{tree}")}:refs/notes/x`] });
+    expect(r[0]).toMatchObject({ ok: false, reason: expect.stringMatching(/needs force/) });
+  }, 60_000);
+  it("client: only advertised capabilities are asked (no side-band, no ofs-delta)", async () => {
+    const src = repoWithHistory(3);
+    const { repo: server } = await ourServer(src, "files");
+    const inner = gitHandler(server);
+    let firstLine = "";
+    const url = await serve(async (req) => {
+      if (req.method === "GET") {
+        const res = await inner(req);
+        const text0 = new TextDecoder().decode(new Uint8Array(await res.arrayBuffer()));
+        const stripped = text0.replace(" side-band-64k", "").replace(" ofs-delta", "");
+        // the length prefix of the line with capabilities changes: rebuild it
+        const out = stripped.replace(
+          /([0-9a-f]{4})([0-9a-f]{40} [^\n]*\0[^\n]*\n)/,
+          (_m, _l, line: string) => `${(line.length + 4).toString(16).padStart(4, "0")}${line}`,
+        );
+        return new Response(out, { headers: res.headers });
+      }
+      const body = new Uint8Array(await req.arrayBuffer());
+      const first = new TextDecoder().decode(
+        body.subarray(4, Number.parseInt(new TextDecoder().decode(body.subarray(0, 4)), 16)),
+      );
+      firstLine = first;
+      return inner(
+        new Request(req.url, {
+          method: "POST",
+          headers: req.headers,
+          body: body as unknown as BodyInit,
+        }),
+      );
+    });
+    const work = join(tmp(), "w");
+    git(tmpdir(), ["clone", "-q", src, work]);
+    commitFile(work, "file0.txt", "x\n", "x");
+    const r = await push(url, await open(work), { refspecs: ["HEAD:refs/heads/caps"] });
+    expect(r[0]?.ok).toBe(true);
+    expect(firstLine).not.toMatch(/side-band-64k|ofs-delta/);
+  }, 60_000);
+});
