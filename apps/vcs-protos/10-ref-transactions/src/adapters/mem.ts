@@ -32,6 +32,16 @@ export function memRefFiles(): RefFiles & { paths(): string[] } {
       const prefix = dir.endsWith("/") ? dir : `${dir}/`;
       for (const p of [...files.keys()].sort()) if (p.startsWith(prefix)) yield p;
     },
+    async append(path, content) {
+      const old = files.get(path) ?? new Uint8Array(0);
+      const next = new Uint8Array(old.length + content.length);
+      next.set(old);
+      next.set(content, old.length);
+      files.set(path, next);
+    },
+    async removeEmptyDir() {
+      return false; // no directories in memory: a name is free once no file has it
+    },
     paths: () => [...files.keys()].sort(),
   };
 }

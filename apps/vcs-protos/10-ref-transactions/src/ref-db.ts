@@ -14,7 +14,16 @@ export interface RefCommand {
   new: string | null;
 }
 
-export type RejectReason = "mismatch" | "locked" | "invalid-name" | "df-conflict" | "duplicate";
+export type RejectReason =
+  | "mismatch"
+  | "locked"
+  | "invalid-name"
+  | "df-conflict"
+  | "duplicate"
+  /** e.g. a delete whose old value says "must not exist" (git: "zero <oldvalue>") */
+  | "invalid-command"
+  /** a name outside refs/ (a detached HEAD) in a multi-ref batch */
+  | "not-atomic";
 
 export interface BatchResult {
   ok: boolean;

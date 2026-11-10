@@ -7,7 +7,7 @@ import { kvRefDb } from "../src/kv-ref-db.js";
 import { runRefContract } from "../src/ref-contract.js";
 import { sqlRefDb } from "../src/sql-ref-db.js";
 
-const CASES = 12;
+const CASES = 20;
 
 describe("R8 the X5 contract in Chromium", () => {
   it("git files on OPFS (Web Lock exclusive create)", async () => {

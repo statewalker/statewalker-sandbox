@@ -1,7 +1,7 @@
 /**
  * X5 contract (R2–R5), runnable in Node, Chromium and a Durable Object against any RefDb.
  */
-import type { RefDb, RejectReason } from "./ref-db.js";
+import type { BatchResult, RefDb, RejectReason } from "./ref-db.js";
 import { ZERO_OID } from "./ref-db.js";
 
 /** Deterministic fake object ids: refs point at ids; object existence is not checked here. */
@@ -151,6 +151,9 @@ export async function runRefContract(
     const mainLog = (await db.reflog("refs/heads/main")).map((e) => e.message).join("|");
     const headLog = (await db.reflog("HEAD")).map((e) => e.message).join("|");
     if (!(await names(db)).startsWith("refs/heads/main")) return "list";
+    const headLast = (await db.reflog("HEAD")).at(-1);
+    if (headLast?.old !== oid(1) || headLast?.new !== oid(2))
+      return `HEAD log ${JSON.stringify(headLast)}`;
     return (
       (mainLog === "init|commit: two" && headLog.endsWith("commit: two")) ||
       `main=${mainLog} head=${headLog}`
@@ -197,6 +200,20 @@ export async function runRefContract(
         { name: "refs/heads/right", new: oid(0) },
       ]);
       let successes = 0;
+      let done = false;
+      const torn: string[] = [];
+      const reader = (async () => {
+        while (!done) {
+          const seen = new Map<string, string>();
+          for await (const { name, oid } of db.list("refs/heads/")) seen.set(name, oid);
+          if (seen.get("refs/heads/left") !== seen.get("refs/heads/right")) {
+            torn.push(
+              `${seen.get("refs/heads/left")?.slice(-2)}/${seen.get("refs/heads/right")?.slice(-2)}`,
+            );
+          }
+          await new Promise((res) => setTimeout(res, 0));
+        }
+      })();
       const worker = async (i: number) => {
         for (let attempt = 0; attempt < 200; attempt++) {
           const cur = await db.resolve(i % 2 ? "refs/heads/left" : "refs/heads/right");
@@ -215,6 +232,10 @@ export async function runRefContract(
         throw new Error(`worker ${i} gave up`);
       };
       await Promise.all(Array.from({ length: 20 }, (_, i) => worker(i)));
+      done = true;
+      await reader;
+      if (torn.length)
+        return `a list() snapshot showed left != right: ${torn.slice(0, 5).join(", ")}`;
       const l = await db.resolve("refs/heads/left");
       const r = await db.resolve("refs/heads/right");
       return (
@@ -223,6 +244,129 @@ export async function runRefContract(
       );
     },
   );
+  await check("a create below an existing ref (not in the batch) is refused", async (db) => {
+    await db.batch([{ name: "refs/x", new: oid(1) }]);
+    const r = await db.batch([{ name: "refs/x/y", new: oid(2) }]);
+    const r2 = await db.batch([
+      { name: "refs/x/y/z", new: oid(3) },
+      { name: "refs/other", new: oid(4) },
+    ]);
+    const ok =
+      !r.ok &&
+      rejected(r) === "refs/x/y:df-conflict" &&
+      !r2.ok &&
+      r2.rejected.some((x) => x.reason === "df-conflict") &&
+      (await names(db)) === "refs/x=aaa1";
+    return ok || `${rejected(r)} | ${rejected(r2)} | ${await names(db)}`;
+  });
+  await check("HEAD and its target in one batch are duplicates (as git)", async (db) => {
+    await db.batch([{ name: "refs/heads/main", new: oid(1) }]);
+    await db.setSymref("HEAD", "refs/heads/main");
+    const r = await db.batch([
+      { name: "HEAD", old: oid(1), new: oid(2) },
+      { name: "refs/heads/main", old: oid(1), new: oid(3) },
+    ]);
+    const ok = !r.ok && r.rejected.some((x) => x.reason === "duplicate");
+    return (ok && (await db.resolve("refs/heads/main")) === oid(1)) || rejected(r);
+  });
+  await check(
+    "delete of an absent ref succeeds; delete with old=null is refused (as git)",
+    async (db) => {
+      const r1 = await db.batch([{ name: "refs/heads/none", new: null }]);
+      const r2 = await db.batch([{ name: "refs/heads/none", old: null, new: null }]);
+      const r3 = await db.batch([]);
+      const ok =
+        r1.ok && !r2.ok && r2.rejected.some((x) => x.reason === "invalid-command") && r3.ok;
+      return ok || `${r1.ok} ${rejected(r2)} ${r3.ok}`;
+    },
+  );
+  await check("a detached HEAD updates alone and is refused in a multi-ref batch", async (db) => {
+    await db.batch([{ name: "refs/heads/main", new: oid(1) }]);
+    const single = await db.batch([{ name: "HEAD", new: oid(5) }]); // detaches (or creates) HEAD
+    const head = await db.read("HEAD");
+    if (!single.ok || !head || !("oid" in head) || head.oid !== oid(5)) {
+      return `single ${rejected(single)} ${JSON.stringify(head)}`;
+    }
+    const multi = await db.batch([
+      { name: "HEAD", old: oid(5), new: oid(6) },
+      { name: "refs/heads/main", old: oid(1), new: oid(7) },
+    ]);
+    const after = await db.read("HEAD");
+    const ok =
+      !multi.ok &&
+      multi.rejected.some((x) => x.name === "HEAD" && x.reason === "not-atomic") &&
+      !!after &&
+      "oid" in after &&
+      after.oid === oid(5) &&
+      (await db.resolve("refs/heads/main")) === oid(1);
+    return ok || `${rejected(multi)} ${JSON.stringify(after)}`;
+  });
+  await check("updating HEAD's target directly also logs HEAD (as git)", async (db) => {
+    await db.batch([{ name: "refs/heads/main", new: oid(1) }], { ident: IDENT, message: "init" });
+    await db.setSymref("HEAD", "refs/heads/main");
+    const before = (await db.reflog("HEAD")).length;
+    await db.batch([{ name: "refs/heads/main", old: oid(1), new: oid(2) }], {
+      ident: IDENT,
+      message: "direct",
+    });
+    const log = await db.reflog("HEAD");
+    const last = log[log.length - 1];
+    const ok =
+      log.length === before + 1 &&
+      last?.old === oid(1) &&
+      last?.new === oid(2) &&
+      last?.message === "direct";
+    return ok || JSON.stringify(log.slice(-2));
+  });
+  await check(
+    "a deleted ref's name can become a directory, and a directory's name a ref again",
+    async (db) => {
+      const steps = [
+        await db.batch([{ name: "refs/heads/a/b", new: oid(1) }]),
+        await db.batch([{ name: "refs/heads/a/b", old: oid(1), new: null }]),
+        await db.batch([{ name: "refs/heads/a", old: null, new: oid(2) }]),
+        await db.batch([{ name: "refs/heads/a", old: oid(2), new: null }]),
+        await db.batch([
+          { name: "refs/heads/a/c", old: null, new: oid(3) },
+          { name: "refs/heads/z", new: oid(4) },
+        ]),
+      ];
+      const bad = steps.findIndex((r) => !r.ok);
+      if (bad >= 0) return `step ${bad}: ${rejected(steps[bad] as BatchResult)}`;
+      return (await names(db)) === "refs/heads/a/c=aaa3,refs/heads/z=aaa4" || (await names(db));
+    },
+  );
+  await check("concurrent creates of a ref and a ref below it never both succeed", async (db) => {
+    for (let round = 0; round < 10; round++) {
+      const x = `refs/r${round}`;
+      const [a, b] = await Promise.all([
+        db.batch([
+          { name: x, old: null, new: oid(1) },
+          { name: `refs/s${round}a`, new: oid(1) },
+        ]),
+        db.batch([
+          { name: `${x}/y`, old: null, new: oid(2) },
+          { name: `refs/s${round}b`, new: oid(2) },
+        ]),
+      ]);
+      const both =
+        (await db.resolve(x)) !== undefined && (await db.resolve(`${x}/y`)) !== undefined;
+      if (both || (a.ok && b.ok)) return `round ${round}: ${a.ok} ${b.ok}`;
+    }
+    return true;
+  });
+  await check("a no-op update changes nothing and logs nothing (as git)", async (db) => {
+    await db.batch([{ name: "refs/heads/a", new: oid(1) }], { ident: IDENT, message: "create" });
+    const r = await db.batch([{ name: "refs/heads/a", old: oid(1), new: oid(1) }], {
+      ident: IDENT,
+      message: "noop",
+    });
+    const log = (await db.reflog("refs/heads/a")).map((e) => e.message).join("|");
+    return (
+      (r.ok && log === "create" && (await db.resolve("refs/heads/a")) === oid(1)) ||
+      `${r.ok} ${log}`
+    );
+  });
   await check("list(prefix) is sorted by bytes and skips symbolic refs", async (db) => {
     await db.batch([
       { name: "refs/heads/b", new: oid(2) },

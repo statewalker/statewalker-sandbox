@@ -1,5 +1,5 @@
-import { readdir, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { appendFile, mkdir, readdir, rmdir, stat, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { nodeAtomicFiles } from "../../../07-lockfile-cas/src/adapters/node.js";
 import type { RefFiles } from "../files-ref-db.js";
 
@@ -21,6 +21,18 @@ export function nodeRefFiles(root: string): RefFiles {
     exists: isFile,
     async write(path, content) {
       await writeFile(join(root, path), content);
+    },
+    async append(path, content) {
+      await mkdir(dirname(join(root, path)), { recursive: true });
+      await appendFile(join(root, path), content); // O_APPEND, as git writes reflogs
+    },
+    async removeEmptyDir(dir) {
+      try {
+        await rmdir(join(root, dir)); // fails unless an empty directory
+        return true;
+      } catch {
+        return false;
+      }
     },
     async *list(dir) {
       let entries: string[];

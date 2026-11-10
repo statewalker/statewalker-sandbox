@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,7 @@ import { checkRefFormat } from "../src/refname.js";
 import { REFNAME_TABLE } from "../src/refname-table.js";
 import { sqlRefDb } from "../src/sql-ref-db.js";
 
-const CASES = 12;
+const CASES = 20;
 const IDENT = "A U Thor <author@example.com> 1700000000 +0000";
 const dirs: string[] = [];
 afterAll(() => {
@@ -229,6 +229,8 @@ function dyingAt(inner: RefFiles, k: number) {
         yield* inner.list(d);
       },
     }),
+    append: wrap(inner.append),
+    removeEmptyDir: wrap(inner.removeEmptyDir),
   };
   return { files: self, calls: () => calls };
 }
@@ -237,7 +239,7 @@ describe("R7 crash at every primitive call (git files)", () => {
   it("each crash leaves all old or all new values once stale locks are broken", async () => {
     const repo = newRepo();
     const cs = commits(repo, 6);
-    const names = ["refs/heads/a", "refs/heads/b", "refs/heads/c"];
+    const names = ["refs/heads/a", "refs/heads/b", "refs/heads/c", "refs/heads/d"];
     const outcomes = new Set<string>();
     let completed = false;
     for (let k = 1; k <= 400 && !completed; k++) {
@@ -254,6 +256,7 @@ describe("R7 crash at every primitive call (git files)", () => {
         (await setup.batch([{ name: "refs/heads/b", old: cs[1] as string, new: cs[2] as string }]))
           .ok,
       ).toBe(true);
+      await setup.batch([{ name: "refs/heads/d", new: cs[4] as string }]); // loose only
       const before = await Promise.all(names.map((n) => setup.resolve(n)));
       const { files } = dyingAt(base, k);
       let threw = false;
@@ -262,6 +265,7 @@ describe("R7 crash at every primitive call (git files)", () => {
           { name: "refs/heads/a", old: cs[0] as string, new: cs[3] as string },
           { name: "refs/heads/b", old: cs[2] as string, new: null },
           { name: "refs/heads/c", old: null, new: cs[5] as string },
+          { name: "refs/heads/d", old: cs[4] as string, new: cs[0] as string },
         ]);
         if (r.ok) completed = true;
       } catch {
@@ -271,7 +275,8 @@ describe("R7 crash at every primitive call (git files)", () => {
       await base.remove("packed-refs.lock");
       const after = await Promise.all(names.map((n) => filesRefDb(base).resolve(n)));
       const isOld = after.every((v, i) => v === before[i]);
-      const isNew = after[0] === cs[3] && after[1] === undefined && after[2] === cs[5];
+      const isNew =
+        after[0] === cs[3] && after[1] === undefined && after[2] === cs[5] && after[3] === cs[0];
       expect(isOld || isNew, `crash at call ${k}: ${JSON.stringify(after)}`).toBe(true);
       outcomes.add(`${threw ? "crash" : "done"}:${isNew ? "new" : "old"}`);
     }
@@ -279,6 +284,166 @@ describe("R7 crash at every primitive call (git files)", () => {
     console.log("R7 outcomes:", [...outcomes].join(", "));
     expect(outcomes.has("crash:old")).toBe(true);
   }, 120_000);
+});
+
+describe("R7b crash in the single-ref path and in setSymref", () => {
+  it("every crash leaves the old or the new value", async () => {
+    const repo = newRepo();
+    const [c0, c1] = commits(repo, 2) as [string, string];
+    for (const op of ["update", "delete-packed", "symref"] as const) {
+      let completed = false;
+      for (let k = 1; k <= 200 && !completed; k++) {
+        const base = nodeRefFiles(join(newRepo(), ".git"));
+        const setup = filesRefDb(base);
+        await setup.batch([
+          { name: "refs/heads/m", new: c0 },
+          { name: "refs/heads/n", new: c0 },
+        ]); // packed
+        await setup.batch([{ name: "refs/heads/m", old: c0, new: c1 }]); // m loose over a stale packed value
+        const { files } = dyingAt(base, k);
+        const db = filesRefDb(files);
+        try {
+          if (op === "update")
+            completed = (await db.batch([{ name: "refs/heads/m", old: c1, new: c0 }])).ok;
+          if (op === "delete-packed")
+            completed = (await db.batch([{ name: "refs/heads/m", old: c1, new: null }])).ok;
+          if (op === "symref")
+            completed = await db.setSymref("HEAD", "refs/heads/n", "refs/heads/main");
+        } catch {
+          // crashed
+        }
+        for await (const p of base.list("refs")) if (p.endsWith(".lock")) await base.remove(p);
+        await base.remove("packed-refs.lock");
+        await base.remove("HEAD.lock");
+        const after = filesRefDb(base);
+        const m = await after.resolve("refs/heads/m");
+        const head = await after.read("HEAD");
+        const okState =
+          op === "update"
+            ? m === c1 || m === c0
+            : op === "delete-packed"
+              ? m === c1 || m === undefined
+              : !!head &&
+                "symref" in head &&
+                (head.symref === "refs/heads/main" || head.symref === "refs/heads/n");
+        expect(okState, `${op}, crash at call ${k}: m=${m} head=${JSON.stringify(head)}`).toBe(
+          true,
+        );
+      }
+      expect(completed, op).toBe(true);
+    }
+  }, 120_000);
+});
+
+describe("files backend robustness", () => {
+  it("a stale logs/*.lock does not disable a reflog; reflog lines are git's format", async () => {
+    const repo = newRepo();
+    const [c0, c1] = commits(repo, 2) as [string, string];
+    const files = nodeRefFiles(join(repo, ".git"));
+    const db = filesRefDb(files);
+    await db.batch([{ name: "refs/heads/main", new: c0 }], { ident: IDENT, message: "one" });
+    await files.createExclusive("logs/refs/heads/main.lock", new Uint8Array(0)); // left by a crash
+    await db.batch([{ name: "refs/heads/main", old: c0, new: c1 }], {
+      ident: IDENT,
+      message: "two\n  spaced",
+    });
+    await db.batch([{ name: "refs/heads/main", old: c1, new: c0 }], { ident: IDENT });
+    const raw = readFileSync(join(repo, ".git", "logs", "refs", "heads", "main"), "utf8").split(
+      "\n",
+    );
+    expect(raw[1]).toBe(`${c0} ${c1} ${IDENT}\ttwo spaced`); // whitespace runs collapsed, as git
+    expect(raw[2]).toBe(`${c1} ${c0} ${IDENT}`); // no tab without a message, as git
+    expect(git(repo, ["reflog", "show", "--format=%gs", "refs/heads/main"]).split("\n")).toEqual([
+      "",
+      "two spaced",
+      "one",
+    ]);
+  });
+  it("a reflog failure after the commit still reports ok (the refs changed)", async () => {
+    const repo = newRepo();
+    const [c0, c1, c2] = commits(repo, 3) as [string, string, string];
+    const base = nodeRefFiles(join(repo, ".git"));
+    const failingLogs: RefFiles = {
+      ...base,
+      append: async (p, b) => {
+        if (p.startsWith("logs/")) throw new Error("log disk full");
+        return base.append(p, b);
+      },
+    };
+    const db = filesRefDb(failingLogs);
+    expect((await db.batch([{ name: "refs/heads/a", new: c0 }])).ok).toBe(true);
+    const r = await db.batch([
+      { name: "refs/heads/a", old: c0, new: c1 },
+      { name: "refs/heads/b", old: null, new: c2 },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(await db.resolve("refs/heads/a")).toBe(c1);
+  });
+  it("reads like git: 'ref:' without a space, an id followed by junk; list skips a broken ref and only covers refs/", async () => {
+    const repo = newRepo();
+    const [c0] = commits(repo, 1) as [string];
+    const gitDir = join(repo, ".git");
+    const files = nodeRefFiles(gitDir);
+    const db = filesRefDb(files);
+    await db.batch([{ name: "refs/heads/main", new: c0 }]);
+    writeFileSync(join(gitDir, "refs", "heads", "sym"), "ref:refs/heads/main\n");
+    writeFileSync(join(gitDir, "refs", "heads", "junk"), `${c0} trailing junk\n`);
+    writeFileSync(join(gitDir, "refs", "heads", "broken"), "not an id\n");
+    writeFileSync(join(gitDir, "COMMIT_EDITMSG"), "x\n");
+    expect(await db.resolve("refs/heads/sym")).toBe(c0);
+    expect(await db.resolve("refs/heads/junk")).toBe(c0);
+    const all: string[] = [];
+    for await (const { name } of db.list("")) all.push(name);
+    expect(all).toEqual(["refs/heads/junk", "refs/heads/main"]);
+  });
+  it("native git, run while our batch is paused inside phase 2, is blocked by our locks", async () => {
+    const repo = newRepo();
+    const [c0, c1, c2] = commits(repo, 3) as [string, string, string];
+    const base = nodeRefFiles(join(repo, ".git"));
+    await filesRefDb(base).batch([
+      { name: "refs/heads/main", new: c0 },
+      { name: "refs/heads/x", new: c0 },
+    ]);
+    let release: () => void = () => {};
+    let paused: () => void = () => {};
+    const atPause = new Promise<void>((r) => {
+      paused = r;
+    });
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let commits_ = 0;
+    const gated: RefFiles = {
+      ...base,
+      replace: async (s, t) => {
+        if (s === "packed-refs.lock" && ++commits_ === 1) {
+          paused();
+          await gate;
+        }
+        return base.replace(s, t);
+      },
+    };
+    const running = filesRefDb(gated).batch([
+      { name: "refs/heads/main", old: c0, new: c1 },
+      { name: "refs/heads/x", old: c0, new: c1 },
+    ]);
+    await atPause;
+    const viaRef = gitTry(repo, ["update-ref", "refs/heads/main", c2, c0]);
+    const viaPacked = gitTry(repo, [
+      "-c",
+      "core.packedRefsTimeout=0",
+      "update-ref",
+      "-d",
+      "refs/heads/x",
+      c0,
+    ]);
+    release();
+    expect((await running).ok).toBe(true);
+    expect(viaRef.status, viaRef.stderr).not.toBe(0);
+    expect(viaRef.stderr).toMatch(/refs\/heads\/main\.lock/);
+    expect(viaPacked.status).not.toBe(0);
+    expect(git(repo, ["rev-parse", "refs/heads/main", "refs/heads/x"])).toBe(`${c1}\n${c1}`);
+  });
 });
 
 describe("R8 KV snapshot size", () => {

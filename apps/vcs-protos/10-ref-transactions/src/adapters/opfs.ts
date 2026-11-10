@@ -47,6 +47,33 @@ export function opfsRefFiles(root: FileSystemDirectoryHandle): RefFiles {
       await w.write(content as Uint8Array<ArrayBuffer>);
       await w.close();
     },
+    async append(path, content) {
+      const parts = path.split("/").filter(Boolean);
+      const name = parts.pop() as string;
+      let d = root;
+      for (const p of parts) d = await d.getDirectoryHandle(p, { create: true });
+      const h = await d.getFileHandle(name, { create: true });
+      const size = (await h.getFile()).size;
+      const w = await h.createWritable({ keepExistingData: true });
+      await w.seek(size);
+      await w.write(content as Uint8Array<ArrayBuffer>);
+      await w.close();
+    },
+    async removeEmptyDir(dir) {
+      const parts = dir.split("/").filter(Boolean);
+      const name = parts.pop();
+      if (!name) return false;
+      try {
+        const parent = await dirOf(parts);
+        const h = await parent.getDirectoryHandle(name);
+        for await (const _ of (h as unknown as { keys(): AsyncIterable<string> }).keys())
+          return false;
+        await parent.removeEntry(name); // not recursive
+        return true;
+      } catch {
+        return false;
+      }
+    },
     async *list(dir) {
       const parts = dir.split("/").filter(Boolean);
       let d: FileSystemDirectoryHandle;

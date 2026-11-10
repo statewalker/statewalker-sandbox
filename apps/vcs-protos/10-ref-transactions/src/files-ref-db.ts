@@ -36,6 +36,10 @@ export interface RefFiles {
   write(path: string, content: Uint8Array): Promise<void>;
   /** File paths (not directories) under `dir`, recursively. */
   list(dir: string): AsyncIterable<string>;
+  /** Append to a file, creating it (and its directories) if absent — git's O_APPEND reflog write. */
+  append(path: string, content: Uint8Array): Promise<void>;
+  /** Remove `dir` if it is an empty directory; false otherwise (git: try_remove_empty_parents). */
+  removeEmptyDir(dir: string): Promise<boolean>;
 }
 
 export interface FilesRefDbOptions {
