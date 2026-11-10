@@ -260,10 +260,13 @@ describe("R4 delta chains through the base cache", () => {
       console.log(
         `R4 cache ${cache >> 20} MiB: ${reader.stats.inflations} inflations, peak +${(peak / MiB).toFixed(1)} MiB live`,
       );
-      // memory = the cache budget + a working set of about four 4 MiB objects (the base being
-      // patched, the result, the caller's copy, buffers awaiting release); the criterion's "< 24 MiB"
-      // forgot the working set and is recorded as not met in the README (measured ≈ 34 MiB)
-      if (cache > 0) expect(peak).toBeLessThan(cache + 5 * 4 * MiB);
+      // The cache itself stays within its budget (deterministic). Process memory = the budget + a
+      // working set of a few objects (the base being patched, the result, the caller's copy) plus
+      // buffers awaiting release after a forced GC, which varies by Node version (≈ 30–34 MiB on
+      // Node 22, 42 MiB on Node 24 in CI): only a loose sanity bound is asserted. The criterion's
+      // "< 24 MiB" forgot the working set and is recorded as not met in the README.
+      expect(reader.stats.peakCachedBytes).toBeLessThanOrEqual(cache);
+      if (cache > 0) expect(peak).toBeLessThan(cache + 8 * 4 * MiB);
     }
     expect((inflations[0] as number) * 2).toBeLessThanOrEqual(inflations[1] as number);
   }, 300_000);

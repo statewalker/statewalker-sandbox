@@ -43,8 +43,8 @@ export interface PackReader {
   /** Undefined when the pack does not contain `oid`. */
   get(oid: string, opts?: { verify?: boolean }): Promise<ReadObject | undefined>;
   ids(): Iterable<string>;
-  /** Counters for tests: entry inflations performed. */
-  readonly stats: { inflations: number };
+  /** Counters for tests: entry inflations performed; bytes held by the base cache (peak). */
+  readonly stats: { inflations: number; peakCachedBytes: number };
 }
 
 const TYPES: Record<number, ObjectTypeName> = { 1: "commit", 2: "tree", 3: "blob", 4: "tag" };
@@ -180,7 +180,7 @@ export async function openPack(
   };
 
   const pool = createInflaterPool();
-  const st = { inflations: 0 };
+  const st = { inflations: 0, peakCachedBytes: 0 };
   const readHead = async (offset: number): Promise<EntryHead> => {
     const end = endOf(offset);
     if (offset < 12 || end <= offset)
@@ -293,6 +293,7 @@ export async function openPack(
       cache.delete(k);
       cached -= x.data.length;
     }
+    st.peakCachedBytes = Math.max(st.peakCachedBytes, cached);
   };
   /** Resolves the object at `offset` to bytes: walk down to a base, patch upwards, cache on the way. */
   const resolve = async (

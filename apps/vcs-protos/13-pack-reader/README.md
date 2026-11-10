@@ -68,9 +68,10 @@ Findings:
    object (8 MiB here) barely helps (862 / 1 326): it can only hold the last answer.
 2. **Delta memory = cache budget + working set.** Resolving holds the base being patched, the new
    result and the caller's previous object, plus buffers awaiting release: the no-cache run already
-   peaks at +24 MiB for 4 MiB objects, the 16 MiB cache at +30–34 MiB. The criterion's "< 24 MiB
-   with a 16 MiB cache" ignored the working set: **not met as written**; the test asserts
-   budget + 5 objects instead.
+   peaks at +24 MiB for 4 MiB objects, the 16 MiB cache at +30–34 MiB on Node 22 and +42 MiB on Node 24 in CI (forced-GC readings
+   include buffers awaiting release). The criterion's "< 24 MiB with a 16 MiB cache" ignored the
+   working set: **not met as written**. The test asserts, deterministically, that the cache never
+   holds more than its budget, and process memory only as a loose sanity bound (budget + 8 objects).
 3. **The pack/idx pairing must be checked by trailer**: an idx of another pack with the same
    object count passes every other check (count, lengths) and would serve wrong offsets.
 4. **Packs first, then loose objects** (git's order); REF_DELTA bases outside a pack resolve
@@ -86,7 +87,7 @@ All 12 Node tests and 1 Chromium test pass (`pnpm test 13-pack-reader`).
 | R1 | OFS_DELTA (60-commit history), REF_DELTA, `gc --aggressive`, a 4 MiB blob with a delta child, installed by X6a: for every object, type, size and content equal `git cat-file --batch-all-objects --batch`. |
 | R2 | Objects in two git-written packs (`repack -d` twice) plus loose objects: every object read (with `verify`) equals git's; `has` true for all, `list` yields each id once and exactly git's set; an absent id: `has` false, `get` undefined. |
 | R3 | Open refuses with `PackError`: idx checksum flipped; another pack's idx (different count); another pack's idx with the same count (trailer check only); truncated idx. A flipped byte inside a compressed entry fails the read with `PackError`; a pack whose bytes are another valid object under the same layout is served without `verify` and refused with it. |
-| R4 | 4 MiB base + 50-deep chain, all 51 objects in random order, each verified: 16 MiB cache → 631 inflations (no cache: 1 326), peak +30–34 MiB live (no cache: +24 MiB). |
+| R4 | 4 MiB base + 50-deep chain, all 51 objects in random order, each verified: 16 MiB cache → 631 inflations (no cache: 1 326); the cache's peak holding ≤ its budget; process peak +30–34 MiB live on Node 22, +42 MiB on Node 24 (no cache: +24 MiB). |
 | R5 | Chromium (OPFS) and a Durable Object (SqliteFilesApi): all 280 objects of X6a's fixture read with `verify`. |
 | R6 | A 64 MiB incompressible blob in a git-written pack: streamed with +0.0–0.2 MiB live, its SHA-1 equals its id. |
 
