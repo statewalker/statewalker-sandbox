@@ -25,7 +25,7 @@ then tests written first (red), then the implementation (green), then findings.
 | `16-pack-to-sql` | X6b3 — **keep packs as the store of record; exploding to rows is git-identical, crash-safe, DO-resumable, reads text 3–7× faster for 3–34× the bytes** | Should the native SQL store explode received packs into object rows, or keep them as packs? |
 | `17-repository` | X16a — **one command layer over git files and one SQL Db: same ids (git's), native-git interop, DO** | Can one repository API run unchanged over git files and over a single SQL database? |
 | `18-pack-export` | X6c — **git's object set, packs git accepts from both backends and a DO, streaming, backpressure, cancel; whole objects 3.8× git's size** | Can a repository export the pack git expects, streaming, with backpressure and cancel? |
-| `19-delta-reuse` | X6d — open | Can export reuse what packs already hold — compressed entries and deltas — as git does? |
+| `19-delta-reuse` | X6d — **reused entries and deltas: export at 1.05× git's pack (from 3.8×), CRC-checked, cycle-free, thin packs** | Can export reuse what packs already hold — compressed entries and deltas — as git does? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.

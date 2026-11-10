@@ -10,6 +10,7 @@ import { filesStagingStore } from "../../09-git-objects/src/staging.js";
 import {
   openPack,
   PackError,
+  type PackedEntry,
   type PackReader,
   type PackReaderOptions,
   type ReadObject,
@@ -22,6 +23,8 @@ export interface ObjectDatabase {
   ): Promise<ReadObject | undefined>;
   has(oid: string): Promise<boolean>;
   list(): AsyncIterable<string>;
+  /** The object's entry in the first pack that holds it (X6d: reuse when exporting). */
+  entry(oid: string): Promise<PackedEntry | undefined>;
   /** Packs that could not be opened (corrupt idx, mismatched pack…), skipped as git does. */
   readonly skipped: { pack: string; error: string }[];
 }
@@ -58,6 +61,11 @@ export async function openObjectDatabase(
       const fromLoose = await loose.get(oid, { verify: o?.verify });
       if (fromLoose || !failed) return fromLoose;
       throw failed;
+    },
+    async entry(oid) {
+      if (!OID.test(oid)) return undefined;
+      for (const p of packs) if (p.has(oid)) return p.entry(oid);
+      return undefined;
     },
     async has(oid) {
       if (!OID.test(oid)) return false;

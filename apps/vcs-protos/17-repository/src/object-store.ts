@@ -12,6 +12,13 @@ export interface ObjectStore {
   has(oid: string): Promise<boolean>;
   /** Every object id once (packs and loose objects). */
   list(): AsyncIterable<string>;
+  /**
+   * The object's entry as a pack stores it, if it is in a pack (X6d: copied as is when exporting).
+   * Absent for loose objects.
+   */
+  packedEntry?(
+    oid: string,
+  ): Promise<import("../../13-pack-reader/src/pack-reader.js").PackedEntry | undefined>;
   /** Installs a received pack (a thin pack is completed from this store). */
   installPack(source: AsyncIterable<Uint8Array>): Promise<{ packId: string; count: number }>;
 }

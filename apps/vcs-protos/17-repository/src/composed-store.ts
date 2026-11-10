@@ -76,6 +76,9 @@ export async function composedStore(
       await rescan();
       return (await packs.get(oid, o)) as StoredObject | undefined;
     },
+    async packedEntry(oid) {
+      return packs.entry(oid);
+    },
     async has(oid) {
       const here = async () =>
         (await packs.has(oid)) || (!opts.looseOnPackFiles && (await loose.has(oid)));

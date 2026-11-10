@@ -26,6 +26,7 @@ import {
   createInflaterPool,
   type StreamInflater,
 } from "../../04-pooled-inflater/src/pooled-inflater.js";
+import { CRC_INIT, crc32Update, crcFinal } from "../../12-index-pack/src/crc32.js";
 import { applyDelta, DeltaError } from "../../12-index-pack/src/delta.js";
 import { PackError } from "../../12-index-pack/src/index-pack.js";
 
@@ -50,6 +51,17 @@ export interface PackReaderOptions {
     visiting: Set<string>,
   ) => Promise<{ type: ObjectTypeName; data: Uint8Array } | undefined>;
 }
+export interface PackedEntry {
+  packId: string;
+  kind: number;
+  size: number;
+  /** a whole object's type */
+  type?: ObjectTypeName;
+  /** a delta's base */
+  baseOid?: string;
+  crc32: number;
+  raw(): AsyncIterable<Uint8Array>;
+}
 export interface PackReader {
   readonly packId: string;
   readonly count: number;
@@ -60,6 +72,13 @@ export interface PackReader {
     opts?: { verify?: boolean; visiting?: Set<string> },
   ): Promise<ReadObject | undefined>;
   ids(): Iterable<string>;
+  /**
+   * The entry as stored (for reuse when exporting, X6d): kind (1–4 whole, 6/7 delta), the size in
+   * its header (the object's, or the delta data's), the base's id for a delta (an OFS_DELTA's base
+   * resolved through the idx), the idx's CRC-32, and its compressed bytes. `raw()` checks the CRC
+   * of the whole entry as it streams and throws a PackError at the end when it does not match.
+   */
+  entry(oid: string): Promise<PackedEntry | undefined>;
   /** Counters for tests: entry inflations performed; bytes held by the base cache (peak). */
   readonly stats: {
     inflations: number;
@@ -447,11 +466,57 @@ export async function openPack(
     yield b;
   }
 
+  let byOffset: Map<number, number> | undefined;
+  const indexAt = (offset: number): number => {
+    if (!byOffset) {
+      byOffset = new Map();
+      for (let i = 0; i < n; i++) byOffset.set(offsetOf(i), i);
+    }
+    return byOffset.get(offset) ?? -1;
+  };
+  const oidAt = (i: number) => hex(idx.subarray(oidsAt + i * 20, oidsAt + i * 20 + 20));
+
   return {
     packId,
     count: n,
     stats: st,
     has: (oid) => find(oid) >= 0,
+    async entry(oid) {
+      const i = find(oid);
+      if (i < 0) return undefined;
+      const offset = offsetOf(i);
+      const e = await readHead(offset);
+      const crc32 = iv.getUint32(crcAt + i * 4);
+      let baseOid = e.baseOid;
+      if (e.kind === 6) {
+        const bi = indexAt(e.baseOffset as number);
+        if (bi < 0) throw new PackError(`${packPath}: OFS_DELTA at ${offset} names no entry`);
+        baseOid = oidAt(bi);
+      }
+      return {
+        packId,
+        kind: e.kind,
+        size: e.size,
+        type: TYPES[e.kind],
+        baseOid,
+        crc32,
+        async *raw() {
+          let crc = CRC_INIT;
+          let at = offset;
+          for await (const c of files.read(packPath, { start: offset, length: e.end - offset })) {
+            crc = crc32Update(crc, c);
+            const from = Math.max(0, e.dataStart - at);
+            if (from < c.length) yield c.subarray(from);
+            at += c.length;
+          }
+          if (at !== e.end) throw new PackError(`${packPath}: entry at ${offset} truncated`);
+          if (crcFinal(crc) !== crc32)
+            throw new PackError(
+              `${packPath}: entry ${oid} at ${offset} does not match its idx CRC (corrupt)`,
+            );
+        },
+      };
+    },
     *ids() {
       for (let i = 0; i < n; i++) yield hex(idx.subarray(oidsAt + i * 20, oidsAt + i * 20 + 20));
     },
