@@ -68,6 +68,8 @@ export interface SearchOptions extends ReuseOptions {
   /** computed deltas kept until written (git's pack.deltaCacheSize). Default 16 MiB. */
   deltaCacheSize?: number;
   searchStats?: SearchStats;
+  /** called as candidates are searched (git's "Compressing objects: i/n") */
+  onProgress?: (done: number, total: number) => void;
 }
 
 const enc = new TextEncoder();
@@ -232,8 +234,10 @@ export async function* writePackSearching(
     let winBytes = 0;
     const bytesOf = (w: WindowEntry) => w.data.length + (w.index ? indexBytes(w.index) : 0);
     let cached = 0;
+    let done = 0;
     for (const c of cands) {
       signal?.throwIfAborted();
+      opts.onProgress?.(done++, cands.length);
       // verified: a copy that inflates to wrong bytes is not used as a base; an unreadable copy
       // leaves the object to the writer (another copy, or a failure before its entry starts)
       let data: Uint8Array;
@@ -313,6 +317,7 @@ export async function* writePackSearching(
       winBytes += bytesOf(entry);
       if (st) st.peakWindowBytes = Math.max(st.peakWindowBytes, winBytes);
     }
+    opts.onProgress?.(done, cands.length);
   };
   yield* writePackReusing(repo, objects, { ...opts, depth: maxDepth, refine });
 }

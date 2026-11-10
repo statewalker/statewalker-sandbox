@@ -31,6 +31,11 @@ export interface WalkOptions {
    * own `.git/shallow`). Any other missing object fails the walk, as git's does.
    */
   shallow?: Iterable<string>;
+  /**
+   * The receiver's shallow commits: being uninteresting (the receiver has them) does not make
+   * their parents uninteresting — the receiver lacks those (a deepening fetch sends them).
+   */
+  receiverShallow?: Iterable<string>;
 }
 
 const TYPE_CODE: Record<ObjectType, number> = { commit: 1, tree: 2, blob: 3, tag: 4 };
@@ -93,6 +98,7 @@ export async function listObjectsWithEdges(
 ): Promise<{ objects: ToSend[]; edges: string[]; receiverHas: Set<string> }> {
   const signal = opts.signal;
   const shallow = new Set(opts.shallow ?? []);
+  const receiverShallow = new Set(opts.receiverShallow ?? []);
   const out: ToSend[] = [];
   const seen = new Set<string>();
   const add = (o: ToSend) => {
@@ -126,7 +132,7 @@ export async function listObjectsWithEdges(
       const s = state.get(x);
       if (!s || s.u) continue;
       s.u = true;
-      if (s.popped && !shallow.has(x)) stack.push(...s.commit.parents);
+      if (s.popped && !shallow.has(x) && !receiverShallow.has(x)) stack.push(...s.commit.parents);
     }
   };
   /** false: absent (only allowed for uninteresting commits) */
@@ -192,6 +198,7 @@ export async function listObjectsWithEdges(
     s.popped = true;
     if (!s.u) result.push(c);
     if (shallow.has(c)) continue;
+    if (s.u && receiverShallow.has(c)) continue;
     for (const p of s.commit.parents) await visit(p, s.u);
   }
   const commits = result.filter((c) => !(state.get(c) as State).u);
