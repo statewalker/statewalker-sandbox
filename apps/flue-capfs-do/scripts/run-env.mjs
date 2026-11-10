@@ -6,13 +6,14 @@
 // TRANSPORTS=token: celld does not pass RpcTargets between isolates ("RPC stubs cannot cross
 // isolate boundaries yet").
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundleTodoTool } from "../tests/fixtures/bundle-fixture.mjs";
+import { startFakeLlm } from "../tests/helpers/fake-llm.mjs";
 
 const env = process.argv[2];
 const dir = fileURLToPath(new URL("..", import.meta.url));
@@ -25,6 +26,14 @@ const freePort = () =>
   });
 const port = Number(process.env.PORT ?? (await freePort()));
 const state = mkdtempSync(join(tmpdir(), `flue-capfs-${env}-`));
+// The `agent` task's model: a fake OpenAI-compatible endpoint (tests/helpers/fake-llm.mjs),
+// given to the runtime as the LLM var, with a dummy key.
+const fakeLlm = await startFakeLlm();
+const LLM = JSON.stringify(fakeLlm.config);
+const LLM_VARS = [`LLM=${LLM}`, "LLM_API_KEY=sk-fake"];
+
+const DEV_VARS_MARK = "# written by scripts/run-env.mjs for a test run (removed when it ends)";
+let ownDevVars = false;
 
 const commands = {
   wrangler: [
@@ -39,9 +48,20 @@ const commands = {
       "--persist-to",
       state,
       "--show-interactive-dev-session=false",
+      ...LLM_VARS.flatMap((v) => ["--var", v.replace("=", ":")]),
     ],
   ],
-  cellb: ["node", ["scripts/serve-cellb.mjs", "--port", String(port), "--data", state]],
+  cellb: [
+    "node",
+    [
+      "scripts/serve-cellb.mjs",
+      "--port",
+      String(port),
+      "--data",
+      state,
+      ...LLM_VARS.flatMap((v) => ["--var", v]),
+    ],
+  ],
   // cellb with its cells in celld's bucket format (the object store `celld dev` keeps).
   "cellb-celld-bucket": [
     "node",
@@ -51,6 +71,7 @@ const commands = {
       String(port),
       "--celld-bucket",
       join(state, "objects.sqlite3"),
+      ...LLM_VARS.flatMap((v) => ["--var", v]),
     ],
   ],
   // cellb, accepting APPROVED bundles: the fixture tool's hash is the one allowed bundle.
@@ -67,6 +88,7 @@ const commands = {
         state,
         "--var",
         `TOOL_BUNDLE=${toolBundle}`,
+        ...LLM_VARS.flatMap((v) => ["--var", v]),
       ],
     ];
   },
@@ -74,6 +96,20 @@ const commands = {
   // in Docker with host networking and the repository mounted at its own path (pnpm's links).
   // celld bundles with esbuild: the project's own native esbuild is passed as CELLD_ESBUILD.
   celld: () => {
+    // celld reads Worker vars from .dev.vars beside the config. A developer's own file (it
+    // usually holds wrangler dev secrets) is never overwritten: only one this script wrote, which
+    // a killed run can leave behind. It is removed when the run ends.
+    const devVars = join(dir, ".dev.vars");
+    if (existsSync(devVars) && !readFileSync(devVars, "utf8").startsWith(DEV_VARS_MARK)) {
+      console.error(`celld: ${devVars} exists; move it away for the test run`);
+      process.exit(2);
+    }
+    if (LLM_VARS.some((v) => v.includes("'"))) throw new Error("a var contains a single quote");
+    writeFileSync(
+      devVars,
+      `${DEV_VARS_MARK}\n${LLM_VARS.map((v) => `${v.replace("=", "='")}'`).join("\n")}\n`,
+    );
+    ownDevVars = true;
     const args = ["dev", dir, "--host", "127.0.0.1", "--port", String(port), "--no-watch"];
     if (process.env.CELLD_BIN) return [process.env.CELLD_BIN, args];
     if (process.platform !== "linux") {
@@ -128,6 +164,9 @@ if (!commands[env]) {
   process.exit(2);
 }
 const [cmd, args] = typeof commands[env] === "function" ? await commands[env]() : commands[env];
+process.on("exit", () => {
+  if (ownDevVars) rmSync(join(dir, ".dev.vars"), { force: true });
+});
 const cleanup = () => {
   if (env === "celld" && cmd === "docker")
     spawnSync("docker", ["rm", "-f", celldContainer], { stdio: "ignore" });
@@ -226,6 +265,7 @@ const durability = { DURABILITY_FILE: join(state, "durability.json") };
 const failed = (code) => code !== 0;
 let code = await runTests("tests/scenario.test.mjs");
 if (!failed(code)) code = await runTests("tests/python.test.mjs");
+if (!failed(code)) code = await runTests("tests/agent.test.mjs");
 if (!failed(code))
   code = await runTests("tests/durability.test.mjs", { ...durability, PHASE: "write" });
 await stopRuntime(child);

@@ -116,6 +116,9 @@ Tasks:
   `toolIsolates` (below).
 - `{kind: "python", code, root?, cwd?, timeoutMs?, fresh?}` runs Python (Pyodide) on the
   capability's files (see [Python](#python)).
+- `{kind: "agent", prompt, instructions?, maxTurns?, timeoutMs?, session?, cwd?}` runs an LLM
+  agent whose tools are Flue's (read, write, edit, grep, glob, bash) over the capability (see
+  [Agent loop](#agent-loop)).
 - `{kind: "revocationId"}` returns the revocation id of the capability the agent holds.
 
 `chain: [{scope?, readOnly?, datalog?}, …]` adds one hop per entry. Each hop attenuates the
@@ -313,6 +316,74 @@ capability.
 - **The CSP is the host's job.** `scripts/serve-browser.mjs` sends it with `/python/engine.mjs`;
   any other host that serves the engine must send the same `Content-Security-Policy` header.
 
+### Agent loop
+
+The `agent` task runs a model loop on the capability: the loop Flue itself is built on
+(`@earendil-works/pi-agent-core`, with `pi-ai` for the model call) and Flue's own model-facing
+tools (`createReadTool`, `createWriteTool`, `createEditTool`, `createGrepTool`, `createGlobTool`,
+`createBashTool`) over the same just-bash sandbox the `flue` task uses. Each file access the
+model asks for is a capability call, authorized per entry in the Workspace cell, so a model
+holding a `/proj` read-only capability can neither read `/private` nor write anywhere,
+whatever it is told.
+
+```bash
+curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/json' -d '{
+  "workspace": "acme", "token": "<token>", "transport": "token",
+  "task": { "kind": "agent", "prompt": "Summarise /proj/notes.md", "maxTurns": 6, "session": "s1" } }'
+# → {"value":{"reply":"…","stopReason":"stop","turns":2,
+#             "toolCalls":[{"tool":"read","arguments":{"path":"/proj/notes.md"},"isError":false,"result":"…"}],
+#             "usage":{"input":…,"output":…},"session":{"name":"s1","messages":4}}}
+```
+
+- **The model is the deployment's.** The `LLM` var names the endpoint
+  (`{"baseUrl", "model", "api"?, "contextWindow"?, "maxTokens"?, "headers"?}`, as JSON);
+  `api` is `openai-completions` (default, any OpenAI-compatible server), `openai-responses` or
+  `anthropic-messages`. The `LLM_API_KEY` secret is its key. Nothing in a request chooses the
+  endpoint or sees the key; `/api/runtime` reports `llm: {model, api, host}` (or `null`, and
+  the task fails with `ENOSYS`).
+- **Limits:** `maxTurns` (default 12, at most 50) and `timeoutMs` (default 120 s, at most
+  600 s; a tool that ignores the abort gets 5 s more, then the run returns, its calls without
+  a result marked as errors; such a tool can still finish after the run returned, and its
+  session stays locked until it does). A run cut short
+  returns `stopReason: "limit"` and the reason in `error`; a run that ends on its last allowed
+  turn is not cut short. `prompt` and `instructions` are at most 100 000 characters each.
+- **Sessions:** with `session`, the conversation is kept in the cell that runs it (the last
+  hop's), and continued next time. Its key is the capability the request brought (its
+  revocation id) and, with a `chain`, a digest of the chain: the same token through the same
+  chain continues it, while another token or another chain starts its own. The token the last
+  hop holds cannot be the key, since attenuation mints fresh block keys on every run. The
+  messages hold file contents read with that capability, which is why another capability never
+  sees them.
+  - A stored history keeps at most 200 messages and 1 MB of UTF-8 JSON, and what is sent back
+    each turn stays within `contextWindow` (about 3 characters a token, less `maxTokens`). It
+    is trimmed to start with a user message and without aborted or failed replies, so a provider
+    accepts it.
+  - A cell keeps at most 32 sessions and drops the least recently used one beyond that, whoever
+    owns it: a holder can push other capabilities' sessions out of a cell (losing their
+    history, not leaking it). Runs on the same session wait for each other; the wait does not
+    count against `timeoutMs`.
+- **The result** is the last reply, each tool call with its arguments and (clipped) result
+  (paired by call id), and token usage. Replies and tool results are clipped at 4000
+  characters, a provider error at 500.
+- **Tests** use a fake OpenAI-compatible server (`tests/helpers/fake-llm.mjs`) whose replies
+  are driven by the prompt (`READ <path>`, `WRITE <path> <text>`, `BASH <script>`, `LOOP`,
+  `HISTORY`), so the cases (`tests/agent-scenario.mjs`) check what the tools did, not what a
+  model chose to say. `run-env.mjs` passes it to every runtime as `LLM` with a dummy key.
+- **Known exposure:**
+  - Any valid capability may run the model: there is no per-capability right to it and no rate
+    limit, so a narrow read-only token can still spend up to 50 turns of the deployment's budget
+    per run. A real deployment would gate the task on a fact in the session token and meter it.
+  - The key is a secret only on workerd (`wrangler secret put LLM_API_KEY`). On cellb, `--var`
+    makes it a plain var, and in the browser build it would be in `dist/cellb/wrangler.json`,
+    which the page loads: anyone who can load the page can read it. The tests pass a dummy key
+    there; a browser deployment needs a proxy that adds the key instead.
+- **Bundle size:** the loop and the three model APIs add about 2.5 MB to the Worker
+  (7.4 MB, 1.25 MB gzipped, in `wrangler deploy --dry-run`).
+- **In the browser**, pi-ai probes `node:fs`/`node:os`/`node:path` while it loads whenever
+  `process.versions.node` is set, and cellb's browser `process` reports Node 22.
+  `src/node-probe-guard.ts`, the entry's first import, hides that field while the modules load
+  (only when `process.platform` is `"browser"`).
+
 ### In a browser
 
 `pnpm dev:browser` builds `dist/` and serves the project at <http://127.0.0.1:8790/>:
@@ -360,6 +431,9 @@ src/caps.ts         holder side: StubCap, TokenCap, ToolFiles (what a tool isola
 src/capfs.ts        just-bash IFileSystem over a capability; /dev/null sink; safeExec
 src/agent.ts        Agent DO: bash, Flue tools, Worker Loader tools, delegation chain
 src/flue-compat.ts  `rg` shim so Flue's grep tool works on just-bash
+src/agent-loop.ts   the `agent` task: pi-agent-core loop, Flue's tools over the capability, sessions
+src/agent-history.ts  how a session history is trimmed (unit-tested)
+src/node-probe-guard.ts  hides process.versions.node from pi-ai's load-time probes in the browser
 src/tools/config.ts  ToolBundleConfig: defaults (tool-bundle.config.json) ← overrides ← TOOL_BUNDLE
 src/tools/shims.ts   fs shim over `files`, POSIX path, deny modules, the WorkerEntrypoint wrapper
 src/tools/bundle.ts  bundleTool(): webrun-bundler with the shims (build side; not in the Worker)
@@ -378,6 +452,8 @@ scripts/run-env.mjs        start runtime, run suites, restart, stop (process gro
 scripts/serve-cellb.mjs    cellb on node:http (optionally on a celld bucket; --var overrides vars; sets the Python vars)
 scripts/build-browser.mjs  dist/cellb (cellb build) and dist/browser (esbuild)
 scripts/serve-browser.mjs  static server for the browser build, Pyodide and the engine (with its CSP)
+tests/agent-scenario.mjs   the agent cases, shared by tests/agent.test.mjs (HTTP) and tests/browser.test.mjs
+tests/helpers/fake-llm.mjs a fake OpenAI-compatible streaming server for the agent cases
 tests/python-scenario.mjs  the Python cases, shared by tests/python.test.mjs (HTTP) and tests/browser.test.mjs
 ```
 
@@ -391,16 +467,17 @@ tests/python-scenario.mjs  the Python cases, shared by tests/python.test.mjs (HT
 | durability across a restart | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run | not run |
 | python (13 cases) | `ENOSYS` (as designed) | ✅ 13 | ✅ 13 | ✅ 13 | `ENOSYS` (as on workerd) |
+| agent (14 cases, fake model; 10 Nov) | ✅ 14 | ✅ 14 | ✅ 14 | ✅ 14 | ✅ 11 (token transport) |
 
-In Chromium on cellb (`test:browser`), 16/16 pass: the runtime check, the capability check
-(rights, both transports, Flue tools with delegation), the 13 Python cases, and no page errors.
+In Chromium on cellb (`test:browser`), 29/29 pass (since the agent task, 10 Nov; 16 before): the runtime check, the capability check
+(rights, both transports, Flue tools with delegation), the 13 Python cases, the 13 agent cases, and no page errors.
 The Python cases include the review's findings:
 - a caller's files, builtins and tasks are not seen by a run with another capability;
 - a task that outlives its run cannot use `capfs`;
 - there is no network from the engine;
 - a removed tree is removed from the store, and oversized output is truncated.
 
-The 27 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
+The 29 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
 asserts the `EPERM` refusal. The bundled-tool test asserts `EPERM` by default; under
 `bundled-only` it asserts a run of the approved bundle, `EPERM` for a changed one, and `EPERM`
 for the global-object alias. The cross-caller isolate test is skipped there.

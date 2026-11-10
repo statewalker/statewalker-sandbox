@@ -410,6 +410,12 @@ importers:
 
   apps/flue-capfs-do:
     dependencies:
+      '@earendil-works/pi-agent-core':
+        specifier: ~1.4.0
+        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@7.30.1)(ws@8.22.0)(zod@4.6.5)
+      '@earendil-works/pi-ai':
+        specifier: 'catalog:'
+        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@7.30.1)(ws@8.22.0)(zod@4.6.5)
       '@flue/runtime':
         specifier: 'catalog:'
         version: 2.3.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(typescript@7.0.2)(undici@7.30.1)(ws@8.22.0)(zod@4.6.5)

@@ -20,6 +20,7 @@ import {
   bash as flueBash,
 } from "@flue/runtime";
 import { Bash } from "just-bash/browser";
+import { type AgentLoopRequest, runAgentLoop } from "./agent-loop.ts";
 import { CapFs, safeExec } from "./capfs.ts";
 import { type Cap, type CapHandoff, capFromHandoff, ToolFiles, type WorkspaceEnv } from "./caps.ts";
 import { rgForFlue } from "./flue-compat.ts";
@@ -36,7 +37,8 @@ export type Task =
   | { kind: "flue"; calls: { tool: string; params: Record<string, unknown> }[]; cwd?: string }
   | { kind: "tool"; code: string; input?: unknown; bundled?: boolean }
   | { kind: "revocationId" }
-  | ({ kind: "python" } & PythonRunRequest);
+  | ({ kind: "python" } & PythonRunRequest)
+  | ({ kind: "agent" } & AgentLoopRequest);
 
 interface WorkerLoader {
   get(
@@ -60,6 +62,9 @@ export interface AgentEnv extends WorkspaceEnv {
   /** Run-side tool policy: overrides of tool-bundle.config.json, a JSON string or an object. */
   TOOL_BUNDLE?: unknown;
   /** Python engine location (see src/python/hosts.ts). */
+  /** The model of the `agent` task (see src/agent-loop.ts) and its key (a secret). */
+  LLM?: unknown;
+  LLM_API_KEY?: string;
   PYTHON_ENGINE?: string;
   PYODIDE_INDEX?: string;
   PYTHON?: string;
@@ -79,26 +84,44 @@ const FLUE_TOOLS = {
   glob: createGlobTool,
 } as const;
 
+/** The requester's revocation id and a digest of the chain it asked for. */
+async function sessionScope(cap: Cap, chain: AttenuationSpec[]): Promise<string> {
+  const rid = await cap.revocationId();
+  if (chain.length === 0) return rid;
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(JSON.stringify(chain)),
+  );
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${rid}:${hex.slice(0, 32)}`;
+}
+
 export class Agent extends DurableObject<AgentEnv> {
   async run(
     name: string,
     handoff: CapHandoff,
     chain: AttenuationSpec[],
     task: Task,
+    /** Set by the hop before: the requester's capability and chain (agent sessions' key). */
+    scope?: string,
   ): Promise<RunResult> {
     const cap = capFromHandoff(this.env, handoff);
+    // An agent session belongs to the capability the request brought and the chain it named:
+    // the token a later hop holds is minted afresh (new block keys) on every run.
+    if (scope === undefined && task.kind === "agent" && task.session !== undefined)
+      scope = await sessionScope(cap, chain);
     if (chain.length > 0) {
       const [first, ...rest] = chain as [AttenuationSpec, ...AttenuationSpec[]];
       const narrower = await cap.attenuate(attenuationBlock(first));
       const subName = `${name}/sub`;
       const sub = this.env.AGENT.get(this.env.AGENT.idFromName(subName));
-      const r = (await sub.run(subName, narrower.handoff(), rest, task)) as RunResult;
+      const r = (await sub.run(subName, narrower.handoff(), rest, task, scope)) as RunResult;
       return { hops: [name, ...r.hops], result: r.result };
     }
-    return { hops: [name], result: await this.#execute(name, cap, task) };
+    return { hops: [name], result: await this.#execute(name, cap, task, scope) };
   }
 
-  async #execute(name: string, cap: Cap, task: Task): Promise<unknown> {
+  async #execute(name: string, cap: Cap, task: Task, scope?: string): Promise<unknown> {
     switch (task.kind) {
       case "bash": {
         const sh = new Bash({ fs: new CapFs(cap) as never, cwd: task.cwd ?? "/" });
@@ -112,6 +135,12 @@ export class Agent extends DurableObject<AgentEnv> {
         return cap.revocationId();
       case "python":
         return this.#python().run(cap, task);
+      case "agent":
+        return runAgentLoop(cap, task, this.env, this.ctx.storage as never, {
+          // Only a session needs the scope (one more call to the Workspace).
+          scope: task.session === undefined ? "" : (scope ?? (await sessionScope(cap, []))),
+          sandboxId: name,
+        });
       default:
         throw new Error(`EINVAL: unknown task '${(task as { kind?: string }).kind}'`);
     }

@@ -7,15 +7,22 @@ import { after, before, describe, test } from "node:test";
 import { chromium } from "playwright";
 import { buildBrowser } from "../scripts/build-browser.mjs";
 import { startServer } from "../scripts/serve-browser.mjs";
+import { agentCases } from "./agent-scenario.mjs";
+import { startFakeLlm } from "./helpers/fake-llm.mjs";
 import { pythonCases } from "./python-scenario.mjs";
 
 let server;
+let fakeLlm;
 let browser;
 let page;
 const errors = [];
 
 before(async () => {
-  await buildBrowser({ quiet: true });
+  fakeLlm = await startFakeLlm();
+  await buildBrowser({
+    quiet: true,
+    vars: { LLM: JSON.stringify(fakeLlm.config), LLM_API_KEY: "sk-fake" },
+  });
   server = await startServer(0);
   const { port } = server.address();
   browser = await chromium
@@ -31,6 +38,7 @@ before(async () => {
 after(async () => {
   await browser?.close();
   server?.close();
+  fakeLlm?.server.close();
 });
 
 const api = (path, body, opts) =>
@@ -83,6 +91,8 @@ describe("browser (cellb in Chromium)", () => {
   });
 
   for (const c of pythonCases({ api, label: "browser-" })) test(`python: ${c.name}`, c.fn);
+
+  for (const c of agentCases({ api, label: "browser-" })) test(`agent: ${c.name}`, c.fn);
 
   test("no uncaught errors in the page", () => {
     assert.deepEqual(errors, []);
