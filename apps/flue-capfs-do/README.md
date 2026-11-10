@@ -359,7 +359,8 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
     no turn or no token left the request is not made and the run ends (`stopReason: "limit"`).
     The cell answers one call at a time, so concurrent runs cannot share the last turn. After the
     request its tokens are charged: input (cached and cache-written prompt tokens included) and
-    output, as the provider reports them; a request can go past the token budget by its own size.
+    output, as the provider reports them; a request can go past the token budget by its own size
+    (and each concurrent run by one request: turns are exact, tokens are known only afterwards).
     Usage is recorded even when the right is gone by then.
   - A spent budget refuses the next run (`EACCES`) until the admin sets it again
     (`POST …/sessions/:sid/model`: the fields given are set, `null` for unlimited, the others

@@ -122,6 +122,15 @@ export function agentCases({ api, transports = ["stub", "token"], label = "" }) 
     },
   );
 
+  add("a run stopped by maxTurns takes no turn past it from the budget", async () => {
+    const { ws, token, session } = await setup(["/proj"], { turns: 5 });
+    const r = ok(await ask(ws, token, "token", { prompt: "LOOP", maxTurns: 2 }));
+    assert.match(r.error, /2 turns/);
+    assert.deepEqual(r.budget, { turnsLeft: 3, tokensLeft: null });
+    const info = await admin(`/api/w/${ws}/sessions/${session}`);
+    assert.equal(info.model.used.turns, 2);
+  });
+
   add("concurrent runs cannot spend more than the budget", async () => {
     const { ws, token } = await setup(["/proj"], { turns: 2 });
     const runs = await Promise.all(

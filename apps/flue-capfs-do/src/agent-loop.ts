@@ -238,10 +238,18 @@ export async function runAgentLoop(
       // right checked again, a turn taken from the budget), so neither a revoked right nor a
       // spent budget, nor concurrent runs, get a request through.
       getApiKey: async () => {
+        // A run already stopped (maxTurns, timeout) reserves nothing: pi-agent-core asks for
+        // the key before it looks at the abort.
+        if (stopped) throw new Error("stopped");
+        // The previous request's tokens are charged first, so the reservation sees them.
+        await charges;
         try {
           budgetLeft = (await cap.model("reserve", metered)) as typeof budgetLeft;
         } catch (e) {
-          stopped ??= redact(String((e as Error)?.message ?? e)).replace(/^E[A-Z]+: /, "");
+          const message = String((e as Error)?.message ?? e);
+          // A refusal (no right, no budget) ends the run as a limit; anything else is an error.
+          if (/EACCES/.test(message))
+            stopped ??= clip(redact(message).replace(/^(Error: )?E[A-Z]+: /, ""), ERROR_LIMIT);
           throw e;
         }
         return credentials.apiKey;
@@ -387,8 +395,9 @@ export async function runAgentLoop(
           )
         : undefined;
     // The provider error repeats a refused reservation (stopped): reported once.
-    const errors = [stopped, providerError, chargeError].filter(
-      (e, i, all): e is string => !!e && !all.slice(0, i).some((p) => p && e.includes(p)),
+    const repeats = !!stopped && !!providerError && providerError.includes(stopped);
+    const errors = [stopped, repeats ? undefined : providerError, chargeError].filter(
+      (e): e is string => !!e,
     );
 
     let kept = messages.length;
