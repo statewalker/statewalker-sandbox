@@ -8,6 +8,8 @@ const db = await newNodeSqliteDb({ path });
 if (busyMs && Number(busyMs) > 0) await db.exec(`PRAGMA busy_timeout = ${Number(busyMs)}`);
 const kv = await sqlKvStore(db);
 const startAt = Number(process.env.START_AT ?? "0");
+// Report a child that reached the barrier too late to overlap (the test asserts none did).
+const late = Date.now() > startAt ? " late" : "";
 while (Date.now() < startAt) {}
 try {
   const ok = await kv.cas(
@@ -15,7 +17,7 @@ try {
     new TextEncoder().encode("v0"),
     new TextEncoder().encode(`p${id}`),
   );
-  process.stdout.write(`${id}:${ok ? "ok" : "mismatch"}\n`);
+  process.stdout.write(`${id}${late}:${ok ? "ok" : "mismatch"}\n`);
 } catch (e) {
   process.stdout.write(
     /locked|busy/i.test(String(e)) ? `${id}:busy\n` : `${id}:error ${String(e)}\n`,

@@ -26,13 +26,29 @@ afterAll(() => {
 describe("R1 the webrun-storage KvStore contract on node:sqlite", () => {
   it("in memory", async () => {
     const r = await runKvContract(async () => sqlKvStore(await newNodeSqliteDb()));
-    expect(r.cases).toBe(9);
+    expect(r.cases).toBe(11);
     expect(r.failed).toEqual([]);
   });
   it("on a file", async () => {
     const path = join(tmp(), "kv.sqlite");
     const r = await runKvContract(async () => sqlKvStore(await newNodeSqliteDb({ path })));
     expect(r.failed).toEqual([]);
+  });
+});
+
+describe("R1b keys the store cannot represent are rejected, never mangled", () => {
+  it("NUL and lone surrogates are refused on put, cas and list", async () => {
+    const kv = await sqlKvStore(await newNodeSqliteDb());
+    for (const bad of ["a\u0000b", "x\uD800y", "z\uDC00"]) {
+      await expect(kv.put(bad, enc.encode("v"))).rejects.toThrow(/key/);
+      await expect(kv.cas(bad, undefined, enc.encode("v"))).rejects.toThrow(/key/);
+      await expect(kv.get(bad)).rejects.toThrow(/key/);
+    }
+    await expect(
+      (async () => {
+        for await (const _ of kv.list("a\u0000")) void _;
+      })(),
+    ).rejects.toThrow(/key/);
   });
 });
 
@@ -50,7 +66,7 @@ describe("R2 100 concurrent cas on one Db", () => {
 });
 
 describe("R3 several connections and processes on one file", () => {
-  it("two connections, interleaved: exactly one winner", async () => {
+  it("two connections on one file see each other's writes (no contention: both run on one thread)", async () => {
     const path = join(tmp(), "kv.sqlite");
     const [a, b] = await Promise.all([newNodeSqliteDb({ path }), newNodeSqliteDb({ path })]);
     const [ka, kb] = [await sqlKvStore(a), await sqlKvStore(b)];
@@ -96,8 +112,14 @@ describe("R3 several connections and processes on one file", () => {
       ),
     );
   };
+  const assertOverlap = (outs: string[]) =>
+    expect(
+      outs.some((o) => o.includes("late")),
+      `a child arrived after the start barrier: ${outs.join(" ")}`,
+    ).toBe(false);
   it("four processes, no busy timeout: at most one ok; contention surfaces as an explicit busy error, never a wrong ok", async () => {
     const outs = await race(0);
+    assertOverlap(outs);
     console.log("no busy timeout:", outs.join(" "));
     expect(
       outs.every((o) => /:(ok|mismatch|busy)$/.test(o)),
@@ -107,6 +129,7 @@ describe("R3 several connections and processes on one file", () => {
   }, 60_000);
   it("four processes with PRAGMA busy_timeout = 5000: exactly one ok, the rest mismatch", async () => {
     const outs = await race(5000);
+    assertOverlap(outs);
     console.log("busy timeout 5000:", outs.join(" "));
     expect(outs.filter((o) => o.endsWith(":ok")).length, outs.join(" ")).toBe(1);
     expect(outs.filter((o) => o.endsWith(":mismatch")).length, outs.join(" ")).toBe(3);
@@ -143,10 +166,10 @@ describe("R5 Durable Object on workerd (Miniflare, SQLite-backed class)", () => 
       cases: number;
       failed: string[];
     };
-    expect(r.cases).toBe(9);
+    expect(r.cases).toBe(11);
     expect(r.failed).toEqual([]);
   });
-  it("100 concurrent requests, one cas each: exactly one winner", async () => {
+  it("100 concurrent requests, one cas each: exactly one winner (guaranteed by DO request serialisation, not by the statement)", async () => {
     const b64 = (s: string) => btoa(s);
     const post = (body: unknown) =>
       mf
@@ -181,9 +204,11 @@ describe("R5 Durable Object on workerd (Miniflare, SQLite-backed class)", () => 
 });
 
 describe("extra: statewalker-db's strict Durable Object fake (DO limits on node:sqlite)", () => {
-  it("R1 contract holds under the DO limits (no BEGIN/PRAGMA, ArrayBuffer BLOBs, 100 params)", async () => {
+  it("R1 contract holds under the DO limits, except empty values (a fake bug: real workerd accepts them)", async () => {
     const r = await runKvContract(async () => sqlKvStore(newDoSqliteDb(newFakeDoStorage())));
-    expect(r.failed).toEqual([]);
+    expect(r.failed.map((f) => f.split(":")[0])).toEqual([
+      "empty values round-trip and can be compared",
+    ]);
   });
   it("R6 a 3 MiB value is rejected by the DO limit, not stored", async () => {
     const kv = await sqlKvStore(newDoSqliteDb(newFakeDoStorage()));

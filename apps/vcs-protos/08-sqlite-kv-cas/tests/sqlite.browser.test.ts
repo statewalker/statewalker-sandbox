@@ -27,7 +27,7 @@ describe("R4 sqlite-wasm with an OPFS database in a Chromium Dedicated Worker", 
     });
     w.terminate();
     expect(r.error).toBeUndefined();
-    expect(r.result?.cases).toBe(9);
+    expect(r.result?.cases).toBe(11);
     expect(r.result?.failed).toEqual([]);
   }, 60_000);
   it("R2 100 concurrent cas: exactly one winner", async () => {
@@ -40,19 +40,20 @@ describe("R4 sqlite-wasm with an OPFS database in a Chromium Dedicated Worker", 
     expect(r.error).toBeUndefined();
     expect(r.winners).toBe(1);
   }, 60_000);
-  it("trap: a second worker cannot open an OPFS (sahpool) database another worker holds", async () => {
+  it("trap: while one worker owns the sahpool pool, a second worker cannot open ANY database in it", async () => {
     const a = worker();
     expect(await ask(a, { op: "open", path: "/x3a-shared.sqlite" })).toEqual({ opened: true });
     const b = worker();
     const second: { opened?: boolean; error?: string } = await ask<{
       opened?: boolean;
       error?: string;
-    }>(b, { op: "open", path: "/x3a-shared.sqlite" }, 20_000).catch((e) => ({ error: String(e) }));
+    }>(b, { op: "open", path: "/x3a-other.sqlite" }, 20_000).catch((e) => ({ error: String(e) }));
     console.log("second worker on the same sahpool database:", JSON.stringify(second));
     a.terminate();
     b.terminate();
-    // OPFS sync access handles are exclusive per file: one worker owns a sahpool database, so other
-    // tabs/workers must reach it through that owner (SharedWorker or leader election).
+    // The second worker asks for a DIFFERENT database and still fails: installing the opfs-sahpool VFS
+    // takes a sync access handle on every file of the pool, and those handles are exclusive. The
+    // limit is one owner per pool (origin + VFS name), so other tabs/workers must go through it.
     expect(second.opened).toBeUndefined();
     expect(second.error).toMatch(/NoModificationAllowedError|Access Handles cannot be created/);
   }, 60_000);

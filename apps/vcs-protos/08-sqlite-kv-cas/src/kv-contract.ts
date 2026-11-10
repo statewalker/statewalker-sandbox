@@ -1,6 +1,8 @@
 /**
- * The webrun-storage KvStore contract (mirrors webrun-storage/tests/kv-store.test.ts), portable so it
- * can run inside a worker and a Durable Object. Returns the failed case names.
+ * The webrun-storage KvStore contract (webrun-storage/tests/kv-store.test.ts), portable so it can run
+ * inside a worker and a Durable Object. Returns the failed case names.
+ * Stricter than upstream in three places: list order (code-point key order, as webrun-files'
+ * comparePaths; memKvStore yields insertion order), literal `%`/`_` prefixes, and empty values.
  */
 import type { KvStore } from "@statewalker/webrun-storage";
 
@@ -102,5 +104,26 @@ export async function runKvContract(
     for await (const { key } of kv.list(`${p}/a%`)) keys.push(key.slice(p.length));
     return keys.join(",") === "/a_b,/a%c";
   });
+  await check("empty values round-trip and can be compared", async (kv) => {
+    const key = k("empty");
+    await kv.put(key, new Uint8Array(0));
+    const back = await kv.get(key);
+    const swapped = await kv.cas(key, new Uint8Array(0), enc.encode("x"));
+    return (
+      back !== undefined && back.length === 0 && swapped && eq(await kv.get(key), enc.encode("x"))
+    );
+  });
+  await check(
+    "list(prefix) includes keys whose next character is high in the code space",
+    async (kv) => {
+      const p = k("hi");
+      await kv.put(`${p}/\u{FFFD}`, enc.encode("1"));
+      await kv.put(`${p}/\u{1F600}`, enc.encode("2"));
+      await kv.put(`${p}0`, enc.encode("3")); // '0' > '/': outside the prefix
+      const keys: string[] = [];
+      for await (const { key } of kv.list(`${p}/`)) keys.push(key.slice(p.length));
+      return keys.join(",") === "/\u{FFFD},/\u{1F600}";
+    },
+  );
   return { cases, failed };
 }
