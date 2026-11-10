@@ -219,17 +219,17 @@ export class Agent extends DurableObject<AgentEnv> {
     return this.#kernel;
   }
 
-  /**
-   * Tool code in its own isolate: no network and only the narrowed capability. That is an RpcTarget
-   * argument (stub transport), or the env.FILES binding (token transport), which works only while
-   * this run is active.
-   */
   /** Tool runs whose file binding is live (see ToolFilesEntrypoint): dropped when `run` settles. */
   #activeToolRuns = new Set<string>();
   toolRunActive(run: string): boolean {
     return this.#activeToolRuns.has(run);
   }
 
+  /**
+   * Tool code in its own isolate: no network and only the narrowed capability. That is an RpcTarget
+   * argument (stub transport), or the env.FILES binding (token transport), which works only while
+   * this run is active.
+   */
   async #tool(name: string, cap: Cap, code: string, input: unknown, bundled: boolean) {
     const config = deploymentToolConfig(this.env.TOOL_BUNDLE);
     await admitTool({ code, bundled }, toolPolicy(this.env, config), config);

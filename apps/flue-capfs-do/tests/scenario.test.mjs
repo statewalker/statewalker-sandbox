@@ -377,6 +377,12 @@ export default class extends WorkerEntrypoint {
     try { await files.attenuate('check if true;'); out.attenuate = "allowed"; } catch (e) { out.attenuate = String(e.message); }
     try { const fs = await import("node:fs"); out.nodeFsRoot = fs.readdirSync("/"); } catch (e) { out.nodeFsRoot = "unavailable: " + e.message; }
     try { await fetch("https://example.com/"); out.fetch = "allowed"; } catch (e) { out.fetch = "blocked"; }
+    // What the capability itself gives away when asked: never the token it was built from.
+    out.leak = [];
+    for (const m of ["valueOf", "toString", "toJSON"]) {
+      try { out.leak.push(m + ": " + JSON.stringify((await files[m]?.()) ?? null)); } catch (e) { out.leak.push(m + ": refused"); }
+    }
+    try { out.leak.push("ctx: " + JSON.stringify((await files.ctx) ?? null)); } catch (e) { out.leak.push("ctx: refused"); }
     return out;
   }
 }`;
@@ -412,6 +418,9 @@ export default class extends WorkerEntrypoint {
         assert.deepEqual(o.envKeys, ["FILES"]);
       }
       assert.equal(o.props, "{}");
+      // Asked through valueOf/toString/toJSON/ctx, the capability does not reveal its token.
+      assert.equal(o.leak.length, 4, JSON.stringify(o.leak));
+      assert.equal(JSON.stringify(o.leak).includes(token), false, `token leaked: ${o.leak}`);
       assert.equal(o.fetch, "blocked");
       assert.equal((await files(ws))["/proj/tool.txt"], undefined);
       // No file system of the host: workerd gives each isolate its own virtual /bundle, /tmp, /dev.
@@ -421,38 +430,43 @@ export default class extends WorkerEntrypoint {
       assert.equal(hostFs, false, `tool isolate sees host files: ${o.nodeFsRoot}`);
     });
 
-    test("a tool cannot use its files after run returns (even if it kept them)", async (t) => {
-      const rt = (await http("/api/runtime")).value;
-      if (rt.toolIsolates !== "isolated") return t.skip(`tool isolates: ${rt.toolIsolates}`);
-      const ws = freshWs();
-      await seed(ws, SEED);
-      const { token } = await session(ws, "alice", ["/proj"]);
-      const code = `import { WorkerEntrypoint } from "cloudflare:workers";
+    // The late write records when it happened; the test compares that with when the response
+    // arrived (one clock: the runtime runs on this machine). With waitUntil, a runtime that keeps
+    // the call open until that work ends (celld does) lets the write land during the call, which
+    // is allowed; with a bare timer the run has returned before the write on every runtime.
+    for (const schedule of ["waitUntil", "setTimeout"]) {
+      test(`a tool cannot use its files after run returns (kept with ${schedule})`, async (t) => {
+        const rt = (await http("/api/runtime")).value;
+        if (rt.toolIsolates !== "isolated") return t.skip(`tool isolates: ${rt.toolIsolates}`);
+        const ws = freshWs();
+        await seed(ws, SEED);
+        const { token } = await session(ws, "alice", ["/proj"]);
+        const late = `(async () => {
+      await new Promise((ok) => setTimeout(ok, 1000));
+      await files.call("writeFile", "/proj/late.txt", String(Date.now()));
+    })().catch(() => {})`;
+        const code = `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint {
   async run(files, input) {
     files ??= this.env.FILES;
-    this.ctx.waitUntil((async () => {
-      await new Promise((ok) => setTimeout(ok, 1000));
-      await files.call("writeFile", "/proj/late.txt", "after the run");
-    })().catch(() => {}));
+    ${schedule === "waitUntil" ? `this.ctx.waitUntil(${late});` : `${late};`}
     return "returned";
   }
 }`;
-      const t0 = Date.now();
-      const r = await run(`late-${ws}`, ws, token, transport, { kind: "tool", code });
-      const elapsed = Date.now() - t0;
-      assert.equal(r.ok, true, r.error);
-      assert.equal(r.value.result, "returned");
-      await new Promise((ok) => setTimeout(ok, 2500));
-      if ((await files(ws))["/proj/late.txt"] !== undefined) {
-        // Allowed only if the runtime kept the call open until the tool's waitUntil work ended
-        // (celld does): then the write happened during the run, not after it.
-        assert.ok(
-          elapsed >= 1000,
-          `a write landed ${elapsed} ms after a run that had already returned`,
-        );
-      }
-    });
+        const r = await run(`late-${schedule}-${ws}`, ws, token, transport, { kind: "tool", code });
+        const answered = Date.now();
+        assert.equal(r.ok, true, r.error);
+        assert.equal(r.value.result, "returned");
+        await new Promise((ok) => setTimeout(ok, 2500));
+        const written = (await files(ws))["/proj/late.txt"];
+        if (written !== undefined) {
+          assert.ok(
+            Number(written) <= answered,
+            `a write landed ${Number(written) - answered} ms after the run had answered`,
+          );
+        }
+      });
+    }
 
     test("a Node-style tool bundled with webrun-bundler runs on the capability", async (t) => {
       const rt = (await http("/api/runtime")).value;
