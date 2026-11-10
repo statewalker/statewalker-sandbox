@@ -26,8 +26,9 @@ makes them a real deployment shape:
 - Delegation goes across real Durable Object cells over the runtime's RPC.
 - The agent side is Flue's own toolset (`read`, `write`, `edit`, `grep`, `glob`, `bash`), running
   on the same sandbox a Flue agent's `useSandbox(bash(...))` gets.
-- Untrusted tool code runs in a fresh Worker Loader isolate for each call. It has no network,
-  no bindings, and only the narrowed capability. On runtimes whose isolates can see the host's
+- Untrusted tool code runs in a fresh Worker Loader isolate for each call. It has no network
+  and only the narrowed capability: an RpcTarget argument, or with the token transport a single
+  `env.FILES` binding that works only while the call runs. On runtimes whose isolates can see the host's
   files (cellb on Node), tool tasks are refused.
 
 ## How to run it
@@ -35,7 +36,7 @@ makes them a real deployment shape:
 ```sh
 pnpm install                                        # at the repository root
 pnpm --filter @statewalker/flue-capfs-do test       # unit + cellb + cellb(celld bucket) + wrangler
-pnpm --filter @statewalker/flue-capfs-do test:celld # needs the celld binary (see below)
+pnpm --filter @statewalker/flue-capfs-do test:celld # celld in Docker (or CELLD_BIN), token transport
 ```
 
 Each `test:<env>` runs `scripts/run-env.mjs <env>`. That script starts the runtime on a free
@@ -51,7 +52,7 @@ again.
 | `test:cellb-bundled-only` | cellb with `TOOL_BUNDLE={"hostFsRuntimes":"bundled-only","allowedBundles":[<hash of tests/fixtures/todo-tool.ts>]}`: that approved bundle runs, other bundles and raw tools are refused |
 | `test:cellb-celld-bucket` | cellb with `celldBucket(sqliteObjectStore(...))`: cells as celld writes them (LTX logs, `own.json` ownership records), in the object store `celld dev` keeps |
 | `test:browser` | the project in Chromium on cellb (Playwright): builds `dist/`, serves it, runs the capability checks and the Python cases through the page |
-| `test:celld` | `celld dev --listen 127.0.0.1:<port>`. Set `CELLD_BIN` (default `celld` on PATH). `CELLD_ARGS` replaces the arguments, with `{port}` substituted. `TRANSPORTS=token` skips the stub transport |
+| `test:celld` | `celld dev <project> --host 127.0.0.1 --port <port> --no-watch`, with `--clean` on the first start only. By default this uses the `ghcr.io/denoland/celld:0.6.0` image in Docker (`CELLD_IMAGE`): host networking, the repository mounted at its own path, the container running as the host user, and the project's Linux esbuild as `CELLD_ESBUILD`. That needs a Linux host; elsewhere, set `CELLD_BIN` to a local celld. The state is the project's `.celld/dev`, so don't run two celld runs at once. It runs with `TRANSPORTS=token` (below) |
 
 For interactive use, start a runtime with `pnpm dev:wrangler` (port 8787) or `pnpm dev:cellb`
 (port 8788). Then run the guided tour, `pnpm example`
@@ -103,7 +104,13 @@ Tasks:
 - `{kind: "flue", calls: [{tool, params}], cwd?}` calls Flue's tools as a model would.
 - `{kind: "tool", code, input?, bundled?}` runs a module in a new Worker Loader isolate (one per
   call, so no state survives between callers). The module exports
-  `default class extends WorkerEntrypoint { run(files, input) }`. With `bundled: true` the code
+  `default class extends WorkerEntrypoint { run(files, input) }`. `files` is the narrowed
+  capability as an RpcTarget with the stub transport. With the token transport it is `null`,
+  and `this.env.FILES` holds it instead: a loopback service binding
+  (`ctx.exports.ToolFilesEntrypoint` with the token in its props, which the tool cannot read).
+  This is the form that works on celld. So `files ??= this.env.FILES` works everywhere. Either
+  form stops working when `run` returns: the RpcTarget is disposed, and every call through the
+  binding first asks the Agent cell whether the run named in its props is still active. With `bundled: true` the code
   is a bundle from `bundleTool` (see [Bundled tools](#bundled-tools)), and the Agent runs the
   acceptance check before loading it. Whether a raw module or a bundle may run depends on
   `toolIsolates` (below).
@@ -334,6 +341,7 @@ Run a tool that can read `/proj` and nothing else:
 import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint {
   async run(files, input) {
+    files ??= this.env.FILES; // an RpcTarget (stub transport) or a service binding (token transport)
     return files.readdir("/proj"); // files.attenuate(), fetch(): refused
   }
 }
@@ -375,14 +383,14 @@ tests/python-scenario.mjs  the Python cases, shared by tests/python.test.mjs (HT
 
 ### Results (9 Nov 2026)
 
-| Check | wrangler | cellb | cellb, bundled-only | cellb on celld bucket | celld |
+| Check | wrangler | cellb | cellb, bundled-only | cellb on celld bucket | celld 0.6.0 |
 |---|---|---|---|---|---|
-| scenario, stub transport (13) | ✅ 13 | ✅ 12, 1 skipped | ✅ 12, 1 skipped | ✅ 12, 1 skipped | not run |
-| scenario, token transport (13) | ✅ 13 | ✅ 12, 1 skipped | ✅ 12, 1 skipped | ✅ 12, 1 skipped | not run |
-| scenario, runtime and admin (2) | ✅ | ✅ | ✅ | ✅ | not run |
-| durability across a restart | ✅ | ✅ | ✅ | ✅ | not run |
+| scenario, stub transport (13) | ✅ 13 | ✅ 12, 1 skipped | ✅ 12, 1 skipped | ✅ 12, 1 skipped | n/a: celld refuses RpcTargets across isolates |
+| scenario, token transport (13) | ✅ 13 | ✅ 12, 1 skipped | ✅ 12, 1 skipped | ✅ 12, 1 skipped | ✅ 13 |
+| scenario, runtime and admin (2) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| durability across a restart | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run | not run |
-| python (13 cases) | `ENOSYS` (as designed) | ✅ 13 | ✅ 13 | ✅ 13 | not run |
+| python (13 cases) | `ENOSYS` (as designed) | ✅ 13 | ✅ 13 | ✅ 13 | `ENOSYS` (as on workerd) |
 
 In Chromium on cellb (`test:browser`), 16/16 pass: the runtime check, the capability check
 (rights, both transports, Flue tools with delegation), the 13 Python cases, and no page errors.
@@ -397,11 +405,12 @@ asserts the `EPERM` refusal. The bundled-tool test asserts `EPERM` by default; u
 `bundled-only` it asserts a run of the approved bundle, `EPERM` for a changed one, and `EPERM`
 for the global-object alias. The cross-caller isolate test is skipped there.
 
-celld was not run in the session that built this: its release binary and container image could
-not be fetched or run there. cellb-on-celld-bucket checks the storage half of celld
+**celld** (0.6.0, in Docker) runs the project unchanged with the token transport. celld refuses
+to pass RPC stubs between isolates ("RPC stubs cannot cross isolate boundaries yet"), so the
+stub transport is not available there, and an RpcTarget cannot be passed into a Worker Loader
+isolate either ("could not be cloned"). Tool isolates therefore get their files through the
+`env.FILES` service binding. cellb-on-celld-bucket checks the storage half of celld
 compatibility (the bucket holds `cells/<Class>:<id>/own.json` and `ltx/e<epoch>/…` objects).
-Whether celld passes `RpcTarget`s between cells by reference is unverified; if it does not, the
-token transport (`TRANSPORTS=token`) is the one to use there.
 
 **Known gap, closed by refusal:** on cellb (Node), a Worker Loader isolate runs in a worker
 thread that resolves the real `node:fs` and `process`. Such a tool could read the cells' SQLite
@@ -441,8 +450,15 @@ shim-only isolates in cellb, or yesterday's vm runner.
   capability, report `EACCES`. Flue's `grep` and `glob` simply find nothing there.
 - **Denied redirects abort the whole `exec()`** (just-bash). `safeExec` fails closed and reports
   them as a failed command. Earlier output in the same script is lost.
-- **Tools get `ToolFiles`, not the capability object.** They can use it but not attenuate or hand
-  it off, and each call gets a new isolate. An isolate keyed by the code would keep its globals,
+- **Tools get `ToolFiles` (stub transport) or a `ToolFilesEntrypoint` binding (token transport),
+  never the capability object or the token.** They can use it but not attenuate or hand it off,
+  only during the call (a run lease checked with the Agent cell on every binding call), and each
+  call gets a new isolate. Two notes on the entrypoint:
+  - It is a named export of the Worker. Other Workers of the same Cloudflare account could bind
+    to it with props of their own, but without the nonce of a live run it refuses everything.
+  - cellb 0.5.2 dispatches any function-valued name of an entrypoint instance, `Object.prototype`
+    methods included, so `valueOf()` would return the instance with its props. The entrypoint
+    shadows those methods; workerd and celld do not dispatch them at all. An isolate keyed by the code would keep its globals,
   so whatever one user's call read could be returned to the next user.
 - **Limits of the prototype:** contents are stored as UTF-8 text (not binary-safe). `readdir`
   and recursive operations run one Datalog authorization per entry, so a large tree, or a

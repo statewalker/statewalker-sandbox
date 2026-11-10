@@ -107,7 +107,7 @@ export class Agent extends DurableObject<AgentEnv> {
       case "flue":
         return this.#flue(name, cap, task);
       case "tool":
-        return this.#tool(cap, task.code, task.input, !!task.bundled);
+        return this.#tool(name, cap, task.code, task.input, !!task.bundled);
       case "revocationId":
         return cap.revocationId();
       case "python":
@@ -157,21 +157,57 @@ export class Agent extends DurableObject<AgentEnv> {
     return this.#kernel;
   }
 
-  /** Tool code in its own isolate: no network, no bindings, only the narrowed capability as an argument. */
-  async #tool(cap: Cap, code: string, input: unknown, bundled: boolean) {
+  /**
+   * Tool code in its own isolate: no network and only the narrowed capability. That is an RpcTarget
+   * argument (stub transport), or the env.FILES binding (token transport), which works only while
+   * this run is active.
+   */
+  /** Tool runs whose file binding is live (see ToolFilesEntrypoint): dropped when `run` settles. */
+  #activeToolRuns = new Set<string>();
+  toolRunActive(run: string): boolean {
+    return this.#activeToolRuns.has(run);
+  }
+
+  async #tool(name: string, cap: Cap, code: string, input: unknown, bundled: boolean) {
     const config = deploymentToolConfig(this.env.TOOL_BUNDLE);
     await admitTool({ code, bundled }, toolPolicy(this.env, config), config);
     const loader = this.env.LOADER as WorkerLoader;
     // A fresh isolate per invocation: an isolate keyed by the code would keep its globals between
     // callers, so data one user's capability read could be returned to the next user.
     const id = `tool-${crypto.randomUUID()}`;
+    // How the tool gets its files: with the stub transport, the narrowed capability as an
+    // RpcTarget argument (the Agent never holds a token); with the token transport, a loopback
+    // service binding in env.FILES (portable: celld cannot pass RpcTargets into isolates). The
+    // tool's `files` argument is then null; `files ?? this.env.FILES` works on every runtime.
+    const handoff = cap.handoff();
+    const exports = (
+      this.ctx as unknown as { exports?: Record<string, (o: { props: unknown }) => unknown> }
+    ).exports;
+    const viaBinding = handoff.transport === "token";
+    if (viaBinding && !exports?.ToolFilesEntrypoint) {
+      throw new Error("ENOSYS: this runtime offers no ctx.exports for the tool's file binding");
+    }
+    const env = viaBinding
+      ? {
+          FILES: exports?.ToolFilesEntrypoint?.({
+            props: { workspace: handoff.workspace, token: handoff.token, agent: name, run: id },
+          }),
+        }
+      : {};
     const worker = loader.get(id, async () => ({
       compatibilityDate: "2026-10-01",
       mainModule: "tool.js",
       modules: { "tool.js": code },
-      env: {},
+      env,
       globalOutbound: null,
     }));
-    return worker.getEntrypoint().run(new ToolFiles(cap), input ?? null);
+    this.#activeToolRuns.add(id);
+    try {
+      return await worker
+        .getEntrypoint()
+        .run(viaBinding ? null : new ToolFiles(cap), input ?? null);
+    } finally {
+      this.#activeToolRuns.delete(id); // the binding refuses from now on, even if the tool kept it
+    }
   }
 }

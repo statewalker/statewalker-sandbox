@@ -61,12 +61,14 @@ test(`durability phase ${process.env.PHASE}`, async () => {
     assert.notEqual(w.value.result.exitCode, 0, "plan mode survived");
     const c = await sh(ws, child, "cat /proj/a.md");
     assert.ok(!c.ok || c.value.result.exitCode !== 0, "revocation survived");
-    const stub = await sh(ws, token, "cat /proj/a.md", "stub");
-    assert.equal(stub.ok, true, stub.error);
-    assert.equal(
-      stub.value.result.stdout,
-      "before restart\n",
-      "the stub transport works after a restart too",
-    );
+    if ((process.env.TRANSPORTS ?? "stub,token").split(",").includes("stub")) {
+      const stub = await sh(ws, token, "cat /proj/a.md", "stub");
+      assert.equal(stub.ok, true, stub.error);
+      assert.equal(
+        stub.value.result.stdout,
+        "before restart\n",
+        "the stub transport works after a restart too",
+      );
+    }
   }
 });

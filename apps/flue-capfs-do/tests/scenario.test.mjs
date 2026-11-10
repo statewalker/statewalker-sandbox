@@ -367,11 +367,14 @@ for (const transport of TRANSPORTS) {
       const code = `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint {
   async run(files, input) {
-    const out = { list: await files.readdir("/proj") };
+    const out = { argKind: files === null ? "null" : typeof files, envKeys: Object.keys(this.env ?? {}),
+      props: JSON.stringify(this.ctx?.props ?? {}) };
+    files ??= this.env.FILES;
+    out.list = await files.readdir("/proj");
     out.readme = await files.call("readFile", "/proj/readme.md");
     try { await files.call("writeFile", "/proj/tool.txt", "x"); out.write = "allowed"; } catch (e) { out.write = String(e.message); }
     try { await files.call("readFile", "/p1/a.txt"); out.p1 = "readable"; } catch (e) { out.p1 = String(e.message); }
-    try { await files.attenuate('check if true;'); out.attenuate = "allowed"; } catch (e) { out.attenuate = "refused"; }
+    try { await files.attenuate('check if true;'); out.attenuate = "allowed"; } catch (e) { out.attenuate = String(e.message); }
     try { const fs = await import("node:fs"); out.nodeFsRoot = fs.readdirSync("/"); } catch (e) { out.nodeFsRoot = "unavailable: " + e.message; }
     try { await fetch("https://example.com/"); out.fetch = "allowed"; } catch (e) { out.fetch = "blocked"; }
     return out;
@@ -394,7 +397,21 @@ export default class extends WorkerEntrypoint {
       assert.match(o.readme, /# proj/);
       assert.match(o.write, /EACCES/);
       assert.match(o.p1, /EACCES/);
-      assert.equal(o.attenuate, "refused", "the tool can use the capability, not re-delegate it");
+      // The tool can use the capability, not re-delegate it: no such method on either form.
+      assert.match(
+        o.attenuate,
+        /not a function|does not implement|not implemented|no such method|EPERM/i,
+      );
+      // What the tool sees, per transport: the RpcTarget argument and no env (stub), or no
+      // argument and only env.FILES (token); never the props of the binding.
+      if (transport === "stub") {
+        assert.match(o.argKind, /^(object|function)$/); // an RPC stub is callable on workerd
+        assert.deepEqual(o.envKeys, []);
+      } else {
+        assert.equal(o.argKind, "null");
+        assert.deepEqual(o.envKeys, ["FILES"]);
+      }
+      assert.equal(o.props, "{}");
       assert.equal(o.fetch, "blocked");
       assert.equal((await files(ws))["/proj/tool.txt"], undefined);
       // No file system of the host: workerd gives each isolate its own virtual /bundle, /tmp, /dev.
@@ -402,6 +419,39 @@ export default class extends WorkerEntrypoint {
         Array.isArray(o.nodeFsRoot) &&
         o.nodeFsRoot.some((e) => !["bundle", "tmp", "dev"].includes(e));
       assert.equal(hostFs, false, `tool isolate sees host files: ${o.nodeFsRoot}`);
+    });
+
+    test("a tool cannot use its files after run returns (even if it kept them)", async (t) => {
+      const rt = (await http("/api/runtime")).value;
+      if (rt.toolIsolates !== "isolated") return t.skip(`tool isolates: ${rt.toolIsolates}`);
+      const ws = freshWs();
+      await seed(ws, SEED);
+      const { token } = await session(ws, "alice", ["/proj"]);
+      const code = `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class extends WorkerEntrypoint {
+  async run(files, input) {
+    files ??= this.env.FILES;
+    this.ctx.waitUntil((async () => {
+      await new Promise((ok) => setTimeout(ok, 1000));
+      await files.call("writeFile", "/proj/late.txt", "after the run");
+    })().catch(() => {}));
+    return "returned";
+  }
+}`;
+      const t0 = Date.now();
+      const r = await run(`late-${ws}`, ws, token, transport, { kind: "tool", code });
+      const elapsed = Date.now() - t0;
+      assert.equal(r.ok, true, r.error);
+      assert.equal(r.value.result, "returned");
+      await new Promise((ok) => setTimeout(ok, 2500));
+      if ((await files(ws))["/proj/late.txt"] !== undefined) {
+        // Allowed only if the runtime kept the call open until the tool's waitUntil work ended
+        // (celld does): then the write happened during the run, not after it.
+        assert.ok(
+          elapsed >= 1000,
+          `a write landed ${elapsed} ms after a run that had already returned`,
+        );
+      }
     });
 
     test("a Node-style tool bundled with webrun-bundler runs on the capability", async (t) => {
@@ -479,6 +529,7 @@ export default class extends WorkerEntrypoint {
 globalThis.seen ??= [];
 export default class extends WorkerEntrypoint {
   async run(files, input) {
+    files ??= this.env.FILES;
     try { globalThis.seen.push(await files.call("readFile", "/p10/secret.txt")); } catch {}
     return globalThis.seen;
   }

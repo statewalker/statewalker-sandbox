@@ -222,7 +222,7 @@ import { __bindFiles } from ${JSON.stringify(FS_ID)};
 import * as tool from ${JSON.stringify(toolPath)};
 export default class extends WorkerEntrypoint {
   async run(files, input) {
-    __bindFiles(files);
+    __bindFiles(files ?? this.env?.FILES); // argument (stub transport) or binding (token transport)
     const fn = typeof tool.run === "function" ? tool.run : tool.default;
     if (typeof fn !== "function") throw new Error("EINVAL: a tool exports run(input) or a default function");
     try {

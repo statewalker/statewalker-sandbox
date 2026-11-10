@@ -21,6 +21,7 @@ import { deploymentToolConfig } from "./tools/config.ts";
 import { toolPolicy } from "./tools/policy.ts";
 
 export { Agent } from "./agent.ts";
+export { ToolFilesEntrypoint } from "./tool-files-entrypoint.ts";
 export { Workspace } from "./workspace.ts";
 
 interface Env extends AgentEnv {
