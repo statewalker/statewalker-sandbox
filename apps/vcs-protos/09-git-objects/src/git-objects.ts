@@ -227,7 +227,9 @@ export function gitObjects(
       CorruptObjectError,
       () => state.absent,
     );
-    if (hasher) {
+    // an absent object ends the stream with nothing to verify (X16a found `verify` throwing a
+    // mismatch for an absent id instead of returning undefined)
+    if (hasher && !state.absent) {
       const actual = toHex(hasher.digest());
       if (actual !== id) throw new ObjectIdMismatchError(`object ${id} hashes to ${actual}`);
     }
