@@ -48,7 +48,7 @@ again.
 |---|---|
 | `test:unit` | the authorization core and the store on `node:sqlite`, without a runtime |
 | `test:wrangler` | `wrangler dev` (workerd 2026-11-04) |
-| `test:cellb` | `@statewalker/cellb` 0.5.2 `loadProject`, cells in `node:sqlite` files |
+| `test:cellb` | `@statewalker/cellb` 0.8.0 `loadProject`, cells in `node:sqlite` files |
 | `test:cellb-bundled-only` | cellb with `TOOL_BUNDLE={"hostFsRuntimes":"bundled-only","allowedBundles":[<hash of tests/fixtures/todo-tool.ts>]}`: that approved bundle runs, other bundles and raw tools are refused |
 | `test:cellb-celld-bucket` | cellb with `celldBucket(sqliteObjectStore(...))`: cells as celld writes them (LTX logs, `own.json` ownership records), in the object store `celld dev` keeps |
 | `test:browser` | the project in Chromium on cellb (Playwright): builds `dist/`, serves it, runs the capability checks and the Python cases through the page |
@@ -173,7 +173,8 @@ const { code, hash, check } = await bundleTool({
 Or from the command line: `pnpm bundle-tool <dir> [--entry /index.ts] [--config overrides.json]
 [--out tool.bundle.js]`. It prints the hash on stderr, and exits 1 when the bundle would fail
 the Agent's check. Bundling runs wherever esbuild runs (Node, a browser with esbuild-wasm), not
-inside the Durable Objects. The generated entry file is removed from the source tree afterwards.
+inside the Durable Objects. (Since cellb 0.8.0 a cell can import `.wasm`, as on workerd, so an
+esbuild-wasm bundler inside a cell is possible; it is not done here.) The generated entry file is removed from the source tree afterwards.
 
 **The tool contract:** the module exports `run(input)` or a default function; a default-exported
 class is refused with `EINVAL`. The bundle's entry is a generated `WorkerEntrypoint` whose
@@ -561,7 +562,7 @@ shim-only isolates in cellb, or yesterday's vm runner.
   user's call read could be returned to the next user. Two notes on the entrypoint:
   - It is a named export of the Worker. Other Workers of the same Cloudflare account could bind
     to it with props of their own, but without the nonce of a live run it refuses everything.
-  - cellb 0.5.2 dispatches any function-valued name of an entrypoint instance, `Object.prototype`
+  - cellb (seen in 0.5.2; kept for later versions) dispatches any function-valued name of an entrypoint instance, `Object.prototype`
     methods included, so `valueOf()` would return the instance with its props. The entrypoint
     shadows those methods; workerd and celld do not dispatch them at all.
 - **Limits of the prototype:** contents are stored as UTF-8 text (not binary-safe). `readdir`

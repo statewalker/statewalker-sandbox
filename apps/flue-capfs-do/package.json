@@ -42,7 +42,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260702.1",
     "@sqlite.org/sqlite-wasm": "3.53.4-build2",
-    "@statewalker/cellb": "0.5.2",
+    "@statewalker/cellb": "0.8.0",
     "@statewalker/webrun-files-mem": "catalog:",
     "@statewalker/webrun-files-node": "catalog:",
     "esbuild": "^0.28.1",
