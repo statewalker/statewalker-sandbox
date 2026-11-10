@@ -111,6 +111,7 @@ export class WasmerKernel {
   #generation = 0;
   #open = 0;
   #idle?: ReturnType<typeof setTimeout>;
+  #fsQueue: Promise<unknown> = Promise.resolve();
 
   constructor(host: EngineHost, allowed: string[]) {
     this.#host = host;
@@ -166,8 +167,11 @@ export class WasmerKernel {
 
   #onMessage(m: EngineMessage) {
     if (m.type === "wasmer-filesystem-rpc") {
-      // Browser: the engine shares memory with this cell; answer in place.
-      void this.#fs(m.mount, m.method, m.args).then((r) => respondInPlace(m, r));
+      // Browser: the engine shares memory with this cell; answer in place, one request at a
+      // time as on Node (host-fs.ts keeps its open files assuming that).
+      const answer = this.#fsQueue.then(() => this.#fs(m.mount, m.method, m.args));
+      this.#fsQueue = answer.catch(() => {});
+      void answer.then((r) => respondInPlace(m, r));
       return;
     }
     if (m.type === "opened" || m.type === "result" || m.type === "error") {
@@ -254,6 +258,8 @@ export class WasmerKernel {
       generation = this.#generation;
       // One open at a time (the engine also builds one sandbox at a time, for its mount).
       const opened = this.#opening.then(async () => {
+        if (generation !== this.#generation)
+          throw new Error("EIO: wasmer: the engine stopped while the sandbox was opening");
         this.#mounts.set(run, capHostFs(cap));
         const answer = this.#wait(`open:${run}`, OPEN_TIMEOUT_MS);
         engine.post({ type: "open", run, packages: wanted });
@@ -408,7 +414,9 @@ function nodeHost(enginePath: string, cache?: string): EngineHost {
         /* @vite-ignore */ childProcess
       )) as typeof import("node:child_process");
       const proc = (globalThis as { process?: ProcessLike }).process;
-      const preload = enginePath.replace(/engine\.mjs$/, "node-preload.mjs");
+      // The preload sits next to the engine, whatever the engine file is called: without it the
+      // SDK's worker threads would keep their fetch.
+      const preload = enginePath.replace(/[^/\\]*$/, "node-preload.mjs");
       const child = fork(enginePath, [], {
         execPath: proc?.execPath,
         execArgv: [

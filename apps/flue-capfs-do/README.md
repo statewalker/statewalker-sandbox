@@ -527,7 +527,9 @@ capability. Open files are buffered (one buffer per path, shared by its handles)
 flush or close. WASIX drops what close returns, so nothing may fail there silently: creating or
 truncating a file is written through at open, the write right on an existing file is asked at the
 first write (WASIX opens files read-write even to read them), and content that is not UTF-8 is
-refused at the write that makes it so.
+refused at the write that makes it so. One case cannot be: a write may end inside a character
+(the next write may complete it), so a file left with an incomplete last character fails to save
+at close and keeps its previous content; a length that would cut a character is refused.
 
 | Runtime | Engine | How file operations reach the Agent cell |
 |---|---|---|

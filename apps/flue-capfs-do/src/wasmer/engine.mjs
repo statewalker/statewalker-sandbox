@@ -21,6 +21,8 @@
 // packages with the host's fetch, in the SDK's worker threads. So the allowed packages are loaded
 // once at init, and from then on fetch refuses everything: in the SDK's workers from their start
 // (node-preload.mjs; in browsers a wrapper module, below), in this thread once the packages are in.
+// Sockets (WISP in browsers, node:net on Node) are wired only for a sandbox with a network
+// provider; every sandbox here is built with `network: { mode: "disabled" }`, which installs none.
 //
 // The SDK's `storageHost(mount)` (an embedder filesystem as /workspace) is experimental and not
 // in its public options: each sandbox is built through the core builder, with the run id as

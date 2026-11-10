@@ -232,6 +232,9 @@ export function capHostFs(cap: Cap) {
       await mayWrite(f);
       await load(f);
       const n = Number(length);
+      // Cutting a character in two would make the file unstorable, and only at close.
+      if (n < f.size && isContinuation((f.bytes as Uint8Array)[n]))
+        throw err("ENOTSUP", `${f.path}: the length would cut a UTF-8 character`);
       const b = reserve(f, n);
       if (n > f.size) b.fill(0, f.size, n);
       f.size = n;

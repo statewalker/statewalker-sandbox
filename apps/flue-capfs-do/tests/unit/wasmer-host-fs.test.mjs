@@ -185,3 +185,13 @@ test("Flue's guest paths resolve '..' before they reach the capability", () => {
   assert.equal(resolveGuestPath("a/./b/../c"), "/workspace/a/c");
   assert.equal(resolveGuestPath("/workspace"), "/workspace");
 });
+
+test("a length that cuts a character is refused", async () => {
+  const cap = fakeCap({ "/e": "éX" });
+  const fs = capHostFs(cap);
+  const { value: id } = await fs.handle("open", ["e", ...RW]);
+  assert.equal((await fs.handle("setLen", [id, 1])).error.code, "ENOTSUP");
+  assert.deepEqual(await fs.handle("setLen", [id, 2]), { value: null });
+  await fs.handle("close", [id]);
+  assert.equal(cap.files.get("/e"), "é");
+});
