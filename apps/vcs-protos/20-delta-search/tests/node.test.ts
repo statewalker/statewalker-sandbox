@@ -1,18 +1,27 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deflateSync } from "node:zlib";
 import { newNodeSqliteDb } from "@statewalker/db-sqlite-node";
 import { afterAll, describe, expect, it } from "vitest";
 import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-files.js";
 import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
-import { buildPack, oidOf } from "../../12-index-pack/src/craft.js";
+import { buildPack, copyAll, delta, oidOf } from "../../12-index-pack/src/craft.js";
+import { CRC_INIT, crc32Update, crcFinal } from "../../12-index-pack/src/crc32.js";
 import { applyDelta } from "../../12-index-pack/src/delta.js";
 import { git, noise, repoWithHistory } from "../../12-index-pack/src/git-repo.js";
+import { writeIdx } from "../../12-index-pack/src/index-pack.js";
 import { log } from "../../17-repository/src/commands.js";
 import { filesRepository, sqlRepository } from "../../17-repository/src/repository.js";
-import { listObjects } from "../../18-pack-export/src/export.js";
+import { listObjects, type ToSend } from "../../18-pack-export/src/export.js";
 import { deltaIndex, encodeDelta } from "../src/delta-encode.js";
-import { exportPackSearching, type SearchStats, writePackSearching } from "../src/export-search.js";
+import {
+  exportPackSearching,
+  nameHash,
+  type SearchStats,
+  writePackSearching,
+} from "../src/export-search.js";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -439,5 +448,248 @@ describe("R7 X6b installs the searched packs", () => {
       await dst.refs.batch([{ name: "refs/heads/main", new: head }]);
       expect(await log(dst, "refs/heads/main")).toEqual(await log(repo, head));
     }
+  });
+});
+
+/** A pack (and its idx) of the given entries, written as is. */
+function rawPack(entries: { kind: number; data: Uint8Array; baseOid?: string; oid: string }[]) {
+  const parts: Buffer[] = [];
+  const head = Buffer.alloc(12);
+  head.write("PACK");
+  head.writeUInt32BE(2, 4);
+  head.writeUInt32BE(entries.length, 8);
+  parts.push(head);
+  let offset = 12;
+  const idxEntries: { oid: string; offset: number; crc32: number; type: "blob"; size: number }[] =
+    [];
+  for (const e of entries) {
+    const h: number[] = [];
+    let size = e.data.length;
+    let b = (e.kind << 4) | (size & 15);
+    size = Math.floor(size / 16);
+    while (size) {
+      h.push(b | 0x80);
+      b = size & 127;
+      size = Math.floor(size / 128);
+    }
+    h.push(b);
+    if (e.kind === 7) h.push(...Buffer.from(e.baseOid as string, "hex"));
+    const entry = Buffer.concat([Buffer.from(h), deflateSync(e.data)]);
+    idxEntries.push({
+      oid: e.oid,
+      offset,
+      crc32: crcFinal(crc32Update(CRC_INIT, entry)),
+      type: "blob",
+      size: 0,
+    });
+    parts.push(entry);
+    offset += entry.length;
+  }
+  const body = Buffer.concat(parts);
+  const trailer = createHash("sha1").update(body).digest();
+  const pack = new Uint8Array(Buffer.concat([body, trailer]));
+  return { pack, idx: writeIdx(idxEntries, trailer.toString("hex")), id: trailer.toString("hex") };
+}
+const installRaw = (d: string, p: ReturnType<typeof rawPack>, name = p.id) => {
+  const pd = join(d, ".git", "objects", "pack");
+  writeFileSync(join(pd, `pack-${name}.pack`), p.pack);
+  writeFileSync(join(pd, `pack-${name}.idx`), p.idx);
+};
+const hashObject = (d: string, data: Uint8Array) => {
+  writeFileSync(join(d, "obj.tmp"), data);
+  return git(d, ["hash-object", "-w", "obj.tmp"]).toString().trim();
+};
+const reuseStats = () => ({
+  reusedWhole: 0,
+  reusedDelta: 0,
+  thinDelta: 0,
+  deflated: 0,
+  computed: 0,
+});
+
+describe("review cases (#80)", () => {
+  const enc = new TextEncoder();
+  it("a corrupt first copy with a good one in another pack: the search export succeeds (as X6d's)", async () => {
+    const A = enc.encode("the content of A ".repeat(40));
+    const B = enc.encode(`${"the content of A ".repeat(39)}the content of B `);
+    const a = oidOf("blob", A);
+    const b = oidOf("blob", B);
+    const d = emptyRepo();
+    const bad = rawPack([{ kind: 3, data: A, oid: a }]);
+    bad.pack[bad.pack.length - 25] = (bad.pack[bad.pack.length - 25] as number) ^ 0x01;
+    const good = rawPack([
+      { kind: 3, data: A, oid: a },
+      { kind: 3, data: B, oid: b },
+    ]);
+    installRaw(d, bad, `0${bad.id.slice(1)}`);
+    installRaw(d, good, `f${good.id.slice(1)}`);
+    const repo = await open(d);
+    const out = await collect(
+      writePackSearching(repo, [
+        { oid: a, type: "blob" },
+        { oid: b, type: "blob" },
+      ]),
+    );
+    const dst = emptyRepo();
+    git(dst, ["index-pack", "--stdin"], out);
+    expect(git(dst, ["cat-file", "-p", a]).toString()).toBe(new TextDecoder().decode(A));
+  });
+  it("a base's reused-delta children count against its depth (git's check_delta_limit)", async () => {
+    const line = (i: number) =>
+      `line ${i} of the shared text, padded to be long enough ${(i * 7919) % 1000}\n`;
+    const ver = (n: number) =>
+      enc.encode(Array.from({ length: 200 + n }, (_, i) => line(i)).join(""));
+    const d = emptyRepo();
+    const objs: ToSend[] = [];
+    for (let n = 50; n >= 1; n--)
+      objs.push({ oid: hashObject(d, ver(n)), type: "blob", path: "f" });
+    const V0 = ver(0);
+    const v0 = oidOf("blob", V0);
+    const tail = enc.encode("X\n");
+    const X = new Uint8Array([...V0, ...tail]);
+    const x = oidOf("blob", X);
+    const dl = delta(V0.length, X.length, [...copyAll(V0.length), tail.length, ...tail]);
+    installRaw(
+      d,
+      rawPack([
+        { kind: 3, data: V0, oid: v0 },
+        { kind: 7, data: dl, baseOid: v0, oid: x },
+      ]),
+    );
+    objs.push({ oid: v0, type: "blob", path: "f" }, { oid: x, type: "blob", path: "g" });
+    const repo = await open(d);
+    const rs = reuseStats();
+    const s = searchStats();
+    const out = await collect(
+      writePackSearching(repo, objs, { window: 1, stats: rs, searchStats: s }),
+    );
+    const rows = verifyRows(out);
+    expect(rows.find((r) => r.oid === x)?.base).toBe(v0); // X stays the 11-byte reused delta
+    expect(rs.reusedDelta).toBe(1);
+    expect(Math.max(...rows.map((r) => r.depth))).toBeLessThanOrEqual(50);
+    expect(s.computed).toBe(rs.computed ?? 0); // no computed delta demoted by the writer's cap
+  });
+  it("the depth option bounds the whole pack, reused deltas included", async () => {
+    const line = (i: number) => `line ${i} of the shared text, padded to be long enough\n`;
+    const txt = (n: number, tag: string) =>
+      enc.encode(Array.from({ length: n }, (_, i) => line(i)).join("") + tag);
+    const Y = txt(100, "Y\n");
+    const Xc = txt(100, "X changed\n");
+    const Z = txt(101, "Z\n");
+    const y = oidOf("blob", Y);
+    const x = oidOf("blob", Xc);
+    const d = emptyRepo();
+    const tail = enc.encode("X changed\n");
+    const dl = delta(Y.length, Xc.length, [...copyAll(Y.length - 2), tail.length, ...tail]);
+    installRaw(
+      d,
+      rawPack([
+        { kind: 3, data: Y, oid: y },
+        { kind: 7, data: dl, baseOid: y, oid: x },
+      ]),
+    );
+    const z = hashObject(d, Z);
+    const repo = await open(d);
+    for (const depth of [1, 2]) {
+      const out = await collect(
+        writePackSearching(
+          repo,
+          [
+            { oid: z, type: "blob", path: "f" },
+            { oid: y, type: "blob", path: "f" },
+            { oid: x, type: "blob", path: "f" },
+          ],
+          { depth },
+        ),
+      );
+      expect(
+        Math.max(...verifyRows(out).map((r) => r.depth)),
+        `depth ${depth}`,
+      ).toBeLessThanOrEqual(depth);
+    }
+  });
+  it("the size bound passed to the encoder is git's, scaled by depth: the same base as git", async () => {
+    const N = (n: number, s: number) => new Uint8Array(noise(n, s));
+    const cat = (...a: Uint8Array[]) => new Uint8Array(Buffer.concat(a));
+    const C = N(1000, 1);
+    const Ux = N(1100, 2);
+    const Vx = N(1300, 3);
+    const U = cat(C, Ux);
+    const V = cat(C, Vx);
+    const R0 = cat(C, N(600, 9), Vx.subarray(600), N(50, 10));
+    const T = cat(C, Vx.subarray(0, 600), Ux.subarray(0, 400));
+    const d = emptyRepo();
+    const objs: ToSend[] = [R0, V, U, T].map((b) => ({
+      oid: hashObject(d, b),
+      type: "blob",
+      path: "f",
+    }));
+    const t = objs[3]?.oid as string;
+    const repo = await open(d);
+    for (const depth of [2, 50]) {
+      const ours = verifyRows(await collect(writePackSearching(repo, objs, { depth })));
+      const theirs = verifyRows(
+        new Uint8Array(
+          git(
+            d,
+            ["pack-objects", "--stdout", "-q", `--depth=${depth}`],
+            `${objs.map((o) => `${o.oid} f`).join("\n")}\n`,
+          ),
+        ),
+      );
+      expect(ours.find((r) => r.oid === t)?.base, `depth ${depth}`).toBe(
+        theirs.find((r) => r.oid === t)?.base,
+      );
+    }
+  });
+  it("with the defaults, two similar 15 MiB blobs: delta'd, live memory < 96 MiB (a Durable Object has 128)", async () => {
+    const d = emptyRepo();
+    const big = noise(15 * 2 ** 20, 31);
+    writeFileSync(join(d, "big.bin"), big);
+    git(d, ["add", "-A"]);
+    git(d, ["commit", "-q", "-m", "v1"]);
+    big[777777] = (big[777777] as number) ^ 1;
+    writeFileSync(join(d, "big.bin"), big);
+    git(d, ["add", "-A"]);
+    git(d, ["commit", "-q", "-m", "v2"]);
+    const repo = await open(d);
+    const head = rev(d, "HEAD");
+    const gc = () => (globalThis as { gc?: () => void }).gc?.();
+    const live = () => process.memoryUsage().heapUsed + process.memoryUsage().arrayBuffers;
+    gc();
+    gc();
+    const base = live();
+    let peak = 0;
+    const s = searchStats();
+    const origGet = repo.objects.get.bind(repo.objects);
+    // sample while the search reads (the window is full then) and while the pack streams
+    repo.objects.get = async (oid, o) => {
+      gc();
+      peak = Math.max(peak, live() - base);
+      return origGet(oid, o);
+    };
+    let n = 0;
+    for await (const _ of exportPackSearching(repo, [head], [], { searchStats: s })) {
+      if (++n % 16 === 1) {
+        gc();
+        peak = Math.max(peak, live() - base);
+      }
+    }
+    console.log(
+      `#80 defaults, 2 × 15 MiB: peak +${(peak / 2 ** 20).toFixed(1)} MiB; ${JSON.stringify(s)}`,
+    );
+    expect(s.computed).toBe(1);
+    expect(peak).toBeLessThan(96 * 2 ** 20);
+    expect(s.peakWindowBytes).toBeLessThanOrEqual(32 * 2 ** 20 + 15 * 2 ** 20);
+  }, 300_000);
+  it("only the first of a run of identical windows is indexed", () => {
+    const run = new Uint8Array(64).fill(0x61);
+    expect(deltaIndex(run, 1).pos.length).toBe(1);
+  });
+  it("nameHash skips the spaces git's isspace knows (\\t \\n \\r and space), not \\v or \\f", () => {
+    expect(nameHash("a b")).toBe(nameHash("ab"));
+    expect(nameHash("a\tb")).toBe(nameHash("ab"));
+    expect(nameHash("a\vb")).not.toBe(nameHash("ab"));
+    expect(nameHash("a\fb")).not.toBe(nameHash("ab"));
   });
 });
