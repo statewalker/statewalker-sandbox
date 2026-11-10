@@ -59,7 +59,15 @@ export async function composedStore(
     if (!opts.looseOnPackFiles) return (await loose.get(oid, o)) as StoredObject | undefined;
     return undefined;
   };
-  let installing: Promise<unknown> = Promise.resolve();
+  // reopens after installs, in order: a reopen that began before a pack's rename would miss it
+  let reopening: Promise<void> = Promise.resolve();
+  const reopenAfterInstall = () => {
+    const run = reopening.then(async () => {
+      packs = await openObjectDatabase(packFiles, objectsDir, { maxObjectSize });
+    });
+    reopening = run.catch(() => {});
+    return run;
+  };
   const store: ObjectStore = {
     async put(type: ObjectType, content: Uint8Array) {
       return loose.put(
@@ -97,8 +105,9 @@ export async function composedStore(
         }
     },
     async installPack(source) {
-      // one install at a time per handle: each reopens the pack database after its rename
-      const run = installing.then(async () => {
+      // installs run concurrently (each is its own job, under its own temporary names): a slow or
+      // stalled upload must not hold the others; only the reopen after each rename is ordered
+      {
         const r = await installPack(packFiles, packDir, source, {
           maxObjectSize,
           maxPackSize: opts.maxPackSize,
@@ -115,11 +124,9 @@ export async function composedStore(
             return { type: o.type, data: await collect(o.content) };
           },
         });
-        await rescan();
+        await reopenAfterInstall();
         return { packId: r.packId, count: r.count };
-      });
-      installing = run.catch(() => {});
-      return run;
+      }
     },
   };
   return store;

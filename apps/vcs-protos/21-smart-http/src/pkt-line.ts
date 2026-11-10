@@ -88,6 +88,17 @@ export class PktReader {
     this.off += len - 4;
     return { kind: "data", data };
   }
+  /** The bytes after the last packet read: what is buffered, then the rest of the source (a pack after commands). */
+  async *rest(): AsyncGenerator<Uint8Array> {
+    if (this.off < this.buf.length) yield this.buf.slice(this.off);
+    this.buf = new Uint8Array(0);
+    this.off = 0;
+    for (;;) {
+      const r = await this.it.next();
+      if (r.done) return;
+      yield r.value;
+    }
+  }
   /** Releases the source (an early stop). */
   async close() {
     await this.it.return?.();
