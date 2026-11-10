@@ -46,7 +46,7 @@
     "pyodide": "314.0.7"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260702.1",
+    "@cloudflare/workers-types": "^5.20261107.1",
     "@sqlite.org/sqlite-wasm": "3.53.4-build2",
     "@statewalker/cellb": "0.8.1",
     "@statewalker/webrun-files-node": "catalog:",
