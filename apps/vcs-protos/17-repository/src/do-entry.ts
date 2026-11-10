@@ -1,16 +1,9 @@
 /** workerd: the SQL repository in a Durable Object — the command sequence, then X6a's fixture pack. */
 import { newDoSqliteDb } from "@statewalker/db-sqlite-do";
 import pack from "../../12-index-pack/fixtures/sample.pack";
-import { commit, log, receivePack, writeFiles } from "./commands.js";
+import { log, receivePack } from "./commands.js";
+import { demoCommits } from "./demo.js";
 import { sqlRepository } from "./repository.js";
-
-const enc = new TextEncoder();
-const who = (t: number) => ({
-  name: "A U Thor",
-  email: "a@example.com",
-  when: 1700000000 + t,
-  tz: "+0000",
-});
 
 export class RepoDo {
   private db: ReturnType<typeof newDoSqliteDb>;
@@ -20,22 +13,7 @@ export class RepoDo {
   async fetch(req: Request): Promise<Response> {
     try {
       const repo = await sqlRepository(this.db);
-      let parent: string | undefined;
-      for (let i = 0; i < 4; i++) {
-        const tree = await writeFiles(repo, {
-          "a.txt": enc.encode(`v${i}\n`),
-          "dir/b.txt": enc.encode("b\n"),
-        });
-        const c = await commit(repo, {
-          ref: "refs/heads/main",
-          tree,
-          parents: parent ? [parent] : [],
-          author: who(i * 60),
-          message: `commit ${i}\n`,
-        });
-        if (!c.result.ok) throw new Error("commit rejected");
-        parent = c.oid;
-      }
+      await demoCommits(repo);
       await receivePack(
         repo,
         (async function* () {

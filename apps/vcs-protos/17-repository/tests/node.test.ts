@@ -12,7 +12,16 @@ import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-f
 import { memRefFiles } from "../../10-ref-transactions/src/adapters/mem.js";
 import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
 import { git, gitEnv, packAll, repoWithHistory } from "../../12-index-pack/src/git-repo.js";
-import { commit, log, readCommit, readTree, writeBlob, writeFiles, writeTree } from "../src/commands.js";
+import {
+  commit,
+  log,
+  readCommit,
+  readTree,
+  writeBlob,
+  writeFiles,
+  writeTree,
+} from "../src/commands.js";
+import { demoCommits } from "../src/demo.js";
 import { encodeCommit, type Person } from "../src/git-format.js";
 import { filesRepository, type Repository, sqlRepository } from "../src/repository.js";
 
@@ -260,6 +269,21 @@ describe("R2 the same commands give the same ids on both backends, equal to nati
     ).toBe(t2);
     const c2 = ct(t2, [c1], "second\n\nbody line\n", { ...env("a", 60), ...env("c", 61, "-0130") });
     expect(ids.c2).toBe(c2);
+    // the branch and the merge
+    const t3 = mktree([
+      `100644 blob ${blob("hello\n")}\tREADME.md`,
+      `040000 tree ${mktree([`100644 blob ${blob("# a\n")}\ta.md`])}\tdocs`,
+    ]);
+    expect(ids.t3).toBe(t3);
+    const self = (t: number) => ({
+      ...env("a", t),
+      GIT_COMMITTER_NAME: "A U Thor",
+      GIT_COMMITTER_EMAIL: "a@example.com",
+      GIT_COMMITTER_DATE: `${1700000000 + t} +0000`,
+    });
+    const c3 = ct(t3, [c1], "topic\n", self(120));
+    expect(ids.c3).toBe(c3);
+    expect(ids.c4).toBe(ct(t2, [c2, c3], "merge topic\n", self(180)));
   });
 });
 
@@ -293,24 +317,21 @@ describe("R3 interop with native git on Node files", () => {
 });
 
 describe("R4 the command layer imports no concrete backend", () => {
-  it("only type imports of the interfaces and the pure git-format module", () => {
-    const src = readFileSync(fileURLToPath(new URL("../src/commands.ts", import.meta.url)), "utf8");
-    const imports = [...src.matchAll(/^import\s+(type\s+)?[^;]*?from\s+"([^"]+)";/gms)].map(
-      (m) => ({
-        type: Boolean(m[1]),
-        from: m[2] as string,
-      }),
+  it("bundled alone, commands.ts pulls in only itself and the pure git-format module", async () => {
+    const out = await build({
+      entryPoints: [fileURLToPath(new URL("../src/commands.ts", import.meta.url))],
+      bundle: true,
+      format: "esm",
+      platform: "neutral",
+      write: false,
+      metafile: true,
+      logLevel: "silent",
+    });
+    // every import form counts here (static, dynamic, re-exports, side effects); type imports vanish
+    const inputs = Object.keys(out.metafile?.inputs ?? {}).map((p) =>
+      p.replace(/^(.*\/)?17-repository\//, ""),
     );
-    expect(imports.length).toBeGreaterThan(0);
-    for (const i of imports) {
-      if (i.from === "./git-format.js") continue; // pure encoders
-      expect(i.type, `${i.from} must be a type-only import`).toBe(true);
-      expect([
-        "./object-store.js",
-        "./repository.js",
-        "../../10-ref-transactions/src/ref-db.js",
-      ]).toContain(i.from);
-    }
+    expect(inputs.sort()).toEqual(["src/commands.ts", "src/git-format.ts"]);
   });
 });
 
@@ -372,6 +393,9 @@ describe("R5 the SQL backend inside a Durable Object", () => {
         error?: string;
       };
       expect(r.error).toBeUndefined();
+      const node = await sqlRepository(await newNodeSqliteDb());
+      await demoCommits(node);
+      expect(r.log).toEqual(await log(node, "refs/heads/main")); // the same ids in the DO and on Node
       expect(r.log?.length).toBe(4);
       expect(r.fixtureLog).toEqual(expected);
     } finally {
@@ -497,7 +521,8 @@ describe("review cases (#72)", () => {
       [10, 30],
       [0, 25],
     ];
-    plan.forEach(([a, c], i) => run(["commit", "-q", "--allow-empty", "-m", `m${i}`], at(a, c)));
+    for (const [i, [a, c]] of plan.entries())
+      run(["commit", "-q", "--allow-empty", "-m", `m${i}`], at(a, c));
     run(["checkout", "-q", "-b", "side", "HEAD~3"], gitEnv);
     run(["commit", "-q", "--allow-empty", "-m", "s1"], at(5, 30));
     run(["commit", "-q", "--allow-empty", "-m", "s2"], at(6, 2));
@@ -598,7 +623,10 @@ describe("review cases (#72)", () => {
             const it = content[Symbol.asyncIterator]();
             return {
               next: () => it.next(),
-              return: async () => (released++, it.return?.() ?? { done: true, value: undefined }),
+              return: async () => {
+                released++;
+                return it.return?.() ?? { done: true, value: undefined };
+              },
             };
           },
         } as AsyncIterable<Uint8Array>,
