@@ -1,6 +1,6 @@
 # 23 — Can git run between httpeers peers, authorized per service and per ref by Biscuit tokens?
 
-Plan id **X8** (git over httpeers), slice **X8c: the mesh**. Status: **answered — yes: X8a/X8b's handler and clients cross the bridge unchanged; Biscuit roles per service and per ref; a push longer than the bridge's head timeout works.**
+Plan id **X8** (git over httpeers), slice **X8c: the mesh**. Status: **answered — yes: X8a/X8b's handler and clients cross the bridge unchanged; access from httpeers' mesh roles (Biscuit-verified), decided per service and per ref in the handler; a push longer than the bridge's head timeout works.**
 
 ## Question
 
@@ -43,12 +43,18 @@ the whole pack.
 upload-pack and X8b's receive-pack; `meshFetch(call, peer, token)` turns a
 `createRemoteOverLink` remote into the `fetch` X8a/X8b's clients take — they run unchanged.
 
-- **Roles → capabilities** (`GIT_RULES`): reader → `git:read`; member → `git:read`,
-  `git:write-own`; maintainer → `git:read`, `git:write`. The policy admits any git capability;
-  the handler refines per service: upload-pack needs `git:read`, receive-pack `git:write` or
-  `git:write-own` — the latter through a per-request `update` hook limited to
-  `refs/peers/<the proven peer>/*` (`ng <ref> hook declined: not allowed …` elsewhere). The peer
-  is the one the transport proved (the bridge binds it on arrival), not anything the request says.
+- **Roles → capabilities** (`gitRules`), from httpeers' mesh roles as a standard hub issues them
+  (its join flow mints `member`; `admin` and `hidden` are the others; a hub refuses roles its rules
+  do not know): admin → `git:read`, `git:write`; member and hidden → `git:read`; with
+  `gitRules({ contributors: true })` members also get `git:write-own`. Own-namespace pushes are
+  opt-in because every peer that joined the mesh is a member. Roles are mesh-wide; the rules a
+  serving peer chooses are its repository's policy. The Datalog policy admits any git
+  capability; the decisions per service and per ref are code in the handler: upload-pack needs
+  `git:read`, receive-pack `git:write` or `git:write-own` — the latter limited to
+  `refs/peers/<the proven peer>/*`, checked on the commands **before the pack is read** (a push
+  outside the namespace stores nothing) and per ref (`ng <ref> … not allowed …`); a proven id that
+  cannot be one ref-name component (a `/` in it) is refused. The peer is the one the transport
+  proved (the bridge binds it on arrival), not anything the request says.
 - **A push longer than 30 s**: the bridge bounds a call until its response head. X8b's
   receive-pack now reads the commands, answers its head, and streams report-status once the pack
   is in and the refs are updated (protocol errors, found while reading the commands, still get
@@ -56,17 +62,21 @@ upload-pack and X8b's receive-pack; `meshFetch(call, peer, token)` turns a
   head after processing (mutation N1) it fails.
 - **Tokens**: expired and foreign-peer tokens → 401, a tampered one → 403 (httpeers' refusal
   table), an unknown role → 403, no token → 401.
+- **Errors after receive-pack's head**: answered as a report (`unpack internal error: …`, every
+  ref `ng … internal error`) — native git over plain HTTP saw a dropped connection before.
+- **The 30 s case** is tested scaled down (a 1.5 s head timeout, a 3 s upload): the mechanism is
+  the same; no 30 s test runs.
 
 | | |
 |---|---|
 | clone, fetch, push over `pairedLinks` | logs equal; the serving repository passes `fsck --strict` |
-| reader / member / maintainer | read only (403 on receive-pack) / own namespace only / anywhere |
+| member / member with contributors / admin / hidden | read only (403 on receive-pack) / own namespace only / anywhere / read only |
 | two members | each pushes `refs/peers/<self>/main`, fetches the other's, cannot overwrite it |
 | fetch over the mesh (48 × 256 KiB) | the first byte after 5 of 154 reads (progress during the search) |
 
 ## Verified
 
-All 6 Node tests pass (`pnpm test 23-git-httpeers`); X8b's 15 pass with the early head. The tests
+All 11 Node tests pass (`pnpm test 23-git-httpeers`: R1–R6 and 5 from the review of #84); X8b's 15 pass with the early head. The tests
 were written first (red commit).
 
 ### Mutation check
@@ -77,12 +87,31 @@ were written first (red commit).
 | N2 members write anywhere | R2, R6 |
 | N3 readers may push | R2 |
 | N4 no token sent | R1–R4, R6 |
+| V1 no check before the pack | #84: a refused push stores nothing |
+| V2 errors after the head not reported | #84: error as a report |
+| V3 peer ids not validated | #84: a `/` in the peer id |
+| V4 own-namespace pushes for members by default | R2, #84: roles as a hub issues them |
+| V5 admin not a writer | (the rule set refuses a policy no rule serves: module load fails) |
+
+### Review of #84
+
+| Finding | Resolution |
+|---|---|
+| The roles clashed with httpeers' mesh roles: every joined peer (`member`) could write its namespace on every repository, admins could not read, `reader`/`maintainer` cannot be minted by a standard hub | `gitRules`: admin writes, member and hidden read; own-namespace pushes opt-in (`contributors`) |
+| A refused push still stored its pack (up to 2 GiB per request from any member) | X8b's `authorize` decides on the commands before the pack; a push refused for every ref is answered without reading it |
+| Errors after the head lost their status (native git: a dropped connection) | A report: `unpack internal error: …` |
+| A peer id with `/` could write another peer's namespace | Refused (an id must be one ref-name component) |
+| The headline overstated "Biscuit roles per service and per ref" | Corrected: Biscuit-verified roles; the per-service and per-ref decisions are the handler's |
+| R6 tested one direction | Both directions |
+| Hostile git input only over plain HTTP | A malformed fetch and push over the mesh; the peer keeps serving |
+| No 30 s case | Stated: tested scaled down |
+| Revocation not wired; one repository at any path; `x-httpeers-peer` trusted on a plain-HTTP mount | Open threads (revocation, per-path repositories, mounting only behind a transport that sets the proven peer) |
 
 ## Promotion grades
 
 | File | Grade | Why |
 |---|---|---|
-| `src/mesh-git.ts` | **Adopt** (into a `vcs-httpeers` package) | git on a peer: access per service and per ref |
+| `src/mesh-git.ts` | **Adopt** (into a `vcs-httpeers` package) | git on a peer: httpeers' mesh roles, access per service and per ref |
 
 ## Open threads (ranked by how much later work they would invalidate)
 
@@ -92,3 +121,5 @@ were written first (red commit).
    (the bridge code path is shared; the transport's own limits — stream counts, relays — are not).
 3. **Large files P2P (X12)**: LFS batch per peer mount, only missing chunks, resume.
 4. Revocation (`RevocationCache`) and token refresh on 401 in the clients.
+5. Several repositories per peer (a path → repository map, a policy on `resource`); mount only
+   behind a transport that sets the proven peer (`provenPeer` trusts `x-httpeers-peer`).

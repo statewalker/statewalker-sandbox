@@ -353,7 +353,8 @@ describe("review cases (#84)", () => {
       fetch: f,
       refspecs: ["HEAD:refs/heads/x"],
     }).catch((e) => e);
-    expect(String(err)).toMatch(/internal error.*disk exploded|disk exploded/);
+    // a report, not a broken stream: the client reads `unpack internal error: …`
+    expect(String(err)).toMatch(/unpack internal error: disk exploded/);
   }, 60_000);
   it("a proven peer id that cannot name a namespace (a '/' in it) is refused own-namespace writes", async () => {
     const src = repoWithHistory(3);

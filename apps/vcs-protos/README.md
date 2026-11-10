@@ -29,7 +29,7 @@ then tests written first (red), then the implementation (green), then findings.
 | `20-delta-search` | X6e — **git's delta search: incremental and loose exports at 0.84–0.99× git's pack, bounded window, big files left alone** | Can export compute new deltas, as git's pack-objects does, to come near git's size where nothing is reusable? |
 | `21-smart-http` | X8a — **git's smart protocol v2 over a fetch handler: native git clones, deepens and fetches from ours, ours from `git http-backend`; shallow, gzip, streamed, git's negotiation** | Can git's smart protocol (v2) run over a plain fetch handler, both ways, with native git? |
 | `22-receive-pack` | X8b — **git push over the same handler: native `git push` to ours (files, SQL), ours to `git http-backend`; atomic, CAS, connectivity-checked, thin (1.07× git), streamed (+2 MiB for 64 MiB), hooks** | Can git push run over the same fetch handler, both ways, with native git? |
-| `23-git-httpeers` | X8c — **git between httpeers peers: X8a/X8b unchanged over the bridge; Biscuit roles per service and per ref (`refs/peers/<id>/*`); a push longer than the bridge's head timeout** | Can git run between httpeers peers, authorized per service and per ref by Biscuit tokens? |
+| `23-git-httpeers` | X8c — **git between httpeers peers: X8a/X8b unchanged over the bridge; httpeers' mesh roles, access per service and per ref (`refs/peers/<id>/*`); a push longer than the bridge's head timeout** | Can git run between httpeers peers, authorized per service and per ref by Biscuit tokens? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.
