@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -450,6 +450,7 @@ describe("R3b review: hostile and broken packs fail with PackError, never crash"
     const bad = join(packDir, victim);
     const bytes = readFileSync(bad);
     bytes[bytes.length - 1] = (bytes[bytes.length - 1] as number) ^ 1;
+    chmodSync(bad, 0o644); // git writes .idx read-only (0444); only root could overwrite it as is
     writeFileSync(bad, bytes);
     const db = await openObjectDatabase(new StreamingNodeFilesApi(join(repo, ".git")), "/objects");
     expect(db.skipped.map((s) => s.pack)).toEqual([victim.replace(/\.idx$/, "")]);
