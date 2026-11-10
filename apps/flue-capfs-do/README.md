@@ -26,8 +26,9 @@ makes them a real deployment shape:
 - Delegation goes across real Durable Object cells over the runtime's RPC.
 - The agent side is Flue's own toolset (`read`, `write`, `edit`, `grep`, `glob`, `bash`), running
   on the same sandbox a Flue agent's `useSandbox(bash(...))` gets.
-- Untrusted tool code runs in a fresh Worker Loader isolate for each call. It has no network,
-  no bindings, and only the narrowed capability. On runtimes whose isolates can see the host's
+- Untrusted tool code runs in a fresh Worker Loader isolate for each call. It has no network
+  and only the narrowed capability: an RpcTarget argument, or with the token transport a single
+  `env.FILES` binding that works only while the call runs. On runtimes whose isolates can see the host's
   files (cellb on Node), tool tasks are refused.
 
 ## How to run it
@@ -51,7 +52,7 @@ again.
 | `test:cellb-bundled-only` | cellb with `TOOL_BUNDLE={"hostFsRuntimes":"bundled-only","allowedBundles":[<hash of tests/fixtures/todo-tool.ts>]}`: that approved bundle runs, other bundles and raw tools are refused |
 | `test:cellb-celld-bucket` | cellb with `celldBucket(sqliteObjectStore(...))`: cells as celld writes them (LTX logs, `own.json` ownership records), in the object store `celld dev` keeps |
 | `test:browser` | the project in Chromium on cellb (Playwright): builds `dist/`, serves it, runs the capability checks and the Python cases through the page |
-| `test:celld` | `celld dev <project> --host 127.0.0.1 --port <port> --no-watch`: by default the `ghcr.io/denoland/celld:0.6.0` image in Docker (`CELLD_IMAGE`), with host networking, the repository mounted at its own path, and the project's esbuild as `CELLD_ESBUILD`; or a local binary (`CELLD_BIN`). It runs with `TRANSPORTS=token` (below) |
+| `test:celld` | `celld dev <project> --host 127.0.0.1 --port <port> --no-watch`, with `--clean` on the first start only. By default this uses the `ghcr.io/denoland/celld:0.6.0` image in Docker (`CELLD_IMAGE`): host networking, the repository mounted at its own path, the container running as the host user, and the project's Linux esbuild as `CELLD_ESBUILD`. That needs a Linux host; elsewhere, set `CELLD_BIN` to a local celld. The state is the project's `.celld/dev`, so don't run two celld runs at once. It runs with `TRANSPORTS=token` (below) |
 
 For interactive use, start a runtime with `pnpm dev:wrangler` (port 8787) or `pnpm dev:cellb`
 (port 8788). Then run the guided tour, `pnpm example`
@@ -107,7 +108,9 @@ Tasks:
   capability as an RpcTarget with the stub transport. With the token transport it is `null`,
   and `this.env.FILES` holds it instead: a loopback service binding
   (`ctx.exports.ToolFilesEntrypoint` with the token in its props, which the tool cannot read).
-  This is the form that works on celld. So `files ??= this.env.FILES` works everywhere. With `bundled: true` the code
+  This is the form that works on celld. So `files ??= this.env.FILES` works everywhere. Either
+  form stops working when `run` returns: the RpcTarget is disposed, and every call through the
+  binding first asks the Agent cell whether the run named in its props is still active. With `bundled: true` the code
   is a bundle from `bundleTool` (see [Bundled tools](#bundled-tools)), and the Agent runs the
   acceptance check before loading it. Whether a raw module or a bundle may run depends on
   `toolIsolates` (below).
@@ -449,7 +452,13 @@ shim-only isolates in cellb, or yesterday's vm runner.
   them as a failed command. Earlier output in the same script is lost.
 - **Tools get `ToolFiles` (stub transport) or a `ToolFilesEntrypoint` binding (token transport),
   never the capability object or the token.** They can use it but not attenuate or hand it off,
-  and each call gets a new isolate. An isolate keyed by the code would keep its globals,
+  only during the call (a run lease checked with the Agent cell on every binding call), and each
+  call gets a new isolate. Two notes on the entrypoint:
+  - It is a named export of the Worker. Other Workers of the same Cloudflare account could bind
+    to it with props of their own, but without the nonce of a live run it refuses everything.
+  - cellb 0.5.2 dispatches any function-valued name of an entrypoint instance, `Object.prototype`
+    methods included, so `valueOf()` would return the instance with its props. The entrypoint
+    shadows those methods; workerd and celld do not dispatch them at all. An isolate keyed by the code would keep its globals,
   so whatever one user's call read could be returned to the next user.
 - **Limits of the prototype:** contents are stored as UTF-8 text (not binary-safe). `readdir`
   and recursive operations run one Datalog authorization per entry, so a large tree, or a

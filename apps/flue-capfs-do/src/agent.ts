@@ -107,7 +107,7 @@ export class Agent extends DurableObject<AgentEnv> {
       case "flue":
         return this.#flue(name, cap, task);
       case "tool":
-        return this.#tool(cap, task.code, task.input, !!task.bundled);
+        return this.#tool(name, cap, task.code, task.input, !!task.bundled);
       case "revocationId":
         return cap.revocationId();
       case "python":
@@ -157,8 +157,18 @@ export class Agent extends DurableObject<AgentEnv> {
     return this.#kernel;
   }
 
-  /** Tool code in its own isolate: no network, no bindings, only the narrowed capability as an argument. */
-  async #tool(cap: Cap, code: string, input: unknown, bundled: boolean) {
+  /**
+   * Tool code in its own isolate: no network and only the narrowed capability. That is an RpcTarget
+   * argument (stub transport), or the env.FILES binding (token transport), which works only while
+   * this run is active.
+   */
+  /** Tool runs whose file binding is live (see ToolFilesEntrypoint): dropped when `run` settles. */
+  #activeToolRuns = new Set<string>();
+  toolRunActive(run: string): boolean {
+    return this.#activeToolRuns.has(run);
+  }
+
+  async #tool(name: string, cap: Cap, code: string, input: unknown, bundled: boolean) {
     const config = deploymentToolConfig(this.env.TOOL_BUNDLE);
     await admitTool({ code, bundled }, toolPolicy(this.env, config), config);
     const loader = this.env.LOADER as WorkerLoader;
@@ -180,7 +190,7 @@ export class Agent extends DurableObject<AgentEnv> {
     const env = viaBinding
       ? {
           FILES: exports?.ToolFilesEntrypoint?.({
-            props: { workspace: handoff.workspace, token: handoff.token },
+            props: { workspace: handoff.workspace, token: handoff.token, agent: name, run: id },
           }),
         }
       : {};
@@ -191,6 +201,13 @@ export class Agent extends DurableObject<AgentEnv> {
       env,
       globalOutbound: null,
     }));
-    return worker.getEntrypoint().run(viaBinding ? null : new ToolFiles(cap), input ?? null);
+    this.#activeToolRuns.add(id);
+    try {
+      return await worker
+        .getEntrypoint()
+        .run(viaBinding ? null : new ToolFiles(cap), input ?? null);
+    } finally {
+      this.#activeToolRuns.delete(id); // the binding refuses from now on, even if the tool kept it
+    }
   }
 }

@@ -6,7 +6,7 @@
 // TRANSPORTS=token: celld does not pass RpcTargets between isolates ("RPC stubs cannot cross
 // isolate boundaries yet").
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -76,11 +76,23 @@ const commands = {
   celld: () => {
     const args = ["dev", dir, "--host", "127.0.0.1", "--port", String(port), "--no-watch"];
     if (process.env.CELLD_BIN) return [process.env.CELLD_BIN, args];
+    if (process.platform !== "linux") {
+      // The image needs a Linux esbuild, and pnpm installs only this host's platform package;
+      // Docker Desktop also needs host networking turned on (4.34+) for --network host.
+      console.error(
+        "celld in Docker needs a Linux host here: set CELLD_BIN to a local celld instead",
+      );
+      process.exit(2);
+    }
     const repo = join(dir, "../..");
-    const esbuildBin = createRequire(join(dir, "package.json")).resolve(
-      `@esbuild/${process.platform}-${process.arch === "x64" ? "x64" : process.arch}/bin/esbuild`,
-      { paths: [dirname(createRequire(join(dir, "package.json")).resolve("esbuild"))] },
+    const fromApp = createRequire(join(dir, "package.json"));
+    const esbuildBin = createRequire(fromApp.resolve("esbuild")).resolve(
+      `@esbuild/linux-${process.arch}/bin/esbuild`,
     );
+    const user =
+      typeof process.getuid === "function"
+        ? [`--user`, `${process.getuid()}:${process.getgid()}`]
+        : [];
     return [
       "docker",
       [
@@ -88,6 +100,9 @@ const commands = {
         "--rm",
         "--name",
         celldContainer,
+        ...user, // files celld writes in .celld/ belong to the host user, not root
+        "-e",
+        "HOME=/tmp",
         "--network",
         "host",
         "-e",
@@ -103,8 +118,9 @@ const commands = {
   },
 };
 const celldContainer = `flue-capfs-celld-${port}`;
-// celld keeps its state in <project>/.celld/dev: start from an empty one (the restart reuses it).
-if (env === "celld") rmSync(join(dir, ".celld/dev"), { recursive: true, force: true });
+// celld keeps its state in <project>/.celld/dev, shared by every run in this project (do not run
+// two celld runs at once): the first start passes --clean, the restart reuses the state.
+let celldClean = env === "celld";
 // celld cannot pass RpcTargets between isolates yet: the token transport only.
 if (env === "celld") process.env.TRANSPORTS ??= "token";
 if (!commands[env]) {
@@ -119,7 +135,8 @@ const cleanup = () => {
 const base = `http://127.0.0.1:${port}`;
 
 async function startRuntime() {
-  const child = spawn(cmd, args, {
+  cleanup(); // a leftover container of the same name would answer the readiness check
+  const child = spawn(cmd, celldClean ? [...args, "--clean"] : args, {
     cwd: dir,
     stdio: ["ignore", "pipe", "pipe"],
     env: process.env,
@@ -200,7 +217,10 @@ try {
   console.error(`${env}: ${e.message}`);
   await shutdown(3);
 }
-console.log(`${env}: ready on ${base} (state: ${state})`);
+celldClean = false;
+console.log(
+  `${env}: ready on ${base} (state: ${env === "celld" ? join(dir, ".celld/dev") : state})`,
+);
 const durability = { DURABILITY_FILE: join(state, "durability.json") };
 // A test run killed by a signal exits with code null: count it as a failure.
 const failed = (code) => code !== 0;
