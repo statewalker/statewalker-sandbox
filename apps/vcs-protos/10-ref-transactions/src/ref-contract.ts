@@ -76,7 +76,7 @@ export async function runRefContract(
       { name: "refs/heads/b", new: oid(2) },
     ]);
     const r = await db.batch([
-      { name: "refs/heads/a", old: oid(1), new: oid(11) },
+      { name: "refs/heads/a", old: oid(1), new: oid(0x11) },
       { name: "refs/heads/b", old: oid(2), new: null },
       { name: "refs/heads/c", old: null, new: oid(3) },
     ]);
@@ -136,7 +136,7 @@ export async function runRefContract(
   });
   await check("HEAD as a symbolic ref: resolve, update through it, both reflogs", async (db) => {
     await db.batch([{ name: "refs/heads/main", new: oid(1) }], { ident: IDENT, message: "init" });
-    if (!(await db.setSymref("HEAD", "refs/heads/main", null))) return "setSymref";
+    if (!(await db.setSymref("HEAD", "refs/heads/main"))) return "setSymref"; // a real .git already has HEAD
     const head = await db.read("HEAD");
     if (!head || !("symref" in head) || head.symref !== "refs/heads/main") return "read HEAD";
     if ((await db.resolve("HEAD")) !== oid(1)) return "resolve HEAD";
@@ -157,7 +157,7 @@ export async function runRefContract(
     );
   });
   await check("setSymref is a compare-and-set on the target", async (db) => {
-    await db.setSymref("HEAD", "refs/heads/main", null);
+    await db.setSymref("HEAD", "refs/heads/main");
     const wrong = await db.setSymref("HEAD", "refs/heads/dev", "refs/heads/other");
     const exists = await db.setSymref("HEAD", "refs/heads/dev", null);
     const right = await db.setSymref("HEAD", "refs/heads/dev", "refs/heads/main");
@@ -200,7 +200,7 @@ export async function runRefContract(
       const worker = async (i: number) => {
         for (let attempt = 0; attempt < 200; attempt++) {
           const cur = await db.resolve(i % 2 ? "refs/heads/left" : "refs/heads/right");
-          const n = Number.parseInt(cur ?? "0", 16) - Number.parseInt(oid(0), 16);
+          const n = Array.from({ length: 64 }, (_, k) => k).find((k) => oid(k) === cur) ?? -1;
           const order =
             i % 2
               ? ["refs/heads/left", "refs/heads/right"]

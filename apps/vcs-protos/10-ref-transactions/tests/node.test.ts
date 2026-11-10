@@ -44,10 +44,11 @@ const newRepo = () => {
   return d;
 };
 /** n real commits in `repo`, oldest first. */
-const commits = (repo: string, n: number) =>
-  Array.from({ length: n }, (_, i) =>
-    git(repo, ["commit-tree", "-m", `c${i}`, "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]),
-  );
+const commits = (repo: string, n: number) => {
+  const blob = git(repo, ["hash-object", "-w", "--stdin"], "x\n");
+  const tree = git(repo, ["mktree"], `100644 blob ${blob}\tf\n`);
+  return Array.from({ length: n }, (_, i) => git(repo, ["commit-tree", "-m", `c${i}`, tree]));
+};
 
 describe("R1 ref names follow git check-ref-format", () => {
   for (const allowOneLevel of [false, true]) {
@@ -125,7 +126,8 @@ describe("R6 git files interop", () => {
     expect(git(repo, ["reflog", "show", "--format=%H %gs", "refs/heads/main"])).toBe(
       `${c1} batch\n${c0} single`,
     );
-    expect(gitTry(repo, ["fsck", "--no-dangling"]).status).toBe(0);
+    const fsck = gitTry(repo, ["fsck", "--no-dangling"]);
+    expect(fsck.status, fsck.stderr + fsck.stdout).toBe(0);
     expect(await db.setSymref("HEAD", "refs/heads/topic", "refs/heads/main")).toBe(true);
     expect(git(repo, ["symbolic-ref", "HEAD"])).toBe("refs/heads/topic");
   });
@@ -239,7 +241,8 @@ describe("R7 crash at every primitive call (git files)", () => {
     const outcomes = new Set<string>();
     let completed = false;
     for (let k = 1; k <= 400 && !completed; k++) {
-      // fresh state: a packed, b loose, c absent
+      // fresh state: a packed; b packed at cs1 AND loose at cs2 (as after `git pack-refs` and an
+      // update), so exposing the stale packed value is distinguishable from old and new; c absent
       const gitDir = join(newRepo(), ".git");
       const base = nodeRefFiles(gitDir);
       const setup = filesRefDb(base);
@@ -248,7 +251,7 @@ describe("R7 crash at every primitive call (git files)", () => {
         { name: "refs/heads/b", new: cs[1] as string },
       ]);
       expect(
-        (await setup.batch([{ name: "refs/heads/b", old: cs[1] as string, new: cs[1] as string }]))
+        (await setup.batch([{ name: "refs/heads/b", old: cs[1] as string, new: cs[2] as string }]))
           .ok,
       ).toBe(true);
       const before = await Promise.all(names.map((n) => setup.resolve(n)));
@@ -257,7 +260,7 @@ describe("R7 crash at every primitive call (git files)", () => {
       try {
         const r = await filesRefDb(files).batch([
           { name: "refs/heads/a", old: cs[0] as string, new: cs[3] as string },
-          { name: "refs/heads/b", old: cs[1] as string, new: null },
+          { name: "refs/heads/b", old: cs[2] as string, new: null },
           { name: "refs/heads/c", old: null, new: cs[5] as string },
         ]);
         if (r.ok) completed = true;
