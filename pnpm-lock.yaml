@@ -1413,6 +1413,21 @@ importers:
       '@noble/hashes':
         specifier: ^2.0.1
         version: 2.4.0
+      '@statewalker/db-api':
+        specifier: ^0.1.4
+        version: 0.1.4
+      '@statewalker/db-sqlite-browser':
+        specifier: ^0.2.1
+        version: 0.2.1
+      '@statewalker/db-sqlite-do':
+        specifier: ^0.1.0
+        version: 0.1.0
+      '@statewalker/db-sqlite-node':
+        specifier: ^0.3.0
+        version: 0.3.0
+      '@statewalker/webrun-storage':
+        specifier: ^0.2.2
+        version: 0.2.2
       pako:
         specifier: ^3.0.2
         version: 3.0.3
@@ -4292,6 +4307,10 @@ packages:
   '@speed-highlight/core@1.2.24':
     resolution: {integrity: sha512-qeW2e1l78afw8VhRPfPQ1Gjj+KU5XFQ/OFV5ti6eTa9bruO7mJyZtA4vw0ofqmA3tKCkROE9xLk3VZoeRc98nw==}
 
+  '@sqlite.org/sqlite-wasm@3.53.0-build1':
+    resolution: {integrity: sha512-PfWPWN2n+/37doa8oh2/oUXk4OOsRYZsxc1W1sDXIGb/Pu5Yrb+f2eyYpgQMGITVX7HVgxhs9P18Rc6I97ym/g==}
+    engines: {node: '>=22'}
+
   '@sqlite.org/sqlite-wasm@3.53.4-build2':
     resolution: {integrity: sha512-kQVArGJA4z7s56Dm8t+eTBXad4LiohuVj9pfgDNOcxa+Ic5xMrWlLPTq6cT0hw5S4MIvtpsraW+B0wD+IPvC7A==}
     engines: {node: '>=22'}
@@ -4354,6 +4373,23 @@ packages:
         optional: true
       esbuild:
         optional: true
+
+  '@statewalker/db-api@0.1.4':
+    resolution: {integrity: sha512-XqyQRE1CvJ8Ijv99u0eW8l/syARfuzhL3BGIFYC1375/KlvDJx+o4D4LNnMqCh97ScU/hERQaaJ0MeXYAngmvA==}
+
+  '@statewalker/db-sqlite-browser@0.2.1':
+    resolution: {integrity: sha512-v0rnck/LnDFfz7M4YVS1qwmff7NYvQ+WU7SlxyHzFyzD0qKuv0/sQGxcL7sLBKwyh8iXLeA4D2Ib08hGv8u/jw==}
+
+  '@statewalker/db-sqlite-do@0.1.0':
+    resolution: {integrity: sha512-vMeCkED6ezm2TQSjN3AXmM3EvwylMBrQ5Uk4MTVuvnY7ljwMQa3yzjLWRt1uBGaH8n1MTLpLMHG5Ti40paT3yQ==}
+    engines: {node: '>=22.13'}
+
+  '@statewalker/db-sqlite-node@0.3.0':
+    resolution: {integrity: sha512-hlRr2KD9nEUbuHWGUNMigmMQav87feSwUe/7VwPvSNdoRZ150UpJiAcL6ufEDX1kw/fF0J7Ivb5eeoVg1mHQhg==}
+    engines: {node: '>=22.13'}
+
+  '@statewalker/db-sqlite@0.1.0':
+    resolution: {integrity: sha512-LoVQS/KsuKwbJjXkbrYty2cuqmACFvdhmlQYtfQ8yuBiXSAX8yfKxdDWNcJYqcBJQk6Za7Mg+HU42Oh8jCL9eg==}
 
   '@statewalker/httpeers-access@0.1.4':
     resolution: {integrity: sha512-7Gdp5ZfRwLEJftYtAkV3rEPyyAIAHEIjE2K0YmDRwthkBdt4ori62bMpng34zG2GtuZj6bHF5QX6R6vygfjccw==}
@@ -4516,6 +4552,9 @@ packages:
     resolution: {integrity: sha512-8FmuWAC76Xqx9FKAZsU7KcJoUX9scpGxg/TppSD39XITj33TCB6jC7hbYZh6NENVvyy9PVXvPNABeMX3pBHCbg==}
     peerDependencies:
       '@statewalker/webrun-files': ^0.9.0 || ^0.10.0
+
+  '@statewalker/webrun-storage@0.2.2':
+    resolution: {integrity: sha512-O14peslfjR0XV09jAdKkHNp9p5mnslkLVL3oLqqKHe9J0x9FLntQgZn9FZht/bguDqJzPGj7udOhf4qfjhGAXQ==}
 
   '@statewalker/webrun-streams-libp2p@0.1.7':
     resolution: {integrity: sha512-CL4Pw/HjT3gy2suxN9XXvzhfujgFbGWI3au8QN7dPmuMxABoJqIjpoV5aAZCoxq82RIlifk+G1+A/Ox/7vv5mQ==}
@@ -10991,6 +11030,8 @@ snapshots:
 
   '@speed-highlight/core@1.2.24': {}
 
+  '@sqlite.org/sqlite-wasm@3.53.0-build1': {}
+
   '@sqlite.org/sqlite-wasm@3.53.4-build2': {}
 
   '@stablelib/base64@1.0.1': {}
@@ -11044,6 +11085,28 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
+
+  '@statewalker/db-api@0.1.4': {}
+
+  '@statewalker/db-sqlite-browser@0.2.1':
+    dependencies:
+      '@sqlite.org/sqlite-wasm': 3.53.0-build1
+      '@statewalker/db-api': 0.1.4
+      '@statewalker/db-sqlite': 0.1.0
+
+  '@statewalker/db-sqlite-do@0.1.0':
+    dependencies:
+      '@statewalker/db-api': 0.1.4
+      '@statewalker/db-sqlite': 0.1.0
+
+  '@statewalker/db-sqlite-node@0.3.0':
+    dependencies:
+      '@statewalker/db-api': 0.1.4
+      '@statewalker/db-sqlite': 0.1.0
+
+  '@statewalker/db-sqlite@0.1.0':
+    dependencies:
+      '@statewalker/db-api': 0.1.4
 
   '@statewalker/httpeers-access@0.1.4':
     dependencies:
@@ -11297,6 +11360,10 @@ snapshots:
       '@statewalker/webrun-files-mem': 0.10.3
       '@statewalker/webrun-http-browser': 0.7.0
       '@statewalker/webrun-site-builder': 0.2.2(@statewalker/webrun-files@0.10.2)
+
+  '@statewalker/webrun-storage@0.2.2':
+    dependencies:
+      '@statewalker/webrun-files': 0.10.2
 
   '@statewalker/webrun-streams-libp2p@0.1.7(@libp2p/interface@3.4.0)(@multiformats/multiaddr@13.0.3)(libp2p@3.5.1)':
     dependencies:
