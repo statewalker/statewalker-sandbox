@@ -439,9 +439,15 @@ Data flow:
    table of contents, one inline `define()` script per page) built by astro-builder and run on
    cellb with the `/_m/` closure as static assets → an edit without a rebuild → a static export
    (pages crawled, modules from the closure) whose cells run in Chromium with no off-origin
-   request. Remaining: the same build in a browser tab (astro-builder's browser path with the
-   page-model step in a worker), moving the page-model step into a package (`notebook-astro`),
-   and a Portable Text page model (milestone 3).
+   request.
+   *Update (2026-11-10):* cellb.dev main grew a platform in the meantime (`packages/platform`:
+   package store, ESM CDN, bundler with its own port of the Astro builder, and `NotebookSite`, a
+   Durable Object compiling notebooks with notebook-build), which realizes much of Sections 5–6.
+   The branch was rebuilt on it: `NotebookSite` now writes page models with each build, and an
+   Astro theme (`packages/notebooks/theme`, built from its sources by the platform's bundler)
+   renders them in a Worker Loader isolate with the models in its env (`/nb/<site>/t/…`). An edit
+   needs no theme build. Checked on Wrangler, celld, cellb in Node and in a browser tab. Left for
+   later: a static export of themed sites, and a Portable Text page model (milestone 3).
 9. Optional: `static-bundled` export (E2) and a PT-editor-based notebook editor.
 
 ## 11. Open questions
