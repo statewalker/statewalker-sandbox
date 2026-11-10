@@ -401,6 +401,10 @@ export async function openPack(
         throw new PackError(`${packPath}: REF_DELTA cycle through ${baseOid}`);
       base = await opts.externalBase?.(baseOid, new Set([...visiting, baseOid]));
       if (!base) throw new PackError(`${packPath}: REF_DELTA base ${baseOid} not found`);
+      if (base.data.length > maxObjectSize)
+        throw new PackError(
+          `${packPath}: REF_DELTA base ${baseOid} is ${base.data.length} bytes, over the limit of ${maxObjectSize}`,
+        );
       break;
     }
     // Checkpoints, not every step: caching each object on the way would let the top of the last
@@ -412,7 +416,9 @@ export async function openPack(
     for (let k = chain.length - 1; k >= 0; k--) {
       const e = chain[k] as EntryHead;
       try {
-        data = applyDelta(data, await inflateAll(e));
+        // The result's declared size is checked before allocating: a delta of a few KB can
+        // declare gigabytes (each copy instruction emits up to 16 MiB).
+        data = applyDelta(data, await inflateAll(e), maxObjectSize);
       } catch (err) {
         if (err instanceof DeltaError)
           throw new PackError(`${packPath}: delta at ${e.offset}: ${err.message}`);

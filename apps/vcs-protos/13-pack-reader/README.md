@@ -70,7 +70,13 @@ Findings:
    16 MiB cache cut inflations only from 1 326 to 803. Spreading the cache's slots evenly along
    the chain (plus the object asked for) gives 631–660 depending on the order — just at half — and
    371 when reading the deepest objects first (a history walk); a 64 MiB cache gives 339 / 140. A
-   cache that fits one object (8 MiB here) barely helps: it can only hold the last answer.
+   cache that fits one object (8 MiB here) barely helps: it can only hold the last answer. With
+   objects over half the cache, one slot means only the root and the answer are cached, so reading
+   a chain newest-first re-derives each object from the root: about D²/2 inflations (review of
+   #62: 9 MiB blobs, default 16 MiB cache, D = 60 / 120 / 240 → 6.3 s / 21.6 s / 143 s; git with
+   the same 16 MiB `core.deltaBaseCacheLimit` 2.0 s / 5.5 s, with its default 96 MiB 1.4 s / 2.8 s).
+   git degrades too at that cache size, so this is a constant factor and a cache policy, not a new
+   class of bug; one `get` can still copy up to 4 095 × `maxObjectSize` bytes. Open thread 5.
 2. **Delta memory = cache budget + working set.** Resolving holds the base being patched, the new
    result and the caller's copy; forced-GC readings of process memory also include buffers awaiting
    release and vary widely (no cache: +16–28 MiB for 4 MiB objects; 16 MiB cache: +17–38 MiB on
@@ -83,18 +89,27 @@ Findings:
    — bases now carry the set of ids being resolved; a delta base declaring 1.5 GiB was allocated
    before failing — sizes are bounded by `maxObjectSize` and by zlib's expansion limit; a
    large-offset index past its table raised a raw `RangeError` — validated at open; returning the
-   cached buffer let a caller corrupt later reads — copies now.
+   cached buffer let a caller corrupt later reads — copies now. The review of #62 found two more
+   allocations a small input could drive: a delta's declared result size was not bounded (a
+   15.6 KB pack made `get` allocate 4.8 GB, each copy instruction emitting up to 16 MiB) — now
+   checked against `maxObjectSize` before allocating; and a REF_DELTA base found among the loose
+   objects was buffered whole whatever its size (a loose zlib bomb) — its declared size is now
+   checked first.
 4. **The pack/idx pairing must be checked by trailer**: an idx of another pack with the same
    object count passes every other check and would serve wrong offsets.
 5. **Packs first, then loose objects** (git's order); a corrupt pack is skipped (git warns and
-   skips), not fatal for the database.
+   skips), not fatal for the database. A copy that fails when read (a corrupt delta, a missing
+   REF base) is passed over for the next pack and then the loose objects, as git's
+   `mark_bad_packed_object` does; the error is raised only when no other copy exists. This covers
+   errors raised before `get` returns; a whole (non-delta) object is streamed, so its corruption
+   surfaces while the caller reads, past the point where another copy could be chosen.
 6. **Limits** (stated, not fixed): idx v1 and SHA-256 repositories are not read; loose objects
    with `verify` raise X4's `ObjectIdMismatchError` where packs raise `PackError`; `list` keeps
    every id in a set; bytes after an entry's zlib stream are tolerated, as git does when reading.
 
 ## Verified
 
-All 19 Node tests and 1 Chromium test pass (`pnpm test 13-pack-reader`).
+All 22 Node tests and 1 Chromium test pass (`pnpm test 13-pack-reader`).
 
 | # | Result |
 |---|---|
@@ -102,6 +117,7 @@ All 19 Node tests and 1 Chromium test pass (`pnpm test 13-pack-reader`).
 | R2 | Objects in two git-written packs (`repack -d` twice) plus loose objects: every object read (with `verify`) equals git's; `has` true for all, `list` yields each id once and exactly git's set; an absent id: `has` false, `get` undefined. |
 | R3 | Open refuses with `PackError`: idx checksum flipped; another pack's idx (different count); another pack's idx with the same count (trailer check only); truncated idx. A flipped byte inside a compressed entry fails the read with `PackError`; a pack whose bytes are another valid object under the same layout is served without `verify` and refused with it. |
 | R4 | 4 MiB base + 50-deep chain, all 51 objects in a seeded Fisher–Yates order, each verified: 16 MiB cache → 660 inflations (no cache: 1 326); the cache never holds more than its budget, its accounting equals its entries; process memory within budget + 8 objects. |
+| R3c | (review of #62) a 64 KB pack whose delta declares 8 MiB, read with a 4 MiB limit → `PackError` before allocating (reads with 16 MiB); a REF_DELTA on an 8 MiB loose zlib bomb with a 1 MiB limit → refused before the base is buffered; a packed copy whose REF base is missing → the good loose copy is returned (verified), and with no other copy the `PackError` is raised. Each fails on the code as merged in #62. |
 | R3b | (review) REF_DELTA cycle across two packs → `PackError` in < 2 s; an entry declaring 5 bytes more or less than its data → `PackError` without `verify`; a delta base declaring 1.5 GiB or 2⁴⁰ bytes with no size limit → `PackError`, array buffers < +64 MiB; a forced 64-bit offset decodes, an index past the table is refused at open; ids out of order refused; one corrupt pack of two skipped and reported, HEAD still readable. R2b: mutating returned chunks never changes later reads. |
 | R5 | Chromium (OPFS) and a Durable Object (SqliteFilesApi): all 280 objects of X6a's fixture read with `verify`. |
 | R6 | A 64 MiB incompressible blob in a git-written pack: streamed with +0.0–0.2 MiB live, its SHA-1 equals its id. |
@@ -137,6 +153,7 @@ depended on random pack names); each was rebuilt and its mutation re-run.
 | An LRU of every resolved object is git's delta base cache | For one deep chain it thrashes; spacing cached objects along the chain halves the work. |
 | First version: "each entry is read with one ranged read" | Two: header, then data. |
 | First version: a REF base outside the pack is "resolved through the whole database" | Without a visiting set, a cross-pack cycle exhausted memory (review). |
+| #62: "every declared size is bounded by `maxObjectSize`" | Not a delta's result size, nor a loose REF base's: a 15.6 KB pack allocated 4.8 GB (review of #62). Both are checked now. |
 
 ## Functional description
 
@@ -170,3 +187,6 @@ function openObjectDatabase(files: FilesApi, objectsDir: string, opts?): Promise
 3. Packs in the native SQL store (X6b) — reading them through the same interface.
 4. A persistent cache across readers and a shared inflater per pack read (one open read per entry
    today).
+5. **Chains of large objects** (review of #62): cache every intermediate object while patching
+   upwards (git's `add_delta_base_cache`) when the cache holds few of them, and bound the work of
+   one `get` (bytes applied ≤ N × `maxObjectSize`) so a few-KB chain cannot cost 4 095 objects.

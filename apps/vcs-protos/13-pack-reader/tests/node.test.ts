@@ -8,7 +8,13 @@ import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-files.js";
-import { buildPack, type CraftEntry, copyAll, delta } from "../../12-index-pack/src/craft.js";
+import {
+  buildPack,
+  type CraftEntry,
+  copyAll,
+  delta,
+  oidOf,
+} from "../../12-index-pack/src/craft.js";
 import { git, noise, packAll, repoWithHistory } from "../../12-index-pack/src/git-repo.js";
 import { installPack, PackError, writeIdx } from "../../12-index-pack/src/index-pack.js";
 import { openObjectDatabase } from "../src/object-db.js";
@@ -456,6 +462,73 @@ describe("R3b review: hostile and broken packs fail with PackError, never crash"
     const db = await openObjectDatabase(new StreamingNodeFilesApi(join(repo, ".git")), "/objects");
     expect(db.skipped.map((s) => s.pack)).toEqual([victim.replace(/\.idx$/, "")]);
     expect(await db.has(head)).toBe(true);
+  });
+});
+
+describe("R3c review of #62: sizes bounded before allocating, and other copies tried", () => {
+  /** A loose object as git stores it: zlib("type size\0" + content) under objects/xx/yyyy. */
+  const writeLoose = async (files: StreamingNodeFilesApi, type: string, content: Uint8Array) => {
+    const oid = oidOf(type, content);
+    const raw = Buffer.concat([Buffer.from(`${type} ${content.length}\0`), content]);
+    await files.write(`/objects/${oid.slice(0, 2)}/${oid.slice(2)}`, [deflateSync(raw)]);
+    return oid;
+  };
+  it("a delta declaring more than maxObjectSize is refused before its result is allocated", async () => {
+    // 8 copies of a 1 MiB base: a pack of a few KB whose delta declares 8 MiB
+    const base = new Uint8Array(MiB).fill(0x61);
+    const copies = Array.from({ length: 8 }, () => copyAll(MiB)).flat();
+    const pack = buildPack([
+      { kind: 3, data: base },
+      { kind: 6, data: delta(MiB, 8 * MiB, copies), baseIdx: 0 },
+    ]);
+    expect(pack.length).toBeLessThan(64 * 1024);
+    const { files, packPath, idxPath, result } = await installed(pack);
+    const target = result.entries.find((e) => e.size === 8 * MiB);
+    if (!target) throw new Error("no delta entry");
+    const reader = await openPack(files, packPath, idxPath, { maxObjectSize: 4 * MiB });
+    await expect(reader.get(target.oid)).rejects.toThrow(/over|larger|exceed|limit/i);
+    await expect(reader.get(target.oid)).rejects.toBeInstanceOf(PackError);
+    // within the limit it reads
+    const ok = await openPack(files, packPath, idxPath, { maxObjectSize: 16 * MiB });
+    expect((await collect((await ok.get(target.oid))?.content ?? [])).length).toBe(8 * MiB);
+  });
+  it("a loose REF_DELTA base over maxObjectSize is refused before it is buffered", async () => {
+    const repo = emptyRepo();
+    const files = new StreamingNodeFilesApi(join(repo, ".git"));
+    const big = new Uint8Array(8 * MiB); // zeros: a loose zlib bomb of a few KB
+    const baseOid = await writeLoose(files, "blob", big);
+    const X = fakeOid(0xdd);
+    await writeRaw(
+      files,
+      buildPack([{ kind: 7, data: delta(big.length, big.length, copyAll(big.length)), baseOid }]),
+      [{ oid: X, offset: 12 }],
+    );
+    const db = await openObjectDatabase(files, "/objects", { maxObjectSize: MiB });
+    await expect(db.get(X)).rejects.toThrow(/over the limit of 1048576/);
+  });
+  it("a packed copy that fails is passed over for a good loose copy, as git does", async () => {
+    const repo = emptyRepo();
+    const files = new StreamingNodeFilesApi(join(repo, ".git"));
+    const content = new TextEncoder().encode("the good copy\n".repeat(20));
+    const X = await writeLoose(files, "blob", content);
+    // the packed copy of X: a REF_DELTA whose base exists nowhere, so reading it fails
+    await writeRaw(
+      files,
+      buildPack([{ kind: 7, data: delta(5, 5, copyAll(5)), baseOid: fakeOid(0xee) }]),
+      [{ oid: X, offset: 12 }],
+    );
+    const db = await openObjectDatabase(files, "/objects");
+    const o = await db.get(X, { verify: true });
+    expect(Buffer.from(await collect(o?.content ?? [])).equals(Buffer.from(content))).toBe(true);
+    // with no other copy, the pack's error is raised
+    const Y = fakeOid(0xef);
+    await writeRaw(
+      files,
+      buildPack([{ kind: 7, data: delta(5, 5, copyAll(5)), baseOid: fakeOid(0xee) }]),
+      [{ oid: Y, offset: 12 }],
+    );
+    const db2 = await openObjectDatabase(files, "/objects");
+    await expect(db2.get(Y)).rejects.toBeInstanceOf(PackError);
   });
 });
 
