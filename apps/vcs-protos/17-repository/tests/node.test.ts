@@ -12,8 +12,8 @@ import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-f
 import { memRefFiles } from "../../10-ref-transactions/src/adapters/mem.js";
 import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
 import { git, gitEnv, packAll, repoWithHistory } from "../../12-index-pack/src/git-repo.js";
-import { commit, log, readCommit, readTree, writeBlob, writeFiles } from "../src/commands.js";
-import type { Person } from "../src/git-format.js";
+import { commit, log, readCommit, readTree, writeBlob, writeFiles, writeTree } from "../src/commands.js";
+import { encodeCommit, type Person } from "../src/git-format.js";
 import { filesRepository, type Repository, sqlRepository } from "../src/repository.js";
 
 const dirs: string[] = [];
@@ -378,4 +378,245 @@ describe("R5 the SQL backend inside a Durable Object", () => {
       await mf.dispose();
     }
   }, 300_000);
+});
+
+/** Review of #72: byte-exact formats, git's validation, native-git interop, the command layer. */
+describe("review cases (#72)", () => {
+  const latin1 = (s: string) => Uint8Array.from(s, (c) => c.charCodeAt(0));
+  const mem = () => backends[0]?.[1]() as Promise<Repository>;
+  const rawObject = (d: string, type: string, bytes: Uint8Array) =>
+    git(d, ["hash-object", "-t", type, "-w", "--literally", "--stdin"], bytes).toString().trim();
+  const roundTripTree = async (repo: Repository, bytes: Uint8Array) => {
+    const id = await repo.objects.put("tree", bytes);
+    const entries = await readTree(repo, id);
+    const again = await writeTree(repo, entries);
+    return { id, again, entries };
+  };
+  const treeBytes = (entries: [string, Uint8Array, string][]) =>
+    new Uint8Array(
+      Buffer.concat(
+        entries.flatMap(([mode, name, oid]) => [
+          Buffer.from(`${mode} `),
+          Buffer.from(name),
+          Buffer.from([0]),
+          Buffer.from(oid, "hex"),
+        ]),
+      ),
+    );
+  const E = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+  it("tree names are bytes: latin-1 and BOM names round-trip to the same id", async () => {
+    const repo = await mem();
+    const t = treeBytes([
+      ["100644", latin1("caf\xe8"), E],
+      ["100644", latin1("caf\xe9"), E],
+      ["100644", new TextEncoder().encode("﻿a"), E],
+    ]);
+    const { id, again } = await roundTripTree(repo, t);
+    expect(again).toBe(id);
+  });
+  it("legacy modes (040000, 100664) are read and preserved", async () => {
+    const repo = await mem();
+    const sub = await repo.objects.put("tree", treeBytes([["100644", latin1("f"), E]]));
+    const t = treeBytes([
+      ["100664", latin1("a"), E],
+      ["040000", latin1("d"), sub],
+    ]);
+    const { id, again, entries } = await roundTripTree(repo, t);
+    expect(again).toBe(id);
+    expect(entries.map((e) => e.mode)).toEqual(["100664", "040000"]);
+  });
+  it("names git's fsck refuses are refused on write", async () => {
+    const repo = await mem();
+    for (const name of [".GIT", ".Git", "git~1", ".git ", ".git.", ".g‌it", "\uD800"])
+      await expect(
+        writeTree(repo, [{ mode: "100644", name, oid: E }]),
+        JSON.stringify(name),
+      ).rejects.toThrow();
+    await expect(
+      writeTree(repo, [{ mode: "120000", name: ".gitmodules", oid: E }]),
+    ).rejects.toThrow();
+    await expect(
+      writeTree(repo, [
+        { mode: "100644", name: "\uD800", oid: E },
+        { mode: "100644", name: "\uDC00", oid: E },
+      ]),
+    ).rejects.toThrow();
+  });
+  it("commits keep extra headers, the encoding and the message bytes: gpgsig + ISO-8859-1 round-trip", async () => {
+    const repo = await mem();
+    const tree = await writeFiles(repo, { a: new TextEncoder().encode("a\n") });
+    const raw = Buffer.concat([
+      Buffer.from(
+        `tree ${tree}\nauthor A <a@x> 1700000000 +0000\ncommitter A <a@x> 1700000000 +0000\nencoding ISO-8859-1\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n iQEz\n -----END PGP SIGNATURE-----\n\n`,
+      ),
+      Buffer.from(latin1("caf\xe9\n")),
+    ]);
+    const id = await repo.objects.put("commit", new Uint8Array(raw));
+    const c = await readCommit(repo, id);
+    expect(c.encoding).toBe("ISO-8859-1");
+    expect(c.message).toBe("café\n");
+    const again = await repo.objects.put("commit", encodeCommit(c));
+    expect(again).toBe(id);
+  });
+  it("git log's tolerance: malformed identities do not abort log", async () => {
+    const d = tmp();
+    git(d, ["init", "-q", "."]);
+    const tree = git(d, ["mktree"], "").toString().trim();
+    let parent = "";
+    for (const ident of [
+      "Foo<f@x> 1700000001 +0000",
+      "Foo <f@x> 1700000002",
+      "Foo <f@x>  1700000003 +0000",
+    ]) {
+      const body = `tree ${tree}\n${parent ? `parent ${parent}\n` : ""}author ${ident}\ncommitter ${ident}\n\nm\n`;
+      parent = rawObject(d, "commit", new TextEncoder().encode(body));
+    }
+    git(d, ["update-ref", "refs/heads/main", parent]);
+    const expected = git(d, ["log", "--format=%H", "main"]).toString().trim().split("\n");
+    const repo = await filesRepository(
+      new StreamingNodeFilesApi(join(d, ".git")),
+      nodeRefFiles(join(d, ".git")),
+    );
+    expect(await log(repo, "refs/heads/main")).toEqual(expected);
+  });
+  it("log matches git log with author/committer dates inverted, ties and clock skew", async () => {
+    const d = tmp();
+    git(d, ["init", "-q", "-b", "main", "."]);
+    const at = (a: number, c: number) => ({
+      ...gitEnv,
+      GIT_AUTHOR_DATE: `${1700000000 + a} +0000`,
+      GIT_COMMITTER_DATE: `${1700000000 + c} +0000`,
+    });
+    const run = (args: string[], e: Record<string, string | undefined>) =>
+      execFileSync("git", args, { cwd: d, env: e });
+    const plan: [number, number][] = [
+      [50, 10],
+      [40, 10],
+      [30, 5],
+      [20, 30],
+      [10, 30],
+      [0, 25],
+    ];
+    plan.forEach(([a, c], i) => run(["commit", "-q", "--allow-empty", "-m", `m${i}`], at(a, c)));
+    run(["checkout", "-q", "-b", "side", "HEAD~3"], gitEnv);
+    run(["commit", "-q", "--allow-empty", "-m", "s1"], at(5, 30));
+    run(["commit", "-q", "--allow-empty", "-m", "s2"], at(6, 2));
+    run(["checkout", "-q", "main"], gitEnv);
+    run(["merge", "-q", "--no-ff", "-m", "merge", "side"], at(1, 28));
+    const expected = git(d, ["log", "--format=%H", "main"]).toString().trim().split("\n");
+    const repo = await filesRepository(
+      new StreamingNodeFilesApi(join(d, ".git")),
+      nodeRefFiles(join(d, ".git")),
+    );
+    expect(await log(repo, "refs/heads/main")).toEqual(expected);
+  });
+  it("log peels annotated tags and stops at a shallow boundary", async () => {
+    const src = repoWithHistory(6);
+    git(src, ["tag", "-a", "v1", "-m", "v1", "HEAD~2"]);
+    const repo = await filesRepository(
+      new StreamingNodeFilesApi(join(src, ".git")),
+      nodeRefFiles(join(src, ".git")),
+    );
+    expect(await log(repo, "refs/tags/v1")).toEqual(
+      git(src, ["log", "--format=%H", "v1"]).toString().trim().split("\n"),
+    );
+    const shallow = tmp();
+    git(tmpdir(), ["clone", "-q", "--depth", "2", `file://${src}`, shallow]);
+    const srepo = await filesRepository(
+      new StreamingNodeFilesApi(join(shallow, ".git")),
+      nodeRefFiles(join(shallow, ".git")),
+    );
+    expect(await log(srepo, "HEAD")).toEqual(
+      git(shallow, ["log", "--format=%H"]).toString().trim().split("\n"),
+    );
+  });
+  it("packs written by native git after open are found (git gc on an open repository)", async () => {
+    const d = repoWithHistory(6);
+    const repo = await filesRepository(
+      new StreamingNodeFilesApi(join(d, ".git")),
+      nodeRefFiles(join(d, ".git")),
+    );
+    const head = git(d, ["rev-parse", "HEAD"]).toString().trim();
+    expect(await repo.objects.has(head)).toBe(true);
+    git(d, ["gc", "-q", "--prune=now"]);
+    expect(await repo.objects.has(head)).toBe(true);
+    expect((await log(repo, "HEAD")).length).toBe(6);
+  });
+  it("a second SQL handle on the same Db sees a pack the first installed", async () => {
+    const db = await newNodeSqliteDb();
+    const a = await sqlRepository(db);
+    const b = await sqlRepository(db);
+    const src = repoWithHistory(3);
+    await a.objects.installPack(chunks(packAll(src, true)));
+    expect(await b.objects.has(git(src, ["rev-parse", "HEAD"]).toString().trim())).toBe(true);
+  });
+  it("writeFiles refuses a path that is both a file and a directory, in either order", async () => {
+    const repo = await mem();
+    const x = new TextEncoder().encode("x");
+    await expect(writeFiles(repo, { "a/b": x, a: x })).rejects.toThrow();
+    await expect(writeFiles(repo, { a: x, "a/b": x })).rejects.toThrow();
+  });
+  it("commit refuses a missing tree or parent, and an unreadable date", async () => {
+    const repo = await mem();
+    const tree = await writeFiles(repo, { a: new TextEncoder().encode("a") });
+    const who = alice(0);
+    await expect(
+      commit(repo, { ref: "refs/heads/x", tree: "1".repeat(40), author: who, message: "m\n" }),
+    ).rejects.toThrow();
+    await expect(
+      commit(repo, {
+        ref: "refs/heads/x",
+        tree,
+        parents: ["2".repeat(40)],
+        author: who,
+        message: "m\n",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      commit(repo, {
+        ref: "refs/heads/x",
+        tree,
+        author: { ...who, when: Number.NaN },
+        message: "m\n",
+      }),
+    ).rejects.toThrow();
+    expect(await repo.refs.resolve("refs/heads/x")).toBeUndefined();
+  });
+  it("reading an object as the wrong type releases its stream", async () => {
+    const repo = await mem();
+    const tree = await writeFiles(repo, { a: new TextEncoder().encode("a") });
+    let released = 0;
+    const get = repo.objects.get.bind(repo.objects);
+    repo.objects.get = async (oid, o) => {
+      const r = await get(oid, o);
+      if (!r) return r;
+      const content = r.content;
+      return {
+        ...r,
+        content: {
+          [Symbol.asyncIterator]: () => {
+            const it = content[Symbol.asyncIterator]();
+            return {
+              next: () => it.next(),
+              return: async () => (released++, it.return?.() ?? { done: true, value: undefined }),
+            };
+          },
+        } as AsyncIterable<Uint8Array>,
+      };
+    };
+    await expect(readCommit(repo, tree)).rejects.toThrow(/tree/);
+    expect(released).toBe(1);
+  });
+  it("a thin pack's external base over the size limit is refused", async () => {
+    const repo = await filesRepository(new MemFilesApi(), memRefFiles(), { maxObjectSize: 1000 });
+    const big = await repo.objects.put("blob", new Uint8Array(5000).fill(7));
+    const d = tmp();
+    git(d, ["init", "-q", "."]);
+    // a REF_DELTA against `big`, which the store holds but is over the limit
+    const { buildPack, delta, copyAll } = await import("../../12-index-pack/src/craft.js");
+    const thin = buildPack([
+      { kind: 7, baseOid: big, data: delta(5000, 5001, [...copyAll(5000), 1, 1]) },
+    ]);
+    await expect(repo.objects.installPack(chunks(thin))).rejects.toThrow();
+  });
 });
