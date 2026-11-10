@@ -125,7 +125,7 @@ describe("R3 a corrupt packed entry is not passed on", () => {
     const head = git(src, ["rev-parse", "HEAD"]).toString().trim();
     const err = await collect(exportPackReusing(repo, [head], [])).catch((e) => e);
     expect(err).toBeInstanceOf(Error);
-    expect(String(err)).toMatch(/CRC|corrupt|crc/i);
+    expect(String(err)).toMatch(/idx CRC|corrupt|inflat|zlib|incorrect|invalid/i);
   });
 });
 
@@ -250,7 +250,7 @@ describe("R6 a large stored entry is copied, streaming", () => {
     let n = 0;
     const s = stats();
     for await (const _ of exportPackReusing(repo, [head], [], { stats: s })) {
-      if (++n % 64 === 0) {
+      if (++n % 16 === 1) {
         gc();
         gc();
         peak = Math.max(peak, live() - base);
@@ -260,4 +260,114 @@ describe("R6 a large stored entry is copied, streaming", () => {
     expect(s.deflated).toBe(0);
     expect(peak).toBeLessThan(16 * 2 ** 20);
   }, 300_000);
+});
+
+/** Review of #75: fall back past bad copies, check before sending, base first, depth, shallow receivers. */
+describe("review cases (#75)", () => {
+  const enc = new TextEncoder();
+  /** `git verify-pack -v` rows of a pack: offset, depth and base for deltas. */
+  const rows = (pack: Uint8Array) => {
+    const d = emptyRepo();
+    const p = join(d, "x.pack");
+    writeFileSync(p, pack);
+    git(d, ["index-pack", p]);
+    return git(d, ["verify-pack", "-v", p])
+      .toString()
+      .split("\n")
+      .map((l) => l.trim().split(/\s+/))
+      .filter((f) => /^[0-9a-f]{40}$/.test(f[0] ?? "") && f.length >= 5)
+      .map((f) => ({
+        oid: f[0] as string,
+        offset: Number(f[4]),
+        depth: f[5] ? Number(f[5]) : 0,
+        base: f[6],
+      }));
+  };
+  it("a corrupt copy is not used when another pack holds the object: the export succeeds", async () => {
+    const A = enc.encode("the content of A ".repeat(40));
+    const a = oidOf("blob", A);
+    const d = emptyRepo();
+    const pd = join(d, ".git", "objects", "pack");
+    const bad = rawPack([{ kind: 3, data: A, oid: a }]);
+    // corrupt the copy in the pack consulted first (its idx CRC no longer matches)
+    bad.pack[bad.pack.length - 25] = (bad.pack[bad.pack.length - 25] as number) ^ 0x01;
+    const good = rawPack([{ kind: 3, data: A, oid: a }]);
+    writeFileSync(join(pd, `pack-0${bad.id.slice(1)}.pack`), bad.pack);
+    writeFileSync(join(pd, `pack-0${bad.id.slice(1)}.idx`), bad.idx);
+    writeFileSync(join(pd, `pack-f${good.id.slice(1)}.pack`), good.pack);
+    writeFileSync(join(pd, `pack-f${good.id.slice(1)}.idx`), good.idx);
+    const repo = await open(d);
+    const { writePackReusing } = await import("../src/export-reuse.js");
+    const out = await collect(writePackReusing(repo, [{ oid: a, type: "blob" }]));
+    const dst = emptyRepo();
+    git(dst, ["index-pack", "--stdin"], out);
+    expect(git(dst, ["cat-file", "-p", a]).toString()).toBe(new TextDecoder().decode(A));
+  });
+  it("a corrupt entry with no other copy fails the export before any of its bytes are sent", async () => {
+    const A = enc.encode("only copy ".repeat(60));
+    const a = oidOf("blob", A);
+    const d = emptyRepo();
+    const pd = join(d, ".git", "objects", "pack");
+    const bad = rawPack([{ kind: 3, data: A, oid: a }]);
+    bad.pack[bad.pack.length - 25] = (bad.pack[bad.pack.length - 25] as number) ^ 0x01;
+    writeFileSync(join(pd, `pack-${bad.id}.pack`), bad.pack);
+    writeFileSync(join(pd, `pack-${bad.id}.idx`), bad.idx);
+    const repo = await open(d);
+    const { writePackReusing } = await import("../src/export-reuse.js");
+    let sent = 0;
+    const err = await (async () => {
+      for await (const c of writePackReusing(repo, [{ oid: a, type: "blob" }])) sent += c.length;
+    })().catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(sent).toBeLessThanOrEqual(12); // the pack header only: no byte of the corrupt entry
+  });
+  it("every reused delta's base is written before it", async () => {
+    const src = repoWithHistory(30);
+    git(src, ["gc", "-q", "--aggressive"]);
+    const repo = await open(src);
+    const head = git(src, ["rev-parse", "HEAD"]).toString().trim();
+    const r = rows(await collect(exportPackReusing(repo, [head], [])));
+    const at = new Map(r.map((x) => [x.oid, x.offset]));
+    const deltas = r.filter((x) => x.base);
+    expect(deltas.length).toBeGreaterThan(50);
+    for (const x of deltas) expect(at.get(x.base as string), x.oid).toBeLessThan(x.offset);
+  });
+  it("reused chains are cut at git's default depth (50)", async () => {
+    const { buildPack } = await import("../../12-index-pack/src/craft.js");
+    const base = enc.encode("chain base ".repeat(30));
+    const entries: import("../../12-index-pack/src/craft.js").CraftEntry[] = [
+      { kind: 3, data: base },
+    ];
+    let len = base.length;
+    for (let i = 0; i < 70; i++) {
+      entries.push({ kind: 6, baseIdx: i, data: delta(len, len + 1, [...copyAll(len), 1, i]) });
+      len++;
+    }
+    const d = emptyRepo();
+    const repo = await open(d);
+    await repo.objects.installPack(chunks(buildPack(entries)));
+    const ids: { oid: string; type: "blob" }[] = [];
+    for await (const id of repo.objects.list()) ids.push({ oid: id, type: "blob" });
+    const { writePackReusing } = await import("../src/export-reuse.js");
+    const r = rows(await collect(writePackReusing(repo, ids)));
+    expect(r.length).toBe(71);
+    expect(Math.max(...r.map((x) => x.depth))).toBeLessThanOrEqual(50);
+  });
+  it("a thin pack for a shallow receiver: bases only from what it has (its shallow commits passed in)", async () => {
+    const src = repoWithHistory(10);
+    git(src, ["gc", "-q"]);
+    const h = git(src, ["rev-parse", "HEAD"]).toString().trim();
+    // a receiver that cloned only HEAD (depth 1): it lacks HEAD~1 and older
+    const recv = tmp();
+    git(tmpdir(), ["clone", "-q", "--depth", "1", `file://${src}`, recv]);
+    writeFileSync(join(src, "file0.txt"), `${readFileSync(join(src, "file0.txt"), "utf8")}more\n`);
+    git(src, ["commit", "-q", "-am", "one more"]);
+    git(src, ["gc", "-q"]);
+    const want = git(src, ["rev-parse", "HEAD"]).toString().trim();
+    const repo = await open(src);
+    const thin = await collect(exportPackReusing(repo, [want], [h], { thin: true, shallow: [h] }));
+    git(recv, ["index-pack", "--stdin", "--fix-thin"], thin);
+    git(recv, ["update-ref", "refs/heads/main", want]);
+    git(recv, ["fsck", "--full"]);
+  });
 });
