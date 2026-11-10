@@ -1,18 +1,21 @@
 /**
- * X8c — git on an httpeers peer: X8a/X8b's `gitHandler` behind httpeers' access middleware.
+ * X8c — git on an httpeers peer: X8a/X8b's upload-pack and receive-pack behind httpeers' access
+ * middleware.
  *
  * `withAccess` verifies the membership token (`x-httpeers-token`: issuer, binding to the peer the
  * transport proved, expiry) and derives capabilities from its roles. Then, per request:
  *  - upload-pack (fetch, clone) needs `git:read`;
- *  - receive-pack (push) needs `git:write` (any ref) or `git:write-own`, which an `update` hook
- *    limits to the caller's namespace `refs/peers/<peerId>/*` (git's ng "hook declined: not
- *    allowed …" for any other ref).
- * Default roles: reader (read), member (read, own namespace), maintainer (read, write). The
- * receive-pack answer's head is sent before the pack is read (X8b), so the bridge's 30 s bound on
- * a call's head does not cut a long push.
+ *  - receive-pack (push) needs `git:write` (any ref) or `git:write-own`, which limits the push to
+ *    the caller's namespace `refs/peers/<peerId>/*` — checked on the commands before the pack is
+ *    read (a push outside it stores nothing) and again per ref (`ng … not allowed …`).
+ * Roles are httpeers' mesh roles (see `gitRules`): admin writes, member and hidden read; members
+ * push into their own namespace only when the serving peer opts in. receive-pack's response head
+ * is sent before the pack is read (X8b), so the bridge's 30 s bound on a call's head does not cut a
+ * long push.
  */
 import { access, ruleSet, withAccess } from "@statewalker/httpeers-access";
 import { ANONYMOUS, lookupPeer, MESH_TOKEN_HEADER } from "@statewalker/httpeers-core";
+import { checkRefFormat } from "../../10-ref-transactions/src/refname.js";
 import type { Repository } from "../../17-repository/src/object-store.js";
 import { uploadPackHandler } from "../../21-smart-http/src/server.js";
 import { receivePackHandler } from "../../22-receive-pack/src/server.js";
@@ -20,31 +23,37 @@ import { receivePackHandler } from "../../22-receive-pack/src/server.js";
 export interface MeshGitOptions {
   /** the mesh's issuer (the hub's peerId) */
   issuer: string;
-  /** roles → capabilities and the policy (default: GIT_RULES) */
+  /** roles → capabilities and the policy (default: GIT_RULES, reads for all, writes for admins) */
   rules?: ReturnType<typeof ruleSet>;
 }
 
-/** red stub: the rules for the options */
-export function gitRules(_o: { contributors?: boolean } = {}) {
-  return GIT_RULES;
+/**
+ * git's capabilities from httpeers' mesh roles, as a standard hub issues them (its join flow mints
+ * `member`; `admin` and `hidden` are the others): admin → read and write; member and hidden →
+ * read. With `contributors`, members may also push into their own namespace
+ * (`refs/peers/<peerId>/*`) — opt-in, because every peer that joined the mesh is a member. Roles
+ * are mesh-wide: the rules a serving peer chooses are its repository's policy.
+ */
+export function gitRules(o: { contributors?: boolean } = {}) {
+  return ruleSet({
+    version: 1,
+    rules: [
+      'capability("git:read") <- role("member");',
+      'capability("git:read") <- role("hidden");',
+      'capability("git:read") <- role("admin");',
+      'capability("git:write") <- role("admin");',
+      ...(o.contributors ? ['capability("git:write-own") <- role("member");'] : []),
+    ],
+    policies: [
+      'allow if capability("git:read");',
+      'allow if capability("git:write");',
+      ...(o.contributors ? ['allow if capability("git:write-own");'] : []),
+    ],
+  });
 }
 
-/** reader, member and maintainer; any git capability passes the policy, the handler refines it */
-export const GIT_RULES = ruleSet({
-  version: 1,
-  rules: [
-    'capability("git:read") <- role("reader");',
-    'capability("git:read") <- role("member");',
-    'capability("git:write-own") <- role("member");',
-    'capability("git:read") <- role("maintainer");',
-    'capability("git:write") <- role("maintainer");',
-  ],
-  policies: [
-    'allow if capability("git:read");',
-    'allow if capability("git:write");',
-    'allow if capability("git:write-own");',
-  ],
-});
+/** The default: reads for every mesh role, writes for admins. */
+export const GIT_RULES = gitRules();
 
 const forbidden = (msg: string) =>
   new Response(JSON.stringify({ error: msg }), {
@@ -76,10 +85,16 @@ export function meshGitHandler(
     }
     if (caps.has("git:write")) return receivePackHandler(repo)(req);
     if (!caps.has("git:write-own")) return forbidden("git:write required");
+    // a proven id that cannot be one ref-name component cannot name a namespace of its own
+    if (!peer || peer.includes("/") || !checkRefFormat(`refs/peers/${peer}/x`))
+      return forbidden("this peer id cannot name a ref namespace");
     const own = `refs/peers/${peer}/`;
+    const outside = (ref: string) =>
+      ref.startsWith(own) ? undefined : `not allowed: this peer writes ${own}* only`;
     return receivePackHandler(repo, {
-      update: async (c) =>
-        c.ref.startsWith(own) ? undefined : `not allowed: this peer writes ${own}* only`,
+      // before the pack is read: a push outside the namespace stores nothing
+      authorize: async (commands) => commands.map((c) => outside(c.ref)),
+      update: async (c) => outside(c.ref),
     })(req);
   });
 }

@@ -40,6 +40,11 @@ export interface ReceivePackOptions {
   maxRequestBytes?: number;
   /** refuse the whole push: a message, or undefined to accept */
   preReceive?: (commands: PushCommand[], pushOptions: string[]) => Promise<string | undefined>;
+  /**
+   * Decides on the commands before any pack byte is read: a message refuses that command. A push
+   * whose every command needing a pack is refused is answered without reading (storing) its pack.
+   */
+  authorize?: (commands: PushCommand[]) => Promise<(string | undefined)[]>;
   /** refuse one ref: a message, or undefined to accept */
   update?: (command: PushCommand) => Promise<string | undefined>;
   /** more commands in one push are refused (400). Default 65536. */
@@ -193,6 +198,7 @@ export function receivePackHandler(
 
     // The head goes out now, the report when the pack is in and the refs are updated: a relay that
     // bounds a call until its response head (httpeers' bridge: 30 s) must not time out a long push.
+    const authorized = opts.authorize ? await opts.authorize(commands) : [];
     const finish = async (): Promise<Uint8Array> => {
       // --- the pack (unless every command is a delete); a status per command (a ref may appear twice)
       let unpack = "ok";
@@ -202,15 +208,22 @@ export function receivePackHandler(
       };
       const open = () =>
         commands.flatMap((c, i) => (status[i] === undefined ? [[c, i] as const] : []));
+      authorized.forEach((msg, i) => {
+        if (msg) fail(i, msg);
+      });
       if (commands.some((c) => c.new !== ZERO)) {
-        try {
-          await repo.objects.installPack(reader.rest());
-        } catch (e) {
-          unpack = oneLine(e instanceof Error ? e.message : String(e)).slice(0, 200);
-          commands.forEach((_, i) => {
-            fail(i, "unpacker error");
-          });
-        }
+        // a push refused for every ref that needs the pack: the pack is not read, nothing stored
+        if (!commands.some((c, i) => c.new !== ZERO && status[i] === undefined)) {
+          await reader.close().catch(() => {});
+        } else
+          try {
+            await repo.objects.installPack(reader.rest());
+          } catch (e) {
+            unpack = oneLine(e instanceof Error ? e.message : String(e)).slice(0, 200);
+            commands.forEach((_, i) => {
+              fail(i, "unpacker error");
+            });
+          }
       }
 
       // --- checks: names, ids, current branch, branch tips are commits, connectivity, hooks
@@ -304,7 +317,19 @@ export function receivePackHandler(
         : [reportBytes];
       return new Uint8Array(await new Blob(out as BlobPart[]).arrayBuffer());
     };
-    const result = finish();
+    // an error after the head cannot change the status: it is answered as a report (unpack
+    // internal error, every ref refused) when report-status was asked, else the stream errors
+    const internal = async (e: unknown) => {
+      if (!requested.has("report-status")) throw e;
+      const msg = oneLine(e instanceof Error ? e.message : String(e)).slice(0, 200);
+      const report: Uint8Array[] = [pkt(`unpack internal error: ${msg}\n`)];
+      for (const c of commands) report.push(pkt(`ng ${c.ref} internal error\n`));
+      report.push(FLUSH);
+      const bytes = new Uint8Array(await new Blob(report as BlobPart[]).arrayBuffer());
+      const out = requested.has("side-band-64k") ? [...sideband(1, bytes), FLUSH] : [bytes];
+      return new Uint8Array(await new Blob(out as BlobPart[]).arrayBuffer());
+    };
+    const result = finish().catch(internal);
     result.catch(() => {}); // observed by the stream below
     return new Response(
       new ReadableStream<Uint8Array>({
