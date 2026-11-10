@@ -371,10 +371,18 @@ const rand = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => 
  * Write `source` to `<packDir>/tmp_pack_*`, index it, write `tmp_idx_*`, then rename the pack and,
  * last, the idx into place. On any error every temporary is removed and nothing is installed.
  */
+export interface InstallOptions {
+  /** Largest object (or delta) accepted, by its header. Default 1 GiB. */
+  maxObjectSize?: number;
+  /** Bytes of resolved bases kept while resolving deltas; evicted bases are re-derived. Default 32 MiB. */
+  baseCacheBytes?: number;
+}
+
 export async function installPack(
   files: FilesApi,
   packDir: string,
   source: AsyncIterable<Uint8Array>,
+  _opts: InstallOptions = {},
 ): Promise<InstallResult> {
   const dir = packDir.replace(/\/+$/, "");
   const tmpPack = `${dir}/tmp_pack_${rand()}`;
