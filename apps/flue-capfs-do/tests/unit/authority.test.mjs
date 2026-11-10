@@ -241,3 +241,47 @@ test("admin input is validated", async () => {
   assert.throws(() => auth.startSession("bob", "/p1"), /EINVAL/);
   assert.throws(() => auth.startSession("", ["/p1"]), /EINVAL/);
 });
+
+test("model: a right of the session, narrowed by attenuation, read fresh on revocation", async () => {
+  const { s, store, auth } = await setup();
+  const gateOf = (t) => new FsGate(store, auth, t);
+  const without = auth.startSession("bob", ["/proj"]).token;
+  await denied(gateOf(without).model("grant", true));
+  const { session, token } = auth.startSession("carol", ["/proj"], "readonly", true);
+  assert.deepEqual(await gateOf(token).model("grant", true), { turnsLeft: null, tokensLeft: null });
+  const t = (datalog) => Biscuit.fromBase64(token).attenuate(datalog).toBase64();
+  // Files-only attenuations keep the model; NO_MODEL drops it; a custom check can too.
+  await gateOf(t(attenuationBlock({ readOnly: true, scope: "/proj/x" }))).model("grant", true);
+  await denied(gateOf(t(attenuationBlock({ noModel: true }))).model("grant", true));
+  await denied(gateOf(t(`check if operation($o), ["read"].contains($o);`)).model("grant", true));
+  // A model token never opens files: the right is not a path.
+  await denied(gateOf(token).call("readFile", "/p1/a"));
+  auth.revoke(session);
+  await denied(gateOf(token).model("grant", true));
+  assert.ok(s);
+});
+
+test("model: a budget is charged per turn and tokens, and refuses a metered run once spent", async () => {
+  const { store, auth } = await setup();
+  const { session, token } = auth.startSession("dave", ["/proj"], "yolo", {
+    turns: 2,
+    tokens: 100,
+  });
+  const g = new FsGate(store, auth, token);
+  assert.deepEqual(await g.model("grant", true), { turnsLeft: 2, tokensLeft: 100 });
+  let r = await g.model("charge", true, { turns: 1, input: 30, output: 10 });
+  assert.deepEqual(r, { turnsLeft: 1, tokensLeft: 60, spent: false });
+  // Not metered (a caller's own token): recorded, not charged.
+  r = await g.model("charge", false, { turns: 1, input: 500, output: 0 });
+  assert.equal(r.tokensLeft, 60);
+  r = await g.model("charge", true, { turns: 1, input: 70, output: 0 });
+  assert.deepEqual(r, { turnsLeft: 0, tokensLeft: 0, spent: true });
+  await denied(g.model("grant", true));
+  assert.deepEqual(await g.model("grant", false), { turnsLeft: 0, tokensLeft: 0 });
+  const info = auth.sessionInfo(session).model;
+  assert.deepEqual(info.used, { turns: 3, input: 600, output: 10 });
+  auth.setModelBudget(session, { turns: 5 });
+  assert.deepEqual(await g.model("grant", true), { turnsLeft: 5, tokensLeft: null });
+  assert.throws(() => auth.setModelBudget(session, { turns: -1 }), /EINVAL/);
+  assert.throws(() => auth.startSession("e", ["/"], "yolo", "yes"), /EINVAL/);
+});

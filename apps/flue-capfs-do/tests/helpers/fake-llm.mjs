@@ -40,8 +40,16 @@ export function startFakeLlm(port = 0) {
     const text = (
       typeof content === "string" ? content : content.map((p) => p.text ?? "").join("")
     ).trim();
+    // Every reply reports 10 input and 5 output tokens (on its finishing chunk).
     const chunk = (delta, finish = null) =>
-      `data: ${JSON.stringify({ id: "c", object: "chat.completion.chunk", created: 0, model: json.model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+      `data: ${JSON.stringify({
+        id: "c",
+        object: "chat.completion.chunk",
+        created: 0,
+        model: json.model,
+        choices: [{ index: 0, delta, finish_reason: finish }],
+        ...(finish ? { usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } } : {}),
+      })}\n\n`;
     const toolCalls = (...calls) => [
       chunk({
         role: "assistant",

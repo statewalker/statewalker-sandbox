@@ -80,9 +80,10 @@ curl -H "$A" -H "$J" localhost:8787/api/w/acme/sessions/<session>/mode -d '{"mod
 | `GET /api/w/:ws/files` | admin | every file and its contents (audit) |
 | `GET /api/w/:ws/stats` | admin | `{authorizations, verifications}` of the Workspace instance |
 | `GET /api/w/:ws/sessions/:sid` | admin | `{session, user, mode, revokedAll, revokedIds}` |
-| `POST /api/w/:ws/sessions` `{user, rights, mode}` | admin | mints a session token → `{session, token}` |
+| `POST /api/w/:ws/sessions` `{user, rights, mode, model?}` | admin | mints a session token → `{session, token}`; `model`: `false` (default), `true` or a budget `{turns?, tokens?}` (see [Agent loop](#agent-loop)) |
 | `POST /api/w/:ws/sessions/:sid/mode` `{mode}` | admin | `yolo` · `prototyping` · `plan` · `readonly` |
 | `POST /api/w/:ws/sessions/:sid/revoke` `{rid?}` | admin | revokes one capability (and its descendants), or the whole session |
+| `POST /api/w/:ws/sessions/:sid/model` `{turns?, tokens?}` | admin | sets what is left of the session's model budget (absent: unlimited); `GET …/sessions/:sid` shows it and what was used |
 | `POST /api/agents/:name/run` `{workspace, token, transport, chain?, task}` | user | runs a task in the agent cell |
 | `GET /api/runtime` | any | `{workerLoader, toolIsolates, requireBundled, allowedBundles, userAgent, bootId}`; `toolIsolates` is `isolated`, `bundled-only`, `refused` or `none`; `allowedBundles` is a count; an invalid `TOOL_BUNDLE` shows `toolConfigError` and `refused` |
 
@@ -121,7 +122,7 @@ Tasks:
   [Agent loop](#agent-loop)).
 - `{kind: "revocationId"}` returns the revocation id of the capability the agent holds.
 
-`chain: [{scope?, readOnly?, datalog?}, …]` adds one hop per entry. Each hop attenuates the
+`chain: [{scope?, readOnly?, noModel?, datalog?, llmToken?}, …]` adds one hop per entry. Each hop attenuates the
 capability and hands it to a new sub-agent cell (`<name>/sub`, `<name>/sub/sub`, …), and the
 last hop runs the task. `datalog` is any Biscuit check, for example
 `check if resource($p), !$p.starts_with("/proj/secret/");`. It holds for recursive operations
@@ -143,7 +144,10 @@ the mode and the revocations are identical.
 
 For each path, the authorizer provides `operation(op)` (`read`, `list` or `write`) and
 `resource(path + "/")`, bound as parameters. The authority block holds `user`, `session` and
-`right("/p1/")` facts. The owner reads the session from the authority block and applies THAT
+`right("/p1/")` facts, and `model_use(true)` when the session may drive the model: the `agent`
+task asks for operation `model` (resource `/`), allowed in every mode by that fact. `readOnly`
+and scopes keep it (they are about files); `noModel` (`check if operation($o), $o != "model"`)
+or any check that names only file operations removes it. The owner reads the session from the authority block and applies THAT
 session's mode and revocations; attenuation blocks cannot change it. Mode policies are `allow` rules that only
 ever restrict what `right` allows. Attenuation blocks are `check`s. A scope also allows `list`
 on its ancestors, so `ls /` shows the delegated branch and nothing else.
@@ -342,6 +346,19 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
   `anthropic-messages`. The `LLM_API_KEY` secret is its key. Nothing in a request chooses the
   endpoint or sees the key; `/api/runtime` reports `llm: {model, api, host}` (or `null`, and
   the task fails with `ENOSYS`).
+- **The model is a right, and a session has a budget.** A session token carries the model
+  right only if the admin asked for it (`model: true`, or a budget `{turns?, tokens?}`); without
+  it the task fails with `EACCES`, and a hop can take it away (`noModel`). The Workspace cell
+  decides, as it decides file access, so modes, attenuation and revocation (also mid-run, at the
+  next turn) apply.
+  - Every turn is charged to the session in the Workspace cell: turns, and input plus output
+    tokens as the provider reports them. A run on the deployment's key stops after the turn
+    that spends the budget (`stopReason: "limit"`), and the next one is refused until the admin
+    sets the budget again (`POST …/sessions/:sid/model`). A turn can go past the token budget by
+    its own size.
+  - A run on the caller's own token (below, as the API key) is recorded but not charged; in
+    `callerTokenHeader` mode the deployment's key is the API key, so it is charged.
+  - The result carries `budget: {turnsLeft, tokensLeft}` (null: unlimited) for a charged run.
 - **Callers can bring their own model credential.** Send it in the `x-llm-token` header of
   `/api/agents/:name/run`. Each hop of the `chain` hands it down to the next, and the last hop's
   `agent` task uses it for its model calls. A hop can replace it from there on with `llmToken`
@@ -395,11 +412,9 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
   `HISTORY`), so the cases (`tests/agent-scenario.mjs`) check what the tools did, not what a
   model chose to say. `run-env.mjs` passes it to every runtime as `LLM` with a dummy key.
 - **Known exposure:**
-  - With `callerToken: "allow"` or `"forbid"`, any valid capability may run the model on the
-    deployment's key: there is no per-capability right to it and no rate limit, so a narrow
-    read-only token can still spend up to 50 turns of that budget per run. `"require"` makes
-    callers pay with their own token; otherwise gate the task on a fact in the session token and
-    meter it.
+  - A session with `model: true` has no budget: give sessions a budget, or `callerToken:
+    "require"` so callers pay with their own token. Budgets are per session, not per user or
+    deployment, and there is no rate limit.
   - The key is a secret only on workerd (`wrangler secret put LLM_API_KEY`). On cellb, `--var`
     makes it a plain var, and in the browser build it would be in `dist/cellb/wrangler.json`,
     which the page loads: anyone who can load the page can read it. The tests pass a dummy key

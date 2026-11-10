@@ -194,6 +194,14 @@ export async function runAgentLoop(
   const credentials = llmCredentials(config, env.LLM_API_KEY, llmToken);
   // Neither credential may come back in an error.
   const redact = redactor([credentials.apiKey, llmToken, env.LLM_API_KEY]);
+  // The run spends the deployment's budget unless the caller's own token is the API key.
+  const metered = !(llmToken !== undefined && !config.callerTokenHeader);
+  // The capability must carry the model right (decided in the Workspace cell, like a file
+  // access), and a metered run needs budget left.
+  const grant = (await cap.model("grant", metered)) as {
+    turnsLeft: number | null;
+    tokensLeft: number | null;
+  };
   const cwd = req.cwd ?? "/";
   const sandbox = await flueBash(
     () => new Bash({ fs: new CapFs(cap) as never, cwd, customCommands: [rgForFlue] }) as never,
@@ -231,12 +239,45 @@ export async function runAgentLoop(
       },
     } as never);
 
-    const maxTurns = Math.min(Math.max(Number(req.maxTurns) || 12, 1), 50);
+    const asked = Math.min(Math.max(Number(req.maxTurns) || 12, 1), 50);
+    const byBudget = metered && grant.turnsLeft !== null && grant.turnsLeft < asked;
+    const maxTurns = byBudget ? (grant.turnsLeft as number) : asked;
+    // Each turn is charged to the session in the Workspace cell, in order; a spent budget
+    // stops the run after the turn that spent it.
+    let charges: Promise<unknown> = Promise.resolve();
+    let budgetLeft: { turnsLeft: number | null; tokensLeft: number | null } = grant;
+    const charge = (
+      usage: { input?: number; output?: number } | undefined,
+      more: boolean,
+      counted: boolean,
+    ) => {
+      charges = charges
+        .then(() => cap.model("charge", metered, { turns: counted ? 1 : 0, ...usage }))
+        .then((r) => {
+          const left = r as { turnsLeft: number | null; tokensLeft: number | null; spent: boolean };
+          budgetLeft = { turnsLeft: left.turnsLeft, tokensLeft: left.tokensLeft };
+          if (left.spent && more && !stopped) {
+            stopped = "the session's model budget is spent";
+            agent.abort();
+          }
+        })
+        .catch(() => {
+          // The right was revoked (or the cell is gone): no more turns.
+          if (!stopped) {
+            stopped = "the model right was revoked";
+            agent.abort();
+          }
+        });
+    };
     const timeoutMs = Math.min(Math.max(Number(req.timeoutMs) || 120_000, 1000), 600_000);
     let turns = 0;
     let stopped: string | undefined;
     agent.subscribe((e: { type: string; message?: Message; toolResults?: unknown[] }) => {
-      if (e.type !== "turn_end" || stopped) return; // the turn cut short by the abort does not count
+      if (e.type !== "turn_end") return;
+      const more = e.message?.stopReason === "toolUse" || (e.toolResults?.length ?? 0) > 0;
+      // A turn's tokens are always charged; a turn the abort cut short is not a turn.
+      charge(e.message?.usage, more, e.message?.stopReason !== "aborted");
+      if (stopped) return; // the turn cut short by the abort does not count
       turns += 1;
       // Only a turn that asked for tools leads to another one: a run that ends on its last
       // allowed turn is not a limit stop.
@@ -244,7 +285,9 @@ export async function runAgentLoop(
         turns >= maxTurns &&
         (e.message?.stopReason === "toolUse" || (e.toolResults?.length ?? 0) > 0)
       ) {
-        stopped = `stopped after ${maxTurns} turns`;
+        stopped = byBudget
+          ? "the session's model budget is spent"
+          : `stopped after ${maxTurns} turns`;
         agent.abort();
       }
     });
@@ -271,6 +314,7 @@ export async function runAgentLoop(
       clearTimeout(timer);
       clearTimeout(hard);
     }
+    await charges;
 
     const messages = (agent.state.messages as unknown as Message[]).filter(
       (m) => m.role !== "system",
@@ -346,6 +390,8 @@ export async function runAgentLoop(
       turns,
       toolCalls: toolCalls.map(({ id: _id, done: _done, ...c }) => c),
       usage,
+      // What is left of the session's model budget (null: unlimited), when this run spent it.
+      budget: metered ? budgetLeft : undefined,
       session: req.session ? { name: String(req.session), messages: kept } : undefined,
     };
   }).catch((e: unknown) => {

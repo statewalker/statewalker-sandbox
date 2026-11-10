@@ -6,10 +6,12 @@
 //   admin  POST /api/w/:ws/seed                    { files: { path: content } }
 //   admin  GET  /api/w/:ws/files                   every file (audit)
 //   admin  GET  /api/w/:ws/stats                   authorizations / verifications
-//   admin  POST /api/w/:ws/sessions                { user, rights, mode } → { session, token }
+//   admin  POST /api/w/:ws/sessions                { user, rights, mode, model? } → { session, token }
+//          (model: false (default), true, or a budget { turns?, tokens? })
 //   admin  GET  /api/w/:ws/sessions/:sid
 //   admin  POST /api/w/:ws/sessions/:sid/mode      { mode }
 //   admin  POST /api/w/:ws/sessions/:sid/revoke    { rid? }
+//   admin  POST /api/w/:ws/sessions/:sid/model     { turns?, tokens? }  what is left (absent: unlimited)
 //   user   POST /api/agents/:name/run              { workspace, token, transport, chain?, task }
 //   any    GET  /api/runtime                       which runtime answers
 
@@ -151,6 +153,7 @@ export default {
               String(body.user ?? ""),
               (body.rights as string[]) ?? [],
               body.mode as string | undefined,
+              body.model as never,
             ),
           );
         }
@@ -159,6 +162,8 @@ export default {
           return ok(await ws.setMode(sid, String(body.mode)));
         if (what === "sessions" && sid && action === "revoke")
           return ok(await ws.revoke(sid, body.rid as string | undefined));
+        if (what === "sessions" && sid && action === "model")
+          return ok(await ws.setModelBudget(sid, body as never));
       }
 
       if (parts[1] === "agents" && parts[2] && parts[3] === "run") {

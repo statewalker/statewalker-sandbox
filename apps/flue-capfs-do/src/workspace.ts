@@ -8,7 +8,13 @@
 
 import { DurableObject, RpcTarget } from "cloudflare:workers";
 import { Biscuit } from "@statewalker/webrun-biscuit";
-import { Authority, FsGate, type FsRequest } from "./authority.ts";
+import {
+  Authority,
+  FsGate,
+  type FsRequest,
+  type ModelGrant,
+  type ModelUsage,
+} from "./authority.ts";
 import { normalise } from "./path.ts";
 import { SqlFs } from "./sql-fs.ts";
 
@@ -38,6 +44,10 @@ export class FilteredFiles extends RpcTarget {
   move(kind: "cp" | "mv", src: string, dst: string, opts?: unknown) {
     return this.#gate.move(kind, src, dst, opts);
   }
+  /** The model right and budget (the `agent` task; never given to tools). */
+  model(action: "grant" | "charge", metered: boolean, usage?: ModelUsage) {
+    return this.#gate.model(action, metered, usage);
+  }
   /** Delegation: one more Biscuit block; the new capability can only be narrower. */
   async attenuate(datalog: string): Promise<FilteredFiles> {
     const token = Biscuit.fromBase64(this.#token).attenuate(datalog).toBase64();
@@ -63,8 +73,8 @@ export class Workspace extends DurableObject {
   // ---- issuer / admin (called by the gateway after it authenticated the user) ----
 
   /** Mints the session token and creates the right directories (an admin act, unlike agent writes). */
-  async startSession(user: string, rights: string[], mode?: string) {
-    const started = this.#auth.startSession(user, rights, mode);
+  async startSession(user: string, rights: string[], mode?: string, model?: ModelGrant) {
+    const started = this.#auth.startSession(user, rights, mode, model);
     for (const r of rights) {
       const p = normalise(r);
       if (p !== "/" && !(await this.#store.exists(p)))
@@ -74,6 +84,9 @@ export class Workspace extends DurableObject {
   }
   setMode(session: string, mode: string) {
     return this.#auth.setMode(session, mode);
+  }
+  setModelBudget(session: string, limits: { turns?: number | null; tokens?: number | null }) {
+    return this.#auth.setModelBudget(session, limits);
   }
   revoke(session: string, rid?: string) {
     return this.#auth.revoke(session, rid);
