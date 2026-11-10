@@ -527,15 +527,18 @@ class Resolver {
   private sRefLo = new Int32Array(64); // first REF child position
   private readonly contents: (Uint8Array | null)[] = [];
   depth = 0;
+  /** the table was grown for the thin completion's appended bases (once per resolver) */
+  reserved = false;
   private evictFrom = 0; // levels below this hold no content
   private held = 0;
   loads = 0;
   constructor(
     private readonly t: Entries,
-    private readonly load: (i: number) => Promise<Uint8Array>,
+    /** how entries are read: rebound at every step (the window and the appended store are per step) */
+    public load: (i: number) => Promise<Uint8Array>,
     private readonly opts: { maxObjectSize: number; baseCacheBytes: number },
-    /** entries this resolver resolved, for the checkpoint log */
-    private readonly dirty: number[] = [],
+    /** entries this resolver resolved, for the checkpoint log (rebound at every step) */
+    public dirty: number[] = [],
   ) {
     const n = t.n;
     this.ofsHead = new Int32Array(n).fill(-1);
@@ -806,7 +809,9 @@ class Budget {
     const now = performance.now();
     if (this.used) this.maxUnitMs = Math.max(this.maxUnitMs, now - this.last);
     this.last = now;
-    if (this.used >= this.units || now >= this.deadline) return false;
+    // the first unit is always granted: a step whose setup (a cold replay, rebuilding the
+    // resolver) outlasts its budget must still progress, or the job livelocks
+    if (this.used > 0 && (this.used >= this.units || now >= this.deadline)) return false;
     this.used++;
     return true;
   }
@@ -921,57 +926,94 @@ async function* guardedPack(
 /** Appended entries are batched: written to `tmp_thin_*` files of about this size. */
 const BATCH = 2 ** 20;
 
+interface Segment {
+  start: number;
+  length: number;
+  path: string;
+  /** the batch still being filled: rewritten at every checkpoint until it is full */
+  open: boolean;
+}
+
 /**
- * Appended entries, in offset order, as segments of the logical pack: written files of up to
- * BATCH bytes (an entry larger than BATCH gets a file of its own) and one in-memory batch being
- * filled. A fetch needing hundreds of bases writes a few files, not one per base.
+ * Appended entries, in offset order, as segments of the logical pack: batches of up to BATCH bytes
+ * (an entry larger than BATCH gets a file of its own). The batch being filled lives in memory and
+ * is rewritten to its file at every checkpoint (`checkpoint()`) until it is full, so the files —
+ * and the segment list in the job state — grow with the appended bytes, not with the steps.
  */
 class AppendedStore {
-  readonly segments: { start: number; length: number; path: string | null }[] = [];
+  readonly segments: Segment[] = [];
   private buf: Uint8Array | null = null;
   private fill = 0;
   private k = 0;
-  constructor(
+  private constructor(
     private readonly files: FilesApi,
     private readonly prefix: string,
     public end: number,
-    segments: { start: number; length: number; path: string }[] = [],
-  ) {
-    this.segments.push(...segments);
-    this.k = segments.length;
+  ) {}
+  /** Restores the committed segments; the open batch is reloaded (up to its committed length). */
+  static async open(
+    files: FilesApi,
+    prefix: string,
+    end: number,
+    segments: Segment[],
+  ): Promise<AppendedStore> {
+    const st = new AppendedStore(files, prefix, end);
+    st.segments.push(...segments.map((g) => ({ ...g })));
+    st.k = segments.length;
+    const last = st.segments[st.segments.length - 1];
+    if (last?.open) {
+      st.buf = new Uint8Array(BATCH);
+      let o = 0;
+      for await (const c of files.read(last.path, { start: 0, length: last.length })) {
+        st.buf.set(c.subarray(0, last.length - o), o);
+        o += c.length;
+      }
+      if (o < last.length) throw new Error(`appended batch ${last.path} is torn`);
+      st.fill = last.length;
+    }
+    return st;
   }
   get paths(): string[] {
-    return this.segments.flatMap((g) => (g.path ? [g.path] : []));
+    return this.segments.map((g) => g.path);
   }
-  /** Every path this store may have written or be writing (for cleanup on failure). */
-  get allPaths(): string[] {
-    return Array.from({ length: this.k }, (_, j) => `${this.prefix}${j}`);
+  private get openSegment(): Segment | undefined {
+    const last = this.segments[this.segments.length - 1];
+    return last?.open ? last : undefined;
   }
   async add(parts: Uint8Array[], total: number): Promise<void> {
     if (total > BATCH) {
-      await this.flush();
+      await this.close();
       const path = `${this.prefix}${this.k++}`;
-      this.segments.push({ start: this.end, length: total, path });
+      this.segments.push({ start: this.end, length: total, path, open: false });
       await this.files.write(path, parts);
       this.end += total;
       return;
     }
-    if (this.fill + total > BATCH) await this.flush();
+    if (this.fill + total > BATCH) await this.close();
     if (!this.buf) this.buf = new Uint8Array(BATCH);
-    if (this.fill === 0) this.segments.push({ start: this.end, length: 0, path: null });
+    let g = this.openSegment;
+    if (!g) {
+      g = { start: this.end, length: 0, path: `${this.prefix}${this.k++}`, open: true };
+      this.segments.push(g);
+    }
     for (const x of parts) {
       this.buf.set(x, this.fill);
       this.fill += x.length;
     }
-    (this.segments[this.segments.length - 1] as { length: number }).length += total;
+    g.length += total;
     this.end += total;
   }
-  async flush(): Promise<void> {
-    if (this.fill === 0) return;
-    const g = this.segments[this.segments.length - 1] as { path: string | null };
-    const path = `${this.prefix}${this.k++}`;
-    await this.files.write(path, [(this.buf as Uint8Array).subarray(0, this.fill)]);
-    g.path = path;
+  /** Writes the open batch so far (it stays open). */
+  async checkpoint(): Promise<void> {
+    const g = this.openSegment;
+    if (g) await this.files.write(g.path, [(this.buf as Uint8Array).subarray(0, this.fill)]);
+  }
+  /** Writes and closes the open batch. */
+  async close(): Promise<void> {
+    const g = this.openSegment;
+    if (!g) return;
+    await this.checkpoint();
+    g.open = false;
     this.fill = 0;
   }
   release() {
@@ -986,10 +1028,10 @@ class AppendedStore {
       if ((this.segments[mid]?.start as number) <= start) lo = mid;
       else hi = mid - 1;
     }
-    const g = this.segments[lo] as { start: number; length: number; path: string | null };
+    const g = this.segments[lo] as Segment;
     if (start + length > g.start + g.length)
       throw new PackError(`appended entry at ${start} crosses its segment`);
-    if (g.path) return win.range(g.path, g.length, start - g.start, length);
+    if (!g.open) return win.range(g.path, g.length, start - g.start, length);
     const at = start - g.start;
     const view = (this.buf as Uint8Array).subarray(at, at + length);
     return (async function* () {
@@ -1027,7 +1069,10 @@ async function thinStep(
   budget: Budget,
   dirty: number[],
 ): Promise<boolean> {
-  t.reserve(resolver.distinctUnresolvedBases());
+  if (!resolver.reserved) {
+    t.reserve(resolver.distinctUnresolvedBases()); // an O(REF entries) scan: once, not per step
+    resolver.reserved = true;
+  }
   const misses = new Set(s.thin.misses);
   try {
     for (;;) {
@@ -1200,7 +1245,7 @@ interface JobState {
   thin: {
     i: number;
     misses: string[];
-    segments: { start: number; length: number; path: string }[];
+    segments: Segment[];
     end: number;
   };
   stats: { storageReads: number; loads: number; appended: number };
@@ -1256,6 +1301,15 @@ async function readAll(files: FilesApi, path: string): Promise<Uint8Array> {
     o += p.length;
   }
   return out;
+}
+
+async function newestGen(files: FilesApi, dir: string, id: string): Promise<number> {
+  const prefix = `tmp_job_${id}_state_`;
+  let g = 0; // no state yet: the job being started (generation 0)
+  for await (const e of files.list(dir))
+    if (e.kind === "file" && e.name.startsWith(prefix))
+      g = Math.max(g, Number(e.name.slice(prefix.length)));
+  return g;
 }
 
 /** The newest state generation whose content verifies (a torn write falls back to the previous). */
@@ -1362,6 +1416,10 @@ async function commit(
 ) {
   const paths = jobPaths(dir, s.id);
   const g = s.gen + 1;
+  // compare-before-write: the job must still be at the generation this step started from
+  const newest = await newestGen(files, dir, s.id);
+  if (newest !== s.gen)
+    throw new ConcurrentStepError(`job ${s.id} moved to generation ${newest} during this step`);
   const prevStack = s.stack;
   const prevGen = s.gen;
   const next: JobState = { ...s, gen: g, stack: -1 };
@@ -1394,8 +1452,14 @@ async function removeJobFiles(files: FilesApi, dir: string, id: string, strict =
   const names: string[] = [];
   for await (const e of files.list(dir))
     if (e.kind === "file" && e.name.startsWith("tmp_") && e.name.includes(id)) names.push(e.name);
-  const isState = (n: string) => n.includes("_state_");
-  names.sort((x, y) => Number(isState(x)) - Number(isState(y)));
+  // state files last, oldest generation first: the newest state goes last, so a failure part-way
+  // always leaves the newest state (the cleanup phase) to resume from — never an older one whose
+  // logs are already gone (listing order would put state_10 before state_9)
+  const gen = (n: string) => {
+    const m = /_state_(\d+)$/.exec(n);
+    return m ? Number(m[1]) : -1;
+  };
+  names.sort((x, y) => gen(x) - gen(y));
   for (const n of names) {
     if (strict) await files.remove(`${dir}/${n}`);
     else await files.remove(`${dir}/${n}`).catch(() => false);
@@ -1403,7 +1467,19 @@ async function removeJobFiles(files: FilesApi, dir: string, id: string, strict =
 }
 
 /** Tables this isolate still holds, by job: a warm step skips the replay. */
-const warm = new Map<string, { gen: number; t: Entries }>();
+const warm = new Map<string, { gen: number; t: Entries; resolver?: Resolver }>();
+/** At most this many jobs keep a warm table in an isolate (the least recently stepped go). */
+const WARM_JOBS = 4;
+/** Steps of a job in this isolate run one at a time (a DO's alarm and fetch can interleave). */
+const running = new Map<string, Promise<void>>();
+
+/**
+ * Another stepper committed this job's next generation while this step ran (in another isolate:
+ * within one isolate steps are serialized). The step's work is discarded; the job is intact.
+ */
+export class ConcurrentStepError extends Error {
+  override name = "ConcurrentStepError";
+}
 
 function newState(id: string, packLen: number, opts: InstallOptions): JobState {
   return {
@@ -1516,7 +1592,13 @@ async function advance(
   dirty: number[],
   externalBase: ExternalBase | undefined,
   persist: boolean,
-): Promise<{ result?: InstallResult; stack: Uint8Array | null; reads: number }> {
+  warmResolver?: Resolver,
+): Promise<{
+  result?: InstallResult;
+  stack: Uint8Array | null;
+  reads: number;
+  resolver?: Resolver;
+}> {
   const paths = jobPaths(dir, s.id);
   const win = new WindowReader(files, s.opts.windowBytes);
   let store: AppendedStore | undefined;
@@ -1524,7 +1606,7 @@ async function advance(
   const dataEnd = s.packLen - 20;
   const getResolver = async () => {
     if (resolver) return resolver;
-    store = new AppendedStore(files, paths.thin, s.thin.end || dataEnd, s.thin.segments);
+    store = await AppendedStore.open(files, paths.thin, s.thin.end || dataEnd, s.thin.segments);
     const st = store;
     const read: RangeRead = (start, length) =>
       start < dataEnd
@@ -1535,9 +1617,17 @@ async function advance(
       return i < s.count ? dataEnd : st.end;
     };
     const pool = createInflaterPool();
+    const load = (i: number) => loadEntry(read, t, i, endOf(i), pool.acquire());
+    if (warmResolver) {
+      // the same isolate ran the previous step: keep its stack and cached bases
+      resolver = warmResolver;
+      resolver.load = load;
+      resolver.dirty = dirty;
+      return resolver;
+    }
     resolver = new Resolver(
       t,
-      (i) => loadEntry(read, t, i, endOf(i), pool.acquire()),
+      load,
       { maxObjectSize: s.opts.maxObjectSize, baseCacheBytes: s.opts.baseCacheBytes },
       dirty,
     );
@@ -1569,13 +1659,11 @@ async function advance(
           budget,
           dirty,
         );
-        await (store as AppendedStore).flush();
-        s.thin.segments = (store as AppendedStore).segments.map((g) => ({
-          start: g.start,
-          length: g.length,
-          path: g.path as string,
-        }));
-        s.thin.end = (store as AppendedStore).end;
+        const st = store as AppendedStore;
+        if (finished) await st.close();
+        else await st.checkpoint();
+        s.thin.segments = st.segments.map((g) => ({ ...g }));
+        s.thin.end = st.end;
         if (!finished) break;
         s.phase = "finish";
         continue;
@@ -1643,7 +1731,7 @@ async function advance(
       return { result: await cleanup(files, dir, s, t, persist), stack: null, reads: 0 };
     }
     if (resolver) s.stats.loads = resolver.loads;
-    return { stack: snapshot(), reads: win.reads };
+    return { stack: snapshot(), reads: win.reads, resolver };
   } finally {
     win.release();
     store?.release();
@@ -1663,22 +1751,56 @@ export async function stepIndexJob(
 ): Promise<StepResult> {
   const dir = packDir.replace(/\/+$/, "");
   const key = `${dir}|${jobId}`;
+  const before = running.get(key);
+  let release = () => {};
+  const mine = new Promise<void>((r) => {
+    release = r;
+  });
+  const chained = (before ?? Promise.resolve()).then(() => mine);
+  running.set(key, chained);
+  await before;
+  try {
+    return await stepLocked(files, dir, key, jobId, opts);
+  } finally {
+    release();
+    if (running.get(key) === chained) running.delete(key);
+  }
+}
+
+async function stepLocked(
+  files: FilesApi,
+  dir: string,
+  key: string,
+  jobId: string,
+  opts: StepOptions,
+): Promise<StepResult> {
   const s = await loadState(files, dir, jobId);
   const cached = opts.cold ? undefined : warm.get(key);
   warm.delete(key); // re-added only after a successful commit
+  const fresh = cached && cached.gen === s.gen ? cached : undefined;
   try {
     if (s.phase === "cleanup") {
       const result = await cleanup(files, dir, s, undefined, true);
       return { done: true, result, units: 0, workMs: 0, maxUnitMs: 0 };
     }
-    const t = cached && cached.gen === s.gen ? cached.t : await replay(files, dir, s);
+    const t = fresh ? fresh.t : await replay(files, dir, s);
     // the budget covers the step's work, not the replay of a cold resume
     const budget = new Budget(
       opts.units ?? Number.POSITIVE_INFINITY,
       opts.budgetMs === undefined ? Number.POSITIVE_INFINITY : performance.now() + opts.budgetMs,
     );
     const dirty: number[] = [];
-    const out = await advance(files, dir, s, t, budget, dirty, opts.externalBase, true);
+    const out = await advance(
+      files,
+      dir,
+      s,
+      t,
+      budget,
+      dirty,
+      opts.externalBase,
+      true,
+      fresh?.resolver,
+    );
     const workMs = performance.now() - budget.started;
     if (out.result)
       return {
@@ -1690,7 +1812,8 @@ export async function stepIndexJob(
       };
     s.stats.storageReads += out.reads;
     await commit(files, dir, s, t, dirty, out.stack);
-    warm.set(key, { gen: s.gen, t });
+    warm.set(key, { gen: s.gen, t, resolver: out.resolver });
+    while (warm.size > WARM_JOBS) warm.delete(warm.keys().next().value as string);
     return { done: false, phase: s.phase, units: budget.used, workMs, maxUnitMs: budget.maxUnitMs };
   } catch (e) {
     if (e instanceof PackError) await removeJobFiles(files, dir, jobId);
