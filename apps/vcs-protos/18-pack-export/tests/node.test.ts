@@ -101,6 +101,20 @@ describe("R2 incremental exports", () => {
     git(dst2, ["fsck", "--full"]);
     expect(await log(repo2, "refs/heads/main")).toEqual(await log(repo, head));
   });
+  it("a side branch forked below the have and merged above it: its old ancestry is excluded", async () => {
+    const src = repoWithHistory(20);
+    const have = git(src, ["rev-parse", "HEAD~2"]).toString().trim();
+    git(src, ["checkout", "-q", "-b", "side", "HEAD~8"]);
+    writeFileSync(join(src, "side.txt"), "side\n");
+    git(src, ["add", "side.txt"]);
+    git(src, ["commit", "-q", "-m", "side"]);
+    git(src, ["checkout", "-q", "main"]);
+    git(src, ["merge", "-q", "--no-ff", "-m", "merge side", "side"]);
+    const repo = await open(src);
+    const head = git(src, ["rev-parse", "HEAD"]).toString().trim();
+    const list = await listObjects(repo, [head], [have]);
+    expect(list.map((o) => o.oid).sort()).toEqual(revList(src, ["HEAD", `^${have}`]));
+  });
   it("an annotated tag among the wants is sent with what it points at", async () => {
     const src = repoWithHistory(6);
     git(src, ["tag", "-a", "v1", "-m", "release", "HEAD~1"]);
@@ -199,6 +213,8 @@ describe("R5 backpressure and cancel", () => {
     const s = spied(repo);
     const head = git(src, ["rev-parse", "HEAD"]).toString().trim();
     const list = await listObjects(repo, [head], []);
+    s.opened = 0; // count what writing opens, not the walk
+    s.released = 0;
     const it = writePack(repo, list)[Symbol.asyncIterator]();
     await it.next(); // the header
     await new Promise((r) => setTimeout(r, 50));
@@ -215,15 +231,22 @@ describe("R5 backpressure and cancel", () => {
     const s = spied(repo);
     const head = git(src, ["rev-parse", "HEAD"]).toString().trim();
     const ac = new AbortController();
+    const list = await listObjects(repo, [head], []);
+    s.opened = 0; // count what writing opens, not the walk
+    s.released = 0;
     let chunksSeen = 0;
+    let openedAtAbort = 0;
     const err = await (async () => {
-      for await (const _ of exportPack(repo, [head], [], { signal: ac.signal })) {
-        if (++chunksSeen === 10) ac.abort();
+      for await (const _ of writePack(repo, list, { signal: ac.signal })) {
+        if (++chunksSeen === 10) {
+          ac.abort();
+          openedAtAbort = s.opened;
+        }
       }
     })().catch((e) => e);
     expect(err?.name).toBe("AbortError");
-    const openedAtAbort = s.opened;
-    expect(openedAtAbort).toBeLessThan((await listObjects(repo, [head], [])).length);
+    expect(s.opened).toBe(openedAtAbort); // nothing opened after the abort
+    expect(s.opened).toBeLessThan(list.length);
     expect(s.released).toBe(s.opened);
   });
 });

@@ -24,7 +24,7 @@ then tests written first (red), then the implementation (green), then findings.
 | `15-resumable-index` | X6b2 — **index-pack as a resumable job: cold steps, crash at any storage op, DO restarted per step → the one-shot pack and .idx** | Can index-pack run in bounded steps that survive the eviction of a Durable Object? |
 | `16-pack-to-sql` | X6b3 — **keep packs as the store of record; exploding to rows is git-identical, crash-safe, DO-resumable, reads text 3–7× faster for 3–34× the bytes** | Should the native SQL store explode received packs into object rows, or keep them as packs? |
 | `17-repository` | X16a — **one command layer over git files and one SQL Db: same ids (git's), native-git interop, DO** | Can one repository API run unchanged over git files and over a single SQL database? |
-| `18-pack-export` | X6c — open | Can a repository export the pack git expects, streaming, with backpressure and cancel? |
+| `18-pack-export` | X6c — **git's object set, packs git accepts from both backends and a DO, streaming, backpressure, cancel; whole objects 3.8× git's size** | Can a repository export the pack git expects, streaming, with backpressure and cancel? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.
