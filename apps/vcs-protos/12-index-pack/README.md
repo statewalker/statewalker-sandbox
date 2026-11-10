@@ -147,6 +147,10 @@ All re-run against the final code. (M4 and M6 were not used as numbers.)
 | N9 re-derived bases not kept in their frames | R4b comb (70,751 reads against a bound of 6,000) |
 | N8 read not released when parsing fails | not asserted: the mutated run hung on the open file handle (Node also warns "closing file descriptor on garbage collection") |
 
+## Later changes
+
+- X6b1 (#66): the R4b two-level-tree test asserts process memory < 48 MiB instead of < 24 MiB. Its readings vary with what ran before in the same run (+8 MiB alone, +24–42 MiB in the full suite, on this module and X6b1's alike); the base-read counts remain the deterministic check.
+
 ## Corrections
 
 | Earlier belief | What the prototype showed |
