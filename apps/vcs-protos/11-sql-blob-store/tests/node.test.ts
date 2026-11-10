@@ -118,6 +118,16 @@ describe("R3 atomicity", () => {
       }
       await after.sweepStaged?.(0);
       expect(await after.sweepStaged?.(0), `crash at ${k}: temporaries left`).toBe(0);
+      // the store stays usable: putting the same blob again succeeds and reads back whole
+      await after.put(
+        "obj",
+        (async function* () {
+          yield data;
+        })(),
+      );
+      const back: Uint8Array[] = [];
+      for await (const c of after.get("obj")) back.push(c);
+      expect(Buffer.concat(back).equals(Buffer.from(data)), `crash at ${k}: retry`).toBe(true);
       outcomes.add(has ? "whole" : "absent");
       await real.close();
     }

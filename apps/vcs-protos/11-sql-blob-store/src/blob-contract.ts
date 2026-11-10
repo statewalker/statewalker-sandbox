@@ -191,11 +191,15 @@ export async function runBlobContract(
       }
       const a = await rejects(s.putStaged(failing(), () => "x1"));
       const b = await rejects(
-        s.putStaged(streamOf("abc"), () => {
+        s.putStaged(streamOf(pattern(chunkSize * 2 + 1)), () => {
           throw new Error("bad id");
         }),
       );
-      return a && b && (await ids(s)).length === 0 && !(await s.has("x1"));
+      const left = (await s.sweepStaged?.(0)) ?? 0;
+      return (
+        (a && b && left === 0 && (await ids(s)).length === 0 && !(await s.has("x1"))) ||
+        `leftovers ${left}`
+      );
     },
   );
   await check("putStaged: an existing blob wins, the staged copy is dropped", async (s) => {
@@ -216,7 +220,9 @@ export async function runBlobContract(
       }
       void s.putStaged(stuck(), () => "never").catch(() => {});
       await new Promise((r) => setTimeout(r, 50));
+      const tooYoung = (await s.sweepStaged?.(3_600_000)) ?? -1; // younger than an hour: kept
       const removed = (await s.sweepStaged?.(0)) ?? -1;
+      if (tooYoung !== 0) return `swept a fresh temporary (${tooYoung})`;
       return (
         (removed >= 1 &&
           (await ids(s)).join() === "keep" &&
