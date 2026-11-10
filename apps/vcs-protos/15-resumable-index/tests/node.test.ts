@@ -565,10 +565,10 @@ describe("review cases (#70)", () => {
     }
   }, 300_000);
 
-  /** 20 000 blobs, each with a REF_DELTA child: resolve-phase setup is real work. */
-  const refHeavy = () => {
+  /** `n` blobs, each with a REF_DELTA child: resolve-phase setup is real work. */
+  const refHeavy = (n: number) => {
     const e: CraftEntry[] = [];
-    for (let i = 0; i < 20_000; i++) {
+    for (let i = 0; i < n; i++) {
       const data = enc.encode(`blob ${i} ${"y".repeat(40)}`);
       e.push({ kind: 3, data });
       const t = enc.encode(String(i).padStart(10, "0"));
@@ -582,7 +582,8 @@ describe("review cases (#70)", () => {
   };
   for (const cold of [false, true]) {
     it(`B3: budgetMs 2 (${cold ? "cold" : "warm"}): every step makes progress and the job completes`, async () => {
-      const pack = refHeavy();
+      // cold steps replay the whole log first: a smaller pack keeps a 1-unit-per-step job short
+      const pack = refHeavy(cold ? 1_500 : 20_000);
       const ref = await reference(pack);
       const { steps, result } = await runJob(new MemFilesApi(), pack, Number.POSITIVE_INFINITY, {
         budgetMs: 2,

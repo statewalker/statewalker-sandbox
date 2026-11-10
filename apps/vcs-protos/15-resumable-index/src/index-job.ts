@@ -1329,7 +1329,7 @@ async function loadState(files: FilesApi, dir: string, id: string): Promise<JobS
     const st = JSON.parse(json) as JobState;
     if (st.v === 1 && st.id === id && st.gen === g) return st;
   }
-  throw new PackError(`no index job ${id} in ${dir}`);
+  throw new NoSuchJobError(`no index job ${id} in ${dir}`);
 }
 
 function encodeRecords(t: Entries, indices: number[]): Uint8Array {
@@ -1480,6 +1480,14 @@ const running = new Map<string, Promise<void>>();
 export class ConcurrentStepError extends Error {
   override name = "ConcurrentStepError";
 }
+
+/** No state for this job: it never existed, or it finished (its files are removed). */
+export class NoSuchJobError extends Error {
+  override name = "NoSuchJobError";
+}
+
+/** Results of jobs this isolate finished: a step queued behind the finishing one gets the result. */
+const finished = new Map<string, StepResult>();
 
 function newState(id: string, packLen: number, opts: InstallOptions): JobState {
   return {
@@ -1767,6 +1775,12 @@ export async function stepIndexJob(
   }
 }
 
+function remember(key: string, r: StepResult): StepResult {
+  finished.set(key, r);
+  while (finished.size > WARM_JOBS) finished.delete(finished.keys().next().value as string);
+  return r;
+}
+
 async function stepLocked(
   files: FilesApi,
   dir: string,
@@ -1774,6 +1788,8 @@ async function stepLocked(
   jobId: string,
   opts: StepOptions,
 ): Promise<StepResult> {
+  const done = finished.get(key);
+  if (done) return done;
   const s = await loadState(files, dir, jobId);
   const cached = opts.cold ? undefined : warm.get(key);
   warm.delete(key); // re-added only after a successful commit
@@ -1781,7 +1797,7 @@ async function stepLocked(
   try {
     if (s.phase === "cleanup") {
       const result = await cleanup(files, dir, s, undefined, true);
-      return { done: true, result, units: 0, workMs: 0, maxUnitMs: 0 };
+      return remember(key, { done: true, result, units: 0, workMs: 0, maxUnitMs: 0 });
     }
     const t = fresh ? fresh.t : await replay(files, dir, s);
     // the budget covers the step's work, not the replay of a cold resume
@@ -1803,13 +1819,13 @@ async function stepLocked(
     );
     const workMs = performance.now() - budget.started;
     if (out.result)
-      return {
+      return remember(key, {
         done: true,
         result: out.result,
         units: budget.used,
         workMs,
         maxUnitMs: budget.maxUnitMs,
-      };
+      });
     s.stats.storageReads += out.reads;
     await commit(files, dir, s, t, dirty, out.stack);
     warm.set(key, { gen: s.gen, t, resolver: out.resolver });

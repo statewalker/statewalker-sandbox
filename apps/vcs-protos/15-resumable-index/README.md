@@ -66,6 +66,26 @@ against it (R7).
   empty files, they rebuilt zeroed entries and a wrong `.idx`. Segment lengths are now checked.
 - A malformed pack (PackError) ends the job and removes its temporaries; any other failure leaves
   it at its last checkpoint.
+- **One stepper at a time** (found by the review: two concurrent steppers wedged 24 of 200 jobs).
+  Steps of a job in one isolate are serialized — a DO's alarm and fetch interleave at I/O — and a
+  commit refuses (`ConcurrentStepError`, the job intact) when the newest generation moved during
+  the step. Across isolates or processes that check narrows the race but is not a lock (FilesApi
+  has no compare-and-swap): run one stepper per job there (one DO per job, or X5's ref
+  compare-and-set as a lease).
+- **Every step makes progress**: the first unit is always granted, so a step whose setup outlasts
+  `budgetMs` still advances (the review found 218 steps doing nothing with an 8 ms budget).
+- **Warm steps keep the resolver** — its stack and cached bases — besides the table (at most 4
+  jobs per isolate). A cold step replays the log (O(entries)), rebuilds the resolver's indexes
+  (O(n + REF log REF)) and re-derives the bases of the stack in progress (O(depth) patches): with
+  many small cold steps a job is O(n × steps); the deep comb shows it (below).
+- **Thin completion**: the open batch of appended entries is rewritten in place at each
+  checkpoint until it is full, so batch files and the segment list grow with the appended bytes
+  (one per MiB), not with the steps; the state also lists the missing base ids. The review found
+  one file and one segment per step (300 bases in 1-unit steps: 300 files, a 20 KB state).
+- **Not bounded by the budget**: one unit can be large (a 1 GiB entry, or the re-derivation of a
+  deep stack on a cold resume), and the finish phase (re-hashing a completed thin pack, sorting
+  the idx) is one step of O(pack) work. In production Workers the clock advances only on I/O, so
+  `budgetMs` may not stop a CPU-bound step: budget by `units` there (Miniflare does not show this).
 
 ## Verified
 
