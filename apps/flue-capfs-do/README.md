@@ -202,23 +202,33 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
 ```
 
 - **The bundler Worker** (`src/bundler/program.ts`) is built by `pnpm build:bundler` into
-  `src/bundler/program.gen.js` (generated, not committed; the test runners, `dev:*` scripts and
-  the browser build run it). The main Worker embeds its code (about 280 KB) but not
+  `src/bundler/program.gen.js` (generated, not committed; the test runners, `dev:*`, `deploy`
+  and the browser build run it, so a deploy never ships a stale bundler). The main Worker embeds its code (about 280 KB) but not
   `esbuild.wasm` (about 14 MB). The Agent fetches that once per isolate from the deployment's
   **`BUNDLER_WASM_URL`**, checks it against the SHA-256 pinned at build, and loads both into a
-  Worker Loader isolate of their own (no bindings, no network), which it keeps between calls.
-  A call that fails other than by its request, or takes over 60 s, retires that isolate.
+  Worker Loader isolate of their own (no bindings, no outbound network), which it keeps between
+  calls. Builds run one at a time per Agent isolate. A call that fails other than by its request,
+  or takes over 60 s, retires that isolate; a retired isolate cannot be stopped from here (the
+  Worker Loader has no terminate) and runs until its runtime ends it, so after 3 retirements an
+  Agent isolate stops offering bundling (`EAGAIN`) until it restarts. The wasm fetch has a 30 s
+  timeout and a 32 MB cap; the URL must allow CORS for a browser host.
 - **Opt-in:** without `BUNDLER_WASM_URL` the tasks answer `ENOSYS`, and `/api/runtime` reports
   `bundler: false`. No cell compiles esbuild unless a tool is bundled, and the deploy stays the
   size it was. Point the URL at the file in `node_modules/esbuild-wasm/esbuild.wasm` served by
   the deployment (or a CDN copy of that exact version: the hash decides).
+- **On cellb's Node host** the bundler isolate is a worker thread that sees the host's files and
+  network, as tool isolates do there (`globalOutbound: null` is not a sandbox on that host). The
+  bundler is trusted code that only parses its input (no `eval`, no code from a request runs), so
+  untrusted sources meet esbuild's and acorn's parsers, not the host; the risk left is a bug in
+  those parsers.
 - **Why not a second script behind a service binding:** cellb binds services only to its own
   script's entrypoints, so that would not run on cellb. The Worker Loader is on every runtime
   here (workerd, cellb in Node and in a browser, celld), and keeps esbuild's memory and crashes
   out of the Agent cell.
 - **Same bundle as on a build machine:** esbuild-wasm and esbuild are the same version (pinned),
-  and the bundler is built with Node's builtin export names, so its bundle has the same hash as
-  `bundleTool` on Node; a hash approved in `allowedBundles` admits both (the scenario suite
+  and the bundler is built with Node's builtin export names (those of the Node that ran
+  `build:bundler`: a tool importing `* as` a denied builtin hashes the same only on the same Node
+  major), so its bundle has the same hash as `bundleTool` on Node; a hash approved in `allowedBundles` admits both (the scenario suite
   checks this, and on `cellb-bundled-only` runs the deployment's bundle under the approved hash).
 - **Nothing is trusted more for being built here:** the result is a bundle like any other, so
   the Agent runs the acceptance check and the deployment's policy on it; where no tool may run
