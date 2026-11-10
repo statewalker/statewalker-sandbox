@@ -1,6 +1,6 @@
 # 16 — Should the native SQL store explode received packs into object rows, or keep them as packs?
 
-Plan id **X6** (pack ingest/export), slice **X6b3: packs into the native SQL store**. Status: **answered — keep the pack as the store of record; exploding works (git-identical, crash-safe, resumable in a DO) and reads 2.4–6.5× faster for 3× the bytes and ~4× the ingest: an optional read-optimised mode, not the default.**
+Plan id **X6** (pack ingest/export), slice **X6b3: packs into the native SQL store**. Status: **answered — keep the pack as the store of record; exploding works (git-identical, crash-safe, resumable in a DO) and reads text 3–7× faster, but costs 3× (text) to 34× (versioned binaries) the bytes and 5–10× the ingest: an optional read-optimised mode, not the default.**
 
 ## Question
 
@@ -37,48 +37,70 @@ Durable Object. The comparison is decided by the measurements, recorded either w
 ## Answer
 
 **Exploding works; keeping the pack wins as the default.** `explodeStep(db, reader, { units,
-batch })` writes the objects of an installed pack (read by X6r) into X3b's tables in X4's loose
-format, many per transaction with the progress row in the same transaction; X4's
-`gitObjects(sqlBlobStore(db))` reads them back. Every object of X6a's four native-git packs equals
-`git cat-file` and verifies; a Db failing at any statement, then resumed, ends with every object
-whole; a Durable Object restarted between steps explodes X6a's fixture pack completely.
+batch, batchBytes })` writes the objects of an installed pack (read by X6r, verified) into X3b's
+tables in X4's loose format, many per transaction with the progress row in the same transaction;
+X4's `gitObjects(sqlBlobStore(db))` reads them back. Every object of X6a's four native-git packs
+equals `git cat-file` and verifies; a Db failing at any statement, then resumed, ends with every
+object whole; a Durable Object restarted between steps — one step dying mid-batch, many objects on
+X3b's staged path — explodes X6a's fixture pack completely.
 
-Measured on node:sqlite, one file database each (1 050 objects, 13.8 MB of content, a 330 KB pack):
+Measured on node:sqlite, a file database each, two runs (ranges); the explode reads the installed
+pack from SqliteFilesApi, as after a real ingest; "cold" random reads use a fresh pack reader,
+"warm" ones follow a read of every object (X6r's 16 MiB base cache full):
 
-| | ingest | database | read every object | 1 000 random reads |
-|---|---|---|---|---|
-| pack + idx in SqliteFilesApi (X6b1 + X6r) | 207 ms (install) | 384 KB | 890 ms | 265 ms |
-| exploded rows (X3b + X4) | + 620 ms (explode, after the install) | 1 237 KB | 136 ms | 109 ms |
+| data | store | ingest | database | read all | 1 000 random |
+|---|---|---|---|---|---|
+| text history: 1 050 objects, 13.8 MB, pack 331 KB | pack + idx | 224–312 ms (install) | 393 KB | 802–846 ms | 457–646 ms cold, 241–250 ms warm |
+| | exploded rows | + 1 473–1 687 ms | 1 233 KB (3.1×) | 118–145 ms | 116–136 ms |
+| versioned binary: 40 × 256 KiB, 1-byte edits (120 objects, 10.5 MB, pack 272 KB) | pack + idx | 94–104 ms | 307 KB | 98–115 ms | 408–463 ms |
+| | exploded rows | + 847–989 ms | 10 568 KB (34×) | 93–101 ms | 492–774 ms |
 
-- **Bytes**: exploded objects are zlib'd whole, without git's deltas: 3.2× the pack here (text
-  history with many similar versions; incompressible blobs would differ less). The pack is what
-  git serves and fetches, so keeping it costs nothing extra at push/fetch time (X6c).
-- **Reads**: the pack's delta chains cost a patch per level (X6r's base cache helps sequential
-  reads); exploded rows are one row and one inflate per object — 6.5× faster to read everything,
-  2.4× on random reads.
-- **Ingest**: exploding is a second pass after installing (read, re-deflate, insert): ~4× the
-  install. Batching matters only up to tens of objects per transaction: 1 per transaction took
-  1 127 ms, 64 took 210 ms, 1 024 took 223 ms — beyond that the cost is reading and deflating.
+- **Bytes**: exploded objects are zlib'd whole, without git's deltas. Repetitive text: 3.1× the
+  pack; versioned binaries (each version a near copy): **34×**. (The first version of this README
+  said incompressible blobs "would differ less" — true only for unique blobs, false for versions:
+  the review.)
+- **Reads**: on text, rows read everything 6× faster and random objects 3.4–5.6× faster than a
+  cold pack reader (1.8–2× than a warm one: the first version measured only warm, "2.4×"). On
+  versioned binaries the pack is as fast or faster: few, large objects; a delta is cheap next to
+  inflating 256 KiB.
+- **Ingest**: exploding is a second pass after installing (read, verify, re-deflate, insert):
+  5–10× the install (the first version read the pack from memory and said "~4×").
 - **Decision**: the native SQL store keeps received packs (+ idx) as its store of record, as git
-  does; exploding is an optional, resumable read-optimised mode for hot repositories (or a
-  materialised cache of recent objects). A delta-aware row layout (Fossil's) would close the
-  bytes gap; it is a later slice if storage becomes the constraint.
+  does — compact on every kind of data, and what git fetches and pushes (X6c). Exploding remains an
+  optional, resumable read-optimised mode for text-heavy hot repositories (or a cache of recent
+  objects). A delta-aware row layout (Fossil's) would close the bytes gap: a later slice only if
+  read time on packs becomes the constraint.
+- **Batching**: one object per transaction against a handful is the difference (median of three:
+  964–1 131 ms vs 238–269 ms), but past ~64 objects a transaction reading and deflating dominate,
+  not commits: the criterion's 5× is **not met as written** (4.75–5.05× in the runs; the review
+  saw 3.9× without a warm-up). The test asserts the transaction counts and a 3× bound.
+- **Bounded steps**: a batch is committed at `batch` objects or `batchBytes` (8 MiB) of compressed
+  data, whichever comes first (the review found up to 1 GiB per batch: 120 incompressible ~1 MB
+  objects now add +8.7 MiB, +114.6 MiB before); a large object is streamed once into X3b's staged
+  put (it was resolved twice), and skipped when already stored; the pack's ids are built once per
+  reader. One unit is still one object: a 64 MiB delta-resolved object is materialised by X6r.
 - **Crash safety**: small objects go inline in batches with the progress row in the same
   transaction; an object larger than one chunk goes through X3b's staged put (its own
-  transaction) and the progress advances after it — a crash in between re-puts it, which X3b
-  ignores (existing id wins). The progress never runs ahead of the objects.
+  transaction) and the progress advances after it — a crash in between finds it stored and skips
+  it. The progress only moves forward (`max`), never ahead of the objects. Inline objects are read
+  with `verify`: a pack changed at rest is refused instead of leaving wrong bytes under an id that
+  "existing wins" would keep forever. `batch` and `units` below 1 are refused (`batch: 0` spun the
+  isolate).
 
 ## Verified
 
-All 9 Node tests pass (`pnpm test 16-pack-to-sql`). The tests were written alongside the implementation; the mutation table stands in for the red runs.
+All 15 Node tests pass (`pnpm test 16-pack-to-sql`). The first tests were written alongside the
+implementation; the review's findings got red tests first (the byte-budget test was first red for
+the wrong reason — X6a's `buildPack` cannot hold 120 MB — and was rebuilt before its red run).
 
 | # | Result |
 |---|---|
 | R1 | OFS, REF, `gc --aggressive`, a 4 MiB blob with a delta child: every object exploded reads back with git's type, size and content, verified; `list` yields exactly git's ids. |
-| R2 | 87 KB pack (60 commits): 1 object per transaction 1 127 ms, 64: 210 ms, 1 024: 223 ms on a file database (5.05×: the criterion's 5× is met narrowly, because past ~64 objects reading and deflating dominate, not commits). |
-| R3 | The 4 MiB-blob pack (small objects and one staged object) exploded in steps of 5 objects, batches of 4, with a Db failing at each of its statements in turn, then resumed: every object present and verified each time. The progress row never names an object that is not stored (steps of 37). |
+| R2 | **Not met as written** (above): one transaction per object vs ≤ 2 for the pack, median times 964–1 131 ms vs 238–269 ms (4.75–5.05×). |
+| R3 | The 4 MiB-blob pack (small objects and one staged object) exploded in steps of 5 objects, batches of 4, with a Db failing at each of its statements in turn: after each failure every object the progress covers is stored; resumed, every object present and verified. |
 | R4 | The table above. |
-| R5 | X6a's fixture pack installed (X6b1) and exploded in a Durable Object in steps of 40 objects, the runtime restarted for every request: every object verifies. |
+| R5 | X6a's fixture pack installed (X6b1) and exploded in a Durable Object with 4 KiB chunks (objects on the staged path) in steps of 40, the runtime restarted for every request, one step dying mid-batch: every object verifies. |
+| Review | `batch`/`units` < 1 refused; a byte-bounded batch (+8.7 MiB for 120 × 1 MB); an inline object changed at rest refused, not stored; every object resolved once; a second explode stages no chunk rows. |
 
 ### Mutation check
 
@@ -86,7 +108,7 @@ All 9 Node tests pass (`pnpm test 16-pack-to-sql`). The tests were written along
 |---|---|
 | E1 progress set one past the batch | R1, R3 |
 | E2 large object: progress written before its put | R3 (a crash between them loses the object) |
-| E3 batching ignored | R2 |
+| E3 batching ignored | R2 (transaction count) |
 
 ## Interfaces produced
 
@@ -108,5 +130,5 @@ function explodedObjects(db: Db, opts?: { prefix?; chunkSize? }): Promise<GitObj
 1. **X16**: one `ObjectStore` over packs (X6r) and loose objects (X4 on FilesApi or X3b rows),
    with exploding as a policy, not a different store.
 2. A delta-aware SQL layout (Fossil) if storage matters more than read time.
-3. Exploding in pack order rather than idx order would let X6r's base cache serve each chain
-   once (idx order still read 1 050 objects in 620 ms including deflate).
+3. Exploding in pack order rather than idx order was not faster in the review's runs (879 vs
+   714 ms, 976 vs 1 058 ms): X6r's base cache already serves idx order.
