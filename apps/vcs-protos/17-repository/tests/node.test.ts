@@ -482,6 +482,15 @@ describe("review cases (#72)", () => {
     const again = await repo.objects.put("commit", encodeCommit(c));
     expect(again).toBe(id);
   });
+  it("a commit with a malformed identity re-encodes to the same id", async () => {
+    const repo = await mem();
+    const tree = await writeFiles(repo, { a: new TextEncoder().encode("a") });
+    const raw = `tree ${tree}\nauthor Foo<f@x>  1700000001\ncommitter  Bar <b@x> 1700000002 +0100\n\nm\n`;
+    const id = await repo.objects.put("commit", new TextEncoder().encode(raw));
+    const c = await readCommit(repo, id);
+    expect(c.author.name).toBe("Foo");
+    expect(await repo.objects.put("commit", encodeCommit(c))).toBe(id);
+  });
   it("git log's tolerance: malformed identities do not abort log", async () => {
     const d = tmp();
     git(d, ["init", "-q", "."]);
@@ -564,6 +573,7 @@ describe("review cases (#72)", () => {
     const head = git(d, ["rev-parse", "HEAD"]).toString().trim();
     expect(await repo.objects.has(head)).toBe(true);
     git(d, ["gc", "-q", "--prune=now"]);
+    expect((await readCommit(repo, head)).message).toBe("commit 5\n"); // get first (has rescans too)
     expect(await repo.objects.has(head)).toBe(true);
     expect((await log(repo, "HEAD")).length).toBe(6);
   });
@@ -573,7 +583,9 @@ describe("review cases (#72)", () => {
     const b = await sqlRepository(db);
     const src = repoWithHistory(3);
     await a.objects.installPack(chunks(packAll(src, true)));
-    expect(await b.objects.has(git(src, ["rev-parse", "HEAD"]).toString().trim())).toBe(true);
+    const head = git(src, ["rev-parse", "HEAD"]).toString().trim();
+    expect((await b.objects.get(head))?.type).toBe("commit"); // get first (has rescans too)
+    expect(await b.objects.has(head)).toBe(true);
   });
   it("writeFiles refuses a path that is both a file and a directory, in either order", async () => {
     const repo = await mem();
@@ -641,10 +653,26 @@ describe("review cases (#72)", () => {
     const d = tmp();
     git(d, ["init", "-q", "."]);
     // a REF_DELTA against `big`, which the store holds but is over the limit
-    const { buildPack, delta, copyAll } = await import("../../12-index-pack/src/craft.js");
-    const thin = buildPack([
-      { kind: 7, baseOid: big, data: delta(5000, 5001, [...copyAll(5000), 1, 1]) },
-    ]);
-    await expect(repo.objects.installPack(chunks(thin))).rejects.toThrow();
+    const { buildPack, delta } = await import("../../12-index-pack/src/craft.js");
+    // the delta copies 10 bytes: only the base is over the limit, and it must not be read at all
+    const thin = buildPack([{ kind: 7, baseOid: big, data: delta(5000, 10, [0x90, 10]) }]);
+    let baseBytesRead = 0;
+    const get = repo.objects.get.bind(repo.objects);
+    repo.objects.get = async (oid, o) => {
+      const r = await get(oid, o);
+      if (!r || oid !== big) return r;
+      const content = r.content;
+      return {
+        ...r,
+        content: (async function* () {
+          for await (const c of content) {
+            baseBytesRead += c.length;
+            yield c;
+          }
+        })(),
+      };
+    };
+    await expect(repo.objects.installPack(chunks(thin))).rejects.toThrow(/limit/);
+    expect(baseBytesRead).toBe(0);
   });
 });
