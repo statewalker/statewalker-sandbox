@@ -1,7 +1,7 @@
 # 14 — Can index-pack complete thin packs from the local repository and index 100k+ objects in a Durable Object's memory?
 
 Plan id **X6** (pack ingest/export), slice **X6b1: thin packs, compact entries, bounded reads,
-temporaries**. Status: **open**.
+temporaries**. Status: **answered — yes: thin packs complete to git's objects and order, 200 000 entries in +14 MiB, one storage read serves a pack's delta loads, stale temporaries swept; appended bases are compressed by pako, so the completed pack is git-equivalent, not byte-identical.**
 
 ## Question
 
@@ -44,3 +44,103 @@ entries still need memory of the order of X6a's.
 - Resumable, time-sliced indexing across Durable Object requests — X6b2.
 - Exploding packs into the native SQL store — X6b3.
 - `check_collision` against objects already present and SHA-1 collision detection.
+
+## Answer
+
+**Yes.** `installPack(files, packDir, stream, { externalBase })` completes thin packs as
+`git index-pack --fix-thin` does, and the rewritten index-pack keeps everything X6a verified (its
+whole Node suite passes against this module).
+
+- **Thin packs.** After phase 2, the REF_DELTAs still unresolved are walked in pack order (git's
+  `fix_unresolved_deltas`); each missing base is asked for once, must hash to the requested id, is
+  appended as a whole object (pako, zlib level 6) and its subtree is resolved at once — a delta on
+  a thin delta's result needs no lookup, a base shared by several deltas is appended once. The pack
+  is then rewritten with the new count and a new trailer (`fixup_pack_header_footer`); while the
+  received part is copied it is re-hashed with its original header and must still match its
+  trailer. For four `pack-objects --thin` packs (REF, OFS, one commit, a 4 MiB blob edited by one
+  byte) the completed pack holds git's objects, appends git's bases in git's order with git's
+  types, keeps every received entry's offset and CRC as in git's index, is named after its own
+  SHA-1, has the `.idx` git computes for it, and passes `verify-pack`, `fsck --full` and `cat-file`.
+- **Appended entries are not byte-identical to git's**: git compresses them with its own zlib
+  settings (a 22 893-byte blob: 4 785 bytes from git 2.43, 4 637 from pako or Node's zlib at the
+  default level), so the pack id differs from git's for the same thin pack. Both are valid; nothing
+  downstream depends on the id beyond naming the files.
+- **Compact entries.** Per-entry state is struct-of-arrays — offsets, sizes, CRC, kind, type,
+  header length, base index, id and REF base id: 75 bytes an entry, allocated once from the
+  header's count (plus 8 for the child links during phase 2 and 4 for the idx sort order). OFS children are linked lists in two `Int32Array`s, REF children a sorted index
+  searched by id, and a resolved delta records the entry it was resolved against, so re-deriving
+  an evicted base follows indices instead of maps. A 200 000-object pack (half OFS/REF deltas)
+  installs with a peak of +14 MiB live and git's `.idx` (X6a: see the comparison below).
+- **Counts checked before allocating.** A header declaring more entries than `(size − 32) / 9`
+  (the smallest entry: a 1-byte header and an 8-byte zlib stream) is refused before the tables are
+  allocated.
+- **Bounded window.** Phase 2 re-reads entries through one window (default 1 MiB, never two held):
+  an entry inside it costs no storage read, a miss refills it from that entry on, entries over half
+  the window are streamed directly. The 60-commit history pack's 254 entry loads take 1 storage
+  read (X6a: 254).
+- **Temporaries.** `sweepPackTemporaries(files, packDir, { olderThanMs, now? })` removes the
+  `tmp_*` files of the pack directory older than the threshold — git prune's rule; young ones may
+  belong to an install in progress — and never touches `pack-*` or other files.
+- Chromium (OPFS) and a Durable Object (SqliteFilesApi) complete the committed fixture thin pack
+  (2 286 bytes, 4 bases) to the committed `.idx` (18 objects).
+
+## Verified
+
+All 16 Node tests, the 45 X6a tests re-run against this module and 1 Chromium test pass
+(`pnpm test 14-thin-packs`).
+
+| # | Result |
+|---|---|
+| R1 | Four thin packs (REF_DELTA and OFS_DELTA: last 5 of 30 commits; one commit; a 4 MiB blob with a one-byte edit) completed with `externalBase` over the receiver's object database (X6r): same object set as `git index-pack --fix-thin`, appended bases equal in order and type, received entries' offsets and CRCs equal git's, pack named after its trailer, `.idx` equal to git's for our pack, `verify-pack`, `fsck --full`, `cat-file` of every object equal to the sender's. |
+| R1b | Refused with `PackError`, nothing left in the pack directory: no `externalBase`; unknown base ("2 unresolved deltas"); a base hashing to another id. A REF on a thin delta's result: one lookup, one appended base, 4 objects; a complete pack never calls `externalBase` and keeps its id. |
+| R2 | X6a's suite (45 tests: four native-git variants with git-identical `.idx`, 11 crafted packs, corrupt and hostile packs, memory on deep and branching chains, large offsets, the delta applier, the DO run) passes with X6a's module replaced by this one (`vi.mock`). |
+| R3 | 200 000 objects: peak +14.0 MiB live (sampled after GC on every storage read), `.idx` identical to git's. |
+| R4 | A header declaring 2³²−1 entries in a one-entry pack: refused, < 16 MiB live. |
+| R5 | 254 entry loads, 1 storage read (+1 for phase 1); `.idx` identical to git's. The criterion first said "≥ 300 deltas": the pack has 245 (X6a's count). |
+| R6 | Node: `tmp_pack_old`, `tmp_idx_old` (3 days) removed with a 1-day threshold; `tmp_pack_young`, an old `garbage.txt` and old `pack-*` kept. MemFilesApi: kept at `now`, removed 5 s later with a 1 s threshold. |
+| R7 | The fixture completes to the committed `.idx` on Node, in a Durable Object and in Chromium. |
+
+## Functional description
+
+```ts
+const odb = await openObjectDatabase(files, "/.git/objects");            // X6r
+const r = await installPack(files, "/.git/objects/pack", stream, {
+  externalBase: async (oid) => {                                         // git's --fix-thin
+    const o = await odb.get(oid);
+    return o && { type: o.type, data: await bytes(o.content) };
+  },
+  maxObjectSize: 2 ** 30, baseCacheBytes: 32 * 2 ** 20, windowBytes: 2 ** 20,
+});
+r.packId; r.count; r.idx; r.stats;   // { appended, storageReads, deltaLoads }
+r.entries;                           // IndexedEntry[], materialised on first access
+await sweepPackTemporaries(files, "/.git/objects/pack", { olderThanMs: 14 * 24 * 3600e3 });
+```
+
+## Interfaces produced
+
+```ts
+type ExternalBase = (oid: string) => Promise<{ type: ObjectTypeName; data: Uint8Array } | undefined>;
+function installPack(files: FilesApi, packDir: string, source: AsyncIterable<Uint8Array>,
+  opts?: { maxObjectSize?; baseCacheBytes?; maxPackSize?; externalBase?: ExternalBase; windowBytes? },
+): Promise<{ packId; count; idx; readonly entries: IndexedEntry[]; stats }>;
+function writeIdx(entries: IndexedEntry[], packId: string): Uint8Array;            // unchanged
+function sweepPackTemporaries(files: FilesApi, packDir: string,
+  opts: { olderThanMs: number; now?: number }): Promise<string[]>;
+class PackError extends Error {}
+```
+
+## Promotion grades
+
+| File | Grade | Why |
+|---|---|---|
+| `src/index-pack.ts` | **Adopt** | supersedes X6a's: same results, thin packs, compact entries, windowed phase 2 (imports X1d's inflater and X6a's delta/CRC by path) |
+| `src/fixture-base.ts`, `src/do-entry.ts`, `scripts/make-fixture.ts` | **Source** | fixture and DO harness |
+| `scripts/compare.ts` | **Source** | X6a vs X6b1 measurements |
+
+## Open threads (ranked by how much later work they would invalidate)
+
+1. **X6b2**: resumable, time-sliced indexing across Durable Object requests (the typed tables make
+   the state serialisable: a few arrays and the phase/position).
+2. **X6b3**: exploding a pack into the native SQL store (X3b) in batched transactions.
+3. `check_collision` against objects already present, and SHA-1 collision detection.
+4. Byte-identical appended entries would need git's zlib settings; nothing needs them so far.

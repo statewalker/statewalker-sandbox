@@ -15,11 +15,7 @@ const sender = repoWithHistory(12);
 const receiver = mkdtempSync(join(tmpdir(), "x6b-fixture-"));
 git(receiver, ["init", "-q", "-b", "main", "."]);
 const have = git(sender, ["rev-list", "--objects", "HEAD~2"]);
-git(
-  receiver,
-  ["index-pack", "--stdin"],
-  git(sender, ["pack-objects", "--stdout", "-q"], have),
-);
+git(receiver, ["index-pack", "--stdin"], git(sender, ["pack-objects", "--stdout", "-q"], have));
 const thin = new Uint8Array(
   git(
     sender,
