@@ -457,8 +457,8 @@ importers:
         specifier: 3.53.4-build2
         version: 3.53.4-build2
       '@statewalker/cellb':
-        specifier: 0.8.0
-        version: 0.8.0(@statewalker/webrun-bundler@0.1.1(esbuild-wasm@0.28.2))(@statewalker/webrun-modules@0.3.6)(@statewalker/webrun-site-builder@0.2.2(@statewalker/webrun-files@0.10.3))(@statewalker/webrun-site-host@0.3.0(@statewalker/webrun-files@0.10.3))(bufferutil@4.2.0)(esbuild@0.28.2)
+        specifier: 0.8.1
+        version: 0.8.1(@statewalker/webrun-bundler@0.1.1(esbuild-wasm@0.28.2))(@statewalker/webrun-modules@0.3.6)(@statewalker/webrun-site-builder@0.2.2(@statewalker/webrun-files@0.10.3))(@statewalker/webrun-site-host@0.3.0(@statewalker/webrun-files@0.10.3))(bufferutil@4.2.0)(esbuild@0.28.2)
       '@statewalker/webrun-files-node':
         specifier: 'catalog:'
         version: 0.10.3
@@ -4389,8 +4389,8 @@ packages:
   '@statewalker/ai-openai-compat.core@0.4.2':
     resolution: {integrity: sha512-K15khwQsA53g1/EohRcoXFsr/qR6DtnyDC56DF6U2P63AkIgqgn/cIvCPre13ro0pPxA+aQLKTQg+P/NhSHrNQ==}
 
-  '@statewalker/cellb@0.8.0':
-    resolution: {integrity: sha512-dQ42/mU6989BtvNPz41BpH+4CDVL7SQiVQoa8vmfDoLUxEDmE4kcM4E1wJ3mK+k77QBbNrTMo2jYMF6yTtxvTA==}
+  '@statewalker/cellb@0.8.1':
+    resolution: {integrity: sha512-OyfejVSmjJ9c0hy+DHAmpIqAtH/dLfkZdIpjxjhpOwfoBxFza+zsqGq7y0g/VdKdEEaaN4o1kkX71y9WBQi6QA==}
     engines: {node: '>=22.13'}
     hasBin: true
     peerDependencies:
@@ -11123,7 +11123,7 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  '@statewalker/cellb@0.8.0(@statewalker/webrun-bundler@0.1.1(esbuild-wasm@0.28.2))(@statewalker/webrun-modules@0.3.6)(@statewalker/webrun-site-builder@0.2.2(@statewalker/webrun-files@0.10.3))(@statewalker/webrun-site-host@0.3.0(@statewalker/webrun-files@0.10.3))(bufferutil@4.2.0)(esbuild@0.28.2)':
+  '@statewalker/cellb@0.8.1(@statewalker/webrun-bundler@0.1.1(esbuild-wasm@0.28.2))(@statewalker/webrun-modules@0.3.6)(@statewalker/webrun-site-builder@0.2.2(@statewalker/webrun-files@0.10.3))(@statewalker/webrun-site-host@0.3.0(@statewalker/webrun-files@0.10.3))(bufferutil@4.2.0)(esbuild@0.28.2)':
     dependencies:
       '@noble/hashes': 2.4.0
       '@sqlite.org/sqlite-wasm': 3.53.4-build2
