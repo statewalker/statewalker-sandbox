@@ -14,7 +14,7 @@ import { filesRepository } from "../../17-repository/src/repository.js";
 import { clone, fetchFrom } from "../../21-smart-http/src/client.js";
 import { DELIM, FLUSH, PktReader, pkt } from "../../21-smart-http/src/pkt-line.js";
 import { push } from "../../22-receive-pack/src/client.js";
-import { meshFetch, meshGitHandler } from "../src/mesh-git.js";
+import { gitRules, meshFetch, meshGitHandler } from "../src/mesh-git.js";
 
 const dirs: string[] = [];
 const stops: (() => Promise<void>)[] = [];
@@ -45,9 +45,15 @@ const commitFile = (d: string, file: string, content: string, msg: string) => {
 const URL_ = "http://peer.local/repo.git";
 
 /** A serving peer "B" with `repo`, and a way to connect callers to it. */
-async function mesh(repo: Repository, opts: { requestTimeoutMs?: number } = {}) {
+async function mesh(
+  repo: Repository,
+  opts: { requestTimeoutMs?: number; contributors?: boolean } = {},
+) {
   const signer = await generateSigner();
-  const handler = meshGitHandler(repo, { issuer: signer.mesh });
+  const handler = meshGitHandler(repo, {
+    issuer: signer.mesh,
+    rules: gitRules({ contributors: opts.contributors ?? false }),
+  });
   const connect = async (peer: string) => {
     const [mine, theirs] = pairedLinks(peer, "B");
     stops.push(await serveFetchOverLink({ link: theirs, dispatch: handler }));
@@ -74,7 +80,7 @@ describe("R1 clone, fetch and push over the mesh", () => {
     const served = servingCopy(src);
     const server = await openBare(served);
     const m = await mesh(server);
-    const f = await m.client("A", ["maintainer"]);
+    const f = await m.client("A", ["admin"]);
     const d = emptyRepo();
     const repo = await open(d);
     await clone(URL_, repo, { fetch: f });
@@ -98,11 +104,12 @@ describe("R1 clone, fetch and push over the mesh", () => {
 });
 
 describe("R2 roles", () => {
-  it("no token 401; reader reads only; member writes refs/peers/<self>/*; maintainer anywhere", async () => {
+  it("httpeers' mesh roles: no token 401; member reads only; with contributors, members write refs/peers/<self>/*; admin anywhere", async () => {
     const src = repoWithHistory(5);
     const served = servingCopy(src);
     const server = await openBare(served);
     const m = await mesh(server);
+    const mc = await mesh(server, { contributors: true });
     // no token
     const anon = await m.connect("anon");
     const res = await anon(
@@ -113,7 +120,7 @@ describe("R2 roles", () => {
     );
     expect(res.status).toBe(401);
     // reader
-    const reader = await m.client("R", ["reader"]);
+    const reader = await m.client("R", ["member"]);
     const d = emptyRepo();
     const repo = await open(d);
     await clone(URL_, repo, { fetch: reader });
@@ -121,16 +128,16 @@ describe("R2 roles", () => {
     await expect(
       push(URL_, repo, { fetch: reader, refspecs: ["HEAD:refs/peers/R/x"] }),
     ).rejects.toThrow(/403/);
-    // member
-    const member = await m.client("M", ["member"]);
+    // member, contributors on: its own namespace only
+    const member = await mc.client("M", ["member"]);
     let r = await push(URL_, repo, { fetch: member, refspecs: ["HEAD:refs/heads/main"] });
     expect(r[0]).toMatchObject({ ok: false, reason: expect.stringMatching(/not allowed/) });
     r = await push(URL_, repo, { fetch: member, refspecs: ["HEAD:refs/peers/X/main"] });
     expect(r[0]).toMatchObject({ ok: false, reason: expect.stringMatching(/not allowed/) });
     r = await push(URL_, repo, { fetch: member, refspecs: ["HEAD:refs/peers/M/main"] });
     expect(r[0]?.ok).toBe(true);
-    // maintainer
-    const maint = await m.client("T", ["maintainer"]);
+    // admin
+    const maint = await m.client("T", ["admin"]);
     r = await push(URL_, repo, { fetch: maint, refspecs: ["HEAD:refs/heads/main"] });
     expect(r[0]?.ok).toBe(true);
     expect(rev(served, "refs/heads/main")).toBe(rev(d, "HEAD"));
@@ -143,7 +150,7 @@ describe("R3 a push longer than the bridge's request timeout", () => {
     const served = servingCopy(src);
     const server = await openBare(served);
     const m = await mesh(server, { requestTimeoutMs: 1500 });
-    const base = await m.client("A", ["maintainer"]);
+    const base = await m.client("A", ["admin"]);
     // a fetch whose request bodies trickle: 3 s for the upload
     const slow: typeof fetch = async (input, init) => {
       if (!init?.body || typeof (init.body as ReadableStream).getReader !== "function")
@@ -192,7 +199,7 @@ describe("R4 first byte before the pack is generated", () => {
       return get(oid, o);
     };
     const m = await mesh(server);
-    const f = await m.client("A", ["reader"]);
+    const f = await m.client("A", ["member"]);
     const body = new Blob([
       pkt("command=fetch\n"),
       DELIM,
@@ -241,11 +248,11 @@ describe("R5 hostile tokens", () => {
           headers: { "git-protocol": "version=2", "x-httpeers-token": token },
         }),
       );
-    const expired = await m.token("A", ["maintainer"], 1);
+    const expired = await m.token("A", ["admin"], 1);
     await new Promise((r) => setTimeout(r, 20));
     expect((await ask(expired)).status).toBe(401);
-    expect((await ask(await m.token("Z", ["maintainer"]))).status).toBe(401);
-    const good = await m.token("A", ["maintainer"]);
+    expect((await ask(await m.token("Z", ["admin"]))).status).toBe(401);
+    const good = await m.token("A", ["admin"]);
     const tampered = `${good.slice(0, -4)}${good.slice(-4) === "AAAA" ? "BBBB" : "AAAA"}`;
     // httpeers' refusal table: a bad signature is 403 ("a fresh token will not help"); expired and
     // foreign-peer tokens are 401 (a refresh may) — refused either way, the reason in the body
@@ -262,7 +269,7 @@ describe("R6 per-peer namespaces", () => {
     const src = repoWithHistory(4);
     const served = servingCopy(src);
     const server = await openBare(served);
-    const m = await mesh(server);
+    const m = await mesh(server, { contributors: true });
     const fa = await m.client("A", ["member"]);
     const fc = await m.client("C", ["member"]);
     const da = join(tmp(), "a");
@@ -284,5 +291,101 @@ describe("R6 per-peer namespaces", () => {
     const r = await push(URL_, ra, { fetch: fa, refspecs: ["+HEAD:refs/peers/C/main"] });
     expect(r[0]).toMatchObject({ ok: false, reason: expect.stringMatching(/not allowed/) });
     expect(rev(served, "refs/peers/C/main")).toBe(rev(dc, "HEAD"));
+    const r2 = await push(URL_, rc, { fetch: fc, refspecs: ["+HEAD:refs/peers/A/main"] });
+    expect(r2[0]).toMatchObject({ ok: false, reason: expect.stringMatching(/not allowed/) });
+    expect(rev(served, "refs/peers/A/main")).toBe(rev(da, "HEAD"));
   }, 120_000);
+});
+
+describe("review cases (#84)", () => {
+  it("roles as a standard hub issues them: admin writes, member reads, hidden reads; own-namespace pushes are opt-in", async () => {
+    const src = repoWithHistory(3);
+    const server = await openBare(servingCopy(src));
+    const m = await mesh(server);
+    const conn = await m.connect("P");
+    const status = async (roles: string[], service: string) =>
+      (
+        await conn(
+          "B",
+          new Request(`${URL_}/info/refs?service=${service}`, {
+            headers: { "git-protocol": "version=2", "x-httpeers-token": await m.token("P", roles) },
+          }),
+        )
+      ).status;
+    expect(await status(["admin"], "git-upload-pack")).toBe(200);
+    expect(await status(["admin"], "git-receive-pack")).toBe(200);
+    expect(await status(["member"], "git-upload-pack")).toBe(200);
+    expect(await status(["member"], "git-receive-pack")).toBe(403);
+    expect(await status(["hidden"], "git-upload-pack")).toBe(200);
+    expect(await status(["hidden"], "git-receive-pack")).toBe(403);
+  }, 60_000);
+  it("a push refused for every ref stores nothing (its pack is not read)", async () => {
+    const src = repoWithHistory(3);
+    const served = servingCopy(src);
+    const server = await openBare(served);
+    const m = await mesh(server, { contributors: true });
+    const f = await m.client("M", ["member"]);
+    const d = join(tmp(), "w");
+    git(tmpdir(), ["clone", "-q", served, d]);
+    commitFile(d, "junk.bin", Buffer.from(noise(100_000, 3)).toString("base64"), "junk");
+    const tip = rev(d, "HEAD");
+    const r = await push(URL_, await open(d), { fetch: f, refspecs: ["HEAD:refs/heads/main"] });
+    expect(r[0]).toMatchObject({ ok: false, reason: expect.stringMatching(/not allowed/) });
+    expect(() => git(served, ["cat-file", "-t", tip])).toThrow();
+  }, 60_000);
+  it("an error after the response head reaches the client as a report, not a dropped connection", async () => {
+    const src = repoWithHistory(3);
+    const served = servingCopy(src);
+    const server = await openBare(served);
+    const read = server.refs.read.bind(server.refs);
+    let explode = false;
+    server.refs.read = async (name) => {
+      if (explode && name === "HEAD") throw new Error("disk exploded");
+      return read(name);
+    };
+    const m = await mesh(server);
+    const f = await m.client("A", ["admin"]);
+    const d = join(tmp(), "w");
+    git(tmpdir(), ["clone", "-q", served, d]);
+    commitFile(d, "file0.txt", "x\n", "x");
+    explode = true;
+    const err = await push(URL_, await open(d), {
+      fetch: f,
+      refspecs: ["HEAD:refs/heads/x"],
+    }).catch((e) => e);
+    expect(String(err)).toMatch(/internal error.*disk exploded|disk exploded/);
+  }, 60_000);
+  it("a proven peer id that cannot name a namespace (a '/' in it) is refused own-namespace writes", async () => {
+    const src = repoWithHistory(3);
+    const served = servingCopy(src);
+    const server = await openBare(served);
+    const m = await mesh(server, { contributors: true });
+    const f = await m.client("A/B", ["member"]);
+    const d = join(tmp(), "w");
+    git(tmpdir(), ["clone", "-q", served, d]);
+    commitFile(d, "file0.txt", "x\n", "x");
+    await expect(
+      push(URL_, await open(d), { fetch: f, refspecs: ["HEAD:refs/peers/A/B/main"] }),
+    ).rejects.toThrow(/403/);
+  }, 60_000);
+  it("hostile git input over the mesh: malformed requests are refused, the peer keeps serving", async () => {
+    const src = repoWithHistory(3);
+    const server = await openBare(servingCopy(src));
+    const m = await mesh(server);
+    const f = await m.client("A", ["admin"]);
+    const bad = await f(`${URL_}/git-upload-pack`, {
+      method: "POST",
+      headers: { "git-protocol": "version=2" },
+      body: new TextEncoder().encode("00zzgarbage"),
+    });
+    expect(new TextDecoder().decode(new Uint8Array(await bad.arrayBuffer()))).toMatch(/ERR/);
+    const badPush = await f(`${URL_}/git-receive-pack`, {
+      method: "POST",
+      body: new Blob([pkt("not a command\n"), FLUSH] as BlobPart[]),
+    });
+    expect(badPush.status).toBe(400);
+    const d = emptyRepo();
+    await clone(URL_, await open(d), { fetch: f });
+    expect(rev(d, "HEAD")).toBe(rev(src, "HEAD"));
+  }, 60_000);
 });

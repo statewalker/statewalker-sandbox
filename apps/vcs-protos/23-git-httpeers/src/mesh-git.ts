@@ -24,6 +24,11 @@ export interface MeshGitOptions {
   rules?: ReturnType<typeof ruleSet>;
 }
 
+/** red stub: the rules for the options */
+export function gitRules(_o: { contributors?: boolean } = {}) {
+  return GIT_RULES;
+}
+
 /** reader, member and maintainer; any git capability passes the policy, the handler refines it */
 export const GIT_RULES = ruleSet({
   version: 1,
