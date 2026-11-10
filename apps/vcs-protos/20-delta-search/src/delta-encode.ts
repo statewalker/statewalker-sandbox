@@ -49,8 +49,7 @@ export const indexStep = (n: number) =>
  * entries thinned evenly across the source (keeping the earliest would drop the one occurrence
  * that continues further on a repetitive source).
  */
-export function deltaIndex(source: Uint8Array): DeltaIndex {
-  const step = indexStep(source.length);
+export function deltaIndex(source: Uint8Array, step = indexStep(source.length)): DeltaIndex {
   const blocks = source.length < BLOCK ? 0 : Math.floor((source.length - BLOCK) / step) + 1;
   let size = 16;
   while (size < blocks) size <<= 1;

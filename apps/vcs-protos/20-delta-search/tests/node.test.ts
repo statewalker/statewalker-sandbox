@@ -178,6 +178,39 @@ describe("R1 the delta encoder", () => {
     expect(encodeDelta(deltaIndex(a), b, 1000)).toBeUndefined();
     expect((encodeDelta(deltaIndex(a), b) as Uint8Array).length).toBeGreaterThan(1000);
   });
+  it("matches found past an unindexed position extend back over the literals (a sparse index)", () => {
+    const src = noise(65536, 21);
+    const tgt = src.slice();
+    for (let i = 0; i < 50; i++) tgt[600 + i * 1300] = (tgt[600 + i * 1300] as number) ^ 0x55;
+    const d = encodeDelta(deltaIndex(src, 16), tgt) as Uint8Array;
+    expect(Buffer.compare(applyDelta(src, d), tgt)).toBe(0);
+    // each change: an insert of 1 byte and a copy; without extending back, up to 15 more literals
+    console.log(`R1 sparse: ${d.length} B for 50 one-byte changes`);
+    expect(d.length).toBeLessThan(50 * 9 + 20);
+  });
+  it("on git's own (base, target) pairs, within 1.05× of git's delta bytes", async () => {
+    const src = repoWithHistory(30);
+    const pack = new Uint8Array(
+      git(src, ["pack-objects", "--stdout", "-q"], git(src, ["rev-list", "--objects", "HEAD"])),
+    );
+    const pairs = verifyRows(pack).filter((r) => r.base && r.type === "blob");
+    expect(pairs.length).toBeGreaterThan(50);
+    const repo = await open(src);
+    const read = async (oid: string) => {
+      const o = await repo.objects.get(oid);
+      if (!o) throw new Error(`missing ${oid}`);
+      return collect(o.content);
+    };
+    let theirs = 0;
+    let ours = 0;
+    for (const r of pairs) {
+      theirs += r.size;
+      const d = encodeDelta(deltaIndex(await read(r.base as string)), await read(r.oid));
+      ours += (d as Uint8Array).length;
+    }
+    console.log(`R1 vs git's encoder: ours ${ours} B, git ${theirs} B on ${pairs.length} pairs`);
+    expect(ours).toBeLessThanOrEqual(theirs * 1.05);
+  });
   it("git resolves the computed deltas (index-pack, cat-file)", () => {
     const base = new TextEncoder().encode(
       Array.from({ length: 500 }, (_, i) => `line ${i}`).join("\n"),
@@ -272,16 +305,15 @@ describe("R4 git's ordering and bounds", () => {
   it("same-named files in different directories are tried against each other (path hash order)", async () => {
     const d = emptyRepo();
     seed = 9;
-    // unrelated blobs of similar sizes, and one pair of near-identical files sharing a name
-    for (let i = 0; i < 30; i++)
-      writeFileSync(join(d, `n${i}.dat`), noise(4000 + rnd(200), 100 + i));
+    // one pair of near-identical files sharing a name, their sizes 300 bytes apart, and 30
+    // unrelated blobs with sizes between them: in size order the pair is 30 apart, beyond a window
+    // of 2; only the path hash brings them together
+    for (let i = 0; i < 30; i++) writeFileSync(join(d, `n${i}.dat`), noise(4105 + i * 10, 100 + i));
     const body = noise(4100, 7);
-    for (const dir of ["a", "b"]) {
-      mkdirSync(join(d, dir));
-      const v = body.slice();
-      if (dir === "b") v[100] = (v[100] as number) ^ 1;
-      writeFileSync(join(d, dir, "settings.cfg"), v);
-    }
+    mkdirSync(join(d, "a"));
+    mkdirSync(join(d, "b"));
+    writeFileSync(join(d, "a", "settings.cfg"), body);
+    writeFileSync(join(d, "b", "settings.cfg"), Buffer.concat([body, noise(300, 8)]));
     git(d, ["add", "-A"]);
     git(d, ["commit", "-q", "-m", "x"]);
     const repo = await open(d);
@@ -312,6 +344,10 @@ describe("R4 git's ordering and bounds", () => {
     const deltas = rows.filter((r) => r.base);
     expect(deltas.length).toBeGreaterThan(50);
     expect(Math.max(...rows.map((r) => r.depth))).toBeLessThanOrEqual(50);
+    // the search respects the depth itself: a chain at its limit is not extended, another base is
+    // found (were the writer's cap to cut it, versions past depth 50 would go whole)
+    const blobs = rows.filter((r) => r.type === "blob");
+    expect(blobs.filter((r) => !r.base).length).toBeLessThanOrEqual(2);
     const sizeOf = (oid: string) => Number(git(d, ["cat-file", "-s", oid]).toString());
     for (const r of deltas) expect(r.size).toBeLessThan(sizeOf(r.oid) / 2 - 20);
   });

@@ -78,15 +78,48 @@ then writes through X6d's writer (a new `computed` plan: a REF_DELTA with the de
 
 ## Verified
 
-All 13 Node tests pass (`pnpm test 20-delta-search`); X6d's 11 pass with the refactor. The tests
+All 15 Node tests pass (`pnpm test 20-delta-search`); X6d's 11 pass with the refactor. The tests
 were written first (red commit).
 
 | # | Result |
 |---|---|
-| R1 | 300 random edit cases (alphabets of 4 and 256 bytes) round-trip through `applyDelta`, every copy within the base and ≤ 64 KiB, every insert 1–127; 8.4 MB of targets as 104 KB of deltas; a 300 KB copy split into 5; empty source/target; `maxSize` gives up; git resolves a computed REF_DELTA. |
+| R1 | Our encoder on git's own (base, target) pairs: 17 088 B against git's 18 068 B (0.95×); with a forced 16-byte step, 50 one-byte changes cost 359 B (matches extend back over the literals). 300 random edit cases (alphabets of 4 and 256 bytes) round-trip through `applyDelta`, every copy within the base and ≤ 64 KiB, every insert 1–127; 8.4 MB of targets as 104 KB of deltas; a 300 KB copy split into 5; empty source/target; `maxSize` gives up; git resolves a computed REF_DELTA. |
 | R2 | Above: 0.88×, 0.88×, 0.93×, 0.99× git; the loose case installs in a native receiver (`--fix-thin` for thin) and passes `fsck`. |
 | R3 | 0.85× git; `index-pack` and `fsck --strict` pass. |
 | R4 | `a/settings.cfg` and `b/settings.cfg` among 30 unrelated blobs, window 2: delta'd against each other (path hash order). A 70-version file: every delta below git's max_size, depth ≤ 50. |
 | R5 | Two 64 MiB blobs above a 16 MiB threshold: not delta'd, +0.6 MiB live. Window memory 600 KB: peak 487 KB (unbounded: 2.3 MB). |
 | R6 | Windows 1, 4, 10: comparisons ≤ window × candidates. |
 | R7 | The searched pack installs in X6b on the files and SQL backends; logs equal. |
+
+### Mutation check
+
+| Mutation | Caught by |
+|---|---|
+| S1 no path hash in the sort | R4 same-named pair (sizes 30 objects apart, window 2) |
+| S2 no max_size bound | R4 bounds |
+| S3 no explicit depth check | — equivalent: git's bound scales the budget by (depth − base depth), so a base at depth 50 gets 0 and is skipped (the check is redundant, as in git's try_delta) |
+| S4 window size not enforced | R6 |
+| S5 windowMemory not enforced | R5 window |
+| S6 bigFileThreshold ignored | R5 big |
+| S7 no preferred bases (thin) | R2 thin |
+| E1 the encoder's early give-up removed | — equivalent in output (the final size check still returns undefined); it only saves work |
+| E2 copies not split at 64 KiB | R1 split |
+| E3 no backward extension | R1 sparse index |
+| E4 git's sparse index (every 16th position) | R1 vs git's encoder (4.3×), R2, R3, R5 |
+
+## Promotion grades
+
+| File | Grade | Why |
+|---|---|---|
+| `src/delta-encode.ts` | **Adopt** | git's delta format; denser index than git's for the same or smaller deltas |
+| `src/export-search.ts` | **Adopt** | git's window search over X6d's writer |
+
+## Open threads (ranked by how much later work they would invalidate)
+
+1. **Transport**: smart-HTTP / httpeers negotiation (have/want/ACK, shallow, sideband) over these
+   exports and X6b's ingest.
+2. **Repack / gc (X18)**: the same search writes a repository's own packs (all objects, OFS_DELTA,
+   `--depth`/`--window` from config); loose objects then stop growing.
+3. **Search cost on large repositories**: one pass, no workers; index building is O(source) per
+   window entry. Measure on a large history before adding workers (git: `--threads`).
+4. OFS_DELTA output (smaller headers: ~2 %).
