@@ -1,17 +1,25 @@
 /**
  * X3b — a native chunked BlobStore with putStaged over statewalker-db's Db.
  *
- *   <p>blobs  (id PRIMARY KEY, size, chunk_size, inline)   a blob is visible iff its row exists
- *   <p>chunks (id, seq, data, PRIMARY KEY (id, seq))        rows of `chunk_size` bytes (last shorter)
+ *   <p>blobs   (id PRIMARY KEY, size, chunk_size, handle, inline)   visible iff the row exists
+ *   <p>chunks  (handle, seq, data, PRIMARY KEY (handle, seq))       rows of chunk_size bytes
+ *   <p>staging (handle INTEGER PRIMARY KEY AUTOINCREMENT, created)  handles of puts not committed
  *
- * Content up to one chunk is buffered and stored inline in the blob row: one row and one commit
- * per small git object. Larger content streams into chunk rows under a reserved temporary id
- * (`~tmp/<ms>/<random>`, never visible) holding at most one chunk in memory, then commits in ONE
- * transaction (`inTransaction`: BEGIN/COMMIT, or storage.transaction in a Durable Object): if the
- * id exists the temporary rows are dropped (existing wins); otherwise the rows are renamed to the
- * id and the blob row inserted — or, for a single chunk, the bytes move inline. A crash at any
- * statement leaves no blob or the whole blob; `sweepStaged` removes orphaned temporary rows.
- * Each statement binds at most a few parameters and one chunk (< the DO's ~2 MB value limit).
+ * AUTOINCREMENT matters: a plain INTEGER PRIMARY KEY reuses the largest deleted rowid, so a new
+ * staging handle would collide with the chunk rows of a committed blob.
+ *
+ * Content up to one chunk is buffered and committed inline in the blob row: one statement and one
+ * commit per small git object. Larger content streams into chunk rows under a fresh integer handle
+ * (allocated in `staging`), holding at most about one chunk in memory. The commit is ONE
+ * transaction (`inTransaction`: BEGIN/COMMIT, or storage.transaction in a Durable Object): if the id
+ * exists the staged rows are dropped (existing wins); otherwise it checks that every staged row is
+ * still there (a sweep by another process may have removed them), inserts the blob row pointing at
+ * the handle and clears the staging row. Chunk rows are never rewritten: a handle is immutable, so a
+ * reader holding an old handle can only find rows missing, never other bytes.
+ *
+ * Constraints: one Db (connection) per database file per thread — two connections on one file fail
+ * with "database is locked" (busy timeout 0; a timeout would deadlock a single thread). `remove`
+ * must not race readers of the same blob (gc needs leases, X18).
  */
 import type { Db } from "@statewalker/db-api";
 import { inTransaction } from "@statewalker/db-sqlite";
@@ -26,8 +34,6 @@ export interface SqlBlobStoreOptions {
 }
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const TMP = "~tmp/";
-const TMP_END = "~tmp0"; // '0' follows '/': every temporary id lies in [TMP, TMP_END)
 
 const toBytes = (v: unknown): Uint8Array => {
   if (v instanceof Uint8Array) return v;
@@ -45,17 +51,10 @@ function successor(p: string): string | undefined {
   }
   return undefined;
 }
-const tmpId = () => {
-  const r = crypto.getRandomValues(new Uint8Array(9));
-  return `${TMP}${Date.now()}/${Array.from(r, (b) => b.toString(16).padStart(2, "0")).join("")}`;
-};
 
-interface BlobRow {
-  size: number;
-  chunk_size: number;
-  inline: unknown;
-  chunked: number;
-}
+type Staged =
+  | { kind: "inline"; data: Uint8Array }
+  | { kind: "rows"; handle: number; size: number; rows: number };
 
 export async function sqlBlobStore(
   db: Db,
@@ -69,116 +68,170 @@ export async function sqlBlobStore(
   }
   const blobs = `${prefix}blobs`;
   const chunks = `${prefix}chunks`;
+  const staging = `${prefix}staging`;
+  // rowid tables: rows up to a chunk would bloat a WITHOUT ROWID b-tree (SQLite advises < 1/20 page)
   await db.exec(
     `CREATE TABLE IF NOT EXISTS ${blobs} (id TEXT PRIMARY KEY NOT NULL, size INTEGER NOT NULL,
-       chunk_size INTEGER NOT NULL, chunked INTEGER NOT NULL, inline BLOB) WITHOUT ROWID`,
+       chunk_size INTEGER NOT NULL, handle INTEGER, inline BLOB)`,
   );
   await db.exec(
-    `CREATE TABLE IF NOT EXISTS ${chunks} (id TEXT NOT NULL, seq INTEGER NOT NULL, data BLOB NOT NULL,
-       PRIMARY KEY (id, seq)) WITHOUT ROWID`,
+    `CREATE TABLE IF NOT EXISTS ${chunks} (handle INTEGER NOT NULL, seq INTEGER NOT NULL,
+       data BLOB NOT NULL, PRIMARY KEY (handle, seq))`,
+  );
+  await db.exec(
+    `CREATE TABLE IF NOT EXISTS ${staging} (handle INTEGER PRIMARY KEY AUTOINCREMENT, created INTEGER NOT NULL)`,
   );
 
-  const checkId = (id: string) => {
-    if (typeof id !== "string" || id.length === 0 || id.startsWith(TMP))
-      throw new Error(`invalid blob id ${id}`);
-  };
-  const row = async (id: string) =>
-    (
-      await db.query<BlobRow>(
-        `SELECT size, chunk_size, chunked, inline FROM ${blobs} WHERE id = ?`,
-        [id],
-      )
-    )[0];
+  /** Handles of puts in flight in this store instance: its own sweep never touches them. */
+  const inFlight = new Set<number>();
 
-  type Staged =
-    | { kind: "inline"; data: Uint8Array }
-    | { kind: "rows"; tmp: string; size: number; rows: number };
+  const checkId = (id: string) => {
+    if (typeof id !== "string" || id.length === 0 || !id.isWellFormed())
+      throw new Error(`invalid blob id ${JSON.stringify(id)}`);
+  };
+  type Row = { size: number; chunk_size: number; handle: number | null };
+  const row = async (id: string) =>
+    (await db.query<Row>(`SELECT size, chunk_size, handle FROM ${blobs} WHERE id = ?`, [id]))[0];
+
   /**
-   * Content up to one chunk stays in memory and is committed inline in one transaction (JGit's
-   * small-object path: one commit, no temporary rows). Beyond that it streams into chunk rows under
-   * a fresh temporary id, holding one chunk in memory.
+   * Content up to one chunk stays in memory as the pieces received (no chunk-sized buffer for a
+   * small object) and commits inline. Once more than one chunk has arrived, one chunk-sized buffer
+   * is filled and bound per row, then reused: every driver copies a bound BLOB (SQLITE_TRANSIENT
+   * on node:sqlite, a slice for the DO, the wasm heap for sqlite-wasm), so memory stays at one chunk.
    */
   async function stage(bytes: ByteStream): Promise<Staged> {
-    let tmp: string | undefined;
-    let buf = new Uint8Array(chunkSize);
+    let pending: Uint8Array[] | undefined = [];
+    let pendingLen = 0;
+    let buf: Uint8Array | undefined;
     let fill = 0;
+    let handle: number | undefined;
     let size = 0;
     let rows = 0;
-    const flush = async () => {
-      if (fill === 0) return;
-      tmp ??= tmpId();
-      // copy exactly the used part: never bind a view of a larger or zero-length buffer
-      await db.query(`INSERT INTO ${chunks} (id, seq, data) VALUES (?, ?, ?)`, [
-        tmp,
+    const flush = async (data: Uint8Array) => {
+      if (handle === undefined) {
+        const [h] = await db.query<{ handle: number }>(
+          `INSERT INTO ${staging} (created) VALUES (?) RETURNING handle`,
+          [Date.now()],
+        );
+        handle = Number(h?.handle);
+        inFlight.add(handle);
+      }
+      await db.query(`INSERT INTO ${chunks} (handle, seq, data) VALUES (?, ?, ?)`, [
+        handle,
         rows++,
-        buf.slice(0, fill),
+        data,
       ]);
-      buf = new Uint8Array(chunkSize);
-      fill = 0;
+    };
+    const append = async (c: Uint8Array) => {
+      let off = 0;
+      const b = buf as Uint8Array;
+      while (off < c.length) {
+        if (fill === chunkSize) {
+          await flush(b);
+          fill = 0;
+        }
+        const n = Math.min(chunkSize - fill, c.length - off);
+        b.set(c.subarray(off, off + n), fill);
+        fill += n;
+        off += n;
+      }
     };
     try {
       for await (const c of bytes) {
-        let off = 0;
-        while (off < c.length) {
-          if (fill === chunkSize) await flush(); // spill only once more bytes arrive
-          const n = Math.min(chunkSize - fill, c.length - off);
-          buf.set(c.subarray(off, off + n), fill);
-          fill += n;
-          off += n;
-          size += n;
+        if (c.length === 0) continue;
+        size += c.length;
+        if (pending) {
+          pending.push(c.slice()); // the producer may reuse its buffer
+          pendingLen += c.length;
+          if (pendingLen <= chunkSize) continue;
+          // more than one chunk: switch to the reusable row buffer
+          buf = new Uint8Array(chunkSize);
+          const queued = pending;
+          pending = undefined;
+          for (const q of queued) await append(q);
+        } else {
+          await append(c);
         }
       }
-      if (tmp === undefined) return { kind: "inline", data: buf.slice(0, fill) };
-      await flush();
-      return { kind: "rows", tmp, size, rows };
+      if (pending) {
+        const data = new Uint8Array(pendingLen);
+        let o = 0;
+        for (const q of pending) {
+          data.set(q, o);
+          o += q.length;
+        }
+        return { kind: "inline", data };
+      }
+      if (fill > 0) await flush((buf as Uint8Array).slice(0, fill));
+      return { kind: "rows", handle: handle as number, size, rows };
     } catch (e) {
-      if (tmp !== undefined)
-        await db.query(`DELETE FROM ${chunks} WHERE id = ?`, [tmp]).catch(() => {});
+      if (handle !== undefined) await dropHandle(handle);
       throw e;
     }
   }
-  const drop = async (st: Staged) => {
-    if (st.kind === "rows")
-      await db.query(`DELETE FROM ${chunks} WHERE id = ?`, [st.tmp]).catch(() => {});
-  };
-  async function* readStaged(st: Staged) {
-    if (st.kind === "inline") yield st.data;
-    else yield* readRows(st.tmp, 0, st.rows - 1);
+  async function dropHandle(handle: number) {
+    inFlight.delete(handle);
+    await db.query(`DELETE FROM ${chunks} WHERE handle = ?`, [handle]).catch(() => {});
+    await db.query(`DELETE FROM ${staging} WHERE handle = ?`, [handle]).catch(() => {});
   }
-  /** One transaction: existing wins; else insert inline, or rename the rows to the id. */
+  const drop = async (st: Staged) => {
+    if (st.kind === "rows") await dropHandle(st.handle);
+  };
+  /** One transaction: existing wins; else insert inline, or verify the staged rows and point at them. */
   async function commit(st: Staged, id: string): Promise<boolean> {
-    return inTransaction(db, async (tx) => {
+    const stored = await inTransaction(db, async (tx) => {
       const exists = (await tx.query(`SELECT 1 FROM ${blobs} WHERE id = ?`, [id])).length > 0;
       if (exists) {
-        if (st.kind === "rows") await tx.query(`DELETE FROM ${chunks} WHERE id = ?`, [st.tmp]);
+        if (st.kind === "rows") {
+          await tx.query(`DELETE FROM ${chunks} WHERE handle = ?`, [st.handle]);
+          await tx.query(`DELETE FROM ${staging} WHERE handle = ?`, [st.handle]);
+        }
         return false;
       }
       if (st.kind === "inline") {
         // size 0 stores NULL (some bindings turn zero-length views into NULL anyway)
         await tx.query(
-          `INSERT INTO ${blobs} (id, size, chunk_size, chunked, inline) VALUES (?, ?, ?, 0, ?)`,
+          `INSERT INTO ${blobs} (id, size, chunk_size, handle, inline) VALUES (?, ?, ?, NULL, ?)`,
           [id, st.data.length, chunkSize, st.data.length === 0 ? null : st.data],
         );
-      } else {
-        await tx.query(`UPDATE ${chunks} SET id = ? WHERE id = ?`, [id, st.tmp]);
-        await tx.query(
-          `INSERT INTO ${blobs} (id, size, chunk_size, chunked, inline) VALUES (?, ?, ?, 1, NULL)`,
-          [id, st.size, chunkSize],
-        );
+        return true;
       }
+      const [s] = await tx.query<{ n: number; bytes: number; staged: number }>(
+        `SELECT count(*) AS n, coalesce(sum(length(data)), 0) AS bytes,
+                (SELECT count(*) FROM ${staging} WHERE handle = ?1) AS staged
+           FROM ${chunks} WHERE handle = ?1`,
+        [st.handle],
+      );
+      if (!s || Number(s.staged) !== 1 || Number(s.n) !== st.rows || Number(s.bytes) !== st.size) {
+        throw new Error(`staged rows of ${id} were removed before the commit (swept?)`);
+      }
+      await tx.query(
+        `INSERT INTO ${blobs} (id, size, chunk_size, handle, inline) VALUES (?, ?, ?, ?, NULL)`,
+        [id, st.size, chunkSize, st.handle],
+      );
+      await tx.query(`DELETE FROM ${staging} WHERE handle = ?`, [st.handle]);
       return true;
     });
+    if (st.kind === "rows") inFlight.delete(st.handle);
+    return stored;
   }
-  async function* readRows(id: string, from: number, to: number) {
+  async function* readRows(handle: number, size: number, cs: number, from: number, to: number) {
     // one row per query: at most one chunk in memory, whatever the blob size
     for (let seq = from; seq <= to; seq++) {
       const [r] = await db.query<{ data: unknown }>(
-        `SELECT data FROM ${chunks} WHERE id = ? AND seq = ?`,
-        [id, seq],
+        `SELECT data FROM ${chunks} WHERE handle = ? AND seq = ?`,
+        [handle, seq],
       );
-      if (!r) throw new Error(`blob ${id}: chunk ${seq} missing`);
-      yield toBytes(r.data);
+      const data = r ? toBytes(r.data) : undefined;
+      const want = Math.min(cs, size - seq * cs);
+      if (!data || data.length !== want)
+        throw new Error(`blob chunk ${seq} of handle ${handle} missing or truncated`);
+      yield data;
     }
+  }
+  async function* readStaged(st: Staged) {
+    if (st.kind === "inline") yield st.data;
+    else yield* readRows(st.handle, st.size, chunkSize, 0, st.rows - 1);
   }
 
   const store: StagingBlobStore = {
@@ -195,6 +248,7 @@ export async function sqlBlobStore(
     },
     async put(id, bytes, o) {
       checkId(id);
+      if (!o?.verify && (await store.has(id))) return; // content-addressed: nothing to stage
       const st = await stage(bytes);
       try {
         if (o?.verify) {
@@ -210,12 +264,16 @@ export async function sqlBlobStore(
       }
     },
     async *get(id, range) {
-      const r = await row(id);
+      // one query: the inline column only here (size() and has() never read content)
+      const [r] = await db.query<Row & { inline: unknown }>(
+        `SELECT size, chunk_size, handle, inline FROM ${blobs} WHERE id = ?`,
+        [id],
+      );
       if (!r) return;
       const start = Math.max(0, Math.min(range?.start ?? 0, r.size));
       const end = Math.max(start, Math.min(range?.end ?? r.size, r.size));
       if (start === end) return;
-      if (!r.chunked) {
+      if (r.handle === null) {
         yield toBytes(r.inline).slice(start, end);
         return;
       }
@@ -223,7 +281,7 @@ export async function sqlBlobStore(
       const first = Math.floor(start / cs);
       const last = Math.floor((end - 1) / cs);
       let seq = first;
-      for await (const data of readRows(id, first, last)) {
+      for await (const data of readRows(Number(r.handle), r.size, cs, first, last)) {
         const base = seq * cs;
         seq++;
         const a = Math.max(0, start - base);
@@ -239,9 +297,12 @@ export async function sqlBlobStore(
     },
     async remove(id) {
       return inTransaction(db, async (tx) => {
-        const had = (await tx.query(`SELECT 1 FROM ${blobs} WHERE id = ?`, [id])).length > 0;
-        if (!had) return false;
-        await tx.query(`DELETE FROM ${chunks} WHERE id = ?`, [id]);
+        const [r] = await tx.query<{ handle: number | null }>(
+          `SELECT handle FROM ${blobs} WHERE id = ?`,
+          [id],
+        );
+        if (!r) return false;
+        if (r.handle !== null) await tx.query(`DELETE FROM ${chunks} WHERE handle = ?`, [r.handle]);
         await tx.query(`DELETE FROM ${blobs} WHERE id = ?`, [id]);
         return true;
       });
@@ -249,25 +310,30 @@ export async function sqlBlobStore(
     async *list(p) {
       const lo = p ?? "";
       const hi = lo === "" ? undefined : successor(lo);
-      const rows = hi
-        ? await db.query<{ id: string }>(
-            `SELECT id FROM ${blobs} WHERE id >= ? AND id < ? ORDER BY id`,
-            [lo, hi],
-          )
-        : await db.query<{ id: string }>(`SELECT id FROM ${blobs} ORDER BY id`);
+      const rows =
+        hi !== undefined
+          ? await db.query<{ id: string }>(
+              `SELECT id FROM ${blobs} WHERE id >= ? AND id < ? ORDER BY id`,
+              [lo, hi],
+            )
+          : await db.query<{ id: string }>(`SELECT id FROM ${blobs} WHERE id >= ? ORDER BY id`, [
+              lo,
+            ]);
       for (const r of rows) yield r.id;
     },
     async sweepStaged(olderThanMs) {
       const cutoff = Date.now() - olderThanMs;
-      const temps = await db.query<{ id: string }>(
-        `SELECT DISTINCT id FROM ${chunks} WHERE id >= ? AND id < ?`,
-        [TMP, TMP_END],
+      const stale = await db.query<{ handle: number }>(
+        `SELECT handle FROM ${staging} WHERE created <= ?`,
+        [cutoff],
       );
       let n = 0;
-      for (const { id } of temps) {
-        const ms = Number(id.slice(TMP.length, id.indexOf("/", TMP.length)));
-        if (!(ms <= cutoff)) continue;
-        await db.query(`DELETE FROM ${chunks} WHERE id = ?`, [id]);
+      for (const { handle } of stale) {
+        if (inFlight.has(Number(handle))) continue;
+        await inTransaction(db, async (tx) => {
+          await tx.query(`DELETE FROM ${chunks} WHERE handle = ?`, [handle]);
+          await tx.query(`DELETE FROM ${staging} WHERE handle = ?`, [handle]);
+        });
         n++;
       }
       return n;

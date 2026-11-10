@@ -161,6 +161,7 @@ describe("R3b a sweep by another store instance never yields a broken blob", () 
     );
     await atGate;
     await new Promise((r) => setTimeout(r, 5));
+    expect(await b.sweepStaged?.(3_600_000)).toBe(0); // younger than the age: kept
     expect(await b.sweepStaged?.(0)).toBeGreaterThanOrEqual(1);
     release();
     await expect(put).rejects.toThrow();
@@ -175,6 +176,35 @@ describe("R3b a sweep by another store instance never yields a broken blob", () 
     const back: Uint8Array[] = [];
     for await (const c of a.get("obj")) back.push(c);
     expect(Buffer.concat(back).equals(Buffer.from(data))).toBe(true);
+  });
+});
+
+describe("R3d failed puts leave nothing for a later process to sweep", () => {
+  it("a staged put whose stream or idOf fails removes its rows", async () => {
+    const db = await newNodeSqliteDb({ path: tmpFile() });
+    const a = await sqlBlobStore(db, { chunkSize: CHUNK });
+    const big = pattern(CHUNK * 3, 17);
+    await expect(
+      a.putStaged(
+        (async function* () {
+          yield big;
+        })(),
+        () => {
+          throw new Error("bad id");
+        },
+      ),
+    ).rejects.toThrow();
+    await expect(
+      a.putStaged(
+        (async function* () {
+          yield big;
+          throw new Error("source died");
+        })(),
+        () => "x",
+      ),
+    ).rejects.toThrow();
+    const later = await sqlBlobStore(db, { chunkSize: CHUNK }); // a restarted process
+    expect(await later.sweepStaged?.(0)).toBe(0);
   });
 });
 
