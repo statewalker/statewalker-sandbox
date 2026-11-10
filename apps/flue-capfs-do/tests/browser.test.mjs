@@ -14,6 +14,7 @@ import { bundleTodoTool } from "./fixtures/bundle-fixture.mjs";
 import { startFakeLlm } from "./helpers/fake-llm.mjs";
 import { startWasmServer } from "./helpers/wasm-server.mjs";
 import { pythonCases } from "./python-scenario.mjs";
+import { wasmerCases } from "./wasmer-scenario.mjs";
 
 const TODO_TOOL = new URL("./fixtures/todo-tool.ts", import.meta.url);
 let server;
@@ -36,12 +37,18 @@ before(async () => {
   });
   server = await startServer(0);
   const { port } = server.address();
-  browser = await chromium
-    .launch()
-    .catch(() =>
-      chromium.launch({ executablePath: process.env.PW_CHROMIUM ?? "/opt/pw-browsers/chromium" }),
-    );
-  page = await browser.newPage();
+  // The Wasmer engine fetches packages from the Wasmer registry: through the environment's
+  // proxy when there is one (local servers bypass it).
+  const proxy = process.env.HTTPS_PROXY
+    ? { server: process.env.HTTPS_PROXY, bypass: "127.0.0.1,localhost" }
+    : undefined;
+  browser = await chromium.launch({ proxy }).catch(() =>
+    chromium.launch({
+      proxy,
+      executablePath: process.env.PW_CHROMIUM ?? "/opt/pw-browsers/chromium",
+    }),
+  );
+  page = await (await browser.newContext({ ignoreHTTPSErrors: !!proxy })).newPage();
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(`http://127.0.0.1:${port}/?data=test-${Date.now().toString(36)}`);
   await page.evaluate(() => window.capfs.ready);
@@ -105,6 +112,13 @@ describe("browser (cellb in Chromium)", () => {
   for (const c of pythonCases({ api, label: "browser-" })) test(`python: ${c.name}`, c.fn);
 
   for (const c of agentCases({ api, label: "browser-" })) test(`agent: ${c.name}`, c.fn);
+
+  test("the page is cross-origin isolated, so Wasmer runs in the browser", async () => {
+    assert.equal(await page.evaluate(() => crossOriginIsolated), true);
+    assert.equal((await api("/api/runtime")).value.wasmer, "browser");
+  });
+  for (const c of wasmerCases({ api, label: "browser-", llm: true }))
+    test(`wasmer: ${c.name}`, { timeout: 240000 }, c.fn);
 
   test("a tool is bundled by the bundler Worker in a browser isolate", async () => {
     const rt = await api("/api/runtime");

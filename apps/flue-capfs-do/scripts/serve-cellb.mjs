@@ -41,6 +41,9 @@ const pyodideDir = dirname(createRequire(import.meta.url).resolve("pyodide/packa
 const pythonVars = [
   `PYTHON_ENGINE=${join(projectDir, "src/python/engine.mjs")}`,
   `PYODIDE_INDEX=${pyodideDir}/`,
+  // Wasmer on Node: the kernel forks src/wasmer/engine.mjs; packages are cached in .wasmer-cache.
+  `WASMER_ENGINE=${join(projectDir, "src/wasmer/engine.mjs")}`,
+  `WASMER_CACHE=${join(projectDir, ".wasmer-cache")}`,
 ];
 values.var = [
   ...pythonVars.filter((v) => !values.var.some((o) => o.startsWith(v.split("=")[0] + "="))),

@@ -124,6 +124,9 @@ Tasks:
 - `{kind: "agent", prompt, instructions?, maxTurns?, timeoutMs?, session?, cwd?}` runs an LLM
   agent whose tools are Flue's (read, write, edit, grep, glob, bash) over the capability (see
   [Agent loop](#agent-loop)).
+- `{kind: "wasmer", script, packages?, cwd?, env?, timeoutMs?}` runs a bash script in a Wasmer
+  sandbox whose `/workspace` is the capability (see [Wasmer](#wasmer)); `{kind: "agent", …,
+  sandbox: "wasmer"}` runs Flue's tools on such a sandbox.
 - `{kind: "revocationId"}` returns the revocation id of the capability the agent holds.
 
 `chain: [{scope?, readOnly?, noModel?, datalog?, llmToken?}, …]` adds one hop per entry. Each hop attenuates the
@@ -496,6 +499,78 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
   `src/node-probe-guard.ts`, the entry's first import, hides that field while the modules load
   (only when `process.platform` is `"browser"`).
 
+### Wasmer
+
+The `wasmer` task runs a bash script in a [Wasmer](https://wasmer.io) sandbox (WASIX: real bash,
+coreutils, grep, ripgrep and find from the Wasmer registry) whose **`/workspace` is the
+capability**. Nothing is copied in or out: every file operation the guest makes (stat, readDir,
+open, read, write, mkdir, rename, …) is forwarded to the Agent cell and answered with the
+capability, so the Workspace cell authorizes each entry as it does for the other tasks.
+
+```bash
+curl -s -X POST localhost:8788/api/agents/a1/run -H 'content-type: application/json' -d '{
+  "workspace": "acme", "token": "<token>", "transport": "token",
+  "task": { "kind": "wasmer", "script": "cd /workspace/proj && rg -n TODO . && echo done > out.txt" } }'
+# → {"value":{"result":{"exitCode":0,"reason":"exited","stdout":"./readme.md:2:TODO …","stderr":"","truncated":false}}}
+```
+
+`{kind: "agent", prompt, sandbox: "wasmer"}` gives Flue's tools such a sandbox instead of
+just-bash: `bash`, `grep` (ripgrep) and `glob` (find) run in Wasmer, and `read`, `write` and
+`edit` call the same capability; paths are then under `/workspace`.
+
+**How the files get there.** The SDK (`@wasmer/sdk`) has an experimental `storageHost(mount)`: an
+embedder filesystem as the sandbox's `/workspace`, called synchronously through a bridge
+(protocol: wasmer-js `js/bindgen/src/host_filesystem.rs`). It is not in the SDK's public
+options, so the engine (`src/wasmer/engine.mjs`) builds each sandbox through the core builder
+with the run's id as the mount id; `src/wasmer/host-fs.ts` answers the protocol with the
+capability. Open files are buffered (one buffer per path, shared by its handles) and saved on
+flush or close. WASIX drops what close returns, so nothing may fail there silently: creating or
+truncating a file is written through at open, the write right on an existing file is asked at the
+first write (WASIX opens files read-write even to read them), and content that is not UTF-8 is
+refused at the write that makes it so. One case cannot be: a write may end inside a character
+(the next write may complete it), so a file left with an incomplete last character fails to save
+at close and keeps its previous content; a length that would cut a character is refused.
+
+| Runtime | Engine | How file operations reach the Agent cell |
+|---|---|---|
+| cellb on Node | a child process (`src/wasmer/engine.mjs`) | the engine's file thread (`node-fs-thread.mjs`) writes each request on a pipe and blocks on the reply pipe; `node-preload.mjs` installs the SDK's bridge in its worker threads |
+| cellb in a browser | a module Worker started by the cells worker | the SDK's blocking bridge messages, answered in place (SharedArrayBuffer): the page must be cross-origin isolated (`serve-browser` sends COOP/COEP) |
+| workerd, celld | none (`ENOSYS`) | Wasmer needs threads and shared memory |
+
+- **Packages** come from the Wasmer registry, limited to `WASMER_PACKAGES` (JSON array or comma
+  list; default `wasmer/bash`, `wasmer/coreutils`, `wasmer/grep`, `wasmer/ripgrep`,
+  `wasmer/findutils`; bash is always included); a run asking for another is refused (`EPERM`).
+  The engine loads them once when it starts, and from then on has **no `fetch`**: the sandbox
+  ships a built-in `wasmer` command that would otherwise resolve any registry package with the
+  host's fetch (in the SDK's worker threads, which never have one: `node-preload.mjs` on Node, a
+  wrapper module around the SDK's worker in browsers). On Node they are cached in `WASMER_CACHE`
+  (`serve-cellb` uses `.wasmer-cache/`); a browser caches them per origin. The Node engine
+  inherits only the proxy settings (`HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, …) and runs under
+  Node's permission model: it may read files, write only the cache, start worker threads, and
+  not start processes.
+- **Isolation:** each run is a sandbox of its own (nothing outside `/workspace` survives it), with
+  no network. A guest reaches only its mounts: unlike tool isolates on cellb's Node host, a WASI
+  guest cannot reach the host's files. When a run ends its mount is dropped and late calls are
+  refused.
+- **Engine life:** one engine per Agent cell, started at the first run and stopped after 5
+  minutes without an open sandbox. A file operation the capability has not answered in 20 s
+  fails (on Node one request is served at a time for every sandbox, so none may hold the
+  others); a command the engine fails to stop in time restarts the engine; sessions of a
+  stopped engine fail at once. Sandboxes are built one at a time, each bound to its run's mount,
+  and a sandbox whose open timed out is closed when it is built.
+- **Limits:** 60 s per command by default (at most 300 s), 1 MB of output, 256 open files and
+  16 MB per file read or written through an open file. The store keeps UTF-8 text, so binary
+  writes are refused (`ENOTSUP`); symlinks are not in the protocol. A directory listing makes one
+  `stat` per entry, and its reply must fit the SDK's 512 KiB bridge buffer (a few thousand
+  entries).
+- **Config:** `WASMER=off` disables it; `WASMER_ENGINE` is the engine's path (Node) or URL
+  (browser, default `/wasmer/engine.mjs`); `WASMER_SDK` the SDK's URL in a browser (default
+  `/wasmer/sdk/dist/index.js`). `/api/runtime` reports `wasmer`: `node`, `browser`, or why not.
+- **Cost of the prototype:** one file operation is one round trip to the Agent cell (and a
+  capability check), which suits shell work; tools that make tens of thousands of metadata
+  calls (`pip install`) would want a per-run cache. `storageHost` is experimental in the SDK and
+  may change.
+
 ### In a browser
 
 `pnpm dev:browser` builds `dist/` and serves the project at <http://127.0.0.1:8790/>:
@@ -558,6 +633,11 @@ src/tools/policy.ts  toolPolicy() and admitTool(): what may run here, from the d
 src/python/engine.mjs  the Python engine (Pyodide): a Node child process or a browser Worker
 src/python/kernel.ts   Agent side: files into /workspace, live capfs calls, write-back through the capability
 src/python/hosts.ts    where the engine runs per runtime (node child with --permission, Worker, none)
+src/wasmer/engine.mjs  the Wasmer engine: sandboxes with /workspace = the capability (Node child or Worker)
+src/wasmer/kernel.ts   Agent side: starts the engine, answers its file operations with the run's capability
+src/wasmer/host-fs.ts  the SDK's host-filesystem protocol over a capability
+src/wasmer/flue-sandbox.ts  a Flue sandbox on Wasmer (agent task, sandbox: "wasmer")
+tests/wasmer-scenario.mjs   the Wasmer cases, shared by tests/wasmer.test.mjs (HTTP) and tests/browser.test.mjs
 browser/               the browser host: page, cells worker (cellb + SQLite on OPFS), index.html
 scripts/bundle-tool.mjs    CLI around bundleTool
 tests/scenario.test.mjs    the cross-runtime suite (HTTP)

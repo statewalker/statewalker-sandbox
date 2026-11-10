@@ -272,6 +272,7 @@ const failed = (code) => code !== 0;
 let code = await runTests("tests/scenario.test.mjs");
 if (!failed(code)) code = await runTests("tests/python.test.mjs");
 if (!failed(code)) code = await runTests("tests/agent.test.mjs");
+if (!failed(code)) code = await runTests("tests/wasmer.test.mjs");
 if (!failed(code))
   code = await runTests("tests/durability.test.mjs", { ...durability, PHASE: "write" });
 await stopRuntime(child);

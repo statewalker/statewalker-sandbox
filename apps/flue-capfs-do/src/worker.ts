@@ -26,6 +26,7 @@ import { pythonRuntime } from "./python/hosts.ts";
 import { bundlerOffered } from "./tools/bundler-client.ts";
 import { deploymentToolConfig } from "./tools/config.ts";
 import { toolPolicy } from "./tools/policy.ts";
+import { wasmerHost } from "./wasmer/kernel.ts";
 
 export { Agent } from "./agent.ts";
 export { ToolFilesEntrypoint } from "./tool-files-entrypoint.ts";
@@ -75,6 +76,17 @@ function fail(e: unknown): Response {
     { status: STATUS[err.code] ?? 500 },
   );
 }
+
+/** Where the `wasmer` task runs here ("node", "browser"), or why it does not. */
+function wasmerSummary(env: Env): string {
+  try {
+    wasmerHost(env);
+    return pythonRuntime();
+  } catch (e) {
+    return String((e as Error).message);
+  }
+}
+
 /** Which model the `agent` task uses (never the key). */
 function llmSummary(env: Env) {
   try {
@@ -133,6 +145,8 @@ export default {
           llm: llmSummary(env),
           // Whether tools can be bundled in the deployment (the bundler Worker, on demand).
           bundler: bundlerOffered(env),
+          // Where Wasmer sandboxes run ("node", "browser"), or why not.
+          wasmer: wasmerSummary(env),
           ...tools,
           userAgent: navigator.userAgent,
           bootId,
