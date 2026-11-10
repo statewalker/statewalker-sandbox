@@ -89,7 +89,7 @@ against it (R7).
 
 ## Verified
 
-All 17 Node tests and the 24 X6b1 tests re-run against this module pass
+All 24 Node tests and the 24 X6b1 tests re-run against this module pass
 (`pnpm test 15-resumable-index`). The tests were written alongside the implementation rather than
 before it; the mutation table below stands in for the red runs.
 
@@ -98,6 +98,7 @@ before it; the mutation table below stands in for the red runs.
 | R1 | OFS, REF, `gc --aggressive`, a 4 MiB blob with a delta child, a 300-deep comb, and two thin packs (with `externalBase` over the receiver's object database): in steps of 1, 7 and 1 000 units (7 and 1 000 for the aggressive pack), every step cold, the installed pack, its id and the `.idx` are byte-identical to X6b1's one-shot install; only `pack-*` files remain. A malformed pack ends the job with PackError and leaves nothing. |
 | R2 | A job on Node files (steps of 25 units), failed once at each of its storage operations in turn (reads fail, writes fail after half their first chunk — torn files, removals/moves/stats fail), then resumed cold on healthy storage: every run installs git's `.idx` and leaves only `pack-*` files. |
 | R2b | Storage that loses or corrupts a checkpoint: a missing log segment, a segment truncated by one whole record, a digit changed in the newest state — each fails the resume (never replayed as wrong entries). |
+| Review | B1: an older state left behind plus a failure on the last state removal in cleanup — the job completes, nothing left. B2: two concurrent steppers (0–3 ms storage latency), 32 interleavings — same `.idx`, nothing left (the old code: "pack truncated"). B3: `budgetMs: 0` — every step does exactly one unit; 2 ms on a 40 000-entry pack (warm) and a 3 000-entry pack (cold) completes. C1: 300 appended bases in 900 one-unit steps — state ≤ 773 bytes, one thin file (was 20 383 bytes and 300 files). C2: a 3 000-deep comb in warm steps of 50 — 6 001 entry loads, as one-shot (was 186 121). |
 | R3 | 210 objects in 48 steps of 7 units: 26 612 bytes of log (≤ 2 × 79 × 210 + 8 per step), 29 268 bytes of state (≤ 683 per generation), 561 bytes of stack. |
 | R4 | Steps of 1, 7 and 50 units never use more; a 40 000-entry pack with `budgetMs: 20` (warm) took several steps, each one's work within 20 ms plus its longest unit plus 5 ms. |
 | R5 | X6a's fixture pack indexed in a Durable Object (SqliteFilesApi, Miniflare with persistent storage) in steps of 40 units, the runtime disposed and recreated for every step: git's `.idx`, only `pack-*` files left. |
@@ -121,6 +122,13 @@ Each mutation applied alone to `src/index-job.ts`, the matching tests run (`-t`)
 | N9 resolved deltas not logged | R1 (7) |
 | N10 appended bases not logged | R1 thin packs (2) |
 | N12 log segments not chained | R1 (7) |
+| N13 cleanup removes states in listing order (review B1) | B1 |
+| N14 steps of a job not serialized (review B2) | B2 |
+| N15 first unit of a step not granted (review B3) | B3 `budgetMs: 0` (the 2 ms cases no longer livelock once the resolver stays warm) |
+| N16 warm resolver not reused (review C2) | C2 |
+| N17 thin batch closed at every step (review C1) | C1 |
+| N18 generation check removed | **not caught**: within an isolate steps are serialized; across isolates it narrows a race the tests cannot reproduce deterministically (documented: not a lock) |
+| N19 finished results not remembered | B2 (a queued step finds the job gone) |
 
 ## Functional description
 

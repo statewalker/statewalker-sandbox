@@ -1303,13 +1303,17 @@ async function readAll(files: FilesApi, path: string): Promise<Uint8Array> {
   return out;
 }
 
+/**
+ * The newest generation whose state verifies (0 for a job being started). A torn state file of a
+ * crashed commit does not count: its retry rewrites it.
+ */
 async function newestGen(files: FilesApi, dir: string, id: string): Promise<number> {
-  const prefix = `tmp_job_${id}_state_`;
-  let g = 0; // no state yet: the job being started (generation 0)
-  for await (const e of files.list(dir))
-    if (e.kind === "file" && e.name.startsWith(prefix))
-      g = Math.max(g, Number(e.name.slice(prefix.length)));
-  return g;
+  try {
+    return (await loadState(files, dir, id)).gen;
+  } catch (e) {
+    if (e instanceof NoSuchJobError) return 0;
+    throw e;
+  }
 }
 
 /** The newest state generation whose content verifies (a torn write falls back to the previous). */

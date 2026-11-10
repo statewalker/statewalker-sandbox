@@ -580,6 +580,18 @@ describe("review cases (#70)", () => {
     }
     return buildPack(e);
   };
+  it("B3: budgetMs 0 (the deadline passed before the first unit): each step still does one unit", async () => {
+    const pack = refHeavy(300);
+    const ref = await reference(pack);
+    for (const cold of [false, true]) {
+      const { steps, result } = await runJob(new MemFilesApi(), pack, Number.POSITIVE_INFINITY, {
+        budgetMs: 0,
+        cold,
+      });
+      for (const s of steps.slice(0, -1)) expect(s.units).toBe(1);
+      expect(Buffer.compare(Buffer.from(result.idx), Buffer.from(ref.idx))).toBe(0);
+    }
+  }, 300_000);
   for (const cold of [false, true]) {
     it(`B3: budgetMs 2 (${cold ? "cold" : "warm"}): every step makes progress and the job completes`, async () => {
       // cold steps replay the whole log first: a smaller pack keeps a 1-unit-per-step job short
