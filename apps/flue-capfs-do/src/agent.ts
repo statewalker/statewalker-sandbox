@@ -30,7 +30,13 @@ import { PythonKernel, type PythonRunRequest } from "./python/kernel.ts";
 import { deploymentToolConfig } from "./tools/config.ts";
 import { admitTool, toolPolicy } from "./tools/policy.ts";
 
-export type AttenuationSpec = { scope?: string | string[]; readOnly?: boolean; datalog?: string };
+export type AttenuationSpec = {
+  scope?: string | string[];
+  readOnly?: boolean;
+  datalog?: string;
+  /** The model credential from this hop on (replaces the one handed down); not part of the block. */
+  llmToken?: string;
+};
 
 export type Task =
   | { kind: "bash"; script: string; cwd?: string }
@@ -90,7 +96,8 @@ async function sessionScope(cap: Cap, chain: AttenuationSpec[]): Promise<string>
   if (chain.length === 0) return rid;
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(JSON.stringify(chain)),
+    // The chain's attenuations, not its model credentials.
+    new TextEncoder().encode(JSON.stringify(chain.map(({ llmToken: _t, ...hop }) => hop))),
   );
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return `${rid}:${hex.slice(0, 32)}`;
@@ -104,6 +111,11 @@ export class Agent extends DurableObject<AgentEnv> {
     task: Task,
     /** Set by the hop before: the requester's capability and chain (agent sessions' key). */
     scope?: string,
+    /**
+     * The caller's credential for the model, handed down hop by hop to the `agent` task's model
+     * calls (see agent-loop.ts). It is never stored, returned, or given to tools or the model.
+     */
+    llmToken?: string,
   ): Promise<RunResult> {
     const cap = capFromHandoff(this.env, handoff);
     // An agent session belongs to the capability the request brought and the chain it named:
@@ -112,16 +124,30 @@ export class Agent extends DurableObject<AgentEnv> {
       scope = await sessionScope(cap, chain);
     if (chain.length > 0) {
       const [first, ...rest] = chain as [AttenuationSpec, ...AttenuationSpec[]];
-      const narrower = await cap.attenuate(attenuationBlock(first));
+      const { llmToken: hopToken, ...block } = first;
+      const narrower = await cap.attenuate(attenuationBlock(block));
       const subName = `${name}/sub`;
       const sub = this.env.AGENT.get(this.env.AGENT.idFromName(subName));
-      const r = (await sub.run(subName, narrower.handoff(), rest, task, scope)) as RunResult;
+      const r = (await sub.run(
+        subName,
+        narrower.handoff(),
+        rest,
+        task,
+        scope,
+        hopToken ?? llmToken,
+      )) as RunResult;
       return { hops: [name, ...r.hops], result: r.result };
     }
-    return { hops: [name], result: await this.#execute(name, cap, task, scope) };
+    return { hops: [name], result: await this.#execute(name, cap, task, scope, llmToken) };
   }
 
-  async #execute(name: string, cap: Cap, task: Task, scope?: string): Promise<unknown> {
+  async #execute(
+    name: string,
+    cap: Cap,
+    task: Task,
+    scope?: string,
+    llmToken?: string,
+  ): Promise<unknown> {
     switch (task.kind) {
       case "bash": {
         const sh = new Bash({ fs: new CapFs(cap) as never, cwd: task.cwd ?? "/" });
@@ -140,6 +166,7 @@ export class Agent extends DurableObject<AgentEnv> {
           // Only a session needs the scope (one more call to the Workspace).
           scope: task.session === undefined ? "" : (scope ?? (await sessionScope(cap, []))),
           sandboxId: name,
+          llmToken,
         });
       default:
         throw new Error(`EINVAL: unknown task '${(task as { kind?: string }).kind}'`);

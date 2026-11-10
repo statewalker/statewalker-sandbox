@@ -341,6 +341,19 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
   `anthropic-messages`. The `LLM_API_KEY` secret is its key. Nothing in a request chooses the
   endpoint or sees the key; `/api/runtime` reports `llm: {model, api, host}` (or `null`, and
   the task fails with `ENOSYS`).
+- **Callers can bring their own model credential.** Send it in the `x-llm-token` header of
+  `/api/agents/:name/run`. Each hop of the `chain` hands it down to the next, and the last hop's
+  `agent` task uses it for its model calls. A hop can replace it from there on with `llmToken`
+  in its chain entry, e.g. `"chain": [{"scope": "/proj", "llmToken": "<team key>"}]`.
+  - What the deployment accepts is `callerToken` in `LLM`: `"allow"` (default), `"require"`
+    (no run without a caller token, so callers spend their own budget) or `"forbid"`.
+  - By default the token replaces the deployment's key (sent as the provider's API key). With
+    `"callerTokenHeader": "x-user-token"` it goes in that header and the deployment's key stays
+    the API key: for a gateway that authenticates each caller and holds the provider key.
+  - The token is never stored (not in sessions, which do not depend on it either), never
+    returned, and never reaches the tools or the model. Provider errors are redacted. It must be
+    printable ASCII without spaces (up to 4096 characters), so it cannot break a header.
+  - `/api/runtime` reports `llm.callerToken`.
 - **Limits:** `maxTurns` (default 12, at most 50) and `timeoutMs` (default 120 s, at most
   600 s; a tool that ignores the abort gets 5 s more, then the run returns, its calls without
   a result marked as errors; such a tool can still finish after the run returned, and its
@@ -370,9 +383,11 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
   `HISTORY`), so the cases (`tests/agent-scenario.mjs`) check what the tools did, not what a
   model chose to say. `run-env.mjs` passes it to every runtime as `LLM` with a dummy key.
 - **Known exposure:**
-  - Any valid capability may run the model: there is no per-capability right to it and no rate
-    limit, so a narrow read-only token can still spend up to 50 turns of the deployment's budget
-    per run. A real deployment would gate the task on a fact in the session token and meter it.
+  - With `callerToken: "allow"` or `"forbid"`, any valid capability may run the model on the
+    deployment's key: there is no per-capability right to it and no rate limit, so a narrow
+    read-only token can still spend up to 50 turns of that budget per run. `"require"` makes
+    callers pay with their own token; otherwise gate the task on a fact in the session token and
+    meter it.
   - The key is a secret only on workerd (`wrangler secret put LLM_API_KEY`). On cellb, `--var`
     makes it a plain var, and in the browser build it would be in `dist/cellb/wrangler.json`,
     which the page loads: anyone who can load the page can read it. The tests pass a dummy key
@@ -433,6 +448,7 @@ src/agent.ts        Agent DO: bash, Flue tools, Worker Loader tools, delegation 
 src/flue-compat.ts  `rg` shim so Flue's grep tool works on just-bash
 src/agent-loop.ts   the `agent` task: pi-agent-core loop, Flue's tools over the capability, sessions
 src/agent-history.ts  how a session history is trimmed (unit-tested)
+src/llm-config.ts   the LLM var and one run's credentials (deployment key or caller token)
 src/node-probe-guard.ts  hides process.versions.node from pi-ai's load-time probes in the browser
 src/tools/config.ts  ToolBundleConfig: defaults (tool-bundle.config.json) ← overrides ← TOOL_BUNDLE
 src/tools/shims.ts   fs shim over `files`, POSIX path, deny modules, the WorkerEntrypoint wrapper

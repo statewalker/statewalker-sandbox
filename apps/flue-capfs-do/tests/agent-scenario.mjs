@@ -23,14 +23,12 @@ export function agentCases({ api, transports = ["stub", "token"], label = "" }) 
     return { ws, ...(await admin(`/api/w/${ws}/sessions`, { user: "alice", rights })) };
   };
   const files = (ws) => admin(`/api/w/${ws}/files`);
-  const ask = (ws, token, transport, task, chain = [], agent = `ag-${ws}`) =>
-    api(`/api/agents/${agent}/run`, {
-      workspace: ws,
-      token,
-      transport,
-      chain,
-      task: { kind: "agent", ...task },
-    });
+  const ask = (ws, token, transport, task, chain = [], agent = `ag-${ws}`, llmToken) =>
+    api(
+      `/api/agents/${agent}/run`,
+      { workspace: ws, token, transport, chain, task: { kind: "agent", ...task } },
+      llmToken === undefined ? {} : { headers: { "x-llm-token": llmToken } },
+    );
   const ok = (r) => {
     assert.equal(r.ok, true, r.error);
     return r.value.result;
@@ -128,6 +126,38 @@ export function agentCases({ api, transports = ["stub", "token"], label = "" }) 
     const { ws, token } = await setup();
     const r = ok(await ask(ws, token, "token", { prompt: "KEY" }));
     assert.equal(r.reply, "KEY: Bearer sk-fake");
+  });
+
+  for (const transport of transports)
+    add(
+      `[${transport}] the caller's model token goes down the chain to the model call`,
+      async () => {
+        const { ws, token } = await setup();
+        const key = (chain, llmToken) =>
+          ask(ws, token, transport, { prompt: "KEY" }, chain, undefined, llmToken).then(ok);
+        assert.equal((await key([], "user-tok-1")).reply, "KEY: Bearer user-tok-1");
+        const two = [{ readOnly: true }, { scope: "/proj" }];
+        assert.equal((await key(two, "user-tok-1")).reply, "KEY: Bearer user-tok-1", "two hops");
+        // A hop can hand down its own credential instead.
+        const own = [{ readOnly: true }, { scope: "/proj", llmToken: "hop-tok-2" }];
+        assert.equal((await key(own, "user-tok-1")).reply, "KEY: Bearer hop-tok-2");
+        assert.equal((await key(own)).reply, "KEY: Bearer hop-tok-2");
+        assert.equal((await key([])).reply, "KEY: Bearer sk-fake", "without one: the deployment's");
+      },
+    );
+
+  add("model tokens: refused when malformed, kept out of errors and sessions", async () => {
+    const { ws, token } = await setup();
+    const bad = await ask(ws, token, "token", { prompt: "KEY" }, [], undefined, "a b");
+    assert.equal(bad.code, "EINVAL");
+    const r = ok(await ask(ws, token, "token", { prompt: "FAIL" }, [], undefined, "user-tok-3"));
+    assert.ok(r.error, "the provider's error is reported");
+    assert.doesNotMatch(JSON.stringify(r), /user-tok-3/);
+    // A session through a hop with its own token is the same session as without the token.
+    const chain = (t) => [{ readOnly: true, ...(t ? { llmToken: t } : {}) }];
+    ok(await ask(ws, token, "token", { prompt: "OK", session: "t1" }, chain("hop-tok-4")));
+    const again = ok(await ask(ws, token, "token", { prompt: "HISTORY", session: "t1" }, chain()));
+    assert.equal(again.reply, "MESSAGES: 4", "the token is not part of the session's key");
   });
 
   add("a session continues for its capability, and starts fresh for another", async () => {
