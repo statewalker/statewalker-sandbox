@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -93,7 +93,12 @@ async function serve(handler: (req: Request) => Promise<Response>): Promise<stri
         duplex: "half",
       });
       const response = await handler(request);
-      res.writeHead(response.status, Object.fromEntries(response.headers));
+      // no keep-alive: an idle socket closed by the server is never reused by the client (tests pause
+      // between requests for many seconds)
+      res.writeHead(response.status, {
+        ...Object.fromEntries(response.headers),
+        connection: "close",
+      });
       if (response.body) {
         const reader = response.body.getReader();
         res.on("close", () => void reader.cancel().catch(() => {}));
@@ -304,11 +309,14 @@ describe("R3 our client against git http-backend", () => {
     // incremental
     writeFileSync(join(src, "file2.txt"), "fresh\n");
     git(src, ["commit", "-q", "-am", "fresh"]);
+    git(src, ["tag", "-a", "v2", "-m", "fresh release"]);
     const stats: FetchStats = { haves: 0, rounds: 0, objects: 0 };
     await fetchFrom(url, repo, { refspecs: ["+refs/heads/*:refs/heads/*"], stats });
     expect(rev(d, "refs/heads/main")).toBe(rev(src, "HEAD"));
+    // the annotated tag on the fetched commit came along (include-tag) and was followed
+    expect(rev(d, "refs/tags/v2")).toBe(rev(src, "refs/tags/v2"));
     expect(stats.objects).toBe(
-      git(src, ["rev-list", "--objects", "HEAD~1..HEAD"]).toString().trim().split("\n").length,
+      git(src, ["rev-list", "--objects", "HEAD~1..HEAD"]).toString().trim().split("\n").length + 1,
     );
     git(d, ["fsck", "--strict"]);
   }, 120_000);
@@ -342,13 +350,14 @@ function counted(repo: Repository) {
   return c;
 }
 /** A protocol v2 fetch request for all of `wants`. */
-const fetchRequest = (wants: string[], extra: string[] = []) =>
+const fetchRequest = (wants: string[], extra: string[] = [], noProgress = true) =>
   concat([
     pkt("command=fetch\n"),
     pkt("agent=test\n"),
     pkt("object-format=sha1\n"),
     DELIM,
     pkt("ofs-delta\n"),
+    ...(noProgress ? [pkt("no-progress\n")] : []),
     ...wants.map((w) => pkt(`want ${w}\n`)),
     ...extra.map((l) => pkt(`${l}\n`)),
     pkt("done\n"),
@@ -366,22 +375,11 @@ const post = (url: string, body: Uint8Array, signal?: AbortSignal) =>
   });
 
 describe("R5 streaming", () => {
-  it("the first pack byte arrives before half of the objects are read; abort stops the reads", async () => {
-    const d = emptyRepo();
-    for (let i = 0; i < 64; i++) writeFileSync(join(d, `b${i}.bin`), noise(512 * 1024, i + 1));
-    git(d, ["add", "-A"]);
-    git(d, ["commit", "-q", "-m", "blobs"]);
-    const head = rev(d, "HEAD");
-    const repo = await open(d);
-    const c = counted(repo);
-    const url = await serve(uploadPackHandler(repo));
-    const res = await post(url, fetchRequest([head]));
-    const reader = new PktReader(
-      (async function* () {
-        for await (const x of res.body as unknown as AsyncIterable<Uint8Array>) yield x;
-      })(),
-    );
-    let readsAtFirstPackByte = -1;
+  /** Reads a fetch response; the object reads counted when the first progress and pack bytes arrive. */
+  async function firstBytes(res: Response, c: { reads: number }) {
+    const reader = new PktReader(res.body as unknown as AsyncIterable<Uint8Array>);
+    let progress = -1;
+    let pack = -1;
     let inPack = false;
     for (;;) {
       const p = await reader.read();
@@ -391,34 +389,57 @@ describe("R5 streaming", () => {
         if (dec.decode(p.data) === "packfile\n") inPack = true;
         continue;
       }
-      if (p.data[0] === 1 && readsAtFirstPackByte < 0) readsAtFirstPackByte = c.reads;
+      if (p.data[0] === 2 && progress < 0) progress = c.reads;
+      if (p.data[0] === 1 && pack < 0) pack = c.reads;
     }
-    const total = c.reads;
-    console.log(`R5: first pack byte after ${readsAtFirstPackByte} reads of ${total}`);
-    expect(readsAtFirstPackByte).toBeGreaterThanOrEqual(0);
-    expect(readsAtFirstPackByte).toBeLessThan(total / 2);
-    // abort after the first pack bytes
-    const c2 = counted(repo);
-    void c2;
+    return { progress, pack, total: c.reads };
+  }
+  async function abortAfterFirstBytes(url: string, head: string, c: { reads: number }) {
     const before = c.reads;
     const ac = new AbortController();
-    const res2 = await post(url, fetchRequest([head]), ac.signal);
-    const it2 = (res2.body as unknown as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
-    let got = 0;
-    while (got < 300_000) {
-      const r = await it2.next();
-      if (r.done) break;
-      got += r.value.length;
-    }
+    const res = await post(url, fetchRequest([head], [], false), ac.signal);
+    const it = (res.body as unknown as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
+    await it.next();
     ac.abort();
-    await it2.return?.().catch(() => {});
+    await it.return?.().catch(() => {});
     await new Promise((r) => setTimeout(r, 500));
     const atAbort = c.reads - before;
     await new Promise((r) => setTimeout(r, 1000));
-    const later = c.reads - before;
-    console.log(`R5 abort: ${atAbort} reads at abort, ${later} a second later, of ${total}`);
-    expect(later).toBe(atAbort);
-    expect(later).toBeLessThan(total);
+    return { atAbort, later: c.reads - before };
+  }
+  it("bytes flow before half of the objects are read (progress while searching; pack data at once with reuse); abort stops the reads", async () => {
+    const d = emptyRepo();
+    for (let i = 0; i < 64; i++) writeFileSync(join(d, `b${i}.bin`), noise(512 * 1024, i + 1));
+    git(d, ["add", "-A"]);
+    git(d, ["commit", "-q", "-m", "blobs"]);
+    const head = rev(d, "HEAD");
+    const repo = await open(d);
+    const c = counted(repo);
+    const searching = await serve(uploadPackHandler(repo));
+    const reusing = await serve(uploadPackHandler(repo, { search: false }));
+    c.reads = 0;
+    const s = await firstBytes(await post(searching, fetchRequest([head], [], false)), c);
+    c.reads = 0;
+    const r = await firstBytes(await post(reusing, fetchRequest([head], [], false)), c);
+    console.log(
+      `R5 search: first progress after ${s.progress}, first pack byte after ${s.pack} of ${s.total} reads`,
+    );
+    console.log(`R5 reuse: first pack byte after ${r.pack} of ${r.total} reads`);
+    expect(s.progress).toBeGreaterThanOrEqual(0);
+    expect(s.progress).toBeLessThan(s.total / 2);
+    expect(r.pack).toBeGreaterThanOrEqual(0);
+    expect(r.pack).toBeLessThan(r.total / 2);
+    for (const [name, url, total] of [
+      ["search", searching, s.total],
+      ["reuse", reusing, r.total],
+    ] as const) {
+      const a = await abortAfterFirstBytes(url, head, c);
+      console.log(
+        `R5 abort (${name}): ${a.atAbort} reads at abort, ${a.later} a second later, of ${total}`,
+      );
+      expect(a.later).toBe(a.atAbort);
+      expect(a.later).toBeLessThan(total);
+    }
   }, 120_000);
 });
 
@@ -449,22 +470,55 @@ describe("R6 negotiation", () => {
     );
     expect(rev(d, "refs/heads/main")).toBe(rev(src, "HEAD"));
   }, 180_000);
-  it("an unrelated local history: gives up after 256 haves in vain, still fetches", async () => {
+  it("git's give-up: an early ACK, then 256 haves in vain → done; no ACK at all → every have", async () => {
     const src = repoWithHistory(5);
     const url = await serve(uploadPackHandler(await open(src)));
     const d = emptyRepo();
-    for (let i = 0; i < 400; i++) {
-      writeFileSync(join(d, "x.txt"), `unrelated ${i}\n`);
-      git(d, ["add", "-A"]);
-      git(d, ["commit", "-q", "-m", `u${i}`]);
-    }
     const repo = await open(d);
+    await clone(url, repo);
+    // 600 unrelated commits on another branch, older than the cloned tip (git fast-import)
+    let stream = "";
+    for (let i = 0; i < 600; i++) {
+      const data = `unrelated ${i}\n`;
+      stream += `commit refs/heads/other\ncommitter u <u@x> ${1000000000 + i} +0000\ndata 2\nu\n`;
+      stream += `M 100644 inline x.txt\ndata ${data.length}\n${data}\n`;
+    }
+    execFileSync("git", ["fast-import", "--quiet"], { cwd: d, input: stream });
+    writeFileSync(join(src, "file3.txt"), "upstream\n");
+    git(src, ["commit", "-q", "-am", "upstream"]);
     const stats: FetchStats = { haves: 0, rounds: 0, objects: 0 };
-    await fetchFrom(url, repo, { refspecs: ["+refs/heads/main:refs/remotes/origin/main"], stats });
-    console.log(`R6 unrelated: ${JSON.stringify(stats)}`);
-    expect(stats.haves).toBeGreaterThanOrEqual(256);
-    expect(stats.haves).toBeLessThan(400);
-    expect(rev(d, "refs/remotes/origin/main")).toBe(rev(src, "HEAD"));
+    await fetchFrom(url, repo, { refspecs: ["+refs/heads/main:refs/heads/main"], stats });
+    console.log(`R6 in vain: ${JSON.stringify(stats)}`);
+    // the server is ready once the cloned tip is ACKed, after the first round
+    expect(stats.haves).toBeLessThanOrEqual(16);
+    expect(rev(d, "refs/heads/main")).toBe(rev(src, "HEAD"));
+    // a server that never says ready: after the ACK, 256 haves in vain end it with done
+    const stubborn = await serve(uploadPackHandler(await open(src), { neverReady: true }));
+    writeFileSync(join(src, "file3.txt"), "upstream 2\n");
+    git(src, ["commit", "-q", "-am", "upstream 2"]);
+    const s2: FetchStats = { haves: 0, rounds: 0, objects: 0 };
+    await fetchFrom(stubborn, repo, { refspecs: ["+refs/heads/main:refs/heads/main"], stats: s2 });
+    console.log(`R6 stubborn: ${JSON.stringify(s2)}`);
+    // rounds of 16, 32, 64, 128: 224 in vain after the ACK; the next request adds 256 more and,
+    // past 256 in vain, says done (git decides "done" as it builds a request): 496 of 606
+    expect(s2.haves).toBe(16 + 32 + 64 + 128 + 256);
+    expect(rev(d, "refs/heads/main")).toBe(rev(src, "HEAD"));
+    // an unrelated repository: no ACK ever, so every have is sent (git gives up only after an ACK)
+    const u = emptyRepo();
+    let alone = "";
+    for (let i = 0; i < 300; i++) {
+      const data = `alone ${i}\n`;
+      alone += `commit refs/heads/main\ncommitter a <a@x> ${1100000000 + i} +0000\ndata 2\na\n`;
+      alone += `M 100644 inline y.txt\ndata ${data.length}\n${data}\n`;
+    }
+    execFileSync("git", ["fast-import", "--quiet"], { cwd: u, input: alone });
+    const s3: FetchStats = { haves: 0, rounds: 0, objects: 0 };
+    await fetchFrom(url, await open(u), {
+      refspecs: ["+refs/heads/main:refs/remotes/origin/main"],
+      stats: s3,
+    });
+    expect(s3.haves).toBe(300);
+    expect(rev(u, "refs/remotes/origin/main")).toBe(rev(src, "HEAD"));
   }, 180_000);
 });
 
