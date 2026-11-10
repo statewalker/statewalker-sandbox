@@ -376,11 +376,47 @@ describe("R3b hostile packs fail fast, without allocating what they declare", ()
   });
   it("an entry declaring 10 bytes that inflates to 64 MiB stops at byte 11", async () => {
     const pack = buildPack([{ kind: 3, data: new Uint8Array(64 * 2 ** 20), sizeOverride: 10 }]);
+    // Only installPack is timed: `git init` and the files API are set up before.
+    const repo = emptyRepo();
+    const files = new StreamingNodeFilesApi(join(repo, ".git"));
     const t0 = performance.now();
-    await expect(install(pack)).rejects.toBeInstanceOf(PackError);
+    await expect(installPack(files, "/objects/pack", chunks(pack))).rejects.toBeInstanceOf(
+      PackError,
+    );
     const ms = performance.now() - t0;
     console.log(`R3b inflate bomb refused in ${ms.toFixed(0)} ms`);
     expect(ms).toBeLessThan(200);
+  });
+  it("maxPackSize refuses a pack over the limit while it is stored", async () => {
+    const pack = buildPack([{ kind: 3, data: noise(256 * 1024, 7) }]); // incompressible: > 64 KiB
+    expect(pack.length).toBeGreaterThan(64 * 1024);
+    const repo = emptyRepo();
+    const files = new StreamingNodeFilesApi(join(repo, ".git"));
+    await expect(
+      installPack(files, "/objects/pack", chunks(pack, 4096), { maxPackSize: 64 * 1024 }),
+    ).rejects.toThrow(/over the limit of 65536 bytes/);
+    expect(packDirOf(repo)).toEqual([]);
+    // within the limit, the same pack installs
+    const ok = await installPack(files, "/objects/pack", chunks(pack), {
+      maxPackSize: pack.length,
+    });
+    expect(ok.entries.length).toBe(1);
+  });
+  it("a stream that is not a pack is refused at its first chunk, before the rest is read", async () => {
+    let pulled = 0;
+    async function* garbage() {
+      for (let i = 0; i < 1000; i++) {
+        pulled++;
+        yield new Uint8Array(65536).fill(0x41);
+      }
+    }
+    const repo = emptyRepo();
+    const files = new StreamingNodeFilesApi(join(repo, ".git"));
+    await expect(installPack(files, "/objects/pack", garbage())).rejects.toThrow(
+      /no PACK signature/,
+    );
+    expect(pulled).toBe(1);
+    expect(packDirOf(repo)).toEqual([]);
   });
   it("maxObjectSize refuses an object larger than the limit, by its header", async () => {
     const pack = buildPack([{ kind: 3, data: new Uint8Array(4096) }]);
@@ -474,6 +510,41 @@ describe("R4b memory bounded on deep and branching delta chains", () => {
     // unlimited: the base is inflated once; a 1-byte budget evicts it and re-derives it on demand
     expect(reads[1]).toBe(1);
     expect(reads[0] as number).toBeGreaterThan(1);
+  }, 120_000);
+  it("a deep comb of evicted bases is resolved in linear work, not quadratic", async () => {
+    // R <- N1 <- N2 ... <- N500; each Ni (i > 0) also has a leaf placed before N(i+1). Descending
+    // the chain evicts the lower bases (256 KiB each, 32 MiB budget); every pop on the way back up
+    // needs its frame's base again. Re-deriving each from the root read about depth²/2 entries.
+    const S = 256 * 1024;
+    const depth = 500;
+    const e: CraftEntry[] = [{ kind: 3, data: new Uint8Array(S) }];
+    const grow = (len: number, t: number) => delta(len, len + 1, [...copyAll(len), 1, t & 255]);
+    let parent = 0;
+    let len = S;
+    for (let i = 0; i < depth; i++) {
+      if (parent !== 0) e.push({ kind: 6, data: grow(len, 255 - (i & 127)), baseIdx: parent });
+      e.push({ kind: 6, data: grow(len, i), baseIdx: parent });
+      parent = e.length - 1;
+      len++;
+    }
+    const pack = buildPack(e);
+    const repo = emptyRepo();
+    const files = new StreamingNodeFilesApi(join(repo, ".git"));
+    let reads = 0;
+    const read = files.read.bind(files);
+    files.read = ((p: string, o?: unknown) => {
+      reads++;
+      return read(p, o as never);
+    }) as typeof files.read;
+    const t0 = performance.now();
+    const r = await installPack(files, "/objects/pack", chunks(pack));
+    console.log(
+      `R4b comb of ${depth} over ${S >> 10} KiB bases: ${e.length} entries, ${reads} reads, ${(performance.now() - t0).toFixed(0)} ms`,
+    );
+    expect(r.entries.length).toBe(e.length);
+    // linear: a few reads per entry (the quadratic resolution read about 125,000 for this pack)
+    expect(reads).toBeLessThan(e.length * 6);
+    expect(Buffer.from(r.idx).equals(Buffer.from(gitIdx(pack)))).toBe(true);
   }, 120_000);
 });
 

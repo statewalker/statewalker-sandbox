@@ -392,6 +392,16 @@ async function resolveDeltas(
     for (let k = chain.length - 1; k >= 0; k--) {
       const c = chain[k] as Entry;
       content = patch(content, await loadEntry(c), c.offset);
+      // Keep each rebuilt base in its frame, as git's get_base_data does: the frames below the
+      // top are the next bases needed while unwinding, and without this every pop of a deep,
+      // branching tree ("comb") re-derived from the root, quadratic work from a small pack.
+      // `evict()` (from the bottom of the stack) keeps `held` within the budget.
+      const f = k > 0 ? cached.get(c.offset) : undefined;
+      if (f && !f.content) {
+        f.content = content;
+        held += content.length;
+        evict();
+      }
     }
     return content;
   };
@@ -422,6 +432,7 @@ async function resolveDeltas(
         base = await derive(top.entry);
         top.content = base;
         held += base.length;
+        evict();
       }
       const result = patch(base, await loadEntry(child), child.offset);
       child.type = top.type;
@@ -452,6 +463,9 @@ async function resolveDeltas(
 
 /** `.idx` version 2, laid out as git's write_idx_file. */
 export function writeIdx(entries: IndexedEntry[], packId: string): Uint8Array {
+  // Array.prototype.sort is stable: duplicate objects (same id) stay in pack order. git sorts with
+  // qsort, which promises no order for ties; the two agree on every pack tested, including the
+  // duplicate-object fixtures, but that agreement is empirical.
   const sorted = [...entries].sort((a, b) => (a.oid < b.oid ? -1 : a.oid > b.oid ? 1 : 0));
   const n = sorted.length;
   const large = sorted.filter((e) => e.offset > 0x7fffffff);
@@ -505,6 +519,41 @@ export interface InstallOptions {
   maxObjectSize?: number;
   /** Bytes of resolved bases kept while resolving deltas; evicted bases are re-derived. Default 32 MiB. */
   baseCacheBytes?: number;
+  /**
+   * Largest pack accepted, in bytes, enforced while it is stored (git's `receive.maxInputSize`).
+   * Default: no limit, as in git.
+   */
+  maxPackSize?: number;
+}
+
+/**
+ * `source`, refused as soon as it is not a pack: a wrong signature or version in its first 12
+ * bytes, or more than `maxPackSize` bytes. A hostile or broken peer then fills no storage.
+ */
+async function* guardedPack(
+  source: AsyncIterable<Uint8Array>,
+  maxPackSize: number,
+): AsyncGenerator<Uint8Array> {
+  let total = 0;
+  let head = new Uint8Array(0);
+  for await (const chunk of source) {
+    total += chunk.length;
+    if (total > maxPackSize) throw new PackError(`pack over the limit of ${maxPackSize} bytes`);
+    if (head.length < 12) {
+      const next = new Uint8Array(Math.min(12, head.length + chunk.length));
+      next.set(head);
+      next.set(chunk.subarray(0, next.length - head.length), head.length);
+      head = next;
+      if (head.length === 12) {
+        const v = new DataView(head.buffer);
+        if (v.getUint32(0) !== 0x5041434b) throw new PackError("not a pack: no PACK signature");
+        const version = v.getUint32(4);
+        if (version !== 2 && version !== 3)
+          throw new PackError(`unsupported pack version ${version}`);
+      }
+    }
+    yield chunk;
+  }
 }
 
 export async function installPack(
@@ -515,11 +564,12 @@ export async function installPack(
 ): Promise<InstallResult> {
   const maxObjectSize = opts.maxObjectSize ?? 2 ** 30;
   const baseCacheBytes = opts.baseCacheBytes ?? 32 * 2 ** 20;
+  const maxPackSize = opts.maxPackSize ?? Number.POSITIVE_INFINITY;
   const dir = packDir.replace(/\/+$/, "");
   const tmpPack = `${dir}/tmp_pack_${rand()}`;
   const tmpIdx = `${dir}/tmp_idx_${rand()}`;
   try {
-    await files.write(tmpPack, source);
+    await files.write(tmpPack, guardedPack(source, maxPackSize));
     const stats = await files.stats(tmpPack);
     if (stats?.kind !== "file") throw new PackError("pack was not stored");
     const parsed = await parse(files, tmpPack, stats.size, maxObjectSize);
