@@ -577,15 +577,15 @@ tests/python-scenario.mjs  the Python cases, shared by tests/python.test.mjs (HT
 
 | Check | wrangler | cellb | cellb, bundled-only | cellb on celld bucket | celld 0.6.0 |
 |---|---|---|---|---|---|
-| scenario, stub transport (15) | ✅ 15 | ✅ 12, 3 skipped | ✅ 12, 3 skipped | ✅ 12, 3 skipped | n/a: celld refuses RpcTargets across isolates |
-| scenario, token transport (15) | ✅ 15 | ✅ 12, 3 skipped | ✅ 12, 3 skipped | ✅ 12, 3 skipped | ✅ 13 of the 13 before the run-lease tests (9 Nov); not re-run since |
+| scenario, stub transport (16, 10 Nov) | ✅ 16 | ✅ 13, 3 skipped | ✅ 13, 3 skipped | ✅ 13, 3 skipped | n/a: celld refuses RpcTargets across isolates |
+| scenario, token transport (16, 10 Nov) | ✅ 16 | ✅ 13, 3 skipped | ✅ 13, 3 skipped | ✅ 13, 3 skipped | ✅ 16 |
 | scenario, runtime and admin (2) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | durability across a restart | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run | not run |
 | python (13 cases) | `ENOSYS` (as designed) | ✅ 13 | ✅ 13 | ✅ 13 | `ENOSYS` (as on workerd) |
 | agent (22 cases, fake model; 10 Nov) | ✅ 22 | ✅ 22 | ✅ 22 | ✅ 22 | ✅ 17 (token transport) |
 
-In Chromium on cellb (`test:browser`), 37/37 pass (since the agent task, model tokens and the model right, 10 Nov; 16 before): the runtime check, the capability check
+In Chromium on cellb (`test:browser`), 38/38 pass (10 Nov: the agent task, model tokens, the model right, and a tool bundled by the bundler Worker in a browser isolate; 16 before): the runtime check, the capability check
 (rights, both transports, Flue tools with delegation), the 13 Python cases, the 21 agent cases, and no page errors.
 The Python cases include the review's findings:
 - a caller's files, builtins and tasks are not seen by a run with another capability;
@@ -593,7 +593,7 @@ The Python cases include the review's findings:
 - there is no network from the engine;
 - a removed tree is removed from the store, and oversized output is truncated.
 
-The 39 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
+The 42 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
 asserts the `EPERM` refusal. The bundled-tool test asserts `EPERM` by default; under
 `bundled-only` it asserts a run of the approved bundle, `EPERM` for a changed one, and `EPERM`
 for the global-object alias. The cross-caller isolate test is skipped there.
