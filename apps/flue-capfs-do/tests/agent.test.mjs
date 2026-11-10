@@ -8,8 +8,8 @@ const BASE = process.env.BASE_URL ?? "http://127.0.0.1:8788";
 const ADMIN = process.env.ADMIN_KEY ?? "dev-admin-key";
 const TRANSPORTS = (process.env.TRANSPORTS ?? "stub,token").split(",").filter(Boolean);
 
-async function api(path, body, { admin = false } = {}) {
-  const headers = { "content-type": "application/json" };
+async function api(path, body, { admin = false, headers: extra = {} } = {}) {
+  const headers = { "content-type": "application/json", ...extra };
   if (admin) headers.authorization = `Bearer ${ADMIN}`;
   const res = await fetch(`${BASE}${path}`, {
     method: body === undefined ? "GET" : "POST",

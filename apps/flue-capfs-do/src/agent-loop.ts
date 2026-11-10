@@ -4,8 +4,15 @@
 // capability call, authorized in the Workspace cell.
 //
 // The model is the deployment's: the `LLM` var (JSON or object) names an OpenAI-compatible
-// endpoint ({ baseUrl, model, api?, contextWindow?, maxTokens?, headers? }) and the `LLM_API_KEY`
-// secret holds its key. Nothing in a request chooses the endpoint or sees the key.
+// endpoint ({ baseUrl, model, api?, contextWindow?, maxTokens?, headers?, callerToken?,
+// callerTokenHeader? }) and the `LLM_API_KEY` secret holds its key. Nothing in a request chooses
+// the endpoint or sees the key.
+//
+// A caller can bring its own credential for the model (`llmToken`, handed down the delegation
+// chain by Agent.run; a hop can replace it). `callerToken` says whether the deployment accepts
+// one ("allow", the default), insists on one ("require") or refuses one ("forbid"). The token is
+// sent as the API key, or, with `callerTokenHeader`, in that header beside the deployment's key
+// (for a gateway that authenticates the caller and holds the provider key itself).
 //
 // A conversation can be kept in the Agent cell (`session`), stored per capability: the messages
 // hold file contents read with that capability, so another capability starts its own
@@ -32,6 +39,7 @@ import { trimHistory } from "./agent-history.ts";
 import { CapFs } from "./capfs.ts";
 import type { Cap } from "./caps.ts";
 import { rgForFlue } from "./flue-compat.ts";
+import { type LlmConfig, llmConfig, llmCredentials, redactor } from "./llm-config.ts";
 
 export interface AgentLoopRequest {
   prompt: string;
@@ -46,20 +54,15 @@ export interface AgentLoopRequest {
   cwd?: string;
 }
 
-export interface LlmConfig {
-  baseUrl: string;
-  model: string;
-  api?: "openai-completions" | "openai-responses" | "anthropic-messages";
-  contextWindow?: number;
-  maxTokens?: number;
-  headers?: Record<string, string>;
-}
-
 export interface AgentLoopOptions {
   /** Where the session is kept: the requester's revocation id and chain (see Agent.run). */
   scope: string;
   sandboxId: string;
+  /** The caller's model credential (see the header comment). */
+  llmToken?: string;
 }
+
+export { llmConfig };
 
 export interface AgentLoopEnv {
   LLM?: unknown;
@@ -86,25 +89,9 @@ const GRACE_MS = 5000;
 /** Rough characters per token, to keep a stored history within the model's context. */
 const CHARS_PER_TOKEN = 3;
 
-/** The deployment's model, or undefined when none is configured. */
-export function llmConfig(env: AgentLoopEnv): LlmConfig | undefined {
-  const raw = env.LLM;
-  if (raw === undefined || raw === null || raw === "") return undefined;
-  let c: Partial<LlmConfig>;
-  try {
-    c = typeof raw === "string" ? JSON.parse(raw) : (raw as Partial<LlmConfig>);
-  } catch {
-    throw new Error("EINVAL: LLM is not valid JSON");
-  }
-  if (typeof c.baseUrl !== "string" || typeof c.model !== "string") {
-    throw new Error("EINVAL: LLM needs baseUrl and model");
-  }
-  return c as LlmConfig;
-}
-
 let providersRegistered = false;
 
-function modelOf(c: LlmConfig) {
+function modelOf(c: LlmConfig, extraHeaders: Record<string, string> = {}) {
   if (!providersRegistered) {
     // Only the APIs an LLM config can name (registering every built-in one pulls in providers
     // that import node:fs and friends, which a browser cannot load).
@@ -126,7 +113,7 @@ function modelOf(c: LlmConfig) {
     api: c.api ?? "openai-completions",
     provider: "deployment",
     baseUrl: c.baseUrl,
-    headers: c.headers,
+    headers: { ...c.headers, ...extraHeaders },
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     reasoning: false,
@@ -193,7 +180,7 @@ export async function runAgentLoop(
   req: AgentLoopRequest,
   env: AgentLoopEnv,
   storage: Storage,
-  { scope, sandboxId }: AgentLoopOptions,
+  { scope, sandboxId, llmToken }: AgentLoopOptions,
 ) {
   if (typeof req.prompt !== "string" || !req.prompt)
     throw new Error("EINVAL: agent: prompt is required");
@@ -204,6 +191,9 @@ export async function runAgentLoop(
     throw new Error("EINVAL: agent: instructions are too long");
   const config = llmConfig(env);
   if (!config) throw new Error("ENOSYS: no model configured for this deployment (LLM)");
+  const credentials = llmCredentials(config, env.LLM_API_KEY, llmToken);
+  // Neither credential may come back in an error.
+  const redact = redactor([credentials.apiKey, llmToken, env.LLM_API_KEY]);
   const cwd = req.cwd ?? "/";
   const sandbox = await flueBash(
     () => new Bash({ fs: new CapFs(cap) as never, cwd, customCommands: [rgForFlue] }) as never,
@@ -218,8 +208,9 @@ export async function runAgentLoop(
   ].map((make) => make(sandbox));
 
   const sessionKey = req.session ? `agent-session:${scope}:${String(req.session)}` : undefined;
+  // Whatever fails below, its message carries no credential.
   return withSessionLock(sessionKey && `${sandboxId}\n${sessionKey}`, async (hold) => {
-    const model = modelOf(config);
+    const model = modelOf(config, credentials.headers);
     // What is sent back each turn stays within the context, leaving room for the reply.
     const contextBytes = Math.max(
       (model.contextWindow - model.maxTokens) * CHARS_PER_TOKEN,
@@ -229,7 +220,7 @@ export async function runAgentLoop(
     const history = trimHistory(stored, SESSION_MESSAGES, Math.min(SESSION_BYTES, contextBytes));
     const agent = new LoopAgent({
       streamFn: streamSimple as never,
-      getApiKey: () => env.LLM_API_KEY,
+      getApiKey: () => credentials.apiKey,
       initialState: {
         systemPrompt:
           req.instructions ??
@@ -334,7 +325,10 @@ export async function runAgentLoop(
     // The provider's message, without the URLs it may name, and clipped.
     const providerError =
       last?.stopReason === "error"
-        ? clip(String(last.errorMessage ?? "error").replace(/\b\w+:\/\/\S+/g, "<url>"), ERROR_LIMIT)
+        ? clip(
+            redact(String(last.errorMessage ?? "error")).replace(/\b\w+:\/\/\S+/g, "<url>"),
+            ERROR_LIMIT,
+          )
         : undefined;
     const errors = [stopped, providerError].filter(Boolean);
 
@@ -354,5 +348,7 @@ export async function runAgentLoop(
       usage,
       session: req.session ? { name: String(req.session), messages: kept } : undefined,
     };
+  }).catch((e: unknown) => {
+    throw new Error(redact(String((e as Error)?.message ?? e)));
   });
 }

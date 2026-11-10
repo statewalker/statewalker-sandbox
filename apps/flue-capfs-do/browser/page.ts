@@ -6,7 +6,11 @@ declare global {
   interface Window {
     capfs: {
       ready: Promise<void>;
-      api: (path: string, body?: unknown, opts?: { admin?: boolean }) => Promise<unknown>;
+      api: (
+        path: string,
+        body?: unknown,
+        opts?: { admin?: boolean; headers?: Record<string, string> },
+      ) => Promise<unknown>;
     };
   }
 }
@@ -26,9 +30,16 @@ const ready = (async () => {
   remote = await connectRuntime(port1);
 })();
 
-async function api(path: string, body?: unknown, opts: { admin?: boolean } = {}) {
+async function api(
+  path: string,
+  body?: unknown,
+  opts: { admin?: boolean; headers?: Record<string, string> } = {},
+) {
   await ready;
-  const headers: Record<string, string> = { "content-type": "application/json" };
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    ...opts.headers,
+  };
   if (opts.admin) headers.authorization = "Bearer dev-admin-key";
   const res = await remote.fetch(
     new Request(`http://localhost${path}`, {

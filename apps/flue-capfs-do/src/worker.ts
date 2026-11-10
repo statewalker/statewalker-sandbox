@@ -16,8 +16,8 @@
 // Must stay the first import (a side-effect import, so it is not sorted): see node-probe-guard.ts.
 import "./node-probe-guard.ts";
 import type { AgentEnv, AttenuationSpec, Task } from "./agent.ts";
-import { llmConfig } from "./agent-loop.ts";
 import type { CapHandoff } from "./caps.ts";
+import { llmConfig } from "./llm-config.ts";
 import { restoreNodeVersions } from "./node-probe-guard.ts";
 import { rebuildError } from "./path.ts";
 import { pythonRuntime } from "./python/hosts.ts";
@@ -77,7 +77,15 @@ function llmSummary(env: Env) {
   try {
     const c = llmConfig(env);
     return c
-      ? { model: c.model, api: c.api ?? "openai-completions", host: new URL(c.baseUrl).host }
+      ? {
+          model: c.model,
+          api: c.api ?? "openai-completions",
+          host: new URL(c.baseUrl).host,
+          // Whether callers may (or must) bring their own model token (x-llm-token).
+          callerToken: c.callerToken ?? "allow",
+          // Whether it goes to a gateway beside the deployment's key, or is the provider key.
+          callerTokenHeader: !!c.callerTokenHeader,
+        }
       : null;
   } catch (e) {
     return { error: String((e as Error).message) };
@@ -170,6 +178,9 @@ export default {
             handoff,
             (body.chain as AttenuationSpec[]) ?? [],
             body.task as Task,
+            undefined,
+            // The caller's model credential: a header, so it stays out of logged bodies.
+            request.headers.get("x-llm-token") || undefined,
           ),
         );
       }

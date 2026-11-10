@@ -341,6 +341,30 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
   `anthropic-messages`. The `LLM_API_KEY` secret is its key. Nothing in a request chooses the
   endpoint or sees the key; `/api/runtime` reports `llm: {model, api, host}` (or `null`, and
   the task fails with `ENOSYS`).
+- **Callers can bring their own model credential.** Send it in the `x-llm-token` header of
+  `/api/agents/:name/run`. Each hop of the `chain` hands it down to the next, and the last hop's
+  `agent` task uses it for its model calls. A hop can replace it from there on with `llmToken`
+  in its chain entry, e.g. `"chain": [{"scope": "/proj", "llmToken": "<team key>"}]`; an
+  entry with only `llmToken` passes the capability on unchanged. Chain tokens travel in the
+  request body, so unlike the header they are not kept out of body logs.
+  - What the deployment accepts is `callerToken` in `LLM`: `"allow"` (default), `"require"`
+    (no run without a caller token, so callers spend their own budget) or `"forbid"`.
+  - By default the token replaces the deployment's key (sent as the provider's API key); the
+    deployment's static `headers` still go with it. An Anthropic OAuth token (`sk-ant-oat…`) is
+    refused there, since pi-ai would switch to another client's mode for it.
+  - With `"callerTokenHeader": "x-user-token"` it goes in that header and the deployment's key
+    stays the API key: for a gateway that authenticates each caller and holds the provider key.
+    Then `require` only makes the header present; the gateway must check it. The header cannot
+    be an auth or transport header (`authorization`, `x-api-key`, `content-*`, `anthropic-*`,
+    …) or one of the deployment's `headers`.
+  - The token is never stored (not in sessions, which do not depend on it either), never
+    returned by this code, and never reaches the tools or the model; errors are redacted (the
+    deployment's key too). An endpoint that echoes a credential in a successful reply is the
+    deployment's to fix. A token is 8 to 4096 characters of `A-Z a-z 0-9 . _ ~ + / = : -`, so it
+    cannot break a header or hide in an escaped error.
+  - The endpoint should not redirect: a cross-origin redirect may drop `Authorization` but keep
+    other headers, such as a `callerTokenHeader`.
+  - `/api/runtime` reports `llm.callerToken` and whether a `callerTokenHeader` is set.
 - **Limits:** `maxTurns` (default 12, at most 50) and `timeoutMs` (default 120 s, at most
   600 s; a tool that ignores the abort gets 5 s more, then the run returns, its calls without
   a result marked as errors; such a tool can still finish after the run returned, and its
@@ -370,9 +394,11 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
   `HISTORY`), so the cases (`tests/agent-scenario.mjs`) check what the tools did, not what a
   model chose to say. `run-env.mjs` passes it to every runtime as `LLM` with a dummy key.
 - **Known exposure:**
-  - Any valid capability may run the model: there is no per-capability right to it and no rate
-    limit, so a narrow read-only token can still spend up to 50 turns of the deployment's budget
-    per run. A real deployment would gate the task on a fact in the session token and meter it.
+  - With `callerToken: "allow"` or `"forbid"`, any valid capability may run the model on the
+    deployment's key: there is no per-capability right to it and no rate limit, so a narrow
+    read-only token can still spend up to 50 turns of that budget per run. `"require"` makes
+    callers pay with their own token; otherwise gate the task on a fact in the session token and
+    meter it.
   - The key is a secret only on workerd (`wrangler secret put LLM_API_KEY`). On cellb, `--var`
     makes it a plain var, and in the browser build it would be in `dist/cellb/wrangler.json`,
     which the page loads: anyone who can load the page can read it. The tests pass a dummy key
@@ -433,6 +459,7 @@ src/agent.ts        Agent DO: bash, Flue tools, Worker Loader tools, delegation 
 src/flue-compat.ts  `rg` shim so Flue's grep tool works on just-bash
 src/agent-loop.ts   the `agent` task: pi-agent-core loop, Flue's tools over the capability, sessions
 src/agent-history.ts  how a session history is trimmed (unit-tested)
+src/llm-config.ts   the LLM var and one run's credentials (deployment key or caller token)
 src/node-probe-guard.ts  hides process.versions.node from pi-ai's load-time probes in the browser
 src/tools/config.ts  ToolBundleConfig: defaults (tool-bundle.config.json) ← overrides ← TOOL_BUNDLE
 src/tools/shims.ts   fs shim over `files`, POSIX path, deny modules, the WorkerEntrypoint wrapper
@@ -467,17 +494,17 @@ tests/python-scenario.mjs  the Python cases, shared by tests/python.test.mjs (HT
 | durability across a restart | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run | not run |
 | python (13 cases) | `ENOSYS` (as designed) | ✅ 13 | ✅ 13 | ✅ 13 | `ENOSYS` (as on workerd) |
-| agent (14 cases, fake model; 10 Nov) | ✅ 14 | ✅ 14 | ✅ 14 | ✅ 14 | ✅ 11 (token transport) |
+| agent (17 cases, fake model; 10 Nov) | ✅ 17 | ✅ 17 | ✅ 17 | ✅ 17 | ✅ 13 (token transport) |
 
-In Chromium on cellb (`test:browser`), 29/29 pass (since the agent task, 10 Nov; 16 before): the runtime check, the capability check
-(rights, both transports, Flue tools with delegation), the 13 Python cases, the 13 agent cases, and no page errors.
+In Chromium on cellb (`test:browser`), 32/32 pass (since the agent task and model tokens, 10 Nov; 16 before): the runtime check, the capability check
+(rights, both transports, Flue tools with delegation), the 13 Python cases, the 16 agent cases, and no page errors.
 The Python cases include the review's findings:
 - a caller's files, builtins and tasks are not seen by a run with another capability;
 - a task that outlives its run cannot use `capfs`;
 - there is no network from the engine;
 - a removed tree is removed from the store, and oversized output is truncated.
 
-The 29 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
+The 36 unit tests (`tests/unit`) need no runtime and pass on Node 22. On cellb, the raw-tool test
 asserts the `EPERM` refusal. The bundled-tool test asserts `EPERM` by default; under
 `bundled-only` it asserts a run of the approved bundle, `EPERM` for a changed one, and `EPERM`
 for the global-object alias. The cross-caller isolate test is skipped there.

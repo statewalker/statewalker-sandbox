@@ -8,6 +8,8 @@
 //                                                          "RESULT: <outputs joined by |>"
 //   KEY                                                  → "KEY: <the Authorization header>"
 //   SLOW                                                 → answers after 3 s
+//   FAIL                                                 → HTTP 401 whose message repeats the
+//                                                          Authorization header (as some do)
 //   anything else                                        → "OK"
 // It answers browsers too (CORS), and records each request.
 import { createServer } from "node:http";
@@ -57,6 +59,14 @@ export function startFakeLlm(port = 0) {
     const say = (content) => [chunk({ role: "assistant", content }), chunk({}, "stop")];
     let out;
     const m = text.match(/^(READ|WRITE|BASH)\s+(\S+)(?:\s+([\s\S]*))?$/);
+    if (/^FAIL\b/.test(text)) {
+      res.writeHead(401, { "content-type": "application/json", ...CORS });
+      return res.end(
+        JSON.stringify({
+          error: { message: `invalid credential: ${req.headers.authorization}`, type: "auth" },
+        }),
+      );
+    }
     const two = text.match(/^TWO\s+(\S+)\s+(\S+)$/);
     if (/^SLOW\b/.test(text)) await new Promise((r) => setTimeout(r, 3000));
     if (/^LOOP\b/.test(text)) out = toolCall("bash", { command: "echo again" });
