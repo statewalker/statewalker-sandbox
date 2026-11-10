@@ -217,7 +217,12 @@ describe("R2 incremental exports near git's size", () => {
       );
       expect(ours.length).toBeLessThanOrEqual(theirs.length * 1.1);
       const dst = emptyRepo();
-      git(dst, ["index-pack", "--stdin"], gitPack(src, have, `${have}~100`, false));
+      const seed = git(
+        src,
+        ["pack-objects", "--stdout", "-q"],
+        git(src, ["rev-list", "--objects", have]),
+      );
+      git(dst, ["index-pack", "--stdin"], seed);
       git(dst, ["index-pack", "--stdin", ...(thin ? ["--fix-thin"] : [])], ours);
       git(dst, ["update-ref", "refs/heads/main", want]);
       git(dst, ["fsck", "--full"]);
@@ -347,15 +352,22 @@ describe("R5 bounded memory", () => {
     expect(s.big).toBe(2);
     expect(peak).toBeLessThan(16 * 2 ** 20);
   }, 300_000);
-  it("the window holds at most windowMemory plus one object", async () => {
+  it("the window holds at most windowMemory (contents and their indexes) plus the current target", async () => {
     const src = repoWithHistory(20);
     const head = rev(src, "HEAD");
     const repo = await open(src);
+    const unbounded = searchStats();
+    await collect(
+      exportPackSearching(repo, [head], [], { windowMemory: 0, searchStats: unbounded }),
+    );
     const s = searchStats();
-    const windowMemory = 40000;
+    const windowMemory = 600_000;
     await collect(exportPackSearching(repo, [head], [], { windowMemory, searchStats: s }));
-    const largest = 400 * 70; // a text file of repoWithHistory
-    expect(s.peakWindowBytes).toBeGreaterThan(0);
+    const largest = 30_000; // a text file of repoWithHistory (~28 KB)
+    console.log(
+      `R5 window: peak ${s.peakWindowBytes} B (unbounded ${unbounded.peakWindowBytes} B)`,
+    );
+    expect(unbounded.peakWindowBytes).toBeGreaterThan(windowMemory + largest); // the cap binds
     expect(s.peakWindowBytes).toBeLessThanOrEqual(windowMemory + largest);
   });
 });

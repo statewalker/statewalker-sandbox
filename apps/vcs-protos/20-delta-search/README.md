@@ -1,6 +1,6 @@
 # 20 — Can export compute new deltas, as git's pack-objects does, to come near git's size where nothing is reusable?
 
-Plan id **X6** (pack ingest/export), slice **X6e: delta search**. Status: **open**.
+Plan id **X6** (pack ingest/export), slice **X6e: delta search**. Status: **answered — yes: incremental and loose exports come out smaller than git's (0.88–0.99×), with git's order and bounds, a window bounded in memory, and big files left alone.**
 
 ## Question
 
@@ -35,3 +35,58 @@ exports near git's size.
 
 - Delta islands, bitmaps, `--delta-base-offset` output (OFS_DELTA): REF_DELTA as in X6d.
 - Threads/workers: one pass (a later slice if R6's time matters).
+
+## Answer
+
+**Yes.** `exportPackSearching(repo, wants, haves, { thin, window, depth, windowMemory, bigFileThreshold })`
+(and `writePackSearching` for a list) runs git's delta search over the objects X6d would send whole,
+then writes through X6d's writer (a new `computed` plan: a REF_DELTA with the delta's bytes).
+
+| | ours | git `pack-objects` | ratio |
+|---|---|---|---|
+| 5 loose commits after a gc, `HEAD ^HEAD~5` | 5 856 B | 6 633 B | 0.88× |
+| the same, thin | 2 895 B | 3 293 B | 0.88× |
+| 5 commits stored whole by a gc (X6d: 1.28×) | 6 263 B | 6 761 B | 0.93× |
+| the same, thin (X6d: 1.57×) | 3 389 B | 3 410 B | 0.99× |
+| a 30-commit history never packed, full | 34 955 B | 41 301 B | 0.85× |
+
+- **git's search**: candidates sorted by type, `pack_name_hash` of the path, size (descending)
+  and the walk's order; each tried against the `window` (10) before it, most recent first,
+  stopping at another type; git's `try_delta` bounds (half the target minus 20 bytes, or the best
+  so far, scaled by the base's depth; no base at `depth`; no target under 1/32 of the base). The
+  encoder gives up as soon as the bound is passed. Reused deltas keep their base (git too).
+- **Thin**: the receiver's objects at the paths being sent (read from the edge commits' trees) are
+  preferred bases — tried, never sent.
+- **The encoder** (git's diff-delta format, X6a's `applyDelta` reads it): a rolling hash over
+  16-byte windows, matches verified and extended both ways, copies ≤ 64 KiB, inserts ≤ 127.
+  **Finding**: git's index of one entry per 16-byte block, reproduced, gave **4.3× git's delta
+  bytes** on git's own (base, target) pairs of a text history — on repetitive text the one
+  occurrence that continues past a differing line number is rarely aligned. Indexing every 2nd
+  position gives 0.99×, every byte 0.95×. The step grows with the source (1 up to 256 KiB, 2, 4, 8,
+  16 beyond 16 MiB) so the index (8 bytes per position) stays ≤ 8× a small source and ≤ 0.5× a large
+  one. Runs of identical windows keep their first; crowded slots are thinned evenly (git's
+  HASH_LIMIT 64).
+- **Memory**: each window entry keeps its content and index; `windowMemory` (default 64 MiB,
+  index included) evicts the oldest; objects above `bigFileThreshold` (default 50 MiB, JGit's)
+  are never loaded — a pair of 64 MiB blobs: +0.6 MiB live. Computed deltas are kept by git's
+  delta cache rules (`deltaCacheSize` 256 MiB, small deltas always) and otherwise recomputed when
+  written. Defaults differ from git's (unlimited window memory, 512 MiB big files) so a Durable
+  Object (128 MiB) stays within bounds.
+- **Cost**: comparisons ≤ window × candidates (counted).
+- **Parts added**: X6d's writer takes a `refine` step and a `computed` plan (no change for X6d's
+  callers); `src/delta-encode.ts`, `src/export-search.ts`.
+
+## Verified
+
+All 13 Node tests pass (`pnpm test 20-delta-search`); X6d's 11 pass with the refactor. The tests
+were written first (red commit).
+
+| # | Result |
+|---|---|
+| R1 | 300 random edit cases (alphabets of 4 and 256 bytes) round-trip through `applyDelta`, every copy within the base and ≤ 64 KiB, every insert 1–127; 8.4 MB of targets as 104 KB of deltas; a 300 KB copy split into 5; empty source/target; `maxSize` gives up; git resolves a computed REF_DELTA. |
+| R2 | Above: 0.88×, 0.88×, 0.93×, 0.99× git; the loose case installs in a native receiver (`--fix-thin` for thin) and passes `fsck`. |
+| R3 | 0.85× git; `index-pack` and `fsck --strict` pass. |
+| R4 | `a/settings.cfg` and `b/settings.cfg` among 30 unrelated blobs, window 2: delta'd against each other (path hash order). A 70-version file: every delta below git's max_size, depth ≤ 50. |
+| R5 | Two 64 MiB blobs above a 16 MiB threshold: not delta'd, +0.6 MiB live. Window memory 600 KB: peak 487 KB (unbounded: 2.3 MB). |
+| R6 | Windows 1, 4, 10: comparisons ≤ window × candidates. |
+| R7 | The searched pack installs in X6b on the files and SQL backends; logs equal. |
