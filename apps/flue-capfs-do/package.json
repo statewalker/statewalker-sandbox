@@ -28,6 +28,8 @@
     "test:browser": "node --test tests/browser.test.mjs"
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "~1.4.0",
+    "@earendil-works/pi-ai": "catalog:",
     "@flue/runtime": "catalog:",
     "@statewalker/webrun-biscuit": "catalog:",
     "@statewalker/webrun-bundler": "0.1.1",

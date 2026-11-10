@@ -13,8 +13,12 @@
 //   user   POST /api/agents/:name/run              { workspace, token, transport, chain?, task }
 //   any    GET  /api/runtime                       which runtime answers
 
+// Must stay the first import (a side-effect import, so it is not sorted): see node-probe-guard.ts.
+import "./node-probe-guard.ts";
 import type { AgentEnv, AttenuationSpec, Task } from "./agent.ts";
+import { llmConfig } from "./agent-loop.ts";
 import type { CapHandoff } from "./caps.ts";
+import { restoreNodeVersions } from "./node-probe-guard.ts";
 import { rebuildError } from "./path.ts";
 import { pythonRuntime } from "./python/hosts.ts";
 import { deploymentToolConfig } from "./tools/config.ts";
@@ -23,6 +27,8 @@ import { toolPolicy } from "./tools/policy.ts";
 export { Agent } from "./agent.ts";
 export { ToolFilesEntrypoint } from "./tool-files-entrypoint.ts";
 export { Workspace } from "./workspace.ts";
+
+restoreNodeVersions();
 
 interface Env extends AgentEnv {
   /** Admin bearer key for deployments: a secret (`wrangler secret put ADMIN_KEY`). */
@@ -66,6 +72,18 @@ function fail(e: unknown): Response {
     { status: STATUS[err.code] ?? 500 },
   );
 }
+/** Which model the `agent` task uses (never the key). */
+function llmSummary(env: Env) {
+  try {
+    const c = llmConfig(env);
+    return c
+      ? { model: c.model, api: c.api ?? "openai-completions", host: new URL(c.baseUrl).host }
+      : null;
+  } catch (e) {
+    return { error: String((e as Error).message) };
+  }
+}
+
 // Identifies this process of the runtime (lazily: no random values at global scope in workerd),
 // so a restart test can prove it talks to a NEW process.
 let bootId: string | undefined;
@@ -100,6 +118,7 @@ export default {
         return ok({
           workerLoader: !!env.LOADER,
           python: env.PYTHON === "off" ? "off" : pythonRuntime(),
+          llm: llmSummary(env),
           ...tools,
           userAgent: navigator.userAgent,
           bootId,

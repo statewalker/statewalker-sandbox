@@ -20,6 +20,7 @@ import {
   bash as flueBash,
 } from "@flue/runtime";
 import { Bash } from "just-bash/browser";
+import { type AgentLoopRequest, runAgentLoop } from "./agent-loop.ts";
 import { CapFs, safeExec } from "./capfs.ts";
 import { type Cap, type CapHandoff, capFromHandoff, ToolFiles, type WorkspaceEnv } from "./caps.ts";
 import { rgForFlue } from "./flue-compat.ts";
@@ -36,7 +37,8 @@ export type Task =
   | { kind: "flue"; calls: { tool: string; params: Record<string, unknown> }[]; cwd?: string }
   | { kind: "tool"; code: string; input?: unknown; bundled?: boolean }
   | { kind: "revocationId" }
-  | ({ kind: "python" } & PythonRunRequest);
+  | ({ kind: "python" } & PythonRunRequest)
+  | ({ kind: "agent" } & AgentLoopRequest);
 
 interface WorkerLoader {
   get(
@@ -60,6 +62,9 @@ export interface AgentEnv extends WorkspaceEnv {
   /** Run-side tool policy: overrides of tool-bundle.config.json, a JSON string or an object. */
   TOOL_BUNDLE?: unknown;
   /** Python engine location (see src/python/hosts.ts). */
+  /** The model of the `agent` task (see src/agent-loop.ts) and its key (a secret). */
+  LLM?: unknown;
+  LLM_API_KEY?: string;
   PYTHON_ENGINE?: string;
   PYODIDE_INDEX?: string;
   PYTHON?: string;
@@ -112,6 +117,8 @@ export class Agent extends DurableObject<AgentEnv> {
         return cap.revocationId();
       case "python":
         return this.#python().run(cap, task);
+      case "agent":
+        return runAgentLoop(cap, task, this.env, this.ctx.storage as never, name);
       default:
         throw new Error(`EINVAL: unknown task '${(task as { kind?: string }).kind}'`);
     }

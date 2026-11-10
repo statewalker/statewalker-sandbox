@@ -116,6 +116,9 @@ Tasks:
   `toolIsolates` (below).
 - `{kind: "python", code, root?, cwd?, timeoutMs?, fresh?}` runs Python (Pyodide) on the
   capability's files (see [Python](#python)).
+- `{kind: "agent", prompt, instructions?, maxTurns?, timeoutMs?, session?, cwd?}` runs an LLM
+  agent whose tools are Flue's (read, write, edit, grep, glob, bash) over the capability (see
+  [Agent loop](#agent-loop)).
 - `{kind: "revocationId"}` returns the revocation id of the capability the agent holds.
 
 `chain: [{scope?, readOnly?, datalog?}, …]` adds one hop per entry. Each hop attenuates the
@@ -313,6 +316,50 @@ capability.
 - **The CSP is the host's job.** `scripts/serve-browser.mjs` sends it with `/python/engine.mjs`;
   any other host that serves the engine must send the same `Content-Security-Policy` header.
 
+### Agent loop
+
+The `agent` task runs a model loop on the capability: the loop Flue itself is built on
+(`@earendil-works/pi-agent-core`, with `pi-ai` for the model call) and Flue's own model-facing
+tools (`createReadTool`, `createWriteTool`, `createEditTool`, `createGrepTool`, `createGlobTool`,
+`createBashTool`) over the same just-bash sandbox the `flue` task uses. Each file access the
+model asks for is a capability call, authorized per entry in the Workspace cell, so a model
+holding a `/proj` read-only capability can neither read `/private` nor write anywhere,
+whatever it is told.
+
+```bash
+curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/json' -d '{
+  "workspace": "acme", "token": "<token>", "transport": "token",
+  "task": { "kind": "agent", "prompt": "Summarise /proj/notes.md", "maxTurns": 6, "session": "s1" } }'
+# → {"value":{"reply":"…","stopReason":"stop","turns":2,
+#             "toolCalls":[{"tool":"read","arguments":{"path":"/proj/notes.md"},"isError":false,"result":"…"}],
+#             "usage":{"input":…,"output":…},"session":{"name":"s1","messages":4}}}
+```
+
+- **The model is the deployment's.** The `LLM` var names an OpenAI-compatible endpoint
+  (`{"baseUrl", "model", "api"?, "contextWindow"?, "maxTokens"?, "headers"?}`, as JSON);
+  `api` is `openai-completions` (default), `openai-responses` or `anthropic-messages`. The
+  `LLM_API_KEY` secret is its key. Nothing in a request chooses the endpoint or sees the key;
+  `/api/runtime` reports `llm: {model, api, host}` (or `null`, and the task fails with
+  `ENOSYS`).
+- **Limits:** `maxTurns` (default 12, at most 50) and `timeoutMs` (default 120 s, at most
+  600 s). A run cut short returns `stopReason: "limit"` and the reason in `error`.
+- **Sessions:** with `session`, the conversation is kept in the Agent cell under the
+  capability's revocation id and the name (the last 200 messages, at most 1 MB) and continued
+  next time. The messages hold file contents read with that capability, so another capability
+  starts its own conversation even under the same name.
+- **The result** is the last reply, each tool call with its arguments and (clipped) result,
+  and token usage. Replies and tool results are clipped at 4000 characters.
+- **Tests** use a fake OpenAI-compatible server (`tests/helpers/fake-llm.mjs`) whose replies
+  are driven by the prompt (`READ <path>`, `WRITE <path> <text>`, `BASH <script>`, `LOOP`,
+  `HISTORY`), so the cases (`tests/agent-scenario.mjs`) check what the tools did, not what a
+  model chose to say. `run-env.mjs` passes it to every runtime as `LLM` with a dummy key.
+- **Bundle size:** the loop and the three model APIs add about 2.5 MB to the Worker
+  (7.4 MB, 1.25 MB gzipped, in `wrangler deploy --dry-run`).
+- **In the browser**, pi-ai probes `node:fs`/`node:os`/`node:path` while it loads whenever
+  `process.versions.node` is set, and cellb's browser `process` reports Node 22.
+  `src/node-probe-guard.ts`, the entry's first import, hides that field while the modules load
+  (only when `process.platform` is `"browser"`).
+
 ### In a browser
 
 `pnpm dev:browser` builds `dist/` and serves the project at <http://127.0.0.1:8790/>:
@@ -360,6 +407,8 @@ src/caps.ts         holder side: StubCap, TokenCap, ToolFiles (what a tool isola
 src/capfs.ts        just-bash IFileSystem over a capability; /dev/null sink; safeExec
 src/agent.ts        Agent DO: bash, Flue tools, Worker Loader tools, delegation chain
 src/flue-compat.ts  `rg` shim so Flue's grep tool works on just-bash
+src/agent-loop.ts   the `agent` task: pi-agent-core loop, Flue's tools over the capability, sessions
+src/node-probe-guard.ts  hides process.versions.node from pi-ai's load-time probes in the browser
 src/tools/config.ts  ToolBundleConfig: defaults (tool-bundle.config.json) ← overrides ← TOOL_BUNDLE
 src/tools/shims.ts   fs shim over `files`, POSIX path, deny modules, the WorkerEntrypoint wrapper
 src/tools/bundle.ts  bundleTool(): webrun-bundler with the shims (build side; not in the Worker)
@@ -378,6 +427,8 @@ scripts/run-env.mjs        start runtime, run suites, restart, stop (process gro
 scripts/serve-cellb.mjs    cellb on node:http (optionally on a celld bucket; --var overrides vars; sets the Python vars)
 scripts/build-browser.mjs  dist/cellb (cellb build) and dist/browser (esbuild)
 scripts/serve-browser.mjs  static server for the browser build, Pyodide and the engine (with its CSP)
+tests/agent-scenario.mjs   the agent cases, shared by tests/agent.test.mjs (HTTP) and tests/browser.test.mjs
+tests/helpers/fake-llm.mjs a fake OpenAI-compatible streaming server for the agent cases
 tests/python-scenario.mjs  the Python cases, shared by tests/python.test.mjs (HTTP) and tests/browser.test.mjs
 ```
 
