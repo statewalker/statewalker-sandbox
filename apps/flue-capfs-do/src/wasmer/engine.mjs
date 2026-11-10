@@ -129,7 +129,7 @@ async function init(m) {
   await wasmer.ready();
   const names = [...new Set(m.packages ?? [])];
   const loaded = await wasmer.packages.loadMany(names);
-  names.forEach((name, i) => packages.set(name, loaded[i]));
+  for (const [i, name] of names.entries()) packages.set(name, loaded[i]);
   globalThis.fetch = noNetwork;
 }
 

@@ -96,8 +96,8 @@ export function capHostFs(cap: Cap) {
   };
   /** The file's bytes, read once per open file (concurrent callers share the read). */
   const load = async (f: OpenFile) => {
-    if (!f.bytes)
-      await (f.loading ??= (async () => {
+    if (!f.bytes) {
+      f.loading ??= (async () => {
         const bytes = (await cap.call("exists", f.path))
           ? encoder.encode((await cap.call("readFile", f.path)) as string)
           : new Uint8Array();
@@ -109,7 +109,9 @@ export function capHostFs(cap: Cap) {
         }
       })().finally(() => {
         f.loading = undefined;
-      }));
+      });
+      await f.loading;
+    }
     return f.bytes as Uint8Array;
   };
   const save = async (f: OpenFile) => {
