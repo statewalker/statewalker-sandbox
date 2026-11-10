@@ -308,7 +308,7 @@ describe("R3 checkpoints are log-structured", () => {
     const pack = packAll(history, true);
     const files = new MemFilesApi();
     const write = files.write.bind(files);
-    const bytes = { log: 0, state: 0, stack: 0 };
+    const bytes = { log: 0, state: 0, stack: 0, maxState: 0 };
     files.write = async (p, content) => {
       const kind = /_log_\d+$/.test(p)
         ? "log"
@@ -320,12 +320,15 @@ describe("R3 checkpoints are log-structured", () => {
       if (!kind) return write(p, content);
       const parts = await collect(content as AsyncIterable<Uint8Array>);
       bytes[kind] += parts.length;
+      if (kind === "state") bytes.maxState = Math.max(bytes.maxState, parts.length);
       return write(p, [parts]);
     };
     const { result, steps } = await runJob(files, pack, 7);
     console.log(`R3: ${result.count} objects, ${steps.length} steps, ${JSON.stringify(bytes)}`);
-    expect(bytes.log).toBeLessThanOrEqual(2 * 79 * result.count);
-    expect(bytes.state).toBeLessThanOrEqual((steps.length + 2) * 2048);
+    // each segment: an 8-byte header and 79 bytes per entry created or resolved in its step
+    expect(bytes.log).toBeLessThanOrEqual(2 * 79 * result.count + 8 * steps.length);
+    expect(bytes.maxState).toBeLessThanOrEqual(1024); // the same size whatever the step count
+    expect(bytes.state).toBeLessThanOrEqual((steps.length + 2) * 1024);
     expect(bytes.stack).toBeLessThanOrEqual(steps.length * (4 + 17 * 64));
   }, 300_000);
 });

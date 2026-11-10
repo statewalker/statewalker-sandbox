@@ -1187,8 +1187,12 @@ interface JobState {
   packId: string;
   packFile: string;
   opts: JobOptions;
-  /** log segments in order: the generation that wrote it and its record count */
-  logs: { g: number; n: number }[];
+  /**
+   * The newest log segment (the generation that wrote it, its record count); each segment's
+   * 8-byte header names the one before it, so the state stays the same size however many steps
+   * the job takes.
+   */
+  log: { g: number; n: number } | null;
   /** generation of the resolver stack checkpoint, -1 when no subtree is in progress */
   stack: number;
   parse: { pos: number; i: number; sha: string };
@@ -1294,15 +1298,28 @@ function encodeRecords(t: Entries, indices: number[]): Uint8Array {
   return out;
 }
 
-/** Rebuilds the entry table from the committed log segments. */
+const LOG_HEADER = 8;
+
+/** Rebuilds the entry table from the committed log segments (oldest first). */
 async function replay(files: FilesApi, dir: string, s: JobState): Promise<Entries> {
   const t = new Entries(Math.max(s.n, 16));
   const paths = jobPaths(dir, s.id);
-  for (const { g, n } of s.logs) {
-    const b = await readAll(files, paths.log(g));
+  // walk the chain back through the segment headers, then apply oldest first
+  const chain: { g: number; n: number }[] = [];
+  for (let cur = s.log; cur; ) {
+    chain.unshift(cur);
+    const st = await files.stats(paths.log(cur.g));
     // a missing or torn segment must not replay as zeros
-    if (b.length !== n * RECORD)
-      throw new Error(`job log ${g} has ${b.length} bytes, expected ${n * RECORD}`);
+    if (st?.kind !== "file" || st.size !== LOG_HEADER + cur.n * RECORD)
+      throw new Error(`job log ${cur.g} is missing or torn`);
+    const h = await readRange(files, paths.log(cur.g), 0, LOG_HEADER);
+    const v = new DataView(h.buffer, h.byteOffset, LOG_HEADER);
+    const pg = v.getInt32(0);
+    cur = pg < 0 ? null : { g: pg, n: v.getUint32(4) };
+  }
+  for (const { g } of chain) {
+    const all = await readAll(files, paths.log(g));
+    const b = all.subarray(LOG_HEADER);
     const v = new DataView(b.buffer, b.byteOffset, b.length);
     for (let o = 0; o < b.length; o += RECORD) {
       const i = v.getUint32(o);
@@ -1323,6 +1340,17 @@ async function replay(files: FilesApi, dir: string, s: JobState): Promise<Entrie
   return t;
 }
 
+async function readRange(files: FilesApi, path: string, start: number, length: number) {
+  const out = new Uint8Array(length);
+  let o = 0;
+  for await (const c of files.read(path, { start, length })) {
+    out.set(c.subarray(0, length - o), o);
+    o += c.length;
+  }
+  if (o < length) throw new Error(`${path} is shorter than ${start + length} bytes`);
+  return out;
+}
+
 /** Commits a step: its log segment, the resolver stack, then the next state generation. */
 async function commit(
   files: FilesApi,
@@ -1336,10 +1364,14 @@ async function commit(
   const g = s.gen + 1;
   const prevStack = s.stack;
   const prevGen = s.gen;
-  const next: JobState = { ...s, gen: g, logs: [...s.logs], stack: -1 };
+  const next: JobState = { ...s, gen: g, stack: -1 };
   if (dirty.length) {
-    await files.write(paths.log(g), [encodeRecords(t, dirty)]);
-    next.logs.push({ g, n: dirty.length });
+    const header = new Uint8Array(LOG_HEADER);
+    const hv = new DataView(header.buffer);
+    hv.setInt32(0, s.log ? s.log.g : -1);
+    hv.setUint32(4, s.log ? s.log.n : 0);
+    await files.write(paths.log(g), [header, encodeRecords(t, dirty)]);
+    next.log = { g, n: dirty.length };
   }
   if (stack) {
     await files.write(paths.stack(g), [stack]);
@@ -1390,7 +1422,7 @@ function newState(id: string, packLen: number, opts: InstallOptions): JobState {
       baseCacheBytes: opts.baseCacheBytes ?? 32 * 2 ** 20,
       windowBytes: opts.windowBytes ?? 2 ** 20,
     },
-    logs: [],
+    log: null,
     stack: -1,
     parse: { pos: 0, i: 0, sha: toB64(exportSha1(sha1.create())) },
     nextRoot: 0,
