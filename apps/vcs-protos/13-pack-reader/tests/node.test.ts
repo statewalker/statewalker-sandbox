@@ -354,7 +354,8 @@ describe("R3b review: hostile and broken packs fail with PackError, never crash"
         { oid: fakeOid(size % 9999), offset: 12 },
         { oid: child, offset: 12 + headerLen + deflateSync(base).length },
       ]);
-      const reader = await openPack(files, raw.packPath, raw.idxPath);
+      // no size limit: only the zlib expansion bound (≈1032:1 of the compressed bytes) protects
+      const reader = await openPack(files, raw.packPath, raw.idxPath, { maxObjectSize: 2 ** 50 });
       let peak = 0;
       const read = files.read.bind(files);
       const before = process.memoryUsage().arrayBuffers;
@@ -439,13 +440,19 @@ describe("R3b review: hostile and broken packs fail with PackError, never crash"
       .filter((n) => n.endsWith(".idx"))
       .sort();
     expect(idxs.length).toBe(2);
-    const bad = join(packDir, idxs[0] as string);
+    const head = git(repo, ["rev-parse", "HEAD"]).toString().trim();
+    // corrupt the pack that does NOT hold HEAD (pack names vary between runs)
+    const holdsHead = (n: string) =>
+      git(repo, ["show-index"], readFileSync(join(packDir, n)))
+        .toString()
+        .includes(head);
+    const victim = idxs.find((n) => !holdsHead(n)) as string;
+    const bad = join(packDir, victim);
     const bytes = readFileSync(bad);
     bytes[bytes.length - 1] = (bytes[bytes.length - 1] as number) ^ 1;
     writeFileSync(bad, bytes);
     const db = await openObjectDatabase(new StreamingNodeFilesApi(join(repo, ".git")), "/objects");
-    expect(db.skipped.map((s) => s.pack)).toEqual([idxs[0]?.replace(/\.idx$/, "")]);
-    const head = git(repo, ["rev-parse", "HEAD"]).toString().trim();
+    expect(db.skipped.map((s) => s.pack)).toEqual([victim.replace(/\.idx$/, "")]);
     expect(await db.has(head)).toBe(true);
   });
 });
@@ -464,8 +471,11 @@ describe("R2b review: cached objects are not shared with callers", () => {
     const child = result.entries.find((e) => e.offset !== 12)?.oid as string;
     const first = await reader.get(child);
     for await (const c of first?.content ?? []) c.fill(0);
-    const second = await reader.get(child, { verify: true });
-    await expect(collect(second?.content ?? [])).resolves.toBeDefined();
+    // the second read comes from the cache: mutate it too, then a third read must still verify
+    const second = await reader.get(child);
+    for await (const c of second?.content ?? []) c.fill(0);
+    const third = await reader.get(child, { verify: true });
+    await expect(collect(third?.content ?? [])).resolves.toBeDefined();
   });
 });
 

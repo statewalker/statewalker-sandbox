@@ -5,12 +5,18 @@
  *    version, monotonic fan-out, exact length (large-offset table included), its own SHA-1, and
  *    that the pack's trailer equals the pack checksum it records (a pack/idx mismatch is refused);
  *  - lookup: fan-out range + binary search over the sorted ids; 31-bit offsets or the 64-bit table;
- *  - entry bounds: the next offset in pack order (git's reverse index, built lazily), so every
- *    entry is read with one ranged read of exactly its bytes;
+ *  - open also checks that the ids are sorted and sit in their fan-out buckets, and that every
+ *    large-offset index points into the 64-bit table (git's check_pack_index_ptr);
+ *  - entry bounds: the next offset in pack order (git's reverse index, built lazily); an entry is
+ *    read with two ranged reads, its header (≤ 32 bytes) and then exactly its data;
+ *  - a declared size above maxObjectSize, or above what zlib can expand the entry's compressed bytes
+ *    to (~1032:1), is refused before anything is allocated;
  *  - non-delta objects are streamed straight from the inflater (a 64 MiB blob never materialises);
  *    delta chains are walked down to a non-delta base or a cached object, then patched upwards
- *    with X6a's bounds-checked applier, every object on the way cached in a byte-bounded LRU
- *    (git's delta_base_cache);
+ *    with X6a's bounds-checked applier; a byte-bounded LRU (git's delta_base_cache) keeps
+ *    checkpoints spaced along the chain; callers always get copies, never the cached buffers;
+ *  - REF_DELTA bases outside the pack resolve through `externalBase` with the set of ids being
+ *    resolved, so a cycle across packs fails instead of recursing forever;
  *  - `verify` re-hashes "type size\0" + content and fails at the end of the stream on mismatch.
  */
 import { sha1 } from "@noble/hashes/legacy.js";
@@ -33,15 +39,26 @@ export interface ReadObject {
 export interface PackReaderOptions {
   /** Bytes of resolved delta bases kept across reads (git's delta_base_cache_limit). Default 16 MiB. */
   baseCacheBytes?: number;
-  /** Resolves a REF_DELTA base that is not in this pack (another pack or a loose object). */
-  externalBase?: (oid: string) => Promise<{ type: ObjectTypeName; data: Uint8Array } | undefined>;
+  /** Largest object accepted, by its header. Default 1 GiB. */
+  maxObjectSize?: number;
+  /**
+   * Resolves a REF_DELTA base that is not in this pack (another pack or a loose object). `visiting`
+   * holds the ids being resolved on this path: a base already in it is a cycle.
+   */
+  externalBase?: (
+    oid: string,
+    visiting: Set<string>,
+  ) => Promise<{ type: ObjectTypeName; data: Uint8Array } | undefined>;
 }
 export interface PackReader {
   readonly packId: string;
   readonly count: number;
   has(oid: string): boolean;
   /** Undefined when the pack does not contain `oid`. */
-  get(oid: string, opts?: { verify?: boolean }): Promise<ReadObject | undefined>;
+  get(
+    oid: string,
+    opts?: { verify?: boolean; visiting?: Set<string> },
+  ): Promise<ReadObject | undefined>;
   ids(): Iterable<string>;
   /** Counters for tests: entry inflations performed; bytes held by the base cache (peak). */
   readonly stats: {
@@ -53,7 +70,8 @@ export interface PackReader {
 }
 
 const TYPES: Record<number, ObjectTypeName> = { 1: "commit", 2: "tree", 3: "blob", 4: "tag" };
-const SLICE = 1024;
+const SLICE = 16 * 1024; // inflater input per push: real data stays small, a bomb yields ≤ ~16 MiB
+const MAX_CHAIN = 4095; // git's maximum --depth
 const enc = new TextEncoder();
 const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
 const hex = (b: Uint8Array) => {
@@ -103,6 +121,7 @@ export async function openPack(
   opts: PackReaderOptions = {},
 ): Promise<PackReader> {
   const cacheLimit = opts.baseCacheBytes ?? 16 * 2 ** 20;
+  const maxObjectSize = opts.maxObjectSize ?? 2 ** 30;
   // ---- idx
   const idx = await readAll(files, idxPath);
   if (idx.length < 8 + 1024 + 40) throw new PackError(`${idxPath}: idx too short`);
@@ -125,6 +144,23 @@ export async function openPack(
   for (let i = 0; i < n; i++) if (iv.getUint32(offAt + i * 4) & 0x80000000) large++;
   if (idx.length !== largeAt + large * 8 + 40)
     throw new PackError(`${idxPath}: idx length does not match its tables`);
+  for (let i = 0; i < n; i++) {
+    const v = iv.getUint32(offAt + i * 4);
+    if (v & 0x80000000 && (v & 0x7fffffff) >= large) {
+      throw new PackError(`${idxPath}: entry ${i} points past the large-offset table`);
+    }
+    const first = idx[oidsAt + i * 20] as number;
+    const bucketEnd = iv.getUint32(8 + first * 4);
+    const bucketStart = first ? iv.getUint32(8 + (first - 1) * 4) : 0;
+    if (i < bucketStart || i >= bucketEnd)
+      throw new PackError(`${idxPath}: id ${i} is outside its fan-out bucket`);
+    if (i > 0) {
+      let c = 0;
+      for (let k = 0; k < 20 && c === 0; k++)
+        c = (idx[oidsAt + i * 20 + k] as number) - (idx[oidsAt + (i - 1) * 20 + k] as number);
+      if (c <= 0) throw new PackError(`${idxPath}: ids not strictly sorted at ${i}`);
+    }
+  }
   const body = idx.subarray(0, idx.length - 20);
   if (hex(sha1(body)) !== hex(idx.subarray(idx.length - 20)))
     throw new PackError(`${idxPath}: idx checksum mismatch`);
@@ -185,7 +221,20 @@ export async function openPack(
   };
 
   const pool = createInflaterPool();
-  const st = { inflations: 0, peakCachedBytes: 0, cachedBytes: 0, cachedEntriesBytes: -1 };
+  const st = {
+    inflations: 0,
+    peakCachedBytes: 0,
+    /** bytes the cache accounting believes it holds */
+    get cachedBytes() {
+      return cached;
+    },
+    /** bytes the cache entries really hold (tests check the two agree) */
+    get cachedEntriesBytes() {
+      let n = 0;
+      for (const v of cache.values()) n += v.data.length;
+      return n;
+    },
+  };
   const readHead = async (offset: number): Promise<EntryHead> => {
     const end = endOf(offset);
     if (offset < 12 || end <= offset)
@@ -204,6 +253,12 @@ export async function openPack(
       b = byte();
       size += (b & 0x7f) * mul;
       mul *= 128;
+      if (mul > 2 ** 49) throw new PackError(`${packPath}: entry size at ${offset} overflows`);
+    }
+    if (size > maxObjectSize) {
+      throw new PackError(
+        `${packPath}: entry at ${offset} declares ${size} bytes, over the limit of ${maxObjectSize}`,
+      );
     }
     const e: EntryHead = { offset, kind, size, dataStart: 0, end };
     if (kind === 6) {
@@ -224,9 +279,15 @@ export async function openPack(
       throw new PackError(`${packPath}: bad object type ${kind} at ${offset}`);
     }
     e.dataStart = offset + p;
+    // zlib expands at most ~1032:1: a larger declared size cannot be honest (refused before allocating)
+    if (e.size > (e.end - e.dataStart) * 1032 + 1024) {
+      throw new PackError(
+        `${packPath}: entry at ${offset} declares ${e.size} bytes for ${e.end - e.dataStart} compressed`,
+      );
+    }
     return e;
   };
-  /** Streams one entry's inflated data, checking its length and the exact end of the zlib stream. */
+  /** Streams one entry's inflated data, checking its length and that the zlib stream ends (bytes after it inside the entry are tolerated, as git does when reading). */
   async function* inflate(e: EntryHead): AsyncGenerator<Uint8Array> {
     st.inflations++;
     const inflater: StreamInflater = pool.acquire();
@@ -303,14 +364,17 @@ export async function openPack(
   /** Resolves the object at `offset` to bytes: walk down to a base, patch upwards, cache on the way. */
   const resolve = async (
     offset: number,
-    depth = 0,
+    visiting: Set<string>,
   ): Promise<{ type: ObjectTypeName; data: Uint8Array }> => {
     const chain: EntryHead[] = [];
+    const seen = new Set<number>();
     let cur = offset;
     let base: { type: ObjectTypeName; data: Uint8Array } | undefined;
-    for (let guard = 0; ; guard++) {
-      if (guard > 10_000 || depth > 50)
-        throw new PackError(`${packPath}: delta chain too deep at ${offset}`);
+    for (;;) {
+      if (seen.has(cur)) throw new PackError(`${packPath}: delta cycle at ${cur}`);
+      seen.add(cur);
+      if (chain.length > MAX_CHAIN)
+        throw new PackError(`${packPath}: delta chain deeper than ${MAX_CHAIN} at ${offset}`);
       const hit = cacheGet(cur);
       if (hit) {
         base = hit;
@@ -332,8 +396,11 @@ export async function openPack(
         cur = offsetOf(i);
         continue;
       }
-      base = await opts.externalBase?.(e.baseOid as string);
-      if (!base) throw new PackError(`${packPath}: REF_DELTA base ${e.baseOid} not found`);
+      const baseOid = e.baseOid as string;
+      if (visiting.has(baseOid))
+        throw new PackError(`${packPath}: REF_DELTA cycle through ${baseOid}`);
+      base = await opts.externalBase?.(baseOid, new Set([...visiting, baseOid]));
+      if (!base) throw new PackError(`${packPath}: REF_DELTA base ${baseOid} not found`);
       break;
     }
     // Checkpoints, not every step: caching each object on the way would let the top of the last
@@ -393,7 +460,7 @@ export async function openPack(
       if (hit) {
         ({ type } = hit);
         size = hit.data.length;
-        content = once(hit.data);
+        content = once(hit.data.slice()); // never hand out the cached buffer
       } else {
         const e = await readHead(offset);
         if (TYPES[e.kind]) {
@@ -402,10 +469,10 @@ export async function openPack(
           size = e.size;
           content = inflate(e);
         } else {
-          const r = await resolve(offset);
+          const r = await resolve(offset, new Set([...(o?.visiting ?? []), oid]));
           type = r.type;
           size = r.data.length;
-          content = once(r.data);
+          content = once(r.data.slice()); // the result may be cached: copy it
         }
       }
       return { type, size, content: o?.verify ? verified(oid, type, size, content) : content };

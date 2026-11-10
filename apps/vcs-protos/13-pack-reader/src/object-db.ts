@@ -15,7 +15,10 @@ import {
 } from "./pack-reader.js";
 
 export interface ObjectDatabase {
-  get(oid: string, opts?: { verify?: boolean }): Promise<ReadObject | undefined>;
+  get(
+    oid: string,
+    opts?: { verify?: boolean; visiting?: Set<string> },
+  ): Promise<ReadObject | undefined>;
   has(oid: string): Promise<boolean>;
   list(): AsyncIterable<string>;
   /** Packs that could not be opened (corrupt idx, mismatched pack…), skipped as git does. */
@@ -40,7 +43,7 @@ export async function openObjectDatabase(
       for (const p of packs) {
         if (p.has(oid)) return p.get(oid, o);
       }
-      return loose.get(oid, o);
+      return loose.get(oid, { verify: o?.verify });
     },
     async has(oid) {
       if (!OID.test(oid)) return false;
@@ -64,8 +67,8 @@ export async function openObjectDatabase(
       }
     },
   };
-  const externalBase = async (oid: string) => {
-    const o = await db.get(oid);
+  const externalBase = async (oid: string, visiting: Set<string>) => {
+    const o = await db.get(oid, { visiting });
     if (!o) return undefined;
     const parts: Uint8Array[] = [];
     for await (const c of o.content) parts.push(c);
@@ -85,12 +88,17 @@ export async function openObjectDatabase(
   }
   for (const base of names.sort()) {
     if (!(await files.exists(`${dir}/pack/${base}.pack`))) continue; // an idx without its pack is ignored
-    packs.push(
-      await openPack(files, `${dir}/pack/${base}.pack`, `${dir}/pack/${base}.idx`, {
-        ...opts,
-        externalBase,
-      }),
-    );
+    try {
+      packs.push(
+        await openPack(files, `${dir}/pack/${base}.pack`, `${dir}/pack/${base}.idx`, {
+          ...opts,
+          externalBase,
+        }),
+      );
+    } catch (e) {
+      // git warns and skips a pack it cannot use; the healthy packs and loose objects stay readable
+      db.skipped.push({ pack: base, error: e instanceof Error ? e.message : String(e) });
+    }
   }
   return db;
 }
