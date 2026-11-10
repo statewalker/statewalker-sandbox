@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,6 +39,14 @@ const newRepo = () => {
 const repoStore = (repo: string) =>
   filesStagingStore(new NodeFilesApi({ rootDir: repo }), "/.git/objects");
 const body = (raw: Uint8Array) => raw.subarray(raw.indexOf(0) + 1);
+const fsck = (repo: string) => {
+  const r = spawnSync(
+    "git",
+    ["-c", "fsck.missingSpaceBeforeEmail=warn", "fsck", "--full", "--no-dangling"],
+    { cwd: repo, env: gitEnv, encoding: "utf8" },
+  );
+  return { status: r.status, output: `${r.stdout}${r.stderr}`.trim() };
+};
 
 describe("R1 corpus fixture is native git's", () => {
   it("every id equals `git hash-object --literally` of the content", () => {
@@ -89,9 +97,12 @@ describe("R2 native git interop", () => {
       expect(git(repo, ["cat-file", "-t", o.id]).toString().trim()).toBe(o.type);
       expect(new Uint8Array(git(repo, ["cat-file", o.type, o.id])), o.name).toEqual(body(o.raw));
     }
-    // Exit status 0: fsck re-inflates and re-hashes every loose object. Its warnings about the
-    // deliberately exotic objects (zero-padded modes, missing tagger) do not fail it.
-    git(repo, ["fsck", "--full", "--no-dangling"]);
+    // fsck re-inflates and re-hashes every loose object. The corpus holds one commit with
+    // "Name<a@b>" (as some old importers wrote); fsck calls that an error by default, and git's own
+    // fsck.<msg-id> config downgrades it. Exotic-but-valid objects only produce warnings.
+    const r = fsck(repo);
+    expect(r.status, r.output).toBe(0);
+    expect(r.output).not.toMatch(/hash mismatch|corrupt|inflate|garbage|sha1 mismatch/i);
   });
   for (const level of [0, 1, 9]) {
     it(`objects git writes at core.compression=${level} are read back byte-identically`, async () => {
@@ -155,7 +166,11 @@ describe("R4 one pass over a large blob", () => {
     let peak = 0;
     const gc = (globalThis as { gc?: () => void }).gc;
     gc?.();
-    const base = process.memoryUsage().heapUsed;
+    const mem = () => {
+      const m = process.memoryUsage();
+      return m.heapUsed + m.arrayBuffers;
+    };
+    const base = mem();
     const source = {
       async *[Symbol.asyncIterator]() {
         passes++;
@@ -165,7 +180,7 @@ describe("R4 one pass over a large blob", () => {
           pulled += c.length;
           if (i % 32 === 0) {
             gc?.();
-            peak = Math.max(peak, process.memoryUsage().heapUsed - base);
+            peak = Math.max(peak, mem() - base);
           }
           yield c;
         }
@@ -175,13 +190,15 @@ describe("R4 one pass over a large blob", () => {
     const id = await objs.put("blob", size, source);
     const ms = performance.now() - t0;
     console.log(
-      `R4 ${MB} MB: ${ms.toFixed(0)} ms (${((MB / ms) * 1000).toFixed(0)} MB/s), heap peak +${(peak / 2 ** 20).toFixed(1)} MB`,
+      `R4 ${MB} MB: ${ms.toFixed(0)} ms (${((MB / ms) * 1000).toFixed(0)} MB/s), heap+arrayBuffers peak +${(peak / 2 ** 20).toFixed(1)} MB`,
     );
     expect(passes).toBe(1);
     expect(pulled).toBe(size);
     expect(peak).toBeLessThan(64 * 2 ** 20);
     expect(git(repo, ["cat-file", "-s", id]).toString().trim()).toBe(String(size));
-    git(repo, ["fsck", "--full", "--no-dangling"]);
+    const f = fsck(repo);
+    expect(f.status, f.output).toBe(0);
+    expect(f.output).not.toMatch(/error|warning|mismatch|corrupt|garbage/i); // only "notice: unborn HEAD"
     expect(
       readdirSync(join(repo, ".git", "objects")).filter((n) => n.startsWith("tmp_obj_")),
     ).toEqual([]);
