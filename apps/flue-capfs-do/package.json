@@ -37,6 +37,7 @@
     "@statewalker/webrun-biscuit": "catalog:",
     "@statewalker/webrun-bundler": "0.1.1",
     "@statewalker/webrun-files-mem": "catalog:",
+    "@wasmer/sdk": "0.19.1",
     "acorn": "^8.15.0",
     "acorn-walk": "^8.3.4",
     "esbuild-wasm": "0.28.2",

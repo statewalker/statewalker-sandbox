@@ -4,8 +4,12 @@
 //   /sqlite/              sqlite3.wasm
 //   /pyodide/             node_modules/pyodide (the Python runtime)
 //   /python/engine.mjs    the Python engine (a Worker), served with a restrictive CSP
+//   /wasmer/engine.mjs    the Wasmer engine (a Worker started by the cells worker)
+//   /wasmer/sdk/          node_modules/@wasmer/sdk (served as it is: ES modules and its wasm)
+// Every response is cross-origin isolated (COOP/COEP): the Wasmer engine shares memory with the
+// cells worker (SharedArrayBuffer).
 //   node scripts/serve-browser.mjs [--port 8790] [--no-build]
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, realpathSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { dirname, extname, join, normalize } from "node:path";
@@ -16,6 +20,7 @@ import { buildBrowser } from "./build-browser.mjs";
 const dir = fileURLToPath(new URL("..", import.meta.url));
 const require = createRequire(import.meta.url);
 const pyodideDir = dirname(require.resolve("pyodide/package.json"));
+const wasmerSdkDir = realpathSync(dirname(dirname(require.resolve("@wasmer/sdk/node"))));
 const sqliteDir = join(dirname(require.resolve("@sqlite.org/sqlite-wasm/package.json")), "dist");
 
 // The engine Worker may load only same-origin scripts and Pyodide's files; it cannot connect
@@ -28,6 +33,8 @@ const MOUNTS = [
   ["/sqlite/", sqliteDir],
   ["/pyodide/", pyodideDir],
   ["/python/", join(dir, "src/python")],
+  ["/wasmer/sdk/", wasmerSdkDir],
+  ["/wasmer/", join(dir, "src/wasmer")],
   ["/", join(dir, "dist/browser")],
 ];
 const TYPES = {
@@ -54,6 +61,9 @@ export function startServer(port) {
     const headers = {
       "content-type": TYPES[extname(file)] ?? "application/octet-stream",
       "cache-control": "no-store",
+      "cross-origin-opener-policy": "same-origin",
+      "cross-origin-embedder-policy": "require-corp",
+      "cross-origin-resource-policy": "same-origin",
     };
     if (path.startsWith("/python/")) headers["content-security-policy"] = ENGINE_CSP;
     res.writeHead(200, headers);

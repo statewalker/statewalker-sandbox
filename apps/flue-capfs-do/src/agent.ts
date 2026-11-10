@@ -31,6 +31,13 @@ import type { BundleRequest } from "./tools/bundle-request.ts";
 import { bundleInDeployment } from "./tools/bundler-client.ts";
 import { deploymentToolConfig } from "./tools/config.ts";
 import { admitTool, toolPolicy } from "./tools/policy.ts";
+import {
+  allowedPackages,
+  type WasmerEnv,
+  WasmerKernel,
+  type WasmerRunRequest,
+  wasmerHost,
+} from "./wasmer/kernel.ts";
 
 export type AttenuationSpec = {
   scope?: string | string[];
@@ -52,7 +59,9 @@ export type Task =
   | ({ kind: "bundle" } & BundleRequest)
   | { kind: "revocationId" }
   | ({ kind: "python" } & PythonRunRequest)
-  | ({ kind: "agent" } & AgentLoopRequest);
+  | ({ kind: "agent" } & AgentLoopRequest)
+  /** A bash script in a Wasmer sandbox whose /workspace is the capability (cellb only). */
+  | ({ kind: "wasmer" } & WasmerRunRequest);
 
 interface WorkerLoader {
   get(
@@ -68,7 +77,7 @@ interface WorkerLoader {
   ): { getEntrypoint(): { run(files: unknown, input: unknown): Promise<unknown> } };
 }
 
-export interface AgentEnv extends WorkspaceEnv {
+export interface AgentEnv extends WorkspaceEnv, WasmerEnv {
   AGENT: DurableObjectNamespace<Agent>;
   LOADER?: WorkerLoader;
   /** "1" allows tool isolates on runtimes whose isolates can reach the host file system (cellb on Node). */
@@ -209,12 +218,15 @@ export class Agent extends DurableObject<AgentEnv> {
         return cap.revocationId();
       case "python":
         return this.#python().run(cap, task);
+      case "wasmer":
+        return this.#wasmer().run(cap, task);
       case "agent":
         return runAgentLoop(cap, task, this.env, this.ctx.storage as never, {
           // Only a session needs the scope (one more call to the Workspace).
           scope: task.session === undefined ? "" : (scope ?? (await sessionScope(cap, []))),
           sandboxId: name,
           llmToken,
+          wasmer: (c) => this.#wasmer().open(c),
         });
       default:
         throw new Error(`EINVAL: unknown task '${(task as { kind?: string }).kind}'`);
@@ -252,6 +264,13 @@ export class Agent extends DurableObject<AgentEnv> {
       }
     }
     return out;
+  }
+
+  #wasmerKernel?: WasmerKernel;
+  /** One Wasmer engine per agent cell, started on first use (cellb only). */
+  #wasmer(): WasmerKernel {
+    this.#wasmerKernel ??= new WasmerKernel(wasmerHost(this.env), allowedPackages(this.env));
+    return this.#wasmerKernel;
   }
 
   #kernel?: PythonKernel;
