@@ -86,7 +86,7 @@ whole Node suite passes against this module).
 
 ## Verified
 
-All 16 Node tests, the 45 X6a tests re-run against this module and 1 Chromium test pass
+All 18 Node tests, the 45 X6a tests re-run against this module and 1 Chromium test pass
 (`pnpm test 14-thin-packs`).
 
 | # | Result |
@@ -99,6 +99,25 @@ All 16 Node tests, the 45 X6a tests re-run against this module and 1 Chromium te
 | R5 | 254 entry loads, 1 storage read (+1 for phase 1); `.idx` identical to git's. The criterion first said "≥ 300 deltas": the pack has 245 (X6a's count). |
 | R6 | Node: `tmp_pack_old`, `tmp_idx_old` (3 days) removed with a 1-day threshold; `tmp_pack_young`, an old `garbage.txt` and old `pack-*` kept. MemFilesApi: kept at `now`, removed 5 s later with a 1 s threshold. |
 | R7 | The fixture completes to the committed `.idx` on Node, in a Durable Object and in Chromium. |
+
+### Mutation check
+
+Each mutation applied alone to `src/index-pack.ts`, the matching tests run (`-t`), file restored.
+
+| Mutation | Caught by |
+|---|---|
+| M1 base from the repository not verified against its id | R1b hash case |
+| M2 header count not rewritten after appending | R1 (4: verify-pack / idx) |
+| M3 received part not re-hashed while it is copied | R1b "stored pack changing" (added after the first run missed it) |
+| M4 unresolved deltas walked backwards | R1 (4: appended order differs from git's) |
+| M5 entry count not checked against the pack size | R4 (allocation fails with a RangeError, not PackError) |
+| M6 no window: one storage read per load | R5 |
+| M7 window lower bound not checked (stale window served) | R1, R2 (6) |
+| M8 a REF child's base index not recorded | R1b "evicted base reached through REF links" (added after the first run missed it) |
+| M9 sweep ignores the age | R6 (2) |
+| M10 sweep removes any file | R6 |
+| M11 appended entry's CRC without its header | R1 (4: idx differs from git's for our pack) |
+| M12 REF children never found | R1, R1b, R2 (13) |
 
 ### X6a against X6b1 (`scripts/compare.ts`, Node 22, same packs, on local disk)
 
