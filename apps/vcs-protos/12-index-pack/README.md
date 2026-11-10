@@ -57,7 +57,7 @@ each base down to its children re-reading entries by offset, an `.idx` v2, then 
 - Its `.idx` equals `git index-pack`'s byte for byte for OFS_DELTA and REF_DELTA packs of a
   60-commit history, a `gc --aggressive` pack, a pack with a 4 MiB incompressible blob plus a delta
   against it, and 11 hand-built packs git never writes itself; for every hand-built pack git
-  refuses (count mismatches, REF cycles, duplicate bases, a base before the pack) we refuse too.
+  refuses (count mismatches, REF cycles, a base before the pack) we refuse too (duplicate bases: see finding 5).
 - Native git reads an installed pack (`verify-pack`, `fsck --full`, `cat-file` of every object).
 - Corrupt and hostile input is refused with `PackError` and leaves `objects/pack/` empty: a 64 MiB
   inflate bomb stops at its first extra byte (30 ms; git: 12 ms), a delta declaring 4 GiB or 1 TiB
@@ -87,8 +87,10 @@ Findings:
    its idx, failures remove both temporaries, and the read of the stored pack is released even when
    parsing fails (otherwise Windows could not delete the temporary). Node writes are fsync'ed before
    the renames (git fsyncs packs); SqliteFilesApi commits transactionally and OPFS on `close()`.
-5. **Duplicate bases follow git**: a delta reachable from two bases with the same id is refused
-   ("already resolved (duplicate base)"); plain duplicate objects index exactly as git does.
+5. **Duplicate bases depend on the git version**: git 2.43 refuses a pack where a delta is
+   reachable from two bases with the same id ("already resolved (duplicate base)"), current git
+   (the CI runner's) accepts it. We follow current git — the delta resolves to the same object — and
+   the test compares our idx with git's wherever git accepts. Plain duplicates index as git does.
 6. **Limits for X6b**: about 0.9 KB of heap per entry (entry objects, maps) — a pack of 200 000
    objects peaks near +170 MiB, so a Durable Object tops out around 100–150 thousand objects until
    entries move to typed arrays; thin packs are refused; SHA-1 without collision detection and no
@@ -100,7 +102,7 @@ All 42 Node tests and 1 Chromium test pass (`pnpm test 12-index-pack`).
 
 | # | Result |
 |---|---|
-| R1 | Four packs made by native git (OFS_DELTA 245 deltas; REF_DELTA 245; `gc --aggressive`; a 4 MiB blob with a delta child; chains up to 40): `.idx` byte-identical to `git index-pack`'s, every id and CRC equal `git show-index`'s. R1b: 11 hand-built packs — zero objects, v3, count too high/low, the same blob twice, REF on REF, forward REF, OFS on REF, REF cycle, duplicate base, base before the pack — give git's idx or git's refusal. Large offsets (> 2³¹, up to 2⁴⁰) in `writeIdx` decode through `git show-index`. |
+| R1 | Four packs made by native git (OFS_DELTA 245 deltas; REF_DELTA 245; `gc --aggressive`; a 4 MiB blob with a delta child; chains up to 40): `.idx` byte-identical to `git index-pack`'s, every id and CRC equal `git show-index`'s. R1b: 11 hand-built packs — zero objects, v3, count too high/low, the same blob twice, REF on REF, forward REF, OFS on REF, REF cycle, duplicate base, base before the pack — give git's idx or git's refusal (duplicate base: accepted, as current git; git 2.43 refuses). Large offsets (> 2³¹, up to 2⁴⁰) in `writeIdx` decode through `git show-index`. |
 | R2 | Installed into an empty repository: `pack-<id>.pack` and `.idx` only; `verify-pack`, `fsck --full` pass; `cat-file` of every object equals the source; pack renamed before idx (R2b). |
 | R3 | Refused with `PackError`, `objects/pack/` empty: truncated; trailer flipped; a compressed byte flipped; a declared size disagreeing with the data (trailer recomputed); an OFS_DELTA base inside the pack but not at an entry; a thin pack; bytes after the trailer. R3b: a delta declaring 4 GiB (live memory < +64 MiB) and, with no size limit, 1 TiB — refused before allocating; a 10-byte entry inflating to 64 MiB refused in < 200 ms; `maxObjectSize` refuses by header. |
 | R4 | 64 MiB of incompressible blobs (no deltas: phase 1 only): +0.3–0.8 MiB live. R4b (live memory sampled on every read): a 4 MiB base with a 50-deep linear chain: +4–9 MiB; a two-level tree (4 MiB base → 3 deltas → 3 chains of 3) with a 1-byte and a 64 MiB base budget: idx identical, < 24 MiB, and the base inflated once with the large budget but re-derived several times with the 1-byte one. |
@@ -128,7 +130,6 @@ All re-run against the final code. (M4 and M6 were not used as numbers.)
 | N2 base cache budget ignored | R4b tree (base read once instead of re-derived) |
 | N3 inflation not stopped past the declared size | R3b bomb timing |
 | N4 delta result allocated before validation | R3b 1 TiB case |
-| N5 duplicate base accepted | R1b duplicate base |
 | N6 `maxObjectSize` not checked | R3b |
 | N7 re-derivation skips the delta chain | R4b tree (idx differs) |
 | N8 read not released when parsing fails | not asserted: the mutated run hung on the open file handle (Node also warns "closing file descriptor on garbage collection") |
@@ -138,7 +139,7 @@ All re-run against the final code. (M4 and M6 were not used as numbers.)
 | Earlier belief | What the prototype showed |
 |---|---|
 | First version: "memory bounded by the delta chain … a base and its child are held together" | The whole chain was held (+200 MiB for 50 × 4 MiB); the 64 MiB test pack had no deltas and measured phase 1 only. Fixed with early release and a base cache. |
-| First version: "follows git" for every pack | Duplicate bases were accepted where git refuses; now refused. |
+| Review: "duplicate bases diverge from git" | They diverge from git 2.43 only; current git accepts them as we do (CI showed it after we had briefly switched to refusing). |
 | A pure-TS index-pack is safe against hostile packs because it checks sizes | Only if sizes are checked before allocating and inflation stops at the declared size. |
 | Plan: ingest strategy per backend is open | For FilesApi backends git's own model — keep the pack, write an idx — works unchanged; exploding into objects is only needed for the native SQL store (X6b). |
 | vcs-utils' delta code can be reused | It lacks bounds checks; a checked applier is about 80 lines. |

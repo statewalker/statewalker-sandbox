@@ -413,12 +413,10 @@ async function resolveDeltas(
         pop();
         continue;
       }
-      if (child.oid) {
-        // reachable from two bases with the same id (git: "already resolved (duplicate base)")
-        throw new PackError(
-          `delta at offset ${child.offset} already resolved (duplicate base ${top.entry.oid})`,
-        );
-      }
+      // Reachable again through a second base with the same id (a duplicate object). git 2.43
+      // refuses such packs ("already resolved (duplicate base)"); current git (CI) accepts them
+      // and so do we: the delta resolves to the same object.
+      if (child.oid) continue;
       let base = top.content;
       if (!base) {
         base = await derive(top.entry);
