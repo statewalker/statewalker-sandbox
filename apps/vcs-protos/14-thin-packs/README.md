@@ -70,7 +70,7 @@ whole Node suite passes against this module).
   header's count (plus 8 for the child links during phase 2 and 4 for the idx sort order). OFS children are linked lists in two `Int32Array`s, REF children a sorted index
   searched by id, and a resolved delta records the entry it was resolved against, so re-deriving
   an evicted base follows indices instead of maps. A 200 000-object pack (half OFS/REF deltas)
-  installs with a peak of +14 MiB live and git's `.idx` (X6a: see the comparison below).
+  installs with a peak of +14 MiB live and git's `.idx` (X6a: +135 MiB, table below).
 - **Counts checked before allocating.** A header declaring more entries than `(size − 32) / 9`
   (the smallest entry: a 1-byte header and an 8-byte zlib stream) is refused before the tables are
   allocated.
@@ -99,6 +99,17 @@ All 16 Node tests, the 45 X6a tests re-run against this module and 1 Chromium te
 | R5 | 254 entry loads, 1 storage read (+1 for phase 1); `.idx` identical to git's. The criterion first said "≥ 300 deltas": the pack has 245 (X6a's count). |
 | R6 | Node: `tmp_pack_old`, `tmp_idx_old` (3 days) removed with a 1-day threshold; `tmp_pack_young`, an old `garbage.txt` and old `pack-*` kept. MemFilesApi: kept at `now`, removed 5 s later with a 1 s threshold. |
 | R7 | The fixture completes to the committed `.idx` on Node, in a Durable Object and in Chromium. |
+
+### X6a against X6b1 (`scripts/compare.ts`, Node 22, same packs, on local disk)
+
+| Pack | X6a time | X6b1 time | X6a peak | X6b1 peak |
+|---|---|---|---|---|
+| 200 000 objects (half deltas) | 45.8 s | 5.8 s | +134.7 MiB | +23.9 MiB |
+| 60-commit history (254 entry loads) | 159 ms | 46 ms | +3.9 MiB | +0.1 MiB |
+
+Peaks sampled after a GC on every 64th chunk read (R3 samples on every read and reads +14.0 MiB:
+the coarser sampling here also counts garbage between collections). X6a's time goes to one
+storage read per delta load (100 000 opens of the file); X6b1 serves them from the window.
 
 ## Functional description
 
