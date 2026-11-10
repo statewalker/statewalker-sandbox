@@ -209,3 +209,23 @@ test("a length that cuts a character is refused", async () => {
   await fs.handle("close", [id]);
   assert.equal(cap.files.get("/e"), "é");
 });
+
+test("readDir is one capability call with sizes and times; NUL bytes and growth by setLen are refused", async () => {
+  const cap = fakeCap({ "/d": null, "/d/e.txt": "é", "/d/sub": null });
+  const fs = capHostFs(cap);
+  const calls = cap.calls.length;
+  const { value } = await fs.handle("readDir", ["d"]);
+  assert.deepEqual(cap.calls.slice(calls), ["readdirStat /d"]);
+  const e = value.find((x) => x.name === "e.txt");
+  assert.equal(e.size, 2);
+  assert.equal(e.modified, String(BigInt(Date.parse("2026-01-01T00:00:00Z")) * 1_000_000n));
+  assert.equal(value.find((x) => x.name === "sub").kind, "directory");
+
+  const { value: id } = await fs.handle("open", ["n", ...CREATE]);
+  assert.equal((await fs.handle("write", [id, 0, enc("a\0b")])).error.code, "ENOTSUP");
+  assert.deepEqual(await fs.handle("write", [id, 0, enc("ab")]), { value: 2 });
+  assert.equal((await fs.handle("write", [id, 5, enc("c")])).error.code, "ENOTSUP", "a gap is NUL");
+  assert.equal((await fs.handle("setLen", [id, 10])).error.code, "ENOTSUP");
+  await fs.handle("close", [id]);
+  assert.equal(cap.files.get("/n"), "ab");
+});

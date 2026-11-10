@@ -326,26 +326,47 @@ test("model: a store from before the model columns gets them, once", () => {
 });
 
 test("readdirStat lists what readdir lists, with each entry's stat, in one call", async () => {
-  const { gate, token } = await setup();
-  const scoped = Biscuit.fromBase64(token)
-    .attenuate(attenuationBlock({ scope: "/proj/x" }))
-    .toBase64();
-  for (const t of [token, scoped])
-    for (const dir of ["/", "/proj"]) {
-      const names = await gate(t).readdir(dir);
-      const entries = await gate(t).call("readdirStat", dir);
-      assert.deepEqual(
-        entries.map((e) => e.name),
-        names,
-      );
-      for (const e of entries) {
-        const s = await gate(t).call("stat", dir === "/" ? `/${e.name}` : `${dir}/${e.name}`);
+  const { gate, token, auth, session, store } = await setup(["/p1", "/proj", "/plans"]);
+  await store.writeFile("/proj/secret/k", "s");
+  await store.writeFile("/proj/secretive", "t");
+  const att = (spec) => Biscuit.fromBase64(token).attenuate(attenuationBlock(spec)).toBase64();
+  const tokens = [
+    token,
+    att({ scope: "/proj/x" }),
+    att({ scope: ["/p1", "/proj/x"] }),
+    att({ readOnly: true }),
+    att({ datalog: 'check if resource($p), !$p.starts_with("/proj/secret/");' }),
+  ];
+  const outcome = (p) =>
+    p.then(
+      (v) => v,
+      (e) => e.code,
+    );
+  for (const mode of ["yolo", "readonly", "plan", "prototyping"]) {
+    auth.setMode(session, mode);
+    for (const t of tokens)
+      for (const dir of ["/", "/proj", "/proj/secret", "/proj/x", "/p1", "/nope"]) {
+        const names = await outcome(gate(t).readdir(dir));
+        const entries = await outcome(gate(t).call("readdirStat", dir));
+        if (typeof names === "string") {
+          assert.equal(entries, names, `${mode} ${dir}`);
+          continue;
+        }
         assert.deepEqual(
-          { isDirectory: e.isDirectory, size: e.size, mtime: e.mtime },
-          { isDirectory: s.isDirectory, size: s.size, mtime: s.mtime },
+          entries.map((e) => e.name),
+          names,
         );
+        for (const e of entries) {
+          const s = await gate(t).call("stat", dir === "/" ? `/${e.name}` : `${dir}/${e.name}`);
+          assert.deepEqual(
+            { isDirectory: e.isDirectory, size: e.size, mtime: e.mtime },
+            { isDirectory: s.isDirectory, size: s.size, mtime: s.mtime },
+          );
+        }
       }
-    }
+  }
+  auth.setMode(session, "yolo");
+  const scoped = tokens[1];
   await gate().call("writeFile", "/proj/é.txt", "é");
   const e = (await gate().call("readdirStat", "/proj")).find((x) => x.name === "é.txt");
   assert.equal(e.size, 2, "sizes are UTF-8 bytes");

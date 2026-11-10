@@ -9,6 +9,7 @@
 // EISDIR, ENOTEMPTY, ENOTSUP).
 
 import type { Cap } from "../caps.ts";
+import type { DirEntryStat } from "../sql-fs.ts";
 
 export type HostFsReply = { value: unknown } | { error: { code: string; message: string } };
 
@@ -63,6 +64,9 @@ function checkText(b: Uint8Array, from: number, to: number, path: string) {
   } catch {
     throw err("ENOTSUP", `${path}: the store keeps UTF-8 text, not binary content`);
   }
+  // NUL is valid UTF-8, but the store's text ends at the first one (SQLite TEXT on node:sqlite).
+  if (b.subarray(from, to).includes(0))
+    throw err("ENOTSUP", `${path}: the store keeps text without NUL bytes`);
 }
 
 /** A protocol handler for one sandbox, over `cap`. */
@@ -162,7 +166,7 @@ export function capHostFs(cap: Cap) {
     stat: (p) => stat(abs(p)),
     async readDir(p) {
       // One capability call for the whole listing (entries the token may not list are left out).
-      const entries = (await cap.call("readdirStat", abs(p))) as (PlainStat & { name: string })[];
+      const entries = (await cap.call("readdirStat", abs(p))) as DirEntryStat[];
       return entries.map((e) => {
         const t = nanos(e.mtime);
         return {
@@ -223,7 +227,8 @@ export function capHostFs(cap: Cap) {
       b.set(data, at);
       f.size = Math.max(f.size, end);
       try {
-        checkText(b, at, end, f.path);
+        // A write past the end fills the gap with NUL bytes: checked too.
+        checkText(b, Math.min(at, size), end, f.path);
       } catch (e) {
         b.set(before, at);
         f.size = size;
@@ -240,8 +245,9 @@ export function capHostFs(cap: Cap) {
       // Cutting a character in two would make the file unstorable, and only at close.
       if (n < f.size && isContinuation((f.bytes as Uint8Array)[n]))
         throw err("ENOTSUP", `${f.path}: the length would cut a UTF-8 character`);
-      const b = reserve(f, n);
-      if (n > f.size) b.fill(0, f.size, n);
+      // Growing a file fills it with NUL bytes, which the store cannot keep.
+      if (n > f.size) throw err("ENOTSUP", `${f.path}: a file grows only by writing text`);
+      reserve(f, n);
       f.size = n;
       f.dirty = true;
       return null;
