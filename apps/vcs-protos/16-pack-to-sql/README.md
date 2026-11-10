@@ -72,8 +72,9 @@ pack from SqliteFilesApi, as after a real ingest; "cold" random reads use a fres
   read time on packs becomes the constraint.
 - **Batching**: one object per transaction against a handful is the difference (median of three:
   964–1 131 ms vs 238–269 ms), but past ~64 objects a transaction reading and deflating dominate,
-  not commits: the criterion's 5× is **not met as written** (4.75–5.05× in the runs; the review
-  saw 3.9× without a warm-up). The test asserts the transaction counts and a 3× bound.
+  not commits: the criterion's 5× is **not met as written** (4.75–5.05× in the dev container; the
+  review saw 3.9× without a warm-up; the CI runner, where commits are nearly free, no gain at
+  all). The test asserts the transaction counts only.
 - **Bounded steps**: a batch is committed at `batch` objects or `batchBytes` (8 MiB) of compressed
   data, whichever comes first (the review found up to 1 GiB per batch: 120 incompressible ~1 MB
   objects now add +8.7 MiB, +114.6 MiB before); a large object is streamed once into X3b's staged
@@ -96,7 +97,7 @@ the wrong reason — X6a's `buildPack` cannot hold 120 MB — and was rebuilt be
 | # | Result |
 |---|---|
 | R1 | OFS, REF, `gc --aggressive`, a 4 MiB blob with a delta child: every object exploded reads back with git's type, size and content, verified; `list` yields exactly git's ids. |
-| R2 | **Not met as written** (above): one transaction per object vs ≤ 2 for the pack, median times 964–1 131 ms vs 238–269 ms (4.75–5.05×). |
+| R2 | **Not met as written**: one transaction per object vs ≤ 2 for the pack (asserted); median times 964–1 131 ms vs 238–269 ms in the dev container (4.75–5.05×), and **no gain on the CI runner** (605 ms vs 794 ms), where a commit costs almost nothing. Batching pays where commits sync (a disk, a DO's storage); its speedup is the storage's, not a constant. |
 | R3 | The 4 MiB-blob pack (small objects and one staged object) exploded in steps of 5 objects, batches of 4, with a Db failing at each of its statements in turn: after each failure every object the progress covers is stored; resumed, every object present and verified. |
 | R4 | The table above. |
 | R5 | X6a's fixture pack installed (X6b1) and exploded in a Durable Object with 4 KiB chunks (objects on the staged path) in steps of 40, the runtime restarted for every request, one step dying mid-batch: every object verifies. |
