@@ -25,6 +25,11 @@
   },
   "dependencies": {
     "@noble/hashes": "^2.0.1",
+    "@statewalker/db-api": "^0.1.4",
+    "@statewalker/db-sqlite-browser": "^0.2.1",
+    "@statewalker/db-sqlite-do": "^0.1.0",
+    "@statewalker/db-sqlite-node": "^0.3.0",
+    "@statewalker/webrun-storage": "^0.2.2",
     "pako": "^3.0.2"
   },
   "devDependencies": {
