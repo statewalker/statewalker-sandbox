@@ -65,7 +65,7 @@ All 13 Node tests and 3 Chromium tests pass (`pnpm test 08-sqlite-kv-cas`).
 
 | # | Result |
 |---|---|
-| R1 | The KvStore contract (12 cases: roundtrip, binary values 0x00–0xff and zeros, empty values, cas match/stale/create/delete, two stale cas → one winner, `list(prefix)` in key order, `%`/`_` taken literally, prefixes followed by U+FFFD / U+1F600, a prefix ending at U+D7FF) on `node:sqlite` in memory and on a file, in the Chromium worker and in the Durable Object. On the strict DO fake all but "empty values" pass (see Corrections). R1b: keys with NUL or a lone surrogate are refused by `get`/`put`/`cas`/`list` |
+| R1 | The KvStore contract (12 cases: roundtrip, binary values 0x00–0xff and zeros, empty values, cas match/stale/create/delete, two stale cas → one winner, `list(prefix)` in key order, `%`/`_` taken literally, prefixes followed by U+FFFD / U+1F600, a prefix ending at U+D7FF) on `node:sqlite` in memory and on a file, in the Chromium worker and in the Durable Object. On the strict DO fake all pass on Node 24; on Node 22 "empty values" fails (see Corrections). R1b: keys with NUL or a lone surrogate are refused by `get`/`put`/`cas`/`list` |
 | R2 | 100 concurrent `cas` on one `Db`: one winner, final value is the winner's (Node and Chromium worker) |
 | R3 | Two connections on one file see each other's writes (both run on one thread, so this is visibility, not contention). Four processes, start times checked to overlap (a child that starts late fails the test): without a busy timeout, at most one `ok` and at least one explicit `busy`; with `busy_timeout = 5000`, exactly one `ok` and three `mismatch` |
 | R4 | Chromium Dedicated Worker, sqlite-wasm, OPFS database: contract and the 100-way race hold; trap test: while one worker owns the sahpool pool, a second worker cannot open even a *different* database in it (`NoModificationAllowedError`) |
@@ -92,7 +92,7 @@ All 13 Node tests and 3 Chromium tests pass (`pnpm test 08-sqlite-kv-cas`).
 | Plan: "a strict DO-limits fake must be written for tests" | statewalker-db already ships one (`@statewalker/db-sqlite-do/fake`: `newFakeDoStorage()`); it is used here. |
 | Plan: "`sqlKvStore` CAS = one statement; two-tab race" in the browser | Two tabs cannot both open an OPFS sahpool *pool* at all; the race happens inside the owning worker, and other tabs need a channel to it. |
 | The contract here = webrun-storage's | It is stricter: list order, literal `%`/`_`, high code points and empty values are not checked upstream. |
-| statewalker-db's DO fake mirrors workerd | It refuses empty BLOBs that real workerd stores; recorded as an expected failure (a fake bug to report). |
+| statewalker-db's DO fake mirrors workerd | On Node 22 it cannot store empty BLOBs, which real workerd stores: the fake binds `new Uint8Array(arrayBuffer)`, and Node 22's node:sqlite binds a view of a zero-length ArrayBuffer as NULL (`new Uint8Array(0)` binds as a BLOB; Node 24 fixes both). The test probes the runtime. |
 
 ## Functional description
 

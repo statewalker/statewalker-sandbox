@@ -204,11 +204,20 @@ describe("R5 Durable Object on workerd (Miniflare, SQLite-backed class)", () => 
 });
 
 describe("extra: statewalker-db's strict Durable Object fake (DO limits on node:sqlite)", () => {
-  it("R1 contract holds under the DO limits, except empty values (a fake bug: real workerd accepts them)", async () => {
+  it("R1 contract holds under the DO limits (empty values only where node:sqlite can bind them)", async () => {
+    // The fake binds BLOBs as `new Uint8Array(arrayBuffer)`. node:sqlite on Node 22 binds a view of a
+    // zero-length ArrayBuffer as NULL (Node 24 binds an empty BLOB), so empty values fail NOT NULL
+    // there. Real workerd stores them; probe the runtime instead of hard-coding the Node version.
+    const { DatabaseSync } = await import("node:sqlite");
+    const probe = new DatabaseSync(":memory:");
+    const t = probe.prepare("SELECT typeof(?) AS t").get(new Uint8Array(new ArrayBuffer(0))) as {
+      t: string;
+    };
+    probe.close();
     const r = await runKvContract(async () => sqlKvStore(newDoSqliteDb(newFakeDoStorage())));
-    expect(r.failed.map((f) => f.split(":")[0])).toEqual([
-      "empty values round-trip and can be compared",
-    ]);
+    expect(r.failed.map((f) => f.split(":")[0])).toEqual(
+      t.t === "blob" ? [] : ["empty values round-trip and can be compared"],
+    );
   });
   it("R6 a 3 MiB value is rejected by the DO limit, not stored", async () => {
     const kv = await sqlKvStore(newDoSqliteDb(newFakeDoStorage()));
