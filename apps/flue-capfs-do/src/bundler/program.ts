@@ -22,10 +22,13 @@ declare const __CAPFS_BUILTIN_NAMES__: Record<string, string[]>;
 const g = globalThis as { self?: unknown };
 if (typeof g.self === "undefined") g.self = globalThis;
 
-const ready = esbuild.initialize({ wasmModule, worker: false });
+// Started on the first call: esbuild's Go runtime sets timers and draws random numbers, which
+// workerd refuses at global scope.
+let ready: Promise<void> | undefined;
 
 export default class Bundler extends WorkerEntrypoint {
   async bundle(req: CheckedBundleRequest) {
+    ready ??= esbuild.initialize({ wasmModule, worker: false });
     await ready;
     const out = await bundleTool({
       esbuild,

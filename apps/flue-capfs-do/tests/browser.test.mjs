@@ -2,16 +2,20 @@
 // with SQLite on OPFS, the page reaches them over a MessagePort, Python runs in its own Worker.
 // Runs the Python cases and the core capability checks through the page.
 //   node --test tests/browser.test.mjs        (builds dist/ first)
+
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { after, before, describe, test } from "node:test";
 import { chromium } from "playwright";
 import { buildBrowser } from "../scripts/build-browser.mjs";
 import { startServer } from "../scripts/serve-browser.mjs";
 import { agentCases } from "./agent-scenario.mjs";
+import { bundleTodoTool } from "./fixtures/bundle-fixture.mjs";
 import { startFakeLlm } from "./helpers/fake-llm.mjs";
 import { startWasmServer } from "./helpers/wasm-server.mjs";
 import { pythonCases } from "./python-scenario.mjs";
 
+const TODO_TOOL = new URL("./fixtures/todo-tool.ts", import.meta.url);
 let server;
 let fakeLlm;
 let wasmServer;
@@ -101,6 +105,24 @@ describe("browser (cellb in Chromium)", () => {
   for (const c of pythonCases({ api, label: "browser-" })) test(`python: ${c.name}`, c.fn);
 
   for (const c of agentCases({ api, label: "browser-" })) test(`agent: ${c.name}`, c.fn);
+
+  test("a tool is bundled by the bundler Worker in a browser isolate", async () => {
+    const rt = await api("/api/runtime");
+    assert.equal(rt.value.bundler, true);
+    const ws = `bundle-${Date.now().toString(36)}`;
+    await api(`/api/w/${ws}/seed`, { files: { "/proj/a.md": "TODO: x\n" } }, { admin: true });
+    const s = await api(`/api/w/${ws}/sessions`, { user: "u", rights: ["/proj"] }, { admin: true });
+    const sources = { "/index.ts": readFileSync(TODO_TOOL, "utf8") };
+    const r = await api("/api/agents/bundler/run", {
+      workspace: ws,
+      token: s.value.token,
+      transport: "token",
+      task: { kind: "bundle", sources, entry: "/index.ts" },
+    });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.value.result.check.ok, true);
+    assert.equal(r.value.result.hash, (await bundleTodoTool()).hash, "the same bundle as on Node");
+  });
 
   test("no uncaught errors in the page", () => {
     assert.deepEqual(errors, []);
