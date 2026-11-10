@@ -34,6 +34,7 @@ export class StreamingNodeFilesApi extends NodeFilesApi {
           off += bytesWritten;
         }
       }
+      await fh.sync(); // durable before any rename makes it visible (git fsyncs packs, core.fsync)
     } finally {
       await fh.close();
     }
