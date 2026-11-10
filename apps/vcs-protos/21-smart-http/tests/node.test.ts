@@ -1,0 +1,500 @@
+import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import { newNodeSqliteDb } from "@statewalker/db-sqlite-node";
+import { afterAll, describe, expect, it } from "vitest";
+import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-files.js";
+import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
+import { git, noise, repoWithHistory } from "../../12-index-pack/src/git-repo.js";
+import { log } from "../../17-repository/src/commands.js";
+import type { Repository } from "../../17-repository/src/object-store.js";
+import { filesRepository, sqlRepository } from "../../17-repository/src/repository.js";
+import { clone, type FetchStats, fetchFrom, filesShallow } from "../src/client.js";
+import {
+  DELIM,
+  FLUSH,
+  PktError,
+  PktReader,
+  pkt,
+  RESPONSE_END,
+  readSideband,
+  sideband,
+} from "../src/pkt-line.js";
+import { uploadPackHandler } from "../src/server.js";
+
+const dirs: string[] = [];
+const closers: (() => Promise<void>)[] = [];
+afterAll(async () => {
+  for (const c of closers) await c();
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+const tmp = () => {
+  const d = mkdtempSync(join(tmpdir(), "x8a-"));
+  dirs.push(d);
+  return d;
+};
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+const open = (dir: string) =>
+  filesRepository(new StreamingNodeFilesApi(join(dir, ".git")), nodeRefFiles(join(dir, ".git")));
+const emptyRepo = () => {
+  const d = tmp();
+  git(d, ["init", "-q", "-b", "main", "."]);
+  return d;
+};
+/** git without blocking the event loop (the server it talks to runs in this process). */
+const gitAsync = (cwd: string, args: string[]) =>
+  new Promise<string>((resolve, reject) => {
+    const child = spawn("git", args, {
+      cwd,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+        NO_PROXY: "127.0.0.1",
+        no_proxy: "127.0.0.1",
+      },
+    });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    child.stdout.on("data", (c: Buffer) => out.push(c));
+    child.stderr.on("data", (c: Buffer) => err.push(c));
+    child.on("close", (code) =>
+      code === 0
+        ? resolve(Buffer.concat(out).toString())
+        : reject(new Error(`git ${args.join(" ")}: ${Buffer.concat(err).toString()}`)),
+    );
+  });
+const rev = (d: string, r: string) => git(d, ["rev-parse", r]).toString().trim();
+async function* chunksOf(bytes: Uint8Array, size: number) {
+  for (let i = 0; i < bytes.length; i += size) yield bytes.subarray(i, i + size);
+}
+const concat = (parts: Uint8Array[]) => new Uint8Array(Buffer.concat(parts));
+
+/** Serves a fetch handler on 127.0.0.1 (the URL ends in /repo.git). */
+async function serve(handler: (req: Request) => Promise<Response>): Promise<string> {
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    try {
+      const body =
+        req.method === "GET" || req.method === "HEAD"
+          ? undefined
+          : (Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>);
+      const headers = new Headers();
+      for (const [k, v] of Object.entries(req.headers))
+        if (typeof v === "string") headers.set(k, v);
+      const request = new Request(`http://127.0.0.1${req.url}`, {
+        method: req.method,
+        headers,
+        body,
+        // @ts-expect-error node's fetch needs duplex for a streamed body
+        duplex: "half",
+      });
+      const response = await handler(request);
+      res.writeHead(response.status, Object.fromEntries(response.headers));
+      if (response.body) {
+        const reader = response.body.getReader();
+        res.on("close", () => void reader.cancel().catch(() => {}));
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!res.write(value)) await new Promise((r) => res.once("drain", r));
+        }
+      }
+      res.end();
+    } catch (e) {
+      if (!res.headersSent) res.writeHead(500);
+      res.end(String(e));
+    }
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  closers.push(
+    () =>
+      new Promise((r) => {
+        server.closeAllConnections();
+        server.close(() => r());
+      }),
+  );
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}/repo.git`;
+}
+
+/** `git http-backend` as CGI behind node:http: the repository `dir` served at /repo.git. */
+async function serveNative(dir: string): Promise<string> {
+  const root = join(dir, "..");
+  const name = dir.slice(root.length + 1);
+  return serve(async (req) => {
+    const u = new URL(req.url);
+    const child = spawn("git", ["http-backend"], {
+      env: {
+        ...process.env,
+        GIT_PROJECT_ROOT: root,
+        GIT_HTTP_EXPORT_ALL: "1",
+        PATH_INFO: u.pathname.replace(/^\/repo\.git/, `/${name}/.git`),
+        QUERY_STRING: u.search.slice(1),
+        REQUEST_METHOD: req.method,
+        CONTENT_TYPE: req.headers.get("content-type") ?? "",
+        GIT_PROTOCOL: req.headers.get("git-protocol") ?? "",
+        REMOTE_ADDR: "127.0.0.1",
+      },
+    });
+    if (req.body) Readable.fromWeb(req.body as never).pipe(child.stdin);
+    else child.stdin.end();
+    const out: Buffer[] = [];
+    for await (const c of child.stdout) out.push(c as Buffer);
+    const all = Buffer.concat(out);
+    const sep = all.indexOf("\r\n\r\n");
+    const head = all.subarray(0, sep).toString().split("\r\n");
+    const headers = new Headers();
+    let status = 200;
+    for (const h of head) {
+      const i = h.indexOf(":");
+      const k = h.slice(0, i).trim();
+      const v = h.slice(i + 1).trim();
+      if (k.toLowerCase() === "status") status = Number.parseInt(v, 10);
+      else headers.set(k, v);
+    }
+    return new Response(all.subarray(sep + 4), { status, headers });
+  });
+}
+
+const objectsIn = (dir: string) =>
+  git(dir, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname)"])
+    .toString()
+    .trim()
+    .split("\n")
+    .sort();
+const refsOf = (dir: string) =>
+  git(dir, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/tags"])
+    .toString()
+    .trim();
+
+describe("R1 pkt-line and side-band codecs", () => {
+  it("round trip, split at every offset, special packets", async () => {
+    const stream = concat([
+      pkt("command=fetch\n"),
+      DELIM,
+      pkt(new Uint8Array([0, 1, 2, 255])),
+      FLUSH,
+      pkt("x"),
+      RESPONSE_END,
+    ]);
+    const decode = async (src: AsyncIterable<Uint8Array>) => {
+      const r = new PktReader(src);
+      const out: string[] = [];
+      for (;;) {
+        const p = await r.read();
+        if (!p) break;
+        out.push(p.kind === "data" ? `data:${Buffer.from(p.data).toString("hex")}` : p.kind);
+      }
+      return out;
+    };
+    const whole = await decode(chunksOf(stream, stream.length));
+    expect(whole).toEqual([
+      `data:${Buffer.from("command=fetch\n").toString("hex")}`,
+      "delim",
+      "data:000102ff",
+      "flush",
+      `data:${Buffer.from("x").toString("hex")}`,
+      "end",
+    ]);
+    for (let size = 1; size <= stream.length; size++)
+      expect(await decode(chunksOf(stream, size)), `chunks of ${size}`).toEqual(whole);
+  });
+  it("refuses bad lengths and non-hex", async () => {
+    for (const bad of ["0003", "0004", "fff1", "00zz", "000a12"]) {
+      const r = new PktReader(chunksOf(enc.encode(bad), 2));
+      await expect(r.read(), bad).rejects.toBeInstanceOf(PktError);
+    }
+  });
+  it("side-band: data split to ≤ 65515-byte packets, progress and errors demultiplexed", async () => {
+    const data = noise(200000, 3);
+    const stream = concat([...sideband(1, data), ...sideband(2, enc.encode("counting\n")), FLUSH]);
+    const progress: string[] = [];
+    const got = concat(
+      await Array.fromAsync(
+        readSideband(new PktReader(chunksOf(stream, 777)), (m) => progress.push(m)),
+      ),
+    );
+    expect(Buffer.compare(got, data)).toBe(0);
+    expect(progress.join("")).toBe("counting\n");
+    for (const p of sideband(1, data)) expect(p.length).toBeLessThanOrEqual(65520);
+    const err = concat([...sideband(3, enc.encode("boom")), FLUSH]);
+    await expect(
+      Array.fromAsync(readSideband(new PktReader(chunksOf(err, 3)), () => {})),
+    ).rejects.toThrow(/boom/);
+  });
+});
+
+describe("R2 native git against our server", () => {
+  for (const backend of ["files", "sql"] as const) {
+    it(`clone (${backend}), shallow clone, incremental fetch`, async () => {
+      const src = repoWithHistory(20);
+      git(src, ["tag", "-a", "v1", "-m", "release", "HEAD~3"]);
+      let repo: Repository;
+      if (backend === "files") repo = await open(src);
+      else {
+        repo = await sqlRepository(await newNodeSqliteDb());
+        const pack = git(src, ["pack-objects", "--stdout", "-q", "--all"], "");
+        await repo.objects.installPack(chunksOf(new Uint8Array(pack), 65536));
+        const refs = refsOf(src)
+          .split("\n")
+          .map((l) => l.split(" "))
+          .map(([oid, name]) => ({ name: name as string, new: oid as string }));
+        await repo.refs.batch(refs);
+        await repo.refs.setSymref("HEAD", "refs/heads/main");
+      }
+      const url = await serve(uploadPackHandler(repo));
+      const dst = join(tmp(), "c");
+      await gitAsync(tmpdir(), ["-c", "protocol.version=2", "clone", "-q", "--bare", url, dst]);
+      expect(refsOf(dst)).toBe(refsOf(src));
+      expect(git(dst, ["symbolic-ref", "HEAD"]).toString().trim()).toBe("refs/heads/main");
+      expect(objectsIn(dst)).toEqual(objectsIn(src).filter((o) => objectsIn(dst).includes(o)));
+      git(dst, ["fsck", "--strict"]);
+      // shallow
+      const sh = join(tmp(), "s");
+      await gitAsync(tmpdir(), ["clone", "-q", "--bare", "--depth", "1", url, sh]);
+      expect(readFileSync(join(sh, "shallow"), "utf8").trim()).toBe(rev(src, "HEAD"));
+      expect(git(sh, ["rev-list", "--count", "HEAD"]).toString().trim()).toBe("1");
+      git(sh, ["fsck"]);
+      if (backend === "files") {
+        // incremental: 2 new commits; the pack carries only new objects
+        writeFileSync(join(src, "file0.txt"), "new content\n");
+        git(src, ["commit", "-q", "-am", "new 1"]);
+        writeFileSync(join(src, "file1.txt"), "more new content\n");
+        git(src, ["commit", "-q", "-am", "new 2"]);
+        const before = new Set(objectsIn(dst));
+        await gitAsync(dst, ["fetch", "-q", url, "+refs/heads/*:refs/heads/*"]);
+        const after = objectsIn(dst);
+        const added = after.filter((o) => !before.has(o));
+        const expected = git(src, ["rev-list", "--objects", "HEAD~2..HEAD"])
+          .toString()
+          .trim()
+          .split("\n").length;
+        expect(added.length).toBe(expected);
+        expect(rev(dst, "refs/heads/main")).toBe(rev(src, "HEAD"));
+        git(dst, ["fsck", "--strict"]);
+      }
+    }, 120_000);
+  }
+});
+
+describe("R3 our client against git http-backend", () => {
+  it("clone, shallow clone, incremental fetch", async () => {
+    const src = repoWithHistory(20);
+    git(src, ["tag", "v1", "HEAD~2"]);
+    const url = await serveNative(src);
+    const d = emptyRepo();
+    const repo = await open(d);
+    await clone(url, repo);
+    expect(refsOf(d)).toBe(refsOf(src));
+    expect(git(d, ["symbolic-ref", "HEAD"]).toString().trim()).toBe("refs/heads/main");
+    git(d, ["fsck", "--strict"]);
+    // shallow
+    const s = emptyRepo();
+    const srepo = await open(s);
+    await clone(url, srepo, {
+      depth: 1,
+      shallow: filesShallow(new StreamingNodeFilesApi(join(s, ".git")), "/shallow"),
+    });
+    expect(readFileSync(join(s, ".git", "shallow"), "utf8").trim()).toBe(rev(src, "HEAD"));
+    expect(git(s, ["rev-list", "--count", "HEAD"]).toString().trim()).toBe("1");
+    git(s, ["fsck"]);
+    // incremental
+    writeFileSync(join(src, "file2.txt"), "fresh\n");
+    git(src, ["commit", "-q", "-am", "fresh"]);
+    const stats: FetchStats = { haves: 0, rounds: 0, objects: 0 };
+    await fetchFrom(url, repo, { refspecs: ["+refs/heads/*:refs/heads/*"], stats });
+    expect(rev(d, "refs/heads/main")).toBe(rev(src, "HEAD"));
+    expect(stats.objects).toBe(
+      git(src, ["rev-list", "--objects", "HEAD~1..HEAD"]).toString().trim().split("\n").length,
+    );
+    git(d, ["fsck", "--strict"]);
+  }, 120_000);
+});
+
+describe("R4 our client against our server", () => {
+  it("an SQL repository serves a files-backend clone: logs equal", async () => {
+    const src = repoWithHistory(15);
+    const server = await sqlRepository(await newNodeSqliteDb());
+    const pack = git(src, ["pack-objects", "--stdout", "-q", "--all"], "");
+    await server.objects.installPack(chunksOf(new Uint8Array(pack), 65536));
+    await server.refs.batch([{ name: "refs/heads/main", new: rev(src, "HEAD") }]);
+    await server.refs.setSymref("HEAD", "refs/heads/main");
+    const url = await serve(uploadPackHandler(server));
+    const d = emptyRepo();
+    const repo = await open(d);
+    await clone(url, repo);
+    expect(await log(repo, "HEAD")).toEqual(await log(server, "HEAD"));
+    git(d, ["fsck", "--strict"]);
+  }, 120_000);
+});
+
+/** Counts object reads of a repository (a wrapper over its object store). */
+function counted(repo: Repository) {
+  const c = { reads: 0 };
+  const get = repo.objects.get.bind(repo.objects);
+  repo.objects.get = async (oid, o) => {
+    c.reads++;
+    return get(oid, o);
+  };
+  return c;
+}
+/** A protocol v2 fetch request for all of `wants`. */
+const fetchRequest = (wants: string[], extra: string[] = []) =>
+  concat([
+    pkt("command=fetch\n"),
+    pkt("agent=test\n"),
+    pkt("object-format=sha1\n"),
+    DELIM,
+    pkt("ofs-delta\n"),
+    ...wants.map((w) => pkt(`want ${w}\n`)),
+    ...extra.map((l) => pkt(`${l}\n`)),
+    pkt("done\n"),
+    FLUSH,
+  ]);
+const post = (url: string, body: Uint8Array, signal?: AbortSignal) =>
+  fetch(`${url}/git-upload-pack`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-git-upload-pack-request",
+      "git-protocol": "version=2",
+    },
+    body: body as unknown as BodyInit,
+    signal,
+  });
+
+describe("R5 streaming", () => {
+  it("the first pack byte arrives before half of the objects are read; abort stops the reads", async () => {
+    const d = emptyRepo();
+    for (let i = 0; i < 64; i++) writeFileSync(join(d, `b${i}.bin`), noise(512 * 1024, i + 1));
+    git(d, ["add", "-A"]);
+    git(d, ["commit", "-q", "-m", "blobs"]);
+    const head = rev(d, "HEAD");
+    const repo = await open(d);
+    const c = counted(repo);
+    const url = await serve(uploadPackHandler(repo));
+    const res = await post(url, fetchRequest([head]));
+    const reader = new PktReader(
+      (async function* () {
+        for await (const x of res.body as unknown as AsyncIterable<Uint8Array>) yield x;
+      })(),
+    );
+    let readsAtFirstPackByte = -1;
+    let inPack = false;
+    for (;;) {
+      const p = await reader.read();
+      if (!p) break;
+      if (p.kind !== "data") continue;
+      if (!inPack) {
+        if (dec.decode(p.data) === "packfile\n") inPack = true;
+        continue;
+      }
+      if (p.data[0] === 1 && readsAtFirstPackByte < 0) readsAtFirstPackByte = c.reads;
+    }
+    const total = c.reads;
+    console.log(`R5: first pack byte after ${readsAtFirstPackByte} reads of ${total}`);
+    expect(readsAtFirstPackByte).toBeGreaterThanOrEqual(0);
+    expect(readsAtFirstPackByte).toBeLessThan(total / 2);
+    // abort after the first pack bytes
+    const c2 = counted(repo);
+    void c2;
+    const before = c.reads;
+    const ac = new AbortController();
+    const res2 = await post(url, fetchRequest([head]), ac.signal);
+    const it2 = (res2.body as unknown as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
+    let got = 0;
+    while (got < 300_000) {
+      const r = await it2.next();
+      if (r.done) break;
+      got += r.value.length;
+    }
+    ac.abort();
+    await it2.return?.().catch(() => {});
+    await new Promise((r) => setTimeout(r, 500));
+    const atAbort = c.reads - before;
+    await new Promise((r) => setTimeout(r, 1000));
+    const later = c.reads - before;
+    console.log(`R5 abort: ${atAbort} reads at abort, ${later} a second later, of ${total}`);
+    expect(later).toBe(atAbort);
+    expect(later).toBeLessThan(total);
+  }, 120_000);
+});
+
+describe("R6 negotiation", () => {
+  it("3 new commits on a 300-commit history: ≤ 64 haves, only the new objects", async () => {
+    const src = emptyRepo();
+    for (let i = 0; i < 300; i++) {
+      writeFileSync(join(src, `f${i % 10}.txt`), `commit ${i}\n`);
+      git(src, ["add", "-A"]);
+      git(src, ["commit", "-q", "-m", `c${i}`, "--date", `${1700000000 + i * 60} +0000`]);
+    }
+    const server = await open(src);
+    const url = await serve(uploadPackHandler(server));
+    const d = emptyRepo();
+    const repo = await open(d);
+    await clone(url, repo);
+    for (let i = 0; i < 3; i++) {
+      writeFileSync(join(src, "new.txt"), `new ${i}\n`);
+      git(src, ["add", "-A"]);
+      git(src, ["commit", "-q", "-m", `n${i}`, "--date", `${1800000000 + i * 60} +0000`]);
+    }
+    const stats: FetchStats = { haves: 0, rounds: 0, objects: 0 };
+    await fetchFrom(url, repo, { refspecs: ["+refs/heads/*:refs/heads/*"], stats });
+    console.log(`R6: ${JSON.stringify(stats)}`);
+    expect(stats.haves).toBeLessThanOrEqual(64);
+    expect(stats.objects).toBe(
+      git(src, ["rev-list", "--objects", "HEAD~3..HEAD"]).toString().trim().split("\n").length,
+    );
+    expect(rev(d, "refs/heads/main")).toBe(rev(src, "HEAD"));
+  }, 180_000);
+  it("an unrelated local history: gives up after 256 haves in vain, still fetches", async () => {
+    const src = repoWithHistory(5);
+    const url = await serve(uploadPackHandler(await open(src)));
+    const d = emptyRepo();
+    for (let i = 0; i < 400; i++) {
+      writeFileSync(join(d, "x.txt"), `unrelated ${i}\n`);
+      git(d, ["add", "-A"]);
+      git(d, ["commit", "-q", "-m", `u${i}`]);
+    }
+    const repo = await open(d);
+    const stats: FetchStats = { haves: 0, rounds: 0, objects: 0 };
+    await fetchFrom(url, repo, { refspecs: ["+refs/heads/main:refs/remotes/origin/main"], stats });
+    console.log(`R6 unrelated: ${JSON.stringify(stats)}`);
+    expect(stats.haves).toBeGreaterThanOrEqual(256);
+    expect(stats.haves).toBeLessThan(400);
+    expect(rev(d, "refs/remotes/origin/main")).toBe(rev(src, "HEAD"));
+  }, 180_000);
+});
+
+describe("R7 hostile requests", () => {
+  it("unadvertised wants, malformed and oversized lines, unknown commands: errors, no pack", async () => {
+    const src = repoWithHistory(3);
+    const repo = await open(src);
+    const url = await serve(uploadPackHandler(repo));
+    const inner = rev(src, "HEAD~1"); // reachable but not a ref tip: not advertised
+    const bodies: [string, Uint8Array][] = [
+      ["not our ref", fetchRequest([inner])],
+      ["unknown object", fetchRequest(["1".repeat(40)])],
+      ["malformed length", enc.encode("00zzcommand=fetch\n")],
+      ["oversized", enc.encode(`fff0${"a".repeat(100)}`)],
+      ["unknown command", concat([pkt("command=frobnicate\n"), DELIM, FLUSH])],
+      ["unknown argument", fetchRequest([rev(src, "HEAD")], ["frobnicate yes"])],
+      ["truncated", concat([pkt("command=fetch\n"), enc.encode("0010want")])],
+    ];
+    for (const [name, body] of bodies) {
+      const res = await post(url, body);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      const text = dec.decode(bytes);
+      expect(res.status >= 400 || /ERR /.test(text), name).toBe(true);
+      expect(text.includes("packfile"), name).toBe(false);
+    }
+    // the server still serves afterwards
+    const ok = await post(url, fetchRequest([rev(src, "HEAD")]));
+    expect(dec.decode(new Uint8Array(await ok.arrayBuffer()))).toContain("packfile");
+    // a request without protocol v2 is refused clearly
+    const v0 = await fetch(`${url}/info/refs?service=git-upload-pack`);
+    expect(v0.status).toBeGreaterThanOrEqual(400);
+  });
+});
