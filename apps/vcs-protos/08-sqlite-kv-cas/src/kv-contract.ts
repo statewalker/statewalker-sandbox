@@ -125,5 +125,16 @@ export async function runKvContract(
       return keys.join(",") === "/\u{FFFD},/\u{1F600}";
     },
   );
+  await check(
+    "list(prefix) stops at the prefix when its last character borders the surrogate range",
+    async (kv) => {
+      const p = k("sur");
+      await kv.put(`${p}\u{D7FF}a`, enc.encode("1"));
+      await kv.put(`${p}\u{E000}`, enc.encode("2")); // next code point after U+D7FF in UTF-8
+      const keys: string[] = [];
+      for await (const { key } of kv.list(`${p}\u{D7FF}`)) keys.push(key.slice(p.length));
+      return keys.join(",") === "\u{D7FF}a";
+    },
+  );
   return { cases, failed };
 }

@@ -27,7 +27,7 @@ describe("R4 sqlite-wasm with an OPFS database in a Chromium Dedicated Worker", 
     });
     w.terminate();
     expect(r.error).toBeUndefined();
-    expect(r.result?.cases).toBe(11);
+    expect(r.result?.cases).toBe(12);
     expect(r.result?.failed).toEqual([]);
   }, 60_000);
   it("R2 100 concurrent cas: exactly one winner", async () => {

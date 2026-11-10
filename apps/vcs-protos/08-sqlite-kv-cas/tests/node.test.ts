@@ -26,7 +26,7 @@ afterAll(() => {
 describe("R1 the webrun-storage KvStore contract on node:sqlite", () => {
   it("in memory", async () => {
     const r = await runKvContract(async () => sqlKvStore(await newNodeSqliteDb()));
-    expect(r.cases).toBe(11);
+    expect(r.cases).toBe(12);
     expect(r.failed).toEqual([]);
   });
   it("on a file", async () => {
@@ -166,7 +166,7 @@ describe("R5 Durable Object on workerd (Miniflare, SQLite-backed class)", () => 
       cases: number;
       failed: string[];
     };
-    expect(r.cases).toBe(11);
+    expect(r.cases).toBe(12);
     expect(r.failed).toEqual([]);
   });
   it("100 concurrent requests, one cas each: exactly one winner (guaranteed by DO request serialisation, not by the statement)", async () => {
