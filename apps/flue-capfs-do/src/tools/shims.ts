@@ -216,11 +216,8 @@ export const reexport = (id: string): string =>
  * The bundle's entry: a WorkerEntrypoint whose `run(files, input)` binds the capability for the
  * fs shim, then calls the tool's `run(input)` (or its default export, a function).
  */
-// The specifiers are interpolated, not written out: cellb's browser Worker Loader rewrites
-// \`from "cloudflare:workers"\` with a regex over a module's text, string literals included, so
-// the bundler Worker (which holds this template) would otherwise emit its shim's blob: URL.
 export const wrapperEntry = (toolPath: string): string => `
-import { WorkerEntrypoint } from ${JSON.stringify("cloudflare:workers")};
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { __bindFiles } from ${JSON.stringify(FS_ID)};
 import * as tool from ${JSON.stringify(toolPath)};
 export default class extends WorkerEntrypoint {

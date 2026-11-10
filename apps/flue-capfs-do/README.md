@@ -48,7 +48,7 @@ again.
 |---|---|
 | `test:unit` | the authorization core and the store on `node:sqlite`, without a runtime |
 | `test:wrangler` | `wrangler dev` (workerd 2026-11-04) |
-| `test:cellb` | `@statewalker/cellb` 0.8.0 `loadProject`, cells in `node:sqlite` files |
+| `test:cellb` | `@statewalker/cellb` 0.8.1 `loadProject`, cells in `node:sqlite` files |
 | `test:cellb-bundled-only` | cellb with `TOOL_BUNDLE={"hostFsRuntimes":"bundled-only","allowedBundles":[<hash of tests/fixtures/todo-tool.ts>]}`: that approved bundle runs, other bundles and raw tools are refused |
 | `test:cellb-celld-bucket` | cellb with `celldBucket(sqliteObjectStore(...))`: cells as celld writes them (LTX logs, `own.json` ownership records), in the object store `celld dev` keeps |
 | `test:browser` | the project in Chromium on cellb (Playwright): builds `dist/`, serves it, runs the capability checks and the Python cases through the page |
