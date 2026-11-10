@@ -9,7 +9,8 @@
 // The output is one ES module whose default export is a WorkerEntrypoint with
 // run(files, input): what the Agent's `tool` task loads (with `bundled: true`).
 //
-// Build side only (Node, or a browser with esbuild-wasm): the Worker never imports this file.
+// Build side: Node, a browser with esbuild-wasm, or the bundler Worker (src/bundler/program.ts,
+// loaded on demand by the Agent); the main Worker does not import this file.
 
 import { bundle } from "@statewalker/webrun-bundler";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
@@ -47,14 +48,26 @@ async function builtinNames(spec: string): Promise<string[]> {
   }
 }
 
+// Loading these prints deprecation/experimental warnings: their imports get the default only.
+const QUIET = new Set(["punycode", "sys", "wasi"]);
+
+/**
+ * Every Node builtin's export names, as this host (Node) has them: what a denied builtin
+ * exports. scripts/build-bundler.mjs records them for the bundler Worker, so a bundle built
+ * there denies the same names (and gets the same hash) as one built on Node.
+ */
+export async function builtinExportNames(): Promise<Record<string, string[]>> {
+  const out: Record<string, string[]> = {};
+  for (const b of BUILTINS) out[b] = QUIET.has(b) ? [] : await builtinNames(b);
+  return out;
+}
+
 /** The `modules` resolver webrun-bundler gets: specifier → source, or undefined to resolve normally. */
 export async function toolModules(
   config: ToolBundleConfig,
+  table?: Record<string, string[]>,
 ): Promise<(spec: string) => string | undefined> {
-  const names = new Map<string, string[]>();
-  // Loading these prints deprecation/experimental warnings: their imports get the default only.
-  const quiet = new Set(["punycode", "sys", "wasi"]);
-  for (const b of BUILTINS) names.set(b, quiet.has(b) ? [] : await builtinNames(b));
+  const names = new Map<string, string[]>(Object.entries(table ?? (await builtinExportNames())));
   const process = processShim(config.processEnv);
   return (spec) => {
     if (Object.hasOwn(config.modules, spec)) return config.modules[spec];
@@ -86,6 +99,8 @@ export interface BundleToolOptions {
   /** webrun-bundler `packages` (default: node_modules in the FilesApi). */
   packages?: unknown;
   minify?: boolean;
+  /** Node builtins' export names (builtinExportNames()), where this host is not Node. */
+  builtinNames?: Record<string, string[]>;
 }
 
 export interface BundledTool {
@@ -122,7 +137,7 @@ export async function bundleTool(opts: BundleToolOptions): Promise<BundledTool> 
       files,
       root,
       entry: WRAPPER,
-      modules: await toolModules(config),
+      modules: await toolModules(config, opts.builtinNames),
       // `process` → the stub's identifier, provided by injecting the stub module
       inject: Object.values(config.define).includes(PROCESS_GLOBAL) ? [PROCESS_ID] : [],
       // builtins "external": kept as imports (and then rejected by the check unless listed in `external`)

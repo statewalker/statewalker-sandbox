@@ -4,3 +4,4 @@
 node_modules/
 dist/
 .dev.vars
+src/bundler/program.gen.js

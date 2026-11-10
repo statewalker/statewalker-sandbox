@@ -27,8 +27,9 @@ import { rgForFlue } from "./flue-compat.ts";
 import { attenuationBlock } from "./policy.ts";
 import { engineHost } from "./python/hosts.ts";
 import { PythonKernel, type PythonRunRequest } from "./python/kernel.ts";
+import type { BundleRequest } from "./tools/bundle-request.ts";
+import { bundleInDeployment } from "./tools/bundler-client.ts";
 import { deploymentToolConfig } from "./tools/config.ts";
-import { bundleInCell, type InCellBundleRequest } from "./tools/in-cell.ts";
 import { admitTool, toolPolicy } from "./tools/policy.ts";
 
 export type AttenuationSpec = {
@@ -46,9 +47,9 @@ export type Task =
   | { kind: "flue"; calls: { tool: string; params: Record<string, unknown> }[]; cwd?: string }
   | { kind: "tool"; code: string; input?: unknown; bundled?: boolean }
   /** Sources bundled in this cell, then run as a bundle (the check and policy apply). */
-  | ({ kind: "tool"; code?: undefined; input?: unknown } & InCellBundleRequest)
+  | ({ kind: "tool"; code?: undefined; input?: unknown } & BundleRequest)
   /** Sources bundled in this cell: the bundle, its hash and the check's verdict. */
-  | ({ kind: "bundle" } & InCellBundleRequest)
+  | ({ kind: "bundle" } & BundleRequest)
   | { kind: "revocationId" }
   | ({ kind: "python" } & PythonRunRequest)
   | ({ kind: "agent" } & AgentLoopRequest);
@@ -74,6 +75,8 @@ export interface AgentEnv extends WorkspaceEnv {
   ALLOW_HOST_FS_TOOLS?: string;
   /** Run-side tool policy: overrides of tool-bundle.config.json, a JSON string or an object. */
   TOOL_BUNDLE?: unknown;
+  /** Where esbuild.wasm is for the bundler Worker (src/tools/bundler-client.ts); absent: no bundling. */
+  BUNDLER_WASM_URL?: string;
   /** Python engine location (see src/python/hosts.ts). */
   /** The model of the `agent` task (see src/agent-loop.ts) and its key (a secret). */
   LLM?: unknown;
@@ -169,17 +172,38 @@ export class Agent extends DurableObject<AgentEnv> {
       case "flue":
         return this.#flue(name, cap, task);
       case "tool": {
-        if (typeof task.code === "string")
-          return this.#tool(name, cap, task.code, task.input, !!task.bundled);
+        const t = task as { code?: unknown; sources?: unknown; bundled?: boolean };
+        if (t.code !== undefined && t.sources !== undefined)
+          throw new Error("EINVAL: tool: code or sources, not both");
+        if (t.sources === undefined) {
+          if (typeof t.code !== "string") throw new Error("EINVAL: tool: code is a module's text");
+          return this.#tool(name, cap, t.code, task.input, !!t.bundled);
+        }
+        // Where no tool may run, nothing is bundled for one.
         const config = deploymentToolConfig(this.env.TOOL_BUNDLE);
-        const built = await bundleInCell(task as InCellBundleRequest, config);
-        if (!built.check.ok)
-          throw new Error(`EPERM: the bundle fails the check: ${built.check.problems.join("; ")}`);
+        const policy = toolPolicy(this.env, config);
+        if (policy === "none")
+          throw new Error("ENOSYS: no Worker Loader binding (LOADER) in this runtime");
+        if (policy === "refused")
+          throw new Error(
+            "EPERM: tool isolates on this runtime can reach the host file system; refused",
+          );
+        const built = await bundleInDeployment(this.env, task as BundleRequest, config);
+        // The check runs again in admitTool, on the code that is loaded.
         return this.#tool(name, cap, built.code, task.input, true);
       }
       case "bundle": {
-        const built = await bundleInCell(task, deploymentToolConfig(this.env.TOOL_BUNDLE));
-        return { hash: built.hash, check: built.check, size: built.code.length, code: built.code };
+        const built = await bundleInDeployment(
+          this.env,
+          task as BundleRequest,
+          deploymentToolConfig(this.env.TOOL_BUNDLE),
+        );
+        return {
+          hash: built.hash,
+          check: built.check,
+          bytes: new TextEncoder().encode(built.code).byteLength,
+          code: built.code,
+        };
       }
       case "revocationId":
         return cap.revocationId();

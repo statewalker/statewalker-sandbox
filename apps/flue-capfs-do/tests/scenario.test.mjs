@@ -534,15 +534,24 @@ export default class extends WorkerEntrypoint {
       assert.match(bad.error, /dynamic import/);
     });
 
-    test("a tool's Node-style sources are bundled in the Agent cell", async (t) => {
+    test("a tool's Node-style sources are bundled by the deployment's bundler Worker", async (t) => {
       const rt = (await http("/api/runtime")).value;
       const ws = freshWs();
       await seed(ws, SEED);
       const { token } = await session(ws, "alice", ["/p1", "/proj"]);
       const sources = { "/index.ts": readFileSync(TODO_TOOL, "utf8") };
+      if (!rt.bundler) {
+        const none = await run(`bc-${ws}`, ws, token, transport, {
+          kind: "bundle",
+          sources,
+          entry: "/index.ts",
+        });
+        assert.equal(none.code, "ENOSYS", none.error);
+        return t.skip("no bundler in this deployment (BUNDLER_WASM_URL)");
+      }
       const node = await bundleTodoTool();
-      // esbuild-wasm in the cell and esbuild on Node: the same bundle, the same hash (so a hash
-      // approved from a build machine also admits the cell's bundle).
+      // esbuild-wasm in the bundler Worker and esbuild on Node: the same bundle, the same hash
+      // (so a hash approved from a build machine also admits the deployment's bundle).
       const b = await run(`bc-${ws}`, ws, token, transport, {
         kind: "bundle",
         sources,
@@ -559,7 +568,7 @@ export default class extends WorkerEntrypoint {
         config: { external: ["node:fs"] },
       });
       assert.equal(own.code, "EINVAL", own.error);
-      const sneaky = { "/index.ts": 'export default async (input) => eval(input.code);' };
+      const sneaky = { "/index.ts": "export default async (input) => eval(input.code);" };
       const s = await run(`bc-${ws}`, ws, token, transport, {
         kind: "bundle",
         sources: sneaky,
@@ -567,7 +576,24 @@ export default class extends WorkerEntrypoint {
       });
       assert.equal(s.ok, true, s.error);
       assert.equal(s.value.result.check.ok, false);
-      if (rt.toolIsolates === "none") return t.skip("no Worker Loader binding in this runtime");
+      const both = await run(`bc-${ws}`, ws, token, transport, {
+        kind: "tool",
+        code: "export default {}",
+        sources,
+        entry: "/index.ts",
+      });
+      assert.equal(both.code, "EINVAL", both.error);
+      if (rt.toolIsolates === "refused") {
+        // Where no tool may run, nothing is bundled for one: refused before the bundler.
+        const r = await run(`bc-${ws}`, ws, token, transport, {
+          kind: "tool",
+          sources,
+          entry: "/index.ts",
+        });
+        assert.equal(r.code, "EPERM", r.error);
+        assert.match(r.error, /refused/);
+        return;
+      }
       const bad = await run(`bc-${ws}`, ws, token, transport, {
         kind: "tool",
         sources: sneaky,
@@ -583,10 +609,6 @@ export default class extends WorkerEntrypoint {
         { kind: "tool", sources, entry: "/index.ts", input: { dir: "/proj" } },
         [{ scope: "/proj", readOnly: true }],
       );
-      if (rt.toolIsolates === "refused") {
-        assert.equal(r.code, "EPERM", r.error);
-        return;
-      }
       assert.equal(r.ok, true, r.error);
       assert.deepEqual(r.value.result.todos, ["TODO: write tests"]);
       assert.equal(r.value.result.write, "EACCES");

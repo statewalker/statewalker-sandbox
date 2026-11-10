@@ -9,19 +9,26 @@ import { buildBrowser } from "../scripts/build-browser.mjs";
 import { startServer } from "../scripts/serve-browser.mjs";
 import { agentCases } from "./agent-scenario.mjs";
 import { startFakeLlm } from "./helpers/fake-llm.mjs";
+import { startWasmServer } from "./helpers/wasm-server.mjs";
 import { pythonCases } from "./python-scenario.mjs";
 
 let server;
 let fakeLlm;
+let wasmServer;
 let browser;
 let page;
 const errors = [];
 
 before(async () => {
   fakeLlm = await startFakeLlm();
+  wasmServer = await startWasmServer();
   await buildBrowser({
     quiet: true,
-    vars: { LLM: JSON.stringify(fakeLlm.config), LLM_API_KEY: "sk-fake" },
+    vars: {
+      LLM: JSON.stringify(fakeLlm.config),
+      LLM_API_KEY: "sk-fake",
+      BUNDLER_WASM_URL: wasmServer.url,
+    },
   });
   server = await startServer(0);
   const { port } = server.address();
@@ -39,6 +46,7 @@ after(async () => {
   await browser?.close();
   server?.close();
   fakeLlm?.server.close();
+  wasmServer?.server.close();
 });
 
 const api = (path, body, opts) =>

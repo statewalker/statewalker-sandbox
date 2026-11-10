@@ -16,8 +16,8 @@
     "test:cellb": "node scripts/run-env.mjs cellb",
     "test:wrangler": "node scripts/run-env.mjs wrangler",
     "test:celld": "node scripts/run-env.mjs celld",
-    "dev:wrangler": "wrangler dev",
-    "dev:cellb": "node scripts/serve-cellb.mjs",
+    "dev:wrangler": "node scripts/build-bundler.mjs && wrangler dev",
+    "dev:cellb": "node scripts/build-bundler.mjs && node scripts/serve-cellb.mjs",
     "typecheck": "tsc --noEmit",
     "test:cellb-celld-bucket": "node scripts/run-env.mjs cellb-celld-bucket",
     "example": "node examples/walkthrough.mjs",
@@ -25,7 +25,8 @@
     "test:cellb-bundled-only": "node scripts/run-env.mjs cellb-bundled-only",
     "build:browser": "node scripts/build-browser.mjs",
     "dev:browser": "node scripts/serve-browser.mjs",
-    "test:browser": "node --test tests/browser.test.mjs"
+    "test:browser": "node --test tests/browser.test.mjs",
+    "build:bundler": "node scripts/build-bundler.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "~1.4.0",
