@@ -44,7 +44,12 @@ export interface PackReader {
   get(oid: string, opts?: { verify?: boolean }): Promise<ReadObject | undefined>;
   ids(): Iterable<string>;
   /** Counters for tests: entry inflations performed; bytes held by the base cache (peak). */
-  readonly stats: { inflations: number; peakCachedBytes: number };
+  readonly stats: {
+    inflations: number;
+    peakCachedBytes: number;
+    cachedBytes: number;
+    cachedEntriesBytes: number;
+  };
 }
 
 const TYPES: Record<number, ObjectTypeName> = { 1: "commit", 2: "tree", 3: "blob", 4: "tag" };
@@ -180,7 +185,7 @@ export async function openPack(
   };
 
   const pool = createInflaterPool();
-  const st = { inflations: 0, peakCachedBytes: 0 };
+  const st = { inflations: 0, peakCachedBytes: 0, cachedBytes: 0, cachedEntriesBytes: -1 };
   const readHead = async (offset: number): Promise<EntryHead> => {
     const end = endOf(offset);
     if (offset < 12 || end <= offset)

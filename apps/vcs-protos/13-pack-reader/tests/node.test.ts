@@ -3,13 +3,14 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deflateSync } from "node:zlib";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-files.js";
 import { buildPack, type CraftEntry, copyAll, delta } from "../../12-index-pack/src/craft.js";
 import { git, noise, packAll, repoWithHistory } from "../../12-index-pack/src/git-repo.js";
-import { installPack, PackError } from "../../12-index-pack/src/index-pack.js";
+import { installPack, PackError, writeIdx } from "../../12-index-pack/src/index-pack.js";
 import { openObjectDatabase } from "../src/object-db.js";
 import { openPack } from "../src/pack-reader.js";
 
@@ -169,7 +170,7 @@ describe("R3 corruption is detected", () => {
   });
   it("a corrupt compressed entry fails with PackError when read", async () => {
     const { files, packPath, idxPath, result } = await installed(pack);
-    // corrupt the middle of the largest non-delta entry's compressed bytes
+    // corrupt the middle of the first entry longer than 200 bytes (any type)
     const sorted = [...result.entries].sort((a, b) => a.offset - b.offset);
     const raw = new Uint8Array(await collect(files.read(packPath)));
     const target =
@@ -224,10 +225,12 @@ describe("R4 delta chains through the base cache", () => {
     }
     const { files, packPath, idxPath, result } = await installed(buildPack(entries));
     let seed = 7;
-    const order = [...result.entries.map((e) => e.oid)].sort(() => {
+    const order = result.entries.map((e) => e.oid);
+    for (let i = order.length - 1; i > 0; i--) {
       seed = (seed * 1103515245 + 12345) >>> 0;
-      return ((seed >>> 16) % 3) - 1;
-    });
+      const j = seed % (i + 1);
+      [order[i], order[j]] = [order[j] as string, order[i] as string];
+    }
     const read = files.read.bind(files);
     let peak = 0;
     let base = 0;
@@ -266,10 +269,204 @@ describe("R4 delta chains through the base cache", () => {
       // Node 22, 42 MiB on Node 24 in CI): only a loose sanity bound is asserted. The criterion's
       // "< 24 MiB" forgot the working set and is recorded as not met in the README.
       expect(reader.stats.peakCachedBytes).toBeLessThanOrEqual(cache);
+      // the accounting matches what the cache really holds, and the cache was used
+      expect(reader.stats.cachedBytes).toBe(reader.stats.cachedEntriesBytes);
+      if (cache > 0) expect(reader.stats.peakCachedBytes).toBeGreaterThan(0);
       if (cache > 0) expect(peak).toBeLessThan(cache + 8 * 4 * MiB);
     }
     expect((inflations[0] as number) * 2).toBeLessThanOrEqual(inflations[1] as number);
   }, 300_000);
+});
+
+/** Writes a pack and an idx for it directly (no X6a checks), entries given by offset → oid. */
+async function writeRaw(
+  files: StreamingNodeFilesApi,
+  pack: Uint8Array,
+  entries: { oid: string; offset: number }[],
+) {
+  const packId = Buffer.from(pack.subarray(pack.length - 20)).toString("hex");
+  const idx = writeIdx(
+    entries.map((e) => ({ ...e, crc32: 0, type: "blob" as const, size: 0 })),
+    packId,
+  );
+  await files.write(`/objects/pack/pack-${packId}.pack`, [pack]);
+  await files.write(`/objects/pack/pack-${packId}.idx`, [idx]);
+  return {
+    packId,
+    packPath: `/objects/pack/pack-${packId}.pack`,
+    idxPath: `/objects/pack/pack-${packId}.idx`,
+    idx,
+  };
+}
+const fakeOid = (n: number) => n.toString(16).padStart(40, "0");
+
+describe("R3b review: hostile and broken packs fail with PackError, never crash", () => {
+  it("a REF_DELTA cycle across two packs is refused (no unbounded recursion)", async () => {
+    const repo = emptyRepo();
+    const files = new StreamingNodeFilesApi(join(repo, ".git"));
+    const X = fakeOid(0xaa);
+    const Y = fakeOid(0xbb);
+    const d = delta(10, 10, [...copyAll(10)]);
+    await writeRaw(files, buildPack([{ kind: 7, data: d, baseOid: Y }]), [{ oid: X, offset: 12 }]);
+    await writeRaw(files, buildPack([{ kind: 7, data: d, baseOid: X }]), [{ oid: Y, offset: 12 }]);
+    const db = await openObjectDatabase(files, "/objects");
+    const t0 = performance.now();
+    await expect(
+      (async () => {
+        const o = await db.get(X);
+        await collect(o?.content ?? []);
+      })(),
+    ).rejects.toBeInstanceOf(PackError);
+    expect(performance.now() - t0).toBeLessThan(2000);
+  });
+  it("entry sizes that disagree with the data (larger, smaller) fail with PackError without verify", async () => {
+    const repo = emptyRepo();
+    const files = new StreamingNodeFilesApi(join(repo, ".git"));
+    const data = new TextEncoder().encode("content\n".repeat(20));
+    for (const sizeOverride of [data.length + 5, data.length - 5]) {
+      const raw = await writeRaw(files, buildPack([{ kind: 3, data, sizeOverride }]), [
+        { oid: fakeOid(sizeOverride), offset: 12 },
+      ]);
+      const reader = await openPack(files, raw.packPath, raw.idxPath);
+      await expect(
+        (async () => {
+          const o = await reader.get(fakeOid(sizeOverride));
+          await collect(o?.content ?? []);
+        })(),
+        String(sizeOverride),
+      ).rejects.toBeInstanceOf(PackError);
+    }
+  });
+  it("a delta base whose header declares 1.5 GiB or 2^40 bytes is refused before allocating", async () => {
+    const repo = emptyRepo();
+    const files = new StreamingNodeFilesApi(join(repo, ".git"));
+    const base = new TextEncoder().encode("abc");
+    for (const size of [1.5 * 2 ** 30, 2 ** 40]) {
+      // the oversized entry is a delta base: reading the child must inflate it into memory
+      const pack = buildPack([
+        { kind: 3, data: base, sizeOverride: size },
+        { kind: 6, data: delta(3, 3, [...copyAll(3)]), baseIdx: 0 },
+      ]);
+      const child = fakeOid(1 + (size % 9999));
+      let headerLen = 1;
+      for (let rest = Math.floor(size / 16); rest; rest = Math.floor(rest / 128)) headerLen++;
+      const raw = await writeRaw(files, pack, [
+        { oid: fakeOid(size % 9999), offset: 12 },
+        { oid: child, offset: 12 + headerLen + deflateSync(base).length },
+      ]);
+      const reader = await openPack(files, raw.packPath, raw.idxPath);
+      let peak = 0;
+      const read = files.read.bind(files);
+      const before = process.memoryUsage().arrayBuffers;
+      files.read = (p, o) =>
+        (async function* () {
+          for await (const c of read(p, o)) {
+            peak = Math.max(peak, process.memoryUsage().arrayBuffers - before);
+            yield c;
+          }
+        })();
+      await expect(
+        (async () => {
+          const o = await reader.get(child);
+          await collect(o?.content ?? []);
+        })(),
+        String(size),
+      ).rejects.toBeInstanceOf(PackError);
+      files.read = read;
+      expect(peak, String(size)).toBeLessThan(64 * MiB);
+    }
+  });
+  it("large offsets decode, and a large-offset index outside the table is refused at open", async () => {
+    const { files, packPath, idxPath, result } = await installed(
+      buildPack([{ kind: 3, data: new TextEncoder().encode("big offset\n") }]),
+    );
+    const idx = new Uint8Array(await collect(files.read(idxPath)));
+    // rewrite entry 0's offset as an index into the 64-bit table, holding the real offset
+    const rebuild = (index: number) => {
+      const n = 1;
+      const offAt = 8 + 1024 + n * 20 + n * 4;
+      const head = idx.slice(0, offAt + 4);
+      new DataView(head.buffer).setUint32(offAt, (0x80000000 | index) >>> 0);
+      const table = new Uint8Array(8);
+      new DataView(table.buffer).setUint32(4, result.entries[0]?.offset as number);
+      const body = Buffer.concat([head, table, idx.subarray(idx.length - 40, idx.length - 20)]);
+      return new Uint8Array(Buffer.concat([body, createHash("sha1").update(body).digest()]));
+    };
+    await files.write("/objects/pack/large.idx", [rebuild(0)]);
+    const ok = await openPack(files, packPath, "/objects/pack/large.idx");
+    const o = await ok.get(result.entries[0]?.oid as string, { verify: true });
+    expect((await collect(o?.content ?? [])).toString()).toBe("big offset\n");
+    await files.write("/objects/pack/bad-large.idx", [rebuild(7)]);
+    await expect(openPack(files, packPath, "/objects/pack/bad-large.idx")).rejects.toBeInstanceOf(
+      PackError,
+    );
+  });
+  it("an idx whose object ids are out of order is refused at open", async () => {
+    const pack = buildPack([
+      { kind: 3, data: new TextEncoder().encode("one\n") },
+      { kind: 3, data: new TextEncoder().encode("two\n") },
+    ]);
+    const repo = emptyRepo();
+    const files = new StreamingNodeFilesApi(join(repo, ".git"));
+    const raw = await writeRaw(files, pack, [
+      { oid: `aa${"1".repeat(38)}`, offset: 12 },
+      { oid: `aa${"2".repeat(38)}`, offset: 20 },
+    ]);
+    // swap the two ids inside the same fan-out bucket and re-checksum
+    const idx = raw.idx.slice();
+    const at = 8 + 1024;
+    const a = idx.slice(at, at + 20);
+    idx.copyWithin(at, at + 20, at + 40);
+    idx.set(a, at + 20);
+    idx.set(
+      createHash("sha1")
+        .update(idx.subarray(0, idx.length - 20))
+        .digest(),
+      idx.length - 20,
+    );
+    await files.write(raw.idxPath, [idx]);
+    await expect(openPack(files, raw.packPath, raw.idxPath)).rejects.toBeInstanceOf(PackError);
+  });
+  it("one corrupt pack does not stop the database: it is skipped and reported", async () => {
+    const repo = repoWithHistory(6);
+    git(repo, ["repack", "-q", "-d"]);
+    writeFileSync(join(repo, "more.txt"), "more\n");
+    git(repo, ["add", "-A"]);
+    git(repo, ["commit", "-q", "-m", "more"]);
+    git(repo, ["repack", "-q", "-d"]);
+    const packDir = join(repo, ".git", "objects", "pack");
+    const idxs = readdirSync(packDir)
+      .filter((n) => n.endsWith(".idx"))
+      .sort();
+    expect(idxs.length).toBe(2);
+    const bad = join(packDir, idxs[0] as string);
+    const bytes = readFileSync(bad);
+    bytes[bytes.length - 1] = (bytes[bytes.length - 1] as number) ^ 1;
+    writeFileSync(bad, bytes);
+    const db = await openObjectDatabase(new StreamingNodeFilesApi(join(repo, ".git")), "/objects");
+    expect(db.skipped.map((s) => s.pack)).toEqual([idxs[0]?.replace(/\.idx$/, "")]);
+    const head = git(repo, ["rev-parse", "HEAD"]).toString().trim();
+    expect(await db.has(head)).toBe(true);
+  });
+});
+
+describe("R2b review: cached objects are not shared with callers", () => {
+  it("mutating a returned chunk does not change what the next get returns", async () => {
+    const base = new TextEncoder().encode("base content\n".repeat(50));
+    const d = delta(base.length, base.length + 3, [...copyAll(base.length), 3, 120, 121, 122]);
+    const { files, packPath, idxPath, result } = await installed(
+      buildPack([
+        { kind: 3, data: base },
+        { kind: 6, data: d, baseIdx: 0 },
+      ]),
+    );
+    const reader = await openPack(files, packPath, idxPath);
+    const child = result.entries.find((e) => e.offset !== 12)?.oid as string;
+    const first = await reader.get(child);
+    for await (const c of first?.content ?? []) c.fill(0);
+    const second = await reader.get(child, { verify: true });
+    await expect(collect(second?.content ?? [])).resolves.toBeDefined();
+  });
 });
 
 describe("R6 streaming a large packed blob", () => {

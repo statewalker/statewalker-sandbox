@@ -18,6 +18,8 @@ export interface ObjectDatabase {
   get(oid: string, opts?: { verify?: boolean }): Promise<ReadObject | undefined>;
   has(oid: string): Promise<boolean>;
   list(): AsyncIterable<string>;
+  /** Packs that could not be opened (corrupt idx, mismatched pack…), skipped as git does. */
+  readonly skipped: { pack: string; error: string }[];
 }
 
 const OID = /^[0-9a-f]{40}$/;
@@ -32,6 +34,7 @@ export async function openObjectDatabase(
   const loose = gitObjects(filesStagingStore(files, dir));
   const packs: PackReader[] = [];
   const db: ObjectDatabase = {
+    skipped: [],
     async get(oid, o) {
       if (!OID.test(oid)) return undefined;
       for (const p of packs) {
