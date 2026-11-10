@@ -86,6 +86,8 @@ export interface WriteOptions extends ReuseOptions {
    * plans with "computed" ones (X6e's delta search). Their bases must not form cycles.
    */
   refine?: (plan: Map<string, Plan>) => Promise<void>;
+  /** the deepest chain written (git's --depth); deeper deltas are sent whole. Default 50. */
+  depth?: number;
 }
 
 export async function* writePackReusing(
@@ -128,6 +130,7 @@ export async function* writePackReusing(
   }
   await opts.refine?.(plan);
   // --- depth cap and base-first order (bases among the copied deltas, now acyclic)
+  const maxDepth = opts.depth ?? MAX_DEPTH;
   const depth = new Map<string, number>();
   const order: ToSend[] = [];
   const byOid = new Map(objects.map((o) => [o.oid, o]));
@@ -137,14 +140,14 @@ export async function* writePackReusing(
     const p = plan.get(oid) as Plan;
     let d = 0;
     if (p.mode === "delta") {
-      d = place(p.base) + 1; // depth ≤ MAX_DEPTH bounds this recursion
-      if (d > MAX_DEPTH) {
+      d = place(p.base) + 1; // depth ≤ maxDepth bounds this recursion
+      if (d > maxDepth) {
         plan.set(oid, { mode: "deflate" });
         d = 0;
       }
     } else if (p.mode === "computed") {
       d = sending.has(p.base) ? place(p.base) + 1 : 1;
-      if (d > MAX_DEPTH) {
+      if (d > maxDepth) {
         plan.set(oid, { mode: "deflate" });
         d = 0;
       }

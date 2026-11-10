@@ -414,6 +414,13 @@ describe("R5 bounded memory", () => {
     );
     expect(unbounded.peakWindowBytes).toBeGreaterThan(windowMemory + largest); // the cap binds
     expect(s.peakWindowBytes).toBeLessThanOrEqual(windowMemory + largest);
+    // a window smaller than one indexed text file (~150 KB with its index): those are not kept, so
+    // the window holds only the small objects and the current target
+    const tiny = searchStats();
+    await collect(
+      exportPackSearching(repo, [head], [], { windowMemory: 100_000, searchStats: tiny }),
+    );
+    expect(tiny.peakWindowBytes).toBeLessThanOrEqual(100_000 + largest);
   });
 });
 
@@ -608,6 +615,35 @@ describe("review cases (#80)", () => {
       ).toBeLessThanOrEqual(depth);
     }
   });
+  it("the depth option cuts reused chains deeper than it", async () => {
+    const A = enc.encode("stored chain base ".repeat(30));
+    const B = new Uint8Array([...A, ...enc.encode("b")]);
+    const C = new Uint8Array([...B, ...enc.encode("c")]);
+    const [a, b, c] = [A, B, C].map((x) => oidOf("blob", x)) as [string, string, string];
+    const d = emptyRepo();
+    installRaw(
+      d,
+      rawPack([
+        { kind: 3, data: A, oid: a },
+        {
+          kind: 7,
+          data: delta(A.length, B.length, [...copyAll(A.length), 1, 0x62]),
+          baseOid: a,
+          oid: b,
+        },
+        {
+          kind: 7,
+          data: delta(B.length, C.length, [...copyAll(B.length), 1, 0x63]),
+          baseOid: b,
+          oid: c,
+        },
+      ]),
+    );
+    const repo = await open(d);
+    const objs: ToSend[] = [a, b, c].map((oid) => ({ oid, type: "blob" }));
+    const out = await collect(writePackSearching(repo, objs, { depth: 1 }));
+    expect(Math.max(...verifyRows(out).map((r) => r.depth))).toBeLessThanOrEqual(1);
+  });
   it("the size bound passed to the encoder is git's, scaled by depth: the same base as git", async () => {
     const N = (n: number, s: number) => new Uint8Array(noise(n, s));
     const cat = (...a: Uint8Array[]) => new Uint8Array(Buffer.concat(a));
@@ -669,7 +705,9 @@ describe("review cases (#80)", () => {
       return origGet(oid, o);
     };
     let n = 0;
-    for await (const _ of exportPackSearching(repo, [head], [], { searchStats: s })) {
+    let bytes = 0;
+    for await (const c of exportPackSearching(repo, [head], [], { searchStats: s })) {
+      bytes += c.length;
       if (++n % 16 === 1) {
         gc();
         peak = Math.max(peak, live() - base);
@@ -678,7 +716,7 @@ describe("review cases (#80)", () => {
     console.log(
       `#80 defaults, 2 × 15 MiB: peak +${(peak / 2 ** 20).toFixed(1)} MiB; ${JSON.stringify(s)}`,
     );
-    expect(s.computed).toBe(1);
+    expect(bytes).toBeLessThan(16 * 2 ** 20); // one 15 MiB blob whole, the other a delta
     expect(peak).toBeLessThan(96 * 2 ** 20);
     expect(s.peakWindowBytes).toBeLessThanOrEqual(32 * 2 ** 20 + 15 * 2 ** 20);
   }, 300_000);

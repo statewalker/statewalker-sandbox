@@ -34,14 +34,28 @@ export interface DeltaIndex {
 }
 
 /**
- * Source positions indexed: every byte for small sources, every 2nd…16th as they grow. git indexes
+ * Source positions indexed: every byte up to 256 KiB, every 2nd up to 1 MiB, every 4th up to
+ * 4 MiB, every 16th (git's) beyond. git indexes
  * every 16th (one per block); measured on git's own (base, target) pairs of a text history, that
  * gives 4.3× git's delta bytes here, every 2nd 0.99×, every byte 0.95× — git's encoder finds its
- * long matches in ways a plain block index misses, and a denser index recovers them. The index
- * costs 8 bytes per indexed position: ~8×, 4×, 2×, 1×, 0.5× the source.
+ * long matches in ways a plain block index misses, and a denser index recovers them. An indexed
+ * position costs 8 bytes and its share of the slots ~1: ~9×, 4.5×, 2.3×, 0.6× the source.
  */
 export const indexStep = (n: number) =>
-  n <= 256 * 1024 ? 1 : n <= 2 ** 20 ? 2 : n <= 4 * 2 ** 20 ? 4 : n <= 16 * 2 ** 20 ? 8 : BLOCK;
+  n <= 256 * 1024 ? 1 : n <= 2 ** 20 ? 2 : n <= 4 * 2 ** 20 ? 4 : BLOCK;
+
+/** Slots for `m` indexed positions: about four per slot, as git's hsize. */
+const slotsFor = (m: number) => {
+  let size = 16;
+  while (size * 4 < m) size <<= 1;
+  return size;
+};
+
+/** An upper bound of `indexBytes` for a source of `n` bytes (before deduplication and thinning). */
+export const indexEstimate = (n: number) => {
+  const m = n < BLOCK ? 0 : Math.floor((n - BLOCK) / indexStep(n)) + 1;
+  return (slotsFor(m) + 1) * 4 + m * 8;
+};
 
 /**
  * Indexes `source` once, for every target tried against it, as git's create_delta_index: the hash
@@ -51,8 +65,7 @@ export const indexStep = (n: number) =>
  */
 export function deltaIndex(source: Uint8Array, step = indexStep(source.length)): DeltaIndex {
   const blocks = source.length < BLOCK ? 0 : Math.floor((source.length - BLOCK) / step) + 1;
-  let size = 16;
-  while (size < blocks) size <<= 1;
+  const size = slotsFor(blocks);
   const mask = size - 1;
   const vals = new Int32Array(blocks);
   const keep = new Uint8Array(blocks);
@@ -60,7 +73,7 @@ export function deltaIndex(source: Uint8Array, step = indexStep(source.length)):
   for (let b = 0; b < blocks; b++) {
     vals[b] = hashAt(source, b * step);
     // a run of identical blocks: only its first is indexed
-    if (b > 0 && vals[b] === vals[b - 1] && keep[b - 1]) continue;
+    if (b > 0 && vals[b] === vals[b - 1]) continue;
     keep[b] = 1;
     const c = ((vals[b] as number) & mask) + 1;
     count[c] = (count[c] as number) + 1;

@@ -1,6 +1,6 @@
 # 20 — Can export compute new deltas, as git's pack-objects does, to come near git's size where nothing is reusable?
 
-Plan id **X6** (pack ingest/export), slice **X6e: delta search**. Status: **answered — yes: incremental and loose exports come out smaller than git's (0.88–0.99×), with git's order and bounds, a window bounded in memory, and big files left alone.**
+Plan id **X6** (pack ingest/export), slice **X6e: delta search**. Status: **answered — yes: incremental and loose exports come out smaller than git's (0.84–0.99×), with git's order and bounds, a window bounded in memory, and big files left alone.**
 
 ## Question
 
@@ -45,16 +45,21 @@ then writes through X6d's writer (a new `computed` plan: a REF_DELTA with the de
 | | ours | git `pack-objects` | ratio |
 |---|---|---|---|
 | 5 loose commits after a gc, `HEAD ^HEAD~5` | 5 856 B | 6 633 B | 0.88× |
-| the same, thin | 2 895 B | 3 293 B | 0.88× |
-| 5 commits stored whole by a gc (X6d: 1.28×) | 6 263 B | 6 761 B | 0.93× |
-| the same, thin (X6d: 1.57×) | 3 389 B | 3 410 B | 0.99× |
-| a 30-commit history never packed, full | 34 955 B | 41 301 B | 0.85× |
+| the same, thin | 2 891 B | 3 293 B | 0.88× |
+| 5 commits stored whole by a gc (X6d: 1.28×) | 6 172 B | 6 756 B | 0.91× |
+| the same, thin (X6d: 1.57×) | 3 384 B | 3 405 B | 0.99× |
+| a 30-commit history never packed, full | 34 555 B | 41 268 B | 0.84× |
 
 - **git's search**: candidates sorted by type, `pack_name_hash` of the path, size (descending)
   and the walk's order; each tried against the `window` (10) before it, most recent first,
   stopping at another type; git's `try_delta` bounds (half the target minus 20 bytes, or the best
-  so far, scaled by the base's depth; no base at `depth`; no target under 1/32 of the base). The
-  encoder gives up as soon as the bound is passed. Reused deltas keep their base (git too).
+  so far, scaled by the base's depth — the scaled bound is what the encoder gets; a same-sized
+  delta wins only with a shallower base; no base at `depth`; no target under 1/32 of the base).
+  The encoder gives up as soon as the bound is passed. Reused deltas keep their base (git too),
+  and a candidate's reused-delta descendants lower the depth it may take (git's
+  `check_delta_limit`); `depth` bounds the whole pack, reused chains included.
+- **Corrupt copies**: candidates are read verified; one that cannot be read is left to X6d's writer
+  (sent from another copy, or the export fails before its entry starts).
 - **Thin**: the receiver's objects at the paths being sent (read from the edge commits' trees) are
   preferred bases — tried, never sent.
 - **The encoder** (git's diff-delta format, X6a's `applyDelta` reads it): a rolling hash over
@@ -62,23 +67,25 @@ then writes through X6d's writer (a new `computed` plan: a REF_DELTA with the de
   **Finding**: git's index of one entry per 16-byte block, reproduced, gave **4.3× git's delta
   bytes** on git's own (base, target) pairs of a text history — on repetitive text the one
   occurrence that continues past a differing line number is rarely aligned. Indexing every 2nd
-  position gives 0.99×, every byte 0.95×. The step grows with the source (1 up to 256 KiB, 2, 4, 8,
-  16 beyond 16 MiB) so the index (8 bytes per position) stays ≤ 8× a small source and ≤ 0.5× a large
-  one. Runs of identical windows keep their first; crowded slots are thinned evenly (git's
-  HASH_LIMIT 64).
-- **Memory**: each window entry keeps its content and index; `windowMemory` (default 64 MiB,
-  index included) evicts the oldest; objects above `bigFileThreshold` (default 50 MiB, JGit's)
-  are never loaded — a pair of 64 MiB blobs: +0.6 MiB live. Computed deltas are kept by git's
-  delta cache rules (`deltaCacheSize` 256 MiB, small deltas always) and otherwise recomputed when
-  written. Defaults differ from git's (unlimited window memory, 512 MiB big files) so a Durable
-  Object (128 MiB) stays within bounds.
+  position gives 0.99×, every byte 0.95×. The step grows with the source (every byte up to
+  256 KiB, every 2nd up to 1 MiB, every 4th up to 4 MiB, every 16th beyond), the index costing ~9
+  bytes per position (≤ 9× a small source, ~0.6× a large one). Of a run of identical windows only
+  the first is indexed; ~4 positions per slot, crowded slots thinned evenly (git's HASH_LIMIT 64).
+- **Memory**: each window entry keeps its content and index; room is made (oldest first) before an
+  entry is indexed, so the window never holds more than `windowMemory` (default 32 MiB, index
+  included); an object that alone would exceed it is not kept as a base. Objects above
+  `bigFileThreshold` (default 16 MiB) are never loaded — a pair of 64 MiB blobs: +0.6 MiB live.
+  Computed deltas are kept by git's delta cache rules (`deltaCacheSize` default 16 MiB, small deltas
+  always) and otherwise recomputed when written. With these defaults two similar 15 MiB blobs are
+  delta'd at +63 MiB live (sampled after GC; a Durable Object has 128 MiB). git's defaults are
+  unlimited window memory, 512 MiB big files and a 256 MiB delta cache.
 - **Cost**: comparisons ≤ window × candidates (counted).
 - **Parts added**: X6d's writer takes a `refine` step and a `computed` plan (no change for X6d's
   callers); `src/delta-encode.ts`, `src/export-search.ts`.
 
 ## Verified
 
-All 15 Node tests pass (`pnpm test 20-delta-search`); X6d's 11 pass with the refactor. The tests
+All 23 Node tests pass (`pnpm test 20-delta-search`); X6d's 11 pass with the refactor. The tests
 were written first (red commit).
 
 | # | Result |
@@ -87,7 +94,7 @@ were written first (red commit).
 | R2 | Above: 0.88×, 0.88×, 0.93×, 0.99× git; the loose case installs in a native receiver (`--fix-thin` for thin) and passes `fsck`. |
 | R3 | 0.85× git; `index-pack` and `fsck --strict` pass. |
 | R4 | `a/settings.cfg` and `b/settings.cfg` among 30 unrelated blobs, window 2: delta'd against each other (path hash order). A 70-version file: every delta below git's max_size, depth ≤ 50. |
-| R5 | Two 64 MiB blobs above a 16 MiB threshold: not delta'd, +0.6 MiB live. Window memory 600 KB: peak 487 KB (unbounded: 2.3 MB). |
+| R5 | Two 64 MiB blobs above a 16 MiB threshold: not delta'd, +0.6 MiB live. Window memory 600 KB: peak 422 KB with the current target (unbounded: 1.3 MB); 100 KB: text files not kept. Defaults, two similar 15 MiB blobs: delta'd, +63 MiB live, window ≤ 32 MiB + the target. |
 | R6 | Windows 1, 4, 10: comparisons ≤ window × candidates. |
 | R7 | The searched pack installs in X6b on the files and SQL backends; logs equal. |
 
@@ -106,6 +113,27 @@ were written first (red commit).
 | E2 copies not split at 64 KiB | R1 split |
 | E3 no backward extension | R1 sparse index |
 | E4 git's sparse index (every 16th position) | R1 vs git's encoder (4.3×), R2, R3, R5 |
+| F1 no check_delta_limit | #80: reused-delta children |
+| F2 the writer ignores `depth` | #80: depth cuts reused chains |
+| F3 encoder bound best − 1 instead of git's scaled bound | #80: the same base as git at depth 2 |
+| F4 unreadable candidates not skipped | #80: corrupt first copy |
+| F5 an entry larger than the window kept | R5: 100 KB window |
+| F6 run dedupe keeping every other position | #80: run dedupe |
+| F7 `\v` `\f` treated as spaces | #80: nameHash |
+| F8 no same-size tie rule (shallower base) | — not covered: needs an exact size tie |
+
+### Review of #80
+
+| Finding | Resolution |
+|---|---|
+| A corrupt first copy failed the search export (X6d succeeds) | Candidates read verified; an unreadable one is left to X6d's writer |
+| No check_delta_limit: a base pushed to depth 50 had its reused children demoted to whole | Reused-delta descendants lower the candidate's depth |
+| `depth` did not bound the pack (the writer capped at 50) | The writer takes `depth` |
+| The encoder got best − 1, not git's depth-scaled bound | git's scaled bound and tie rule |
+| Memory: one oversized entry kept; index not counted at the peak; 256 MiB delta cache; "a DO stays within bounds" unsupported | Room made before indexing, oversized entries not kept, peak includes indexes; defaults 32/16/16 MiB; measured +63 MiB for 2 × 15 MiB |
+| Run dedupe kept every other position | Only the first of a run |
+| `\v` `\f` treated as spaces in the path hash | git's isspace: tab, LF, CR, space |
+| Int32 positions limit sources to 2 GiB | Unreachable below `bigFileThreshold` (16 MiB default); noted |
 
 ## Promotion grades
 
