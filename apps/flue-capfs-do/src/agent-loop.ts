@@ -194,8 +194,14 @@ export async function runAgentLoop(
   const credentials = llmCredentials(config, env.LLM_API_KEY, llmToken);
   // Neither credential may come back in an error.
   const redact = redactor([credentials.apiKey, llmToken, env.LLM_API_KEY]);
-  // The run spends the deployment's budget unless the caller's own token is the API key.
-  const metered = !(llmToken !== undefined && !config.callerTokenHeader);
+  // A run spends the session's budget, unless the caller's own token is the API key AND the
+  // deployment says such runs are the caller's to pay (callerTokenUnmetered): a token is any
+  // string until the provider rejects it, and some endpoints take none.
+  const metered = !(
+    llmToken !== undefined &&
+    !config.callerTokenHeader &&
+    config.callerTokenUnmetered === true
+  );
   // The capability must carry the model right (decided in the Workspace cell, like a file
   // access), and a metered run needs budget left.
   const grant = (await cap.model("grant", metered)) as {
@@ -228,7 +234,18 @@ export async function runAgentLoop(
     const history = trimHistory(stored, SESSION_MESSAGES, Math.min(SESSION_BYTES, contextBytes));
     const agent = new LoopAgent({
       streamFn: streamSimple as never,
-      getApiKey: () => credentials.apiKey,
+      // pi-agent-core awaits this before every model request: the turn is reserved there (the
+      // right checked again, a turn taken from the budget), so neither a revoked right nor a
+      // spent budget, nor concurrent runs, get a request through.
+      getApiKey: async () => {
+        try {
+          budgetLeft = (await cap.model("reserve", metered)) as typeof budgetLeft;
+        } catch (e) {
+          stopped ??= redact(String((e as Error)?.message ?? e)).replace(/^E[A-Z]+: /, "");
+          throw e;
+        }
+        return credentials.apiKey;
+      },
       initialState: {
         systemPrompt:
           req.instructions ??
@@ -239,44 +256,31 @@ export async function runAgentLoop(
       },
     } as never);
 
-    const asked = Math.min(Math.max(Number(req.maxTurns) || 12, 1), 50);
-    const byBudget = metered && grant.turnsLeft !== null && grant.turnsLeft < asked;
-    const maxTurns = byBudget ? (grant.turnsLeft as number) : asked;
-    // Each turn is charged to the session in the Workspace cell, in order; a spent budget
-    // stops the run after the turn that spent it.
+    const maxTurns = Math.min(Math.max(Number(req.maxTurns) || 12, 1), 50);
+    // The tokens of each request are charged after it, in order (input counts cached and
+    // cache-written prompt tokens). Usage is recorded even if the right is gone by then.
     let charges: Promise<unknown> = Promise.resolve();
-    let budgetLeft: { turnsLeft: number | null; tokensLeft: number | null } = grant;
-    const charge = (
-      usage: { input?: number; output?: number } | undefined,
-      more: boolean,
-      counted: boolean,
-    ) => {
+    let chargeError: string | undefined;
+    const charge = (usage: Message["usage"]) => {
+      const u = (usage ?? {}) as Record<string, number | undefined>;
+      const input = (u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
+      const output = u.output ?? 0;
       charges = charges
-        .then(() => cap.model("charge", metered, { turns: counted ? 1 : 0, ...usage }))
+        .then(() => cap.model("charge", metered, { input, output }))
         .then((r) => {
-          const left = r as { turnsLeft: number | null; tokensLeft: number | null; spent: boolean };
-          budgetLeft = { turnsLeft: left.turnsLeft, tokensLeft: left.tokensLeft };
-          if (left.spent && more && !stopped) {
-            stopped = "the session's model budget is spent";
-            agent.abort();
-          }
+          budgetLeft = r as typeof budgetLeft;
         })
-        .catch(() => {
-          // The right was revoked (or the cell is gone): no more turns.
-          if (!stopped) {
-            stopped = "the model right was revoked";
-            agent.abort();
-          }
+        .catch((e) => {
+          chargeError ??= `usage not recorded: ${redact(String((e as Error)?.message ?? e))}`;
         });
     };
     const timeoutMs = Math.min(Math.max(Number(req.timeoutMs) || 120_000, 1000), 600_000);
     let turns = 0;
     let stopped: string | undefined;
+    let budgetLeft: { turnsLeft: number | null; tokensLeft: number | null } = grant;
     agent.subscribe((e: { type: string; message?: Message; toolResults?: unknown[] }) => {
       if (e.type !== "turn_end") return;
-      const more = e.message?.stopReason === "toolUse" || (e.toolResults?.length ?? 0) > 0;
-      // A turn's tokens are always charged; a turn the abort cut short is not a turn.
-      charge(e.message?.usage, more, e.message?.stopReason !== "aborted");
+      charge(e.message?.usage); // every request's tokens, the aborted one's too
       if (stopped) return; // the turn cut short by the abort does not count
       turns += 1;
       // Only a turn that asked for tools leads to another one: a run that ends on its last
@@ -285,9 +289,7 @@ export async function runAgentLoop(
         turns >= maxTurns &&
         (e.message?.stopReason === "toolUse" || (e.toolResults?.length ?? 0) > 0)
       ) {
-        stopped = byBudget
-          ? "the session's model budget is spent"
-          : `stopped after ${maxTurns} turns`;
+        stopped = `stopped after ${maxTurns} turns`;
         agent.abort();
       }
     });
@@ -302,12 +304,22 @@ export async function runAgentLoop(
       }, timeoutMs);
     });
     const loop = (async () => {
-      await agent.prompt(req.prompt);
-      await agent.waitForIdle();
+      try {
+        await agent.prompt(req.prompt);
+        await agent.waitForIdle();
+      } catch (e) {
+        if (!stopped) throw e; // a refused reservation ends the run, it does not fail it
+      }
     })();
-    // A run that outlives the grace period keeps its session locked until it settles: a tool
-    // that ignores the abort may still finish a write, but no other run on the session starts.
-    hold(loop);
+    // A run that outlives the grace period keeps its session locked until it settles (and its
+    // last charges are made): a tool that ignores the abort may still finish a write, but no
+    // other run on the session starts.
+    hold(
+      loop.then(
+        () => charges,
+        () => charges,
+      ),
+    );
     try {
       await Promise.race([loop, deadline]);
     } finally {
@@ -374,7 +386,10 @@ export async function runAgentLoop(
             ERROR_LIMIT,
           )
         : undefined;
-    const errors = [stopped, providerError].filter(Boolean);
+    // The provider error repeats a refused reservation (stopped): reported once.
+    const errors = [stopped, providerError, chargeError].filter(
+      (e, i, all): e is string => !!e && !all.slice(0, i).some((p) => p && e.includes(p)),
+    );
 
     let kept = messages.length;
     if (sessionKey) {

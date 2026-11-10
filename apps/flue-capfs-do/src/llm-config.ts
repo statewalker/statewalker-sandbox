@@ -10,6 +10,8 @@ export interface LlmConfig {
   headers?: Record<string, string>;
   callerToken?: "allow" | "require" | "forbid";
   callerTokenHeader?: string;
+  /** Runs on a caller's own token (as the API key) are not charged to the session's budget. */
+  callerTokenUnmetered?: boolean;
 }
 
 const RESERVED_HEADERS = new Set([
@@ -42,6 +44,8 @@ export function llmConfig(env: { LLM?: unknown }): LlmConfig | undefined {
   }
   if (c.callerToken !== undefined && !["allow", "require", "forbid"].includes(c.callerToken))
     throw new Error("EINVAL: LLM callerToken is allow, require or forbid");
+  if (c.callerTokenUnmetered !== undefined && typeof c.callerTokenUnmetered !== "boolean")
+    throw new Error("EINVAL: LLM callerTokenUnmetered is true or false");
   if (c.callerTokenHeader !== undefined) {
     const h = c.callerTokenHeader;
     if (typeof h !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(h))

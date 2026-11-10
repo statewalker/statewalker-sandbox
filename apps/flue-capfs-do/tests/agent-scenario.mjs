@@ -95,29 +95,40 @@ export function agentCases({ api, transports = ["stub", "token"], label = "" }) 
       assert.equal(ok(await ask(s.ws, s.token, transport, { prompt: "OK" }, two)).reply, "OK");
     });
 
-  add("a session's model budget: charged per turn, refused once spent, set again", async () => {
-    const { ws, token, session } = await setup(["/proj"], { turns: 3 });
-    const r = ok(await ask(ws, token, "token", { prompt: "LOOP", maxTurns: 10 }));
-    assert.equal(r.stopReason, "limit");
-    assert.equal(r.turns, 3);
-    assert.match(r.error, /budget is spent/);
-    assert.deepEqual(r.budget, { turnsLeft: 0, tokensLeft: null });
-    const spent = await ask(ws, token, "token", { prompt: "OK" });
-    assert.equal(spent.code, "EACCES");
-    assert.match(spent.error, /budget is spent/);
-    // The caller's own model token is not the deployment's budget.
-    const own = ok(await ask(ws, token, "token", { prompt: "OK" }, [], undefined, "user-tok-6"));
-    assert.equal(own.reply, "OK");
-    assert.equal(own.budget, undefined);
-    const info = await admin(`/api/w/${ws}/sessions/${session}`);
-    assert.equal(info.model.used.turns, 4, "every turn is recorded");
-    assert.equal(info.model.used.input, 40);
-    await admin(`/api/w/${ws}/sessions/${session}/model`, { tokens: 20 });
-    // 15 tokens a turn: the second turn spends the budget.
-    const t = ok(await ask(ws, token, "token", { prompt: "LOOP", maxTurns: 10 }));
-    assert.equal(t.turns, 2);
-    assert.match(t.error, /budget is spent/);
-    assert.deepEqual(t.budget, { turnsLeft: null, tokensLeft: 0 });
+  add(
+    "a session's model budget: a turn per request, tokens after, refused once spent",
+    async () => {
+      const { ws, token, session } = await setup(["/proj"], { turns: 3 });
+      const r = ok(await ask(ws, token, "token", { prompt: "LOOP", maxTurns: 10 }));
+      assert.equal(r.stopReason, "limit");
+      assert.equal(r.turns, 3);
+      assert.match(r.error, /budget is spent/);
+      assert.deepEqual(r.budget, { turnsLeft: 0, tokensLeft: null });
+      const spent = await ask(ws, token, "token", { prompt: "OK" });
+      assert.equal(spent.code, "EACCES");
+      assert.match(spent.error, /budget is spent/);
+      // A caller's own token is charged too unless the deployment says otherwise
+      // (callerTokenUnmetered): any string is a token until the provider refuses it.
+      const own = await ask(ws, token, "token", { prompt: "OK" }, [], undefined, "user-tok-6");
+      assert.equal(own.code, "EACCES");
+      const info = await admin(`/api/w/${ws}/sessions/${session}`);
+      assert.deepEqual(info.model.used, { turns: 3, input: 30, output: 15 });
+      await admin(`/api/w/${ws}/sessions/${session}/model`, { turns: null, tokens: 20 });
+      // 15 tokens a request: the third request finds none left.
+      const t = ok(await ask(ws, token, "token", { prompt: "LOOP", maxTurns: 10 }));
+      assert.equal(t.turns, 2);
+      assert.match(t.error, /budget is spent/);
+      assert.deepEqual(t.budget, { turnsLeft: null, tokensLeft: 0 });
+    },
+  );
+
+  add("concurrent runs cannot spend more than the budget", async () => {
+    const { ws, token } = await setup(["/proj"], { turns: 2 });
+    const runs = await Promise.all(
+      [1, 2, 3, 4].map((i) => ask(ws, token, "token", { prompt: "OK" }, [], `ag-${ws}-${i}`)),
+    );
+    const answered = runs.filter((r) => r.ok && r.value.result.reply === "OK").length;
+    assert.equal(answered, 2, JSON.stringify(runs.map((r) => r.error ?? r.value.result.error)));
   });
 
   add("a run stops after maxTurns", async () => {

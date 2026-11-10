@@ -12,6 +12,7 @@ import {
   Authority,
   FsGate,
   type FsRequest,
+  type ModelAction,
   type ModelGrant,
   type ModelUsage,
 } from "./authority.ts";
@@ -45,7 +46,7 @@ export class FilteredFiles extends RpcTarget {
     return this.#gate.move(kind, src, dst, opts);
   }
   /** The model right and budget (the `agent` task; never given to tools). */
-  model(action: "grant" | "charge", metered: boolean, usage?: ModelUsage) {
+  model(action: ModelAction, metered: boolean, usage?: ModelUsage) {
     return this.#gate.model(action, metered, usage);
   }
   /** Delegation: one more Biscuit block; the new capability can only be narrower. */

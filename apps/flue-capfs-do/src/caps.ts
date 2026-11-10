@@ -7,7 +7,7 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import { Biscuit } from "@statewalker/webrun-biscuit";
-import type { FsRequest, ModelUsage } from "./authority.ts";
+import type { FsRequest, ModelAction, ModelUsage } from "./authority.ts";
 import { rebuildError } from "./path.ts";
 import type { FilteredFiles, Workspace } from "./workspace.ts";
 
@@ -18,7 +18,7 @@ export interface Cap {
   attenuate(datalog: string): Promise<Cap>;
   revocationId(): Promise<string>;
   /** The model right and budget, decided in the owner cell (the `agent` task only). */
-  model(action: "grant" | "charge", metered: boolean, usage?: ModelUsage): Promise<unknown>;
+  model(action: ModelAction, metered: boolean, usage?: ModelUsage): Promise<unknown>;
   /** What to send to the next cell (a stub, or the token string). */
   handoff(): CapHandoff;
 }
@@ -58,7 +58,7 @@ export class StubCap implements Cap {
   revocationId() {
     return wrap(Promise.resolve(this.#stub.revocationId()));
   }
-  model(action: "grant" | "charge", metered: boolean, usage?: ModelUsage) {
+  model(action: ModelAction, metered: boolean, usage?: ModelUsage) {
     return wrap(Promise.resolve(this.#stub.model(action, metered, usage)));
   }
   handoff(): CapHandoff {
@@ -97,7 +97,7 @@ export class TokenCap implements Cap {
       Biscuit.fromBase64(this.#token).attenuate(datalog).toBase64(),
     );
   }
-  model(action: "grant" | "charge", metered: boolean, usage?: ModelUsage) {
+  model(action: ModelAction, metered: boolean, usage?: ModelUsage) {
     return this.#send({ op: "model", action, metered, usage });
   }
   async revocationId() {

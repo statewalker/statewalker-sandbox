@@ -79,11 +79,11 @@ curl -H "$A" -H "$J" localhost:8787/api/w/acme/sessions/<session>/mode -d '{"mod
 | `POST /api/w/:ws/seed` `{files}` | admin | writes files without rights checks (import) |
 | `GET /api/w/:ws/files` | admin | every file and its contents (audit) |
 | `GET /api/w/:ws/stats` | admin | `{authorizations, verifications}` of the Workspace instance |
-| `GET /api/w/:ws/sessions/:sid` | admin | `{session, user, mode, revokedAll, revokedIds}` |
+| `GET /api/w/:ws/sessions/:sid` | admin | `{session, user, mode, revokedAll, revokedIds, model: {allowed, turnsLeft, tokensLeft, used}}` |
 | `POST /api/w/:ws/sessions` `{user, rights, mode, model?}` | admin | mints a session token → `{session, token}`; `model`: `false` (default), `true` or a budget `{turns?, tokens?}` (see [Agent loop](#agent-loop)) |
 | `POST /api/w/:ws/sessions/:sid/mode` `{mode}` | admin | `yolo` · `prototyping` · `plan` · `readonly` |
 | `POST /api/w/:ws/sessions/:sid/revoke` `{rid?}` | admin | revokes one capability (and its descendants), or the whole session |
-| `POST /api/w/:ws/sessions/:sid/model` `{turns?, tokens?}` | admin | sets what is left of the session's model budget (absent: unlimited); `GET …/sessions/:sid` shows it and what was used |
+| `POST /api/w/:ws/sessions/:sid/model` `{turns?, tokens?}` | admin | sets what is left of the session's model budget (each field given is set, `null` = unlimited; others kept) |
 | `POST /api/agents/:name/run` `{workspace, token, transport, chain?, task}` | user | runs a task in the agent cell |
 | `GET /api/runtime` | any | `{workerLoader, toolIsolates, requireBundled, allowedBundles, userAgent, bootId}`; `toolIsolates` is `isolated`, `bundled-only`, `refused` or `none`; `allowedBundles` is a count; an invalid `TOOL_BUNDLE` shows `toolConfigError` and `refused` |
 
@@ -145,9 +145,12 @@ the mode and the revocations are identical.
 For each path, the authorizer provides `operation(op)` (`read`, `list` or `write`) and
 `resource(path + "/")`, bound as parameters. The authority block holds `user`, `session` and
 `right("/p1/")` facts, and `model_use(true)` when the session may drive the model: the `agent`
-task asks for operation `model` (resource `/`), allowed in every mode by that fact. `readOnly`
-and scopes keep it (they are about files); `noModel` (`check if operation($o), $o != "model"`)
-or any check that names only file operations removes it. The owner reads the session from the authority block and applies THAT
+task asks for operation `model` on resource `/`, allowed in every mode by that fact only (the
+mode rules name their file operations). Every check of the token must hold for that pair:
+`readOnly` and the built-in scopes allow it, `noModel` (`check if operation($o), $o != "model"`)
+does not, and a hand-written check keeps or drops it depending on whether `operation("model")`
+with `resource("/")` passes it (`!$p.starts_with("/proj/secret/")` keeps it,
+`$p.starts_with("/proj/")` drops it). The owner reads the session from the authority block and applies THAT
 session's mode and revocations; attenuation blocks cannot change it. Mode policies are `allow` rules that only
 ever restrict what `right` allows. Attenuation blocks are `check`s. A scope also allows `list`
 on its ancestors, so `ls /` shows the delegated branch and nothing else.
@@ -351,14 +354,23 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
   it the task fails with `EACCES`, and a hop can take it away (`noModel`). The Workspace cell
   decides, as it decides file access, so modes, attenuation and revocation (also mid-run, at the
   next turn) apply.
-  - Every turn is charged to the session in the Workspace cell: turns, and input plus output
-    tokens as the provider reports them. A run on the deployment's key stops after the turn
-    that spends the budget (`stopReason: "limit"`), and the next one is refused until the admin
-    sets the budget again (`POST …/sessions/:sid/model`). A turn can go past the token budget by
-    its own size.
-  - A run on the caller's own token (below, as the API key) is recorded but not charged; in
-    `callerTokenHeader` mode the deployment's key is the API key, so it is charged.
+  - Before each model request the Agent reserves a turn in the Workspace cell: the right is
+    checked again (a revocation stops the next request) and a turn is taken from the budget; with
+    no turn or no token left the request is not made and the run ends (`stopReason: "limit"`).
+    The cell answers one call at a time, so concurrent runs cannot share the last turn. After the
+    request its tokens are charged: input (cached and cache-written prompt tokens included) and
+    output, as the provider reports them; a request can go past the token budget by its own size.
+    Usage is recorded even when the right is gone by then.
+  - A spent budget refuses the next run (`EACCES`) until the admin sets it again
+    (`POST …/sessions/:sid/model`: the fields given are set, `null` for unlimited, the others
+    kept; only for a session with the right).
+  - Runs on a caller's own token are charged too, unless the deployment sets
+    `"callerTokenUnmetered": true` in `LLM` and the token is the API key: a token is any string
+    until the provider refuses it, and an endpoint that authenticates otherwise would take it.
   - The result carries `budget: {turnsLeft, tokensLeft}` (null: unlimited) for a charged run.
+  - **Migration:** tokens issued before the model right have no `model_use`, so the `agent`
+    task refuses them; a budget cannot add the right (it is a fact of the token), so mint a new
+    session with `model`. Stores get the new session columns on their first start.
 - **Callers can bring their own model credential.** Send it in the `x-llm-token` header of
   `/api/agents/:name/run`. Each hop of the `chain` hands it down to the next, and the last hop's
   `agent` task uses it for its model calls. A hop can replace it from there on with `llmToken`
@@ -382,7 +394,8 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
     cannot break a header or hide in an escaped error.
   - The endpoint should not redirect: a cross-origin redirect may drop `Authorization` but keep
     other headers, such as a `callerTokenHeader`.
-  - `/api/runtime` reports `llm.callerToken` and whether a `callerTokenHeader` is set.
+  - `/api/runtime` reports `llm.callerToken`, whether a `callerTokenHeader` is set, and
+    `callerTokenUnmetered`.
 - **Limits:** `maxTurns` (default 12, at most 50) and `timeoutMs` (default 120 s, at most
   600 s; a tool that ignores the abort gets 5 s more, then the run returns, its calls without
   a result marked as errors; such a tool can still finish after the run returned, and its

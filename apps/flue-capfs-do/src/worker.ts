@@ -87,6 +87,7 @@ function llmSummary(env: Env) {
           callerToken: c.callerToken ?? "allow",
           // Whether it goes to a gateway beside the deployment's key, or is the provider key.
           callerTokenHeader: !!c.callerTokenHeader,
+          callerTokenUnmetered: !!c.callerTokenUnmetered,
         }
       : null;
   } catch (e) {

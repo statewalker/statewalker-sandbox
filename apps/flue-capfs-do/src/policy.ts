@@ -40,7 +40,7 @@ const MODEL = `allow if operation("model"), model_use(true);`;
 export const MODES: Record<string, string> = {
   // Everything inside the user's rights.
   yolo: `
-allow if resource($p), right($r), $p.starts_with($r);
+allow if operation($o), ["read","list","write"].contains($o), resource($p), right($r), $p.starts_with($r);
 ${ANCESTOR_LIST}
 ${MODEL}`,
   // Work freely, but only inside /proj/ (and read everything the rights allow).

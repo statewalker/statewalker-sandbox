@@ -243,10 +243,15 @@ test("admin input is validated", async () => {
 });
 
 test("model: a right of the session, narrowed by attenuation, read fresh on revocation", async () => {
-  const { s, store, auth } = await setup();
+  const { store, auth } = await setup();
   const gateOf = (t) => new FsGate(store, auth, t);
   const without = auth.startSession("bob", ["/proj"]).token;
   await denied(gateOf(without).model("grant", true));
+  // yolo over "/" is about files: it does not give the model.
+  const root = auth.startSession("root", ["/"], "yolo", false).token;
+  await denied(gateOf(root).model("grant", true));
+  await denied(gateOf(root).model("reserve", true));
+  assert.equal(await gateOf(root).call("readFile", "/p1/a"), "1");
   const { session, token } = auth.startSession("carol", ["/proj"], "readonly", true);
   assert.deepEqual(await gateOf(token).model("grant", true), { turnsLeft: null, tokensLeft: null });
   const t = (datalog) => Biscuit.fromBase64(token).attenuate(datalog).toBase64();
@@ -254,14 +259,18 @@ test("model: a right of the session, narrowed by attenuation, read fresh on revo
   await gateOf(t(attenuationBlock({ readOnly: true, scope: "/proj/x" }))).model("grant", true);
   await denied(gateOf(t(attenuationBlock({ noModel: true }))).model("grant", true));
   await denied(gateOf(t(`check if operation($o), ["read"].contains($o);`)).model("grant", true));
-  // A model token never opens files: the right is not a path.
-  await denied(gateOf(token).call("readFile", "/p1/a"));
+  // The model right opens no file.
+  const bare = auth.startSession("erin", [], "yolo", true).token;
+  await gateOf(bare).model("grant", true);
+  await denied(gateOf(bare).call("readFile", "/proj/x/y.md"));
   auth.revoke(session);
-  await denied(gateOf(token).model("grant", true));
-  assert.ok(s);
+  await denied(gateOf(token).model("reserve", true));
+  // Usage is still recorded for a revoked token's session (it was spent).
+  await gateOf(token).model("charge", true, { input: 5, output: 1 });
+  assert.equal(auth.sessionInfo(session).model.used.input, 5);
 });
 
-test("model: a budget is charged per turn and tokens, and refuses a metered run once spent", async () => {
+test("model: a turn is reserved before each request, tokens charged after", async () => {
   const { store, auth } = await setup();
   const { session, token } = auth.startSession("dave", ["/proj"], "yolo", {
     turns: 2,
@@ -269,19 +278,49 @@ test("model: a budget is charged per turn and tokens, and refuses a metered run 
   });
   const g = new FsGate(store, auth, token);
   assert.deepEqual(await g.model("grant", true), { turnsLeft: 2, tokensLeft: 100 });
-  let r = await g.model("charge", true, { turns: 1, input: 30, output: 10 });
-  assert.deepEqual(r, { turnsLeft: 1, tokensLeft: 60, spent: false });
-  // Not metered (a caller's own token): recorded, not charged.
-  r = await g.model("charge", false, { turns: 1, input: 500, output: 0 });
-  assert.equal(r.tokensLeft, 60);
-  r = await g.model("charge", true, { turns: 1, input: 70, output: 0 });
-  assert.deepEqual(r, { turnsLeft: 0, tokensLeft: 0, spent: true });
+  assert.deepEqual(await g.model("reserve", true), { turnsLeft: 1, tokensLeft: 100 });
+  assert.deepEqual(await g.model("charge", true, { input: 30, output: 10 }), {
+    turnsLeft: 1,
+    tokensLeft: 60,
+  });
+  // Not metered: recorded, not charged.
+  await g.model("reserve", false);
+  assert.equal((await g.model("charge", false, { input: 500 })).tokensLeft, 60);
+  // Two reservations at once: only one gets the last turn.
+  const both = await Promise.allSettled([g.model("reserve", true), g.model("reserve", true)]);
+  assert.deepEqual(both.map((r) => r.status).sort(), ["fulfilled", "rejected"]);
   await denied(g.model("grant", true));
-  assert.deepEqual(await g.model("grant", false), { turnsLeft: 0, tokensLeft: 0 });
-  const info = auth.sessionInfo(session).model;
-  assert.deepEqual(info.used, { turns: 3, input: 600, output: 10 });
+  await g.model("grant", false);
+  assert.deepEqual(auth.sessionInfo(session).model.used, { turns: 3, input: 530, output: 10 });
+  // A budget update sets the fields given and keeps the others.
   auth.setModelBudget(session, { turns: 5 });
+  assert.deepEqual(await g.model("grant", true), { turnsLeft: 5, tokensLeft: 60 });
+  auth.setModelBudget(session, { tokens: null });
   assert.deepEqual(await g.model("grant", true), { turnsLeft: 5, tokensLeft: null });
+  // Huge or negative usage is bounded.
+  await g.model("charge", false, { input: 1e300, output: -5 });
+  assert.equal(auth.sessionInfo(session).model.used.input, 530 + 1e9);
   assert.throws(() => auth.setModelBudget(session, { turns: -1 }), /EINVAL/);
   assert.throws(() => auth.startSession("e", ["/"], "yolo", "yes"), /EINVAL/);
+  const plain = auth.startSession("f", ["/proj"]).session;
+  assert.throws(() => auth.setModelBudget(plain, { turns: 1 }), /EINVAL/, "no right, no budget");
+});
+
+test("model: a store from before the model columns gets them, once", () => {
+  const s = sql();
+  s.exec(`CREATE TABLE cap_sessions (session TEXT PRIMARY KEY, user TEXT NOT NULL,
+    mode TEXT NOT NULL, revoked_all INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL)`);
+  s.exec("INSERT INTO cap_sessions (session, user, mode, created) VALUES ('old', 'u', 'yolo', 1)");
+  const a = new Authority(s);
+  assert.deepEqual(a.sessionInfo("old").model, {
+    allowed: false,
+    turnsLeft: null,
+    tokensLeft: null,
+    used: { turns: 0, input: 0, output: 0 },
+  });
+  const b = new Authority(s); // a restart: no second migration
+  assert.equal(b.sessionInfo("old").user, "u");
+  // A store where a migration stopped half way (columns there, no schema row) is finished.
+  s.exec("DELETE FROM cap_meta WHERE key = 'schema'");
+  assert.equal(new Authority(s).sessionInfo("old").mode, "yolo");
 });
