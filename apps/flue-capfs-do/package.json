@@ -41,7 +41,7 @@
     "acorn": "^8.15.0",
     "acorn-walk": "^8.3.4",
     "esbuild-wasm": "0.28.2",
-    "eslint-scope": "^8.4.0",
+    "eslint-scope": "^9.1.2",
     "just-bash": "catalog:",
     "pyodide": "314.0.7"
   },
