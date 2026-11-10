@@ -23,7 +23,7 @@ then tests written first (red), then the implementation (green), then findings.
 | `14-thin-packs` | X6b1 — **thin packs completed as git --fix-thin; 200k entries in +19 MiB; one storage read per window; tmp sweep** | Can index-pack complete thin packs from the local repository and index 100k+ objects in a Durable Object's memory? |
 | `15-resumable-index` | X6b2 — **index-pack as a resumable job: cold steps, crash at any storage op, DO restarted per step → the one-shot pack and .idx** | Can index-pack run in bounded steps that survive the eviction of a Durable Object? |
 | `16-pack-to-sql` | X6b3 — **keep packs as the store of record; exploding to rows is git-identical, crash-safe, DO-resumable, reads text 3–7× faster for 3–34× the bytes** | Should the native SQL store explode received packs into object rows, or keep them as packs? |
-| `17-repository` | X16a — open | Can one repository API run unchanged over git files and over a single SQL database? |
+| `17-repository` | X16a — **one command layer over git files and one SQL Db: same ids (git's), native-git interop, DO** | Can one repository API run unchanged over git files and over a single SQL database? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.

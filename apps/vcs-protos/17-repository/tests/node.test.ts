@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -168,13 +168,18 @@ describe("R1 ObjectStore contract", () => {
         }
         // a thin pack of two more commits: its bases are in the store
         for (let k = 0; k < 2; k++) {
-          git(history, ["commit", "-q", "--allow-empty", "-m", `extra ${k}`]);
+          // edit a large text file: the new blob is a delta against one the store already has
+          const f = join(history, "file0.txt");
+          writeFileSync(f, `${readFileSync(f, "utf8")}appended line ${k}\n`);
+          git(history, ["commit", "-q", "-am", `extra ${k}`]);
         }
         const thin = new Uint8Array(
           git(history, ["pack-objects", "--revs", "--thin", "--stdout", "-q"], "HEAD\n^HEAD~2\n"),
         );
+        // git leaves the bases out: a thin pack has fewer objects than it needs
+        const idxOf = (p: Uint8Array) => new DataView(p.buffer, p.byteOffset).getUint32(8);
         const r = await repo.objects.installPack(chunks(thin));
-        expect(r.count).toBeGreaterThan(0);
+        expect(r.count).toBeGreaterThan(idxOf(thin)); // bases appended from the store
         const head = git(history, ["rev-parse", "HEAD"]).toString().trim();
         expect((await repo.objects.get(head, { verify: true }))?.type).toBe("commit");
       });

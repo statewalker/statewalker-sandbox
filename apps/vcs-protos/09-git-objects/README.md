@@ -202,3 +202,8 @@ function runObjectContract(make, corpus): Promise<{ cases: number; failed: strin
 3. **Throughput.** For large incompressible blobs the deflate level dominates. A level option needs pako's deflate or a WASM zlib instead of `CompressionStream`.
 4. **Hasher tier**: wire X1e's WASM SHA-1 where `node:crypto` is absent. Collision detection (SHA-1DC) is a future issue and plugs into `newHasher`.
 5. **Verify-before-return for small objects.** `verify` reports a mismatch only at the end of the stream (JGit does the same for large objects).
+
+## Later changes
+
+- X16a (#… 17-repository): `get(id, { verify: true })` on an absent id threw `ObjectIdMismatchError`
+  (the hash of nothing) instead of returning `undefined`; fixed (`raw` verifies only a present object).
