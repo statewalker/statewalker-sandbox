@@ -57,14 +57,47 @@ async function* chunksOf(bytes: Uint8Array, size: number) {
 }
 const concat = (parts: Uint8Array[]) => new Uint8Array(Buffer.concat(parts));
 
+/**
+ * node:http's request as a web stream that tolerates an early cancel (a handler that stops reading
+ * at its size limit): Readable.toWeb then throws "Controller is already closed".
+ */
+function requestBody(req: IncomingMessage): ReadableStream<Uint8Array> {
+  let done = false;
+  return new ReadableStream<Uint8Array>({
+    start(ctrl) {
+      req.on("data", (c: Buffer) => {
+        if (done) return;
+        ctrl.enqueue(new Uint8Array(c));
+        if ((ctrl.desiredSize ?? 1) <= 0) req.pause();
+      });
+      req.on("end", () => {
+        if (!done) {
+          done = true;
+          ctrl.close();
+        }
+      });
+      req.on("error", (e) => {
+        if (!done) {
+          done = true;
+          ctrl.error(e);
+        }
+      });
+    },
+    pull() {
+      req.resume();
+    },
+    cancel() {
+      done = true;
+      req.resume(); // drain: the response can still be written
+    },
+  });
+}
+
 /** Serves a fetch handler on 127.0.0.1 (the URL ends in /repo.git). */
 async function serve(handler: (req: Request) => Promise<Response>): Promise<string> {
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
-      const body =
-        req.method === "GET" || req.method === "HEAD"
-          ? undefined
-          : (Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>);
+      const body = req.method === "GET" || req.method === "HEAD" ? undefined : requestBody(req);
       const headers = new Headers();
       for (const [k, v] of Object.entries(req.headers))
         if (typeof v === "string") headers.set(k, v);
@@ -466,10 +499,14 @@ describe("R7 hostile and invalid requests, hooks", () => {
     let lines = await report(await send([`${ZERO} ${h} refs/heads/nopack`]));
     expect(lines.join("\n")).toMatch(/unpack|ng refs\/heads\/nopack/);
     expect(await refOf(repo, "refs/heads/nopack")).toBe(ZERO);
-    // oversized
+    // oversized: a valid pack (a 2 MB blob) over the 1 MB limit
+    const big = join(tmp(), "big");
+    git(tmpdir(), ["clone", "-q", src, big]);
+    commitFile(big, "big.bin", Buffer.from(noise(2_000_000, 1)).toString("base64"), "big");
+    const bigTip = rev(big, "HEAD");
     const huge = await postReceive(
       url,
-      receiveRequest([`${ZERO} ${h} refs/heads/huge`], noise(2_000_000, 1)),
+      receiveRequest([`${ZERO} ${bigTip} refs/heads/huge`], packOf(big, `${bigTip}\n^${h}`)),
     );
     const htext = new TextDecoder().decode(new Uint8Array(await huge.arrayBuffer()));
     expect(huge.status >= 400 || /unpack (?!ok)|ERR/.test(htext)).toBe(true);
@@ -487,8 +524,17 @@ describe("R7 hostile and invalid requests, hooks", () => {
     lines = await report(await send([`${ZERO} ${h} refs/heads/later`], packOf(src, `${h}^!`)));
     expect(lines.join("\n")).toMatch(/ng refs\/heads\/later pre-receive hook declined/);
     expect(await refOf(repo, "refs/heads/later")).toBe(ZERO);
-    // still serving
+    // our client's atomic push: one ref declined → none applied
     preReceive = undefined;
+    const work = join(tmp(), "w");
+    git(tmpdir(), ["clone", "-q", src, work]);
+    const res = await push(url, await open(work), {
+      refspecs: ["HEAD:refs/heads/nope", "HEAD:refs/heads/atomic-ok"],
+      atomic: true,
+    });
+    expect(res.every((x) => !x.ok)).toBe(true);
+    expect(await refOf(repo, "refs/heads/atomic-ok")).toBe(ZERO);
+    // still serving
     lines = await report(await send([`${ZERO} ${h} refs/heads/fine`], packOf(src, `${h}^!`)));
     expect(lines).toContain("ok refs/heads/fine");
     void receivePackHandler;
