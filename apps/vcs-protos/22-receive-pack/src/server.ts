@@ -42,6 +42,10 @@ export interface ReceivePackOptions {
   preReceive?: (commands: PushCommand[], pushOptions: string[]) => Promise<string | undefined>;
   /** refuse one ref: a message, or undefined to accept */
   update?: (command: PushCommand) => Promise<string | undefined>;
+  /** more commands in one push are refused (400). Default 65536. */
+  maxCommands?: number;
+  /** a request body silent this long is abandoned (a stalled upload). Default 60 s. */
+  idleTimeoutMs?: number;
 }
 
 const ZERO = "0".repeat(40);
@@ -49,20 +53,44 @@ const OID = /^[0-9a-f]{40}$/;
 
 class ProtocolError extends Error {}
 
-async function* limited(body: ReadableStream<Uint8Array> | null, max: number) {
+/** The body, bounded in size and in silence (a stalled upload is abandoned). */
+async function* limited(body: ReadableStream<Uint8Array> | null, max: number, idleMs: number) {
   if (!body) return;
+  const reader = body.getReader();
   let n = 0;
-  for await (const c of body as unknown as AsyncIterable<Uint8Array>) {
-    n += c.length;
-    if (n > max) throw new ProtocolError(`request over ${max} bytes`);
-    yield c;
+  try {
+    for (;;) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const idle = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new ProtocolError(`request idle for ${idleMs} ms`)),
+          idleMs,
+        );
+      });
+      let r: ReadableStreamReadResult<Uint8Array>;
+      try {
+        r = await Promise.race([reader.read(), idle]);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (r.done) return;
+      n += r.value.length;
+      if (n > max) throw new ProtocolError(`request over ${max} bytes`);
+      yield r.value;
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
   }
 }
 
-/** git's connectivity check: everything `tip` needs is here, down to what `known` already reaches. */
-async function connected(repo: Repository, tip: string, known: string[]): Promise<boolean> {
+/**
+ * git's connectivity check (one `rev-list --objects <tips> --not --all` for the push): everything
+ * the tips need is here, down to what the refs already reach. Undefined: connected; otherwise the
+ * walk's error (a missing object).
+ */
+async function connected(repo: Repository, tips: string[], known: string[]): Promise<boolean> {
   try {
-    const { objects } = await listObjectsWithEdges(repo, [tip], known);
+    const { objects } = await listObjectsWithEdges(repo, tips, known);
     for (const o of objects) if (!(await repo.objects.has(o.oid))) return false;
     return true;
   } catch {
@@ -70,12 +98,24 @@ async function connected(repo: Repository, tip: string, known: string[]): Promis
   }
 }
 
+/** The object's type, or undefined when absent (its stream closed). */
+async function typeOf(repo: Repository, oid: string): Promise<string | undefined> {
+  const o = await repo.objects.get(oid);
+  await o?.content[Symbol.asyncIterator]().return?.();
+  return o?.type;
+}
+
+/** One report line per command, never a line break inside (hook messages are free text). */
+const oneLine = (s: string) => s.replace(/[\r\n]+/g, " ").trim();
+
 export function receivePackHandler(
   repo: Repository,
   opts: ReceivePackOptions = {},
 ): (req: Request) => Promise<Response> {
   const agent = opts.agent ?? "webrun-vcs/0.0";
   const maxRequest = opts.maxRequestBytes ?? 2 * 2 ** 30;
+  const maxCommands = opts.maxCommands ?? 65536;
+  const idleMs = opts.idleTimeoutMs ?? 60_000;
   const caps = `report-status delete-refs side-band-64k quiet atomic ofs-delta push-options object-format=sha1 agent=${agent}`;
   return async (req) => {
     const url = new URL(req.url);
@@ -107,7 +147,9 @@ export function receivePackHandler(
       encoding === "gzip" && req.body
         ? req.body.pipeThrough(new DecompressionStream("gzip") as never)
         : req.body;
-    const reader = new PktReader(limited(body as ReadableStream<Uint8Array> | null, maxRequest));
+    const reader = new PktReader(
+      limited(body as ReadableStream<Uint8Array> | null, maxRequest, idleMs),
+    );
 
     // --- commands, capabilities, push options
     const commands: PushCommand[] = [];
@@ -120,6 +162,8 @@ export function receivePackHandler(
         if (p.kind === "flush") break;
         if (p.kind !== "data") throw new ProtocolError(`unexpected ${p.kind} packet`);
         let line = text(p) as string;
+        // a shallow client's boundary (gitprotocol-pack: *shallow before the commands)
+        if (!commands.length && /^shallow [0-9a-f]{40}$/.test(line)) continue;
         if (!commands.length) {
           const nul = line.indexOf("\0");
           if (nul >= 0) {
@@ -131,6 +175,8 @@ export function receivePackHandler(
         const m = /^([0-9a-f]{40}) ([0-9a-f]{40}) (.+)$/.exec(line);
         if (!m) throw new ProtocolError(`protocol error: expected old/new/ref, got '${line}'`);
         commands.push({ old: m[1] as string, new: m[2] as string, ref: m[3] as string });
+        if (commands.length > maxCommands)
+          throw new ProtocolError(`more than ${maxCommands} commands`);
       }
       if (requested.has("push-options"))
         for (;;) {
@@ -145,55 +191,73 @@ export function receivePackHandler(
     }
     if (!commands.length) return new Response(new Blob([FLUSH as BlobPart]));
 
-    // --- the pack (unless every command is a delete)
+    // --- the pack (unless every command is a delete); a status per command (a ref may appear twice)
     let unpack = "ok";
-    const status = new Map<string, string>(); // ref → "" (ok) or a reason
-    const fail = (ref: string, reason: string) => {
-      if (!status.has(ref)) status.set(ref, reason);
+    const status: (string | undefined)[] = commands.map(() => undefined); // undefined: ok so far
+    const fail = (i: number, reason: string) => {
+      status[i] ??= oneLine(reason);
     };
+    const open = () =>
+      commands.flatMap((c, i) => (status[i] === undefined ? [[c, i] as const] : []));
     if (commands.some((c) => c.new !== ZERO)) {
       try {
         await repo.objects.installPack(reader.rest());
       } catch (e) {
-        unpack = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, " ").slice(0, 200);
-        for (const c of commands) fail(c.ref, "unpacker error");
+        unpack = oneLine(e instanceof Error ? e.message : String(e)).slice(0, 200);
+        commands.forEach((_, i) => {
+          fail(i, "unpacker error");
+        });
       }
     }
 
-    // --- checks: names, current branch, connectivity, hooks
+    // --- checks: names, ids, current branch, branch tips are commits, connectivity, hooks
     const head = await repo.refs.read("HEAD");
     const current = head && "symref" in head ? head.symref : undefined;
-    const known: string[] = [];
-    for await (const r of repo.refs.list("refs/")) known.push(r.oid);
-    for (const c of commands) {
-      if (status.has(c.ref)) continue;
-      if (!c.ref.startsWith("refs/") || !checkRefFormat(c.ref)) fail(c.ref, "funny refname");
-      else if (!OID.test(c.old) || !OID.test(c.new)) fail(c.ref, "invalid id");
+    const known = new Set<string>();
+    for await (const r of repo.refs.list("refs/")) known.add(r.oid);
+    const seenRef = new Set<string>();
+    for (const [c, i] of open()) {
+      if (!c.ref.startsWith("refs/") || !checkRefFormat(c.ref)) fail(i, "funny refname");
+      else if (!OID.test(c.old) || !OID.test(c.new)) fail(i, "invalid id");
+      else if (seenRef.has(c.ref)) fail(i, "failed to update ref (the same ref twice in one push)");
       else if (c.new === ZERO && c.ref === current)
-        fail(c.ref, "deletion of the current branch prohibited");
-      else if (c.new !== ZERO && !(await connected(repo, c.new, known)))
-        fail(c.ref, "missing necessary objects");
+        fail(i, "deletion of the current branch prohibited");
+      else if (
+        c.new !== ZERO &&
+        c.ref.startsWith("refs/heads/") &&
+        (await typeOf(repo, c.new)) !== "commit"
+      )
+        fail(i, "failed to update ref (not a commit: a branch must point at a commit)");
+      seenRef.add(c.ref);
     }
-    if (opts.preReceive && commands.some((c) => !status.has(c.ref))) {
+    // one walk for every new tip; only if it fails, one per tip to name the broken ones
+    const tips = open().filter(([c]) => c.new !== ZERO);
+    if (tips.length && !(await connected(repo, [...new Set(tips.map(([c]) => c.new))], [...known])))
+      for (const [c, i] of tips)
+        if (!(await connected(repo, [c.new], [...known]))) fail(i, "missing necessary objects");
+    if (opts.preReceive && open().length) {
       const msg = await opts.preReceive(
-        commands.filter((c) => !status.has(c.ref)),
+        open().map(([c]) => c),
         pushOptions,
       );
-      if (msg) for (const c of commands) fail(c.ref, `pre-receive hook declined: ${msg}`);
+      if (msg)
+        commands.forEach((_, i) => {
+          fail(i, `pre-receive hook declined: ${msg}`);
+        });
     }
     if (opts.update)
-      for (const c of commands) {
-        if (status.has(c.ref)) continue;
+      for (const [c, i] of open()) {
         const msg = await opts.update(c);
-        if (msg) fail(c.ref, `hook declined: ${msg}`);
+        if (msg) fail(i, `hook declined: ${msg}`);
       }
 
-    // --- the ref transaction(s)
+    // --- the ref transaction(s); deleting a ref that does not exist is a no-op (git: a warning)
     const toCommand = (c: PushCommand) => ({
       name: c.ref,
       old: c.old === ZERO ? null : c.old,
       new: c.new === ZERO ? null : c.new,
     });
+    const noop = (c: PushCommand) => c.old === ZERO && c.new === ZERO;
     const reasonOf = (r: string | undefined) =>
       r === "mismatch"
         ? "failed to update ref (stale old value)"
@@ -201,30 +265,35 @@ export function receivePackHandler(
           ? "failed to lock"
           : `failed to update ref (${r ?? "rejected"})`;
     if (requested.has("atomic")) {
-      if (commands.some((c) => status.has(c.ref))) {
-        for (const c of commands) fail(c.ref, "atomic push failure");
+      if (status.some((x) => x !== undefined)) {
+        commands.forEach((_, i) => {
+          fail(i, "atomic push failure");
+        });
       } else {
-        const res = await repo.refs.batch(commands.map(toCommand), { message: "push" });
+        const todo = commands.filter((c) => !noop(c));
+        const res = todo.length
+          ? await repo.refs.batch(todo.map(toCommand), { message: "push" })
+          : { ok: true, rejected: [] };
         if (!res.ok)
-          for (const c of commands) {
+          commands.forEach((c, i) => {
             const own = res.rejected.find((x) => x.name === c.ref);
-            fail(c.ref, own ? reasonOf(own.reason) : "atomic push failure");
-          }
+            fail(i, own ? reasonOf(own.reason) : "atomic push failure");
+          });
       }
     } else
-      for (const c of commands) {
-        if (status.has(c.ref)) continue;
+      for (const [c, i] of open()) {
+        if (noop(c)) continue;
         const res = await repo.refs.batch([toCommand(c)], { message: "push" });
-        if (!res.ok) fail(c.ref, reasonOf(res.rejected[0]?.reason));
+        if (!res.ok) fail(i, reasonOf(res.rejected[0]?.reason));
       }
 
     // --- report-status
     if (!requested.has("report-status")) return new Response(new Blob([]));
     const report: Uint8Array[] = [pkt(`unpack ${unpack}\n`)];
-    for (const c of commands) {
-      const reason = status.get(c.ref);
-      report.push(pkt(reason ? `ng ${c.ref} ${reason}\n` : `ok ${c.ref}\n`));
-    }
+    commands.forEach((c, i) => {
+      const reason = status[i];
+      report.push(pkt(reason !== undefined ? `ng ${c.ref} ${reason}\n` : `ok ${c.ref}\n`));
+    });
     report.push(FLUSH);
     const reportBytes = new Uint8Array(await new Blob(report as BlobPart[]).arrayBuffer());
     const out = requested.has("side-band-64k")

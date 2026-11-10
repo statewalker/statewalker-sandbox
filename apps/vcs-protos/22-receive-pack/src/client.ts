@@ -33,6 +33,8 @@ export interface PushOptions {
   agent?: string;
   /** bytes of the request body sent (commands and pack) */
   stats?: { bytes: number };
+  /** the remote's messages (side-band 2: hooks, progress) */
+  onMessage?: (message: string) => void;
 }
 
 const ZERO = "0".repeat(40);
@@ -83,14 +85,67 @@ async function isAncestor(repo: Repository, a: string, b: string): Promise<boole
   return false;
 }
 
-/** Resolves a local refspec source: a ref name (as git: HEAD, a branch, a tag) or an id. */
-async function resolveLocal(repo: Repository, src: string): Promise<string | undefined> {
-  if (OID.test(src)) return src;
-  for (const name of [src, `refs/heads/${src}`, `refs/tags/${src}`]) {
+/**
+ * Resolves a local refspec source as git's ref_rev_parse_rules (an id, a full name, then
+ * refs/<name>, refs/tags/<name>, refs/heads/<name>, refs/remotes/<name>); `HEAD` names the branch
+ * it points at. Returns the id and the full ref name (undefined for an id).
+ */
+async function resolveLocal(
+  repo: Repository,
+  src: string,
+): Promise<{ oid: string; name?: string } | undefined> {
+  if (OID.test(src)) return { oid: src };
+  if (src === "HEAD") {
+    const h = await repo.refs.read("HEAD");
+    const oid = await repo.refs.resolve("HEAD");
+    if (!oid) return undefined;
+    return h && "symref" in h ? { oid, name: h.symref } : { oid };
+  }
+  for (const name of [
+    src,
+    `refs/${src}`,
+    `refs/tags/${src}`,
+    `refs/heads/${src}`,
+    `refs/remotes/${src}`,
+  ]) {
+    if (!name.startsWith("refs/")) continue;
     const oid = await repo.refs.resolve(name);
-    if (oid) return oid;
+    if (oid) return { oid, name };
+  }
+  // an expression of a commit (HEAD~1, main^): resolved through the history
+  const m = /^(.+?)((?:[~^]\d*)+)$/.exec(src);
+  if (m) {
+    const base = await resolveLocal(repo, m[1] as string);
+    if (!base) return undefined;
+    let oid = base.oid;
+    for (const op of (m[2] as string).match(/[~^]\d*/g) ?? []) {
+      const n = op.length > 1 ? Number(op.slice(1)) : 1;
+      for (let k = 0; k < (op[0] === "~" ? n : 1); k++) {
+        const c = await readCommit(repo, oid);
+        const parent = c.parents[op[0] === "^" ? n - 1 : 0];
+        if (!parent) return undefined;
+        oid = parent;
+      }
+    }
+    return { oid };
+  }
+  const tree = /^(.+)\^\{tree\}$/.exec(src);
+  if (tree) {
+    const base = await resolveLocal(repo, tree[1] as string);
+    return base ? { oid: (await readCommit(repo, base.oid)).tree } : undefined;
   }
   return undefined;
+}
+
+/**
+ * git's destination for a short name: the remote ref it names (refs/heads/x or refs/tags/x, if
+ * exactly one exists), else by the source's kind (a tag source makes a tag).
+ */
+function remoteName(dst: string, remote: Map<string, string>, srcName?: string): string {
+  if (dst.startsWith("refs/")) return dst;
+  const matches = [`refs/heads/${dst}`, `refs/tags/${dst}`].filter((n) => remote.has(n));
+  if (matches.length === 1) return matches[0] as string;
+  return srcName?.startsWith("refs/tags/") ? `refs/tags/${dst}` : `refs/heads/${dst}`;
 }
 
 export async function push(
@@ -114,34 +169,46 @@ export async function push(
     const body = force ? spec.slice(1) : spec;
     const i = body.indexOf(":");
     const src = i < 0 ? body : body.slice(0, i);
-    let dst = i < 0 ? body : body.slice(i + 1);
-    if (!dst.startsWith("refs/")) dst = `refs/heads/${dst}`;
-    const old = remote.get(dst) ?? ZERO;
     if (!src) {
+      // ":dst" deletes the remote ref it names
+      const dst = remoteName(body.slice(i + 1), remote);
+      const old = remote.get(dst) ?? ZERO;
       if (old === ZERO) results.push({ ref: dst, ok: false, reason: "remote ref does not exist" });
       else commands.push({ ref: dst, old, new: ZERO });
       continue;
     }
-    const neu = await resolveLocal(repo, src);
-    if (!neu) throw new Error(`src refspec ${src} does not match any local ref`);
+    const local = await resolveLocal(repo, src);
+    if (!local) throw new Error(`src refspec ${src} does not match any local ref`);
+    // no colon: the same name on the remote (git: "HEAD" pushes the current branch)
+    const dstSpec = i < 0 ? (local.name ?? src) : body.slice(i + 1);
+    const dst = remoteName(dstSpec, remote, local.name);
+    const old = remote.get(dst) ?? ZERO;
+    const neu = local.oid;
     if (old === neu) {
       results.push({ ref: dst, ok: true, reason: "up to date" });
       continue;
     }
-    if (old !== ZERO && !force && dst.startsWith("refs/heads/")) {
-      // git's rule: the remote tip must be known here and an ancestor of what is pushed
+    if (old !== ZERO && !force) {
+      // git's set_ref_status_for_push: tags are never replaced without force; any other ref
+      // must fast-forward from a remote tip known here, both ends commits
+      if (dst.startsWith("refs/tags/")) {
+        results.push({ ref: dst, ok: false, reason: "rejected (already exists)" });
+        continue;
+      }
       if (!(await repo.objects.has(old))) {
         results.push({ ref: dst, ok: false, reason: "rejected (fetch first)" });
+        continue;
+      }
+      const isCommit = async (oid: string) =>
+        (await readCommit(repo, oid).catch(() => undefined)) !== undefined;
+      if (!(await isCommit(old)) || !(await isCommit(neu))) {
+        results.push({ ref: dst, ok: false, reason: "rejected (needs force)" });
         continue;
       }
       if (!(await isAncestor(repo, old, neu))) {
         results.push({ ref: dst, ok: false, reason: "rejected (non-fast-forward)" });
         continue;
       }
-    }
-    if (old !== ZERO && !force && dst.startsWith("refs/tags/")) {
-      results.push({ ref: dst, ok: false, reason: "rejected (already exists)" });
-      continue;
     }
     commands.push({ ref: dst, old, new: neu });
   }
@@ -155,12 +222,10 @@ export async function push(
   if (!commands.length) return results;
 
   // --- the request: commands, options, a thin pack (none when every command is a delete)
-  const want = [
-    "report-status",
-    "side-band-64k",
-    "ofs-delta",
-    `agent=${opts.agent ?? "webrun-vcs/0.0"}`,
-  ];
+  // only what the server advertised (gitprotocol-capabilities: a client MUST NOT ask for more)
+  const want: string[] = [];
+  for (const c of ["report-status", "side-band-64k"]) if (caps.has(c)) want.push(c);
+  want.push(`agent=${opts.agent ?? "webrun-vcs/0.0"}`);
   if (caps.has("object-format=sha1")) want.push("object-format=sha1");
   if (opts.atomic) want.push("atomic");
   if (opts.pushOptions?.length) want.push("push-options");
@@ -220,9 +285,16 @@ export async function push(
   });
   if (!res.ok) throw new Error(`${base}: HTTP ${res.status} ${await res.text()}`);
 
-  // --- report-status (in side-band)
+  // --- report-status (in side-band when negotiated); without report-status git assumes success
+  if (!caps.has("report-status")) {
+    await res.arrayBuffer();
+    for (const c of commands) results.push({ ref: c.ref, ok: true });
+    return results;
+  }
   const outer = new PktReader(res.body as unknown as AsyncIterable<Uint8Array>);
-  const inner = new PktReader(readSideband(outer, () => {}));
+  const inner = caps.has("side-band-64k")
+    ? new PktReader(readSideband(outer, (m) => opts.onMessage?.(m)))
+    : outer;
   const first = await inner.read();
   const unpack = first ? text(first) : undefined;
   if (!unpack?.startsWith("unpack ")) throw new PktError(`unexpected report: ${unpack}`);

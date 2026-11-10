@@ -603,7 +603,7 @@ describe("review cases (#82)", () => {
   }, 120_000);
   it("a stalled push does not block another push", async () => {
     const src = repoWithHistory(3);
-    const { repo, url } = await ourServer(src, "files");
+    const { repo, url } = await ourServer(src, "files", { idleTimeoutMs: 1500 });
     const h = rev(src, "HEAD");
     const pack = packOf(src, `${h}^!`);
     const stalled = new ReadableStream<Uint8Array>({
@@ -618,15 +618,20 @@ describe("review cases (#82)", () => {
       signal: ac.signal,
       // @ts-expect-error node needs duplex for a streamed body
       duplex: "half",
-    }).catch(() => undefined);
+    }).then(
+      (res) => report(res),
+      () => undefined,
+    );
     await new Promise((r) => setTimeout(r, 300));
     const t0 = Date.now();
     const lines = await report(
       await postReceive(url, receiveRequest([`${ZERO} ${h} refs/heads/b`], pack)),
     );
     const took = Date.now() - t0;
+    // the stalled upload is abandoned after its idle timeout: an unpack error, no ref
+    const aLines = await a;
     ac.abort();
-    await a;
+    expect(aLines?.[0]).toMatch(/^unpack .*idle/);
     expect(lines).toContain("ok refs/heads/b");
     expect(took).toBeLessThan(5000);
     expect(await refOf(repo, "refs/heads/stalled")).toBe(ZERO);
