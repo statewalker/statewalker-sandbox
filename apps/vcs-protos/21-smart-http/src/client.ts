@@ -322,7 +322,7 @@ export async function fetchFrom(url: string, repo: Repository, opts: FetchOption
       ...(opts.depth ? [`deepen ${opts.depth}`] : []),
       "thin-pack",
       "ofs-delta",
-      "include-tag",
+      ...(followTags ? ["include-tag"] : []), // git: --no-tags sends no include-tag
       ...(opts.onProgress ? [] : ["no-progress"]),
     ];
     let flush = INITIAL_FLUSH;

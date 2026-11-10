@@ -100,7 +100,7 @@ repo, { refspecs, depth, shallow })` and `clone(url, repo)` use global `fetch`.
 
 ## Verified
 
-All 21 Node tests pass (11 for R1–R7, 10 from the review of #81) (`pnpm test 21-smart-http`). The tests were written first (red commit).
+All 22 Node tests pass (11 for R1–R7, 11 from the review of #81) (`pnpm test 21-smart-http`). The tests were written first (red commit).
 
 ### Mutation check
 
@@ -140,6 +140,14 @@ it.
 | `depth` without a shallow store left a broken repository | Refused |
 | Refspec without a destination fetched nothing; an empty remote's clone kept the local HEAD; progress never reached 100%; local annotated tags not peeled in negotiation; an ERR in the advertisement misreported | Fixed |
 | Symbolic refs other than HEAD not listed | Noted (X5's store lists direct refs) |
+
+Mutations of the fixes, all caught by the review tests: G1 gzip ignored, G2 include-tag of the
+outer tag only, G3 auto-follow without the chain check (it also showed `followTags: false` still
+sent `include-tag`; git's `--no-tags` does not), G4 haves propagating past the receiver's shallow
+commits, G5 no unshallow lines, G6 the error write not caught, G7 non-tip wants refused, G8 no
+common propagation on pop, G9 no request when deepening local tips, G10 depth without a shallow
+store, G11 one non-fast-forward aborting all, G12 refspec without destination ignored, G13
+`unborn` not asked.
 
 ## Promotion grades
 

@@ -610,6 +610,33 @@ describe("review cases (#81)", () => {
     expect(rev(d, "refs/tags/outer")).toBe(rev(src, "refs/tags/outer"));
     git(d, ["fsck", "--strict"]);
   }, 60_000);
+  it("auto-follow skips a tag whose chain is incomplete here", async () => {
+    const src = repoWithHistory(3);
+    git(src, ["tag", "-a", "inner", "-m", "inner"]);
+    git(src, ["tag", "-a", "outer", "-m", "outer", "inner"]);
+    git(src, ["tag", "-d", "inner"]);
+    const url = await serve(uploadPackHandler(await open(src)));
+    const d = emptyRepo();
+    const repo = await open(d);
+    await fetchFrom(url, repo, {
+      refspecs: ["+refs/heads/main:refs/heads/main"],
+      followTags: false,
+    });
+    // the outer tag object alone (its inner tag missing), then a fetch with nothing to download:
+    // only auto-follow decides
+    const outer = rev(src, "refs/tags/outer");
+    const body = git(src, ["cat-file", "tag", outer]);
+    const id = execFileSync("git", ["hash-object", "-t", "tag", "-w", "--literally", "--stdin"], {
+      cwd: d,
+      input: body,
+    })
+      .toString()
+      .trim();
+    expect(id).toBe(outer);
+    const r = await fetchFrom(url, repo, { refspecs: ["+refs/heads/main:refs/heads/main"] });
+    expect(r.updated).not.toContain("refs/tags/outer");
+    expect(() => rev(d, "refs/tags/outer")).toThrow();
+  }, 60_000);
   it("deepening a shallow clone: native --depth 5 and --unshallow, and our client's depth", async () => {
     const src = repoWithHistory(14);
     const url = await serve(uploadPackHandler(await open(src)));
