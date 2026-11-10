@@ -37,6 +37,7 @@ export default defineConfig({
             "@statewalker/webrun-files-browser",
             "@statewalker/webrun-files-sqlite",
             "@statewalker/webrun-storage",
+            "@statewalker/db-sqlite",
           ],
           // sqlite-wasm locates sqlite3.wasm next to its own module; pre-bundling would move it.
           exclude: ["@sqlite.org/sqlite-wasm"],
