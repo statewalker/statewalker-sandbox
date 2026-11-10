@@ -53,6 +53,16 @@ const TYPES = new Set<string>(["blob", "tree", "commit", "tag"]);
 const OID = /^[0-9a-f]{40}$/;
 const MAX_HEADER = 32; // "commit " + 16 digits + NUL fits; git's limit is similar (MAX_HEADER_LEN)
 const enc = new TextEncoder();
+/**
+ * Input bytes fed to the inflater per push. zlib expands at most ~1032:1, so one push yields at
+ * most ~1 MiB, whatever block size the store returns (SqliteFilesApi reads 1 MiB blocks).
+ */
+const INFLATE_SLICE = 1024;
+
+function checkId(id: string): void {
+  if (typeof id !== "string" || !OID.test(id))
+    throw new InvalidObjectIdError(`not an object id: ${String(id)}`);
+}
 
 /** Parses `"<type> <size>"` (without the NUL) as git does: known type, canonical decimal size. */
 function parseHeader(bytes: Uint8Array): { type: ObjectType; size: number } {
@@ -73,6 +83,8 @@ async function* checkedRaw(
   hasher: Hasher | undefined,
   onHeader?: (h: { type: ObjectType; size: number }) => void,
   Err: new (m: string) => Error = CorruptObjectError,
+  /** True when an empty input means "absent" rather than a missing header. */
+  emptyIsAbsent: () => boolean = () => false,
 ): AsyncGenerator<Uint8Array> {
   let header: { type: ObjectType; size: number } | undefined;
   let pending: Uint8Array | undefined; // header bytes seen so far
@@ -110,8 +122,8 @@ async function* checkedRaw(
     yield body;
   }
   if (!header) {
-    if (pending) throw new Err("object header has no NUL");
-    return;
+    if (!pending && emptyIsAbsent()) return;
+    throw new Err(pending ? "object header has no NUL" : "object has no header (empty)");
   }
   if (seen !== header.size)
     throw new Err(`object body is ${seen} bytes, header says ${header.size}`);
@@ -132,6 +144,7 @@ async function* deflate(src: AsyncIterable<Uint8Array>): AsyncGenerator<Uint8Arr
       await writer.abort(e).catch(() => {});
     }
   })();
+  let completed = false;
   try {
     for (;;) {
       const r = await reader.read().catch((e) => {
@@ -142,7 +155,14 @@ async function* deflate(src: AsyncIterable<Uint8Array>): AsyncGenerator<Uint8Arr
     }
     await pump;
     if (failure) throw failure;
+    completed = true;
   } finally {
+    if (!completed) {
+      // The consumer stopped early (or failed): cancel the stream so the pump's pending write
+      // rejects, its for-await exits and calls the source's return() — no open source, no zlib state.
+      await reader.cancel().catch(() => {});
+      await pump.catch(() => {});
+    }
     reader.releaseLock();
   }
 }
@@ -154,31 +174,34 @@ export function gitObjects(
   const pool = createInflaterPool();
 
   /** Inflates a stored object, failing on truncation and on bytes after the zlib stream. */
-  async function* inflate(id: string): AsyncGenerator<Uint8Array> {
+  async function* inflate(id: string, state: { absent: boolean }): AsyncGenerator<Uint8Array> {
     const inflater = pool.acquire();
     let done = false;
     let any = false;
     try {
       for await (const chunk of store.get(id)) {
-        if (chunk.length === 0) continue;
-        any = true;
-        if (done) throw new CorruptObjectError(`${id}: bytes after the end of the zlib stream`);
-        let r: ReturnType<typeof inflater.push>;
-        try {
-          r = inflater.push(chunk);
-        } catch (e) {
-          throw new CorruptObjectError(`${id}: ${(e as Error).message}`);
-        }
-        yield* r.out;
-        if (r.done) {
-          done = true;
-          if (r.consumed < chunk.length) {
-            throw new CorruptObjectError(`${id}: bytes after the end of the zlib stream`);
+        for (let off = 0; off < chunk.length; off += INFLATE_SLICE) {
+          const slice = chunk.subarray(off, off + INFLATE_SLICE);
+          any = true;
+          if (done) throw new CorruptObjectError(`${id}: bytes after the end of the zlib stream`);
+          let r: ReturnType<typeof inflater.push>;
+          try {
+            r = inflater.push(slice);
+          } catch (e) {
+            throw new CorruptObjectError(`${id}: ${(e as Error).message}`);
+          }
+          yield* r.out;
+          if (r.done) {
+            done = true;
+            if (r.consumed < slice.length) {
+              throw new CorruptObjectError(`${id}: bytes after the end of the zlib stream`);
+            }
           }
         }
       }
       if (!any) {
         if (await store.has(id)) throw new CorruptObjectError(`${id}: empty object file`);
+        state.absent = true;
         return;
       }
       if (!done) throw new CorruptObjectError(`${id}: truncated zlib stream`);
@@ -194,8 +217,16 @@ export function gitObjects(
   }
 
   async function* raw(id: string, verify: boolean): AsyncGenerator<Uint8Array> {
+    checkId(id);
     const hasher = verify ? newHasher() : undefined;
-    yield* checkedRaw(inflate(id), hasher);
+    const state = { absent: false };
+    yield* checkedRaw(
+      inflate(id, state),
+      hasher,
+      undefined,
+      CorruptObjectError,
+      () => state.absent,
+    );
     if (hasher) {
       const actual = toHex(hasher.digest());
       if (actual !== id) throw new ObjectIdMismatchError(`object ${id} hashes to ${actual}`);
@@ -218,7 +249,7 @@ export function gitObjects(
       return r.id;
     },
     async putRaw(id, rawBytes) {
-      if (!OID.test(id)) throw new ObjectIdMismatchError(`not an object id: ${id}`);
+      checkId(id);
       const hasher = newHasher();
       await store.putStaged(deflate(checkedRaw(rawBytes, hasher)), () => {
         const actual = toHex(hasher.digest());
@@ -231,19 +262,28 @@ export function gitObjects(
       return raw(id, false);
     },
     async get(id, opts) {
+      checkId(id);
       const it = raw(id, opts?.verify === true);
       const first = await it.next(); // the header chunk, or end if absent
       if (first.done) return undefined;
       const { type, size } = parseHeader(first.value.subarray(0, first.value.length - 1));
+      let used = false;
       return {
         type,
         size,
+        // Single-use, like the stream it wraps: consume it or call return() to release the read
+        // and the pooled inflater. A second iteration throws instead of silently yielding nothing.
         content: {
-          [Symbol.asyncIterator]: () => it,
+          [Symbol.asyncIterator]: () => {
+            if (used) throw new Error(`content of ${id} was already iterated`);
+            used = true;
+            return it;
+          },
         },
       };
     },
-    has(id) {
+    async has(id) {
+      checkId(id);
       return store.has(id);
     },
     async *list() {

@@ -10,14 +10,14 @@ import { runObjectContract } from "./object-contract.js";
 import { filesStagingStore } from "./staging.js";
 
 export class ObjectsDo {
+  private tables = 0; // fresh table prefix per contract case, also across requests
   constructor(private ctx: { storage: Parameters<typeof newDoSqliteDb>[0] }) {}
   async fetch(req: Request): Promise<Response> {
     if (new URL(req.url).pathname !== "/contract")
       return new Response("not found", { status: 404 });
     const db = newDoSqliteDb(this.ctx.storage);
-    let n = 0;
     const r = await runObjectContract(async () => {
-      const fs = new SqliteFilesApi(db, { tablePrefix: `t${n++}_`, compression: null });
+      const fs = new SqliteFilesApi(db, { tablePrefix: `t${this.tables++}_`, compression: null });
       await fs.init();
       return filesStagingStore(fs, "/objects");
     }, decodeCorpus(json));

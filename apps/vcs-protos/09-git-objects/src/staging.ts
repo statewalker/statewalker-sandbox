@@ -13,7 +13,9 @@ export interface StagingBlobStore extends BlobStore {
   /**
    * Store `bytes` under the id that `idOf()` returns once the stream has ended. If the stream or
    * `idOf` throws, nothing is stored. If the id already exists, the existing blob is kept
-   * (content addressing: same id, same bytes). Resolves with the id and whether this call stored it.
+   * (content addressing: same id, same content). Resolves with the id and whether this call
+   * stored it. `stored` is advisory under concurrency: FilesApi.move overwrites, so two writers
+   * racing on a new id may both report `true` (the last rename wins, with identical content).
    */
   putStaged(
     bytes: ByteStream,
@@ -51,16 +53,32 @@ export function filesStagingStore(files: FilesApi, root: string): StagingBlobSto
         throw e;
       }
       const target = pathFor(id);
-      // Like git, an existing object wins: identical id means identical bytes.
+      // An existing object wins, as in git — except against a concurrent writer of the same new id:
+      // FilesApi.move overwrites (git uses link() + EEXIST), so the last rename wins. Both files
+      // hold the same content, and each rename is atomic on Node and SqliteFilesApi.
       if (await files.exists(target)) {
         await files.remove(tmp);
         return { id, stored: false };
       }
       if (await files.move(tmp, target)) return { id, stored: true };
-      // A concurrent writer may have placed it between the check and the move.
+      // The move failed (e.g. the target directory vanished): keep whatever is there, drop ours.
       await files.remove(tmp).catch(() => false);
       if (await files.exists(target)) return { id, stored: false };
       throw new Error(`could not move ${tmp} to ${target}`);
+    },
+    async sweepStaged(olderThanMs) {
+      // git prune removes tmp_* files older than its expiry, at the top level and in fan-out
+      // directories; this does the same for stores git never touches (OPFS, SQLite, DO).
+      const cutoff = Date.now() - olderThanMs;
+      const stale: string[] = [];
+      for await (const info of files.list(base || "/", { recursive: true })) {
+        const name = info.path.slice(info.path.lastIndexOf("/") + 1);
+        if (info.kind === "file" && name.startsWith("tmp_obj_") && info.lastModified < cutoff) {
+          stale.push(info.path);
+        }
+      }
+      for (const p of stale) await files.remove(p);
+      return stale.length;
     },
   };
 }
@@ -68,6 +86,8 @@ export function filesStagingStore(files: FilesApi, root: string): StagingBlobSto
 /**
  * Any BlobStore, without a rename primitive: the stream goes to a temporary id and is copied to
  * the final id. One pass over the source, two over storage — the fallback, not the target.
+ * Safe only where `put` is all-or-nothing (memBlobStore buffers, then sets): on a store whose put
+ * streams, a crash during the copy leaves a partial blob at the final id that `has` then accepts.
  */
 export function withStaging(store: BlobStore): StagingBlobStore {
   return {
@@ -92,7 +112,7 @@ export function withStaging(store: BlobStore): StagingBlobStore {
         await store.put(id, store.get(tmp));
         return { id, stored: true };
       } finally {
-        await store.remove(tmp);
+        await store.remove(tmp).catch(() => false); // never mask the copy's own error
       }
     },
   };
