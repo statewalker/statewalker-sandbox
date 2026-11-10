@@ -1,6 +1,6 @@
 // The Wasmer engine: runs WASIX packages (bash, coreutils, ripgrep, …) in Wasmer sandboxes whose
 // /workspace is the agent's capability. One engine per Agent kernel; one sandbox per run.
-//   Node (cellb):  a child process (src/wasmer/hosts.ts). Control messages over IPC; the
+//   Node (cellb):  a child process (src/wasmer/kernel.ts, nodeHost). Control messages over IPC; the
 //                  sandbox's file operations over two pipes (fd 4: requests, fd 5: replies),
 //                  answered by the Agent cell through the capability.
 //   Browser:       a module Worker started by the cells worker. File operations are the SDK's
@@ -8,13 +8,19 @@
 //                  memory), so the page must be cross-origin isolated.
 //
 // Messages (Agent → engine):
-//   {type:"init", sdk?}                                   sdk: the SDK's module URL (browser)
+//   {type:"init", packages, sdk?, cache?}                 packages: the allowlist, loaded here once;
+//                                                         sdk: the SDK's module URL (browser)
 //   {type:"open", run, packages, env?}                    → {type:"opened", run} | {type:"error", run, error}
 //   {type:"exec", run, req, script, cwd?, env?, timeoutMs?, outputBytes?}
 //                                                         → {type:"result", run, req, exitCode, reason, stdout, stderr, truncated}
 //   {type:"close", run}
 // Engine → Agent: {type:"ready"} | {type:"failed", error}; browser only: the SDK's
 // {type:"wasmer-filesystem-rpc", mount, method, args, response, binary} requests.
+//
+// Network: sandboxes have none, but the guest's built-in `wasmer` command resolves registry
+// packages with the host's fetch, in the SDK's worker threads. So the allowed packages are loaded
+// once at init, and from then on fetch refuses everything: in the SDK's workers from their start
+// (node-preload.mjs; in browsers a wrapper module, below), in this thread once the packages are in.
 //
 // The SDK's `storageHost(mount)` (an embedder filesystem as /workspace) is experimental and not
 // in its public options: each sandbox is built through the core builder, with the run id as
@@ -32,6 +38,33 @@ let core;
 let wasmer;
 let nextMount = 0;
 const sandboxes = new Map();
+/** Registry name → Package, loaded at init. */
+const packages = new Map();
+/** Runs closed before their open finished: the sandbox is closed when it is built. */
+const closedEarly = new Set();
+/** One sandbox built at a time: the build binds itself to `nextMount`. */
+let opening = Promise.resolve();
+
+const noNetwork = () =>
+  Promise.reject(new TypeError("fetch: the Wasmer engine has no network after start"));
+const BROWSER_WORKER = /\/browser-worker\.js(\?|$)/;
+/** Browser: what an SDK worker runs instead of browser-worker.js (the same, without fetch). */
+const sealedWorker = (url) =>
+  URL.createObjectURL(
+    new Blob(
+      [
+        `import ${JSON.stringify(url)};
+const refuse = () => Promise.reject(new TypeError("fetch: the Wasmer engine has no network"));
+globalThis.fetch = refuse;
+const W = globalThis.Worker;
+if (W) globalThis.Worker = class extends W {
+  constructor(u, o) { super(${BROWSER_WORKER}.test(String(u)) ? import.meta.url : u, o); }
+};
+`,
+      ],
+      { type: "text/javascript" },
+    ),
+  );
 
 async function init(m) {
   if (IN_NODE) {
@@ -70,9 +103,13 @@ async function init(m) {
     bridge.installHostFileSystemWorkerBridge();
     // Calls from the SDK's workers arrive here as messages: forward them to the Agent cell.
     const NativeWorker = self.Worker;
+    let sealed;
     self.Worker = class extends NativeWorker {
-      constructor(...a) {
-        super(...a);
+      constructor(url, opts) {
+        // SDK workers run without fetch (see above).
+        if (BROWSER_WORKER.test(String(url)) && opts?.type === "module")
+          url = sealed ??= sealedWorker(String(url));
+        super(url, opts);
         this.addEventListener("message", (e) => {
           if (bridge.isHostFileSystemRequest(e.data)) {
             e.stopImmediatePropagation();
@@ -90,18 +127,34 @@ async function init(m) {
     return start.call(this);
   };
   await wasmer.ready();
+  const names = [...new Set(m.packages ?? [])];
+  const loaded = await wasmer.packages.loadMany(names);
+  names.forEach((name, i) => packages.set(name, loaded[i]));
+  globalThis.fetch = noNetwork;
 }
 
-async function open(m) {
-  nextMount = m.run;
-  const shell = m.packages.includes("wasmer/bash") ? "bash" : undefined;
-  const sandbox = await wasmer.sandboxes.create({
-    packages: m.packages,
-    shell,
-    env: m.env ?? {},
-    network: { mode: "disabled" },
+function open(m) {
+  const build = opening.then(async () => {
+    const pkgs = m.packages.map((name) => {
+      const p = packages.get(name);
+      if (!p) throw Object.assign(new Error(`package not loaded: ${name}`), { code: "EPERM" });
+      return p;
+    });
+    nextMount = m.run;
+    const sandbox = await wasmer.sandboxes.create({
+      packages: pkgs,
+      shell: m.packages.includes("wasmer/bash") ? "bash" : undefined,
+      env: m.env ?? {},
+      network: { mode: "disabled" },
+    });
+    if (closedEarly.delete(m.run)) {
+      await sandbox.close();
+      throw Object.assign(new Error("closed before it opened"), { code: "ECANCELED" });
+    }
+    sandboxes.set(m.run, sandbox);
   });
-  sandboxes.set(m.run, sandbox);
+  opening = build.catch(() => {});
+  return build;
 }
 
 async function exec(m) {
@@ -131,6 +184,7 @@ async function handle(m) {
       send({ type: "result", run: m.run, req: m.req, ...(await exec(m)) });
     } else if (m.type === "close") {
       const s = sandboxes.get(m.run);
+      if (!s) closedEarly.add(m.run);
       sandboxes.delete(m.run);
       await s?.close();
     }

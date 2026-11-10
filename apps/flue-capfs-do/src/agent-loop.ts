@@ -223,18 +223,24 @@ export async function runAgentLoop(
   const cwd = req.cwd ?? "/";
   if (req.sandbox !== undefined && req.sandbox !== "just-bash" && req.sandbox !== "wasmer")
     throw new Error("EINVAL: agent: sandbox is just-bash or wasmer");
-  let wasmerSession: WasmerSession | undefined;
-  if (req.sandbox === "wasmer") {
-    if (!opts.wasmer) throw new Error("ENOSYS: agent: no wasmer here");
-    wasmerSession = await opts.wasmer(cap);
-  }
-  try {
-    return await loop(wasmerSession);
-  } finally {
-    await wasmerSession?.close();
-  }
+  const openWasmer = opts.wasmer;
+  if (req.sandbox === "wasmer" && !openWasmer) throw new Error("ENOSYS: agent: no wasmer here");
 
-  async function loop(session: WasmerSession | undefined) {
+  const sessionKey = req.session ? `agent-session:${scope}:${String(req.session)}` : undefined;
+  // Whatever fails below, its message carries no credential.
+  return withSessionLock(sessionKey && `${sandboxId}\n${sessionKey}`, async (hold) => {
+    // Opened once the run holds its session: a waiting run holds no sandbox.
+    const session = req.sandbox === "wasmer" ? await openWasmer?.(cap) : undefined;
+    try {
+      return await loop(session, hold);
+    } finally {
+      await session?.close();
+    }
+  }).catch((e: unknown) => {
+    throw new Error(redact(String((e as Error)?.message ?? e)));
+  });
+
+  async function loop(session: WasmerSession | undefined, hold: (p: Promise<unknown>) => void) {
     const sandbox = session
       ? flueSandboxOnWasmer(session, cap)
       : await flueBash(
@@ -250,9 +256,7 @@ export async function runAgentLoop(
       createBashTool,
     ].map((make) => make(sandbox));
 
-    const sessionKey = req.session ? `agent-session:${scope}:${String(req.session)}` : undefined;
-    // Whatever fails below, its message carries no credential.
-    return withSessionLock(sessionKey && `${sandboxId}\n${sessionKey}`, async (hold) => {
+    {
       const model = modelOf(config, credentials.headers);
       // What is sent back each turn stays within the context, leaving room for the reply.
       const contextBytes = Math.max(
@@ -449,8 +453,6 @@ export async function runAgentLoop(
         budget: metered ? budgetLeft : undefined,
         session: req.session ? { name: String(req.session), messages: kept } : undefined,
       };
-    }).catch((e: unknown) => {
-      throw new Error(redact(String((e as Error)?.message ?? e)));
-    });
+    }
   }
 }

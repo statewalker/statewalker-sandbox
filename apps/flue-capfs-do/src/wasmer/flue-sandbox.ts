@@ -8,16 +8,37 @@ import type { WasmerSession } from "./kernel.ts";
 
 export const WORKSPACE = "/workspace";
 
+/** An absolute guest path, with "." and ".." resolved (relative paths are under /workspace). */
+export function resolveGuestPath(p: string): string {
+  const out: string[] = [];
+  for (const s of (p.startsWith("/") ? p : `${WORKSPACE}/${p}`).split("/")) {
+    if (!s || s === ".") continue;
+    if (s === "..") out.pop();
+    else out.push(s);
+  }
+  return `/${out.join("/")}`;
+}
+
 export function flueSandboxOnWasmer(session: WasmerSession, cap: Cap) {
   const capPath = (p: string) => {
-    const abs = p.startsWith("/") ? p : `${WORKSPACE}/${p}`;
+    const abs = resolveGuestPath(p);
     if (abs !== WORKSPACE && !abs.startsWith(`${WORKSPACE}/`))
       throw Object.assign(new Error(`ENOENT: '${p}' is outside ${WORKSPACE}`), { code: "ENOENT" });
     return abs.slice(WORKSPACE.length) || "/";
   };
+  const text = (c: string | Uint8Array) => {
+    if (typeof c === "string") return c;
+    try {
+      return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(c);
+    } catch {
+      throw Object.assign(new Error("ENOTSUP: the store keeps UTF-8 text, not binary content"), {
+        code: "ENOTSUP",
+      });
+    }
+  };
   return {
     cwd: WORKSPACE,
-    resolvePath: (p: string) => (p.startsWith("/") ? p : `${WORKSPACE}/${p}`),
+    resolvePath: resolveGuestPath,
     async exec(
       command: string,
       options: { cwd?: string; env?: Record<string, string>; timeoutMs?: number } = {},
@@ -33,11 +54,7 @@ export function flueSandboxOnWasmer(session: WasmerSession, cap: Cap) {
     readFileBuffer: async (p: string) =>
       new TextEncoder().encode((await cap.call("readFile", capPath(p))) as string),
     writeFile: async (p: string, c: string | Uint8Array) => {
-      await cap.call(
-        "writeFile",
-        capPath(p),
-        typeof c === "string" ? c : new TextDecoder().decode(c),
-      );
+      await cap.call("writeFile", capPath(p), text(c));
     },
     stat: async (p: string) => {
       const s = (await cap.call("stat", capPath(p))) as {

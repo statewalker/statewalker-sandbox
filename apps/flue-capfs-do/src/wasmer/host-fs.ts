@@ -18,22 +18,52 @@ interface PlainStat {
   mtime: string;
 }
 
-interface Handle {
+/** A file some handle has open: one buffer per path, shared by its handles. */
+interface OpenFile {
   path: string;
-  append: boolean;
+  /** Capacity grows by doubling; `size` is the file's length. */
   bytes: Uint8Array | undefined;
+  size: number;
+  loading?: Promise<void>;
   dirty: boolean;
+  refs: number;
+  /** Whether the capability lets this file be written, asked at the first write. */
+  writable?: Promise<void>;
+}
+
+interface Handle {
+  file: OpenFile;
+  append: boolean;
 }
 
 /** The store keeps UTF-8 text, so a file's bytes must decode. */
-const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
 const encoder = new TextEncoder();
+const strict = () => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 /** At most this many open files per sandbox; at most this many bytes per file in memory. */
 const MAX_HANDLES = 256;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
 const err = (code: string, message: string) => Object.assign(new Error(message), { code });
 const nanos = (iso: string) => String(BigInt(Date.parse(iso) || 0) * 1_000_000n);
+const isContinuation = (b: number | undefined) => b !== undefined && (b & 0xc0) === 0x80;
+
+/**
+ * Refuses a write that makes the file something other than UTF-8 text, at the write itself
+ * (WASIX drops the result of close, so a refusal at close would be silent). Only the bytes
+ * around the written range are decoded; a character still incomplete at its end is allowed
+ * (the next write may finish it) and is caught by the full check when the file is saved.
+ */
+function checkText(b: Uint8Array, from: number, to: number, path: string) {
+  let start = from;
+  for (let i = 0; i < 3 && isContinuation(b[start]); i++) start--;
+  let end = to;
+  for (let i = 0; i < 3 && isContinuation(b[end]); i++) end++;
+  try {
+    strict().decode(b.subarray(Math.max(0, start), end), { stream: true });
+  } catch {
+    throw err("ENOTSUP", `${path}: the store keeps UTF-8 text, not binary content`);
+  }
+}
 
 /** A protocol handler for one sandbox, over `cap`. */
 export function capHostFs(cap: Cap) {
@@ -45,6 +75,7 @@ export function capHostFs(cap: Cap) {
     return `/${p.join("/")}`;
   };
   const handles = new Map<number, Handle>();
+  const files = new Map<string, OpenFile>();
   let next = 1;
 
   const stat = async (path: string) => {
@@ -63,29 +94,66 @@ export function capHostFs(cap: Cap) {
     if (!h) throw err("EBADF", `no open file ${String(id)}`);
     return h;
   };
-  const load = async (h: Handle) => {
-    if (!h.bytes)
-      h.bytes = (await cap.call("exists", h.path))
-        ? encoder.encode((await cap.call("readFile", h.path)) as string)
-        : new Uint8Array();
-    return h.bytes;
+  /** The file's bytes, read once per open file (concurrent callers share the read). */
+  const load = async (f: OpenFile) => {
+    if (!f.bytes)
+      await (f.loading ??= (async () => {
+        const bytes = (await cap.call("exists", f.path))
+          ? encoder.encode((await cap.call("readFile", f.path)) as string)
+          : new Uint8Array();
+        if (bytes.length > MAX_FILE_BYTES)
+          throw err("EFBIG", `${f.path}: files are at most ${MAX_FILE_BYTES} bytes here`);
+        if (!f.bytes) {
+          f.bytes = bytes;
+          f.size = bytes.length;
+        }
+      })().finally(() => {
+        f.loading = undefined;
+      }));
+    return f.bytes as Uint8Array;
   };
-  const save = async (h: Handle) => {
-    if (!h.dirty || !h.bytes) return;
+  const save = async (f: OpenFile) => {
+    if (!f.dirty || !f.bytes) return;
     let text: string;
     try {
-      text = decoder.decode(h.bytes);
+      text = strict().decode(f.bytes.subarray(0, f.size));
     } catch {
-      throw err("ENOTSUP", `${h.path}: the store keeps UTF-8 text, not binary content`);
+      throw err("ENOTSUP", `${f.path}: the store keeps UTF-8 text, not binary content`);
     }
-    await cap.call("writeFile", h.path, text);
-    h.dirty = false;
+    f.dirty = false;
+    try {
+      await cap.call("writeFile", f.path, text);
+    } catch (e) {
+      f.dirty = true;
+      throw e;
+    }
   };
-  const resize = (b: Uint8Array, length: number) => {
-    if (length > MAX_FILE_BYTES) throw err("EFBIG", `files are at most ${MAX_FILE_BYTES} bytes`);
-    const out = new Uint8Array(length);
-    out.set(b.subarray(0, Math.min(b.length, length)));
+  /**
+   * Writes are saved at flush or close, whose errors WASIX drops: a write the capability refuses
+   * fails at the first write instead (an empty append asks for the right without changing text).
+   */
+  const mayWrite = (f: OpenFile) => {
+    f.writable ??= cap.call("appendFile", f.path, "").then(() => {});
+    f.writable.catch(() => (f.writable = undefined));
+    return f.writable;
+  };
+  /** Room for `length` bytes, growing the capacity by doubling. */
+  const reserve = (f: OpenFile, length: number) => {
+    if (length > MAX_FILE_BYTES)
+      throw err("EFBIG", `${f.path}: files are at most ${MAX_FILE_BYTES} bytes here`);
+    const b = f.bytes as Uint8Array;
+    if (length <= b.length) return b;
+    const out = new Uint8Array(Math.min(MAX_FILE_BYTES, Math.max(length, b.length * 2, 4096)));
+    out.set(b.subarray(0, f.size));
+    f.bytes = out;
     return out;
+  };
+  const release = async (id: number) => {
+    const h = handles.get(id);
+    if (!h) return;
+    handles.delete(id);
+    if (--h.file.refs === 0) files.delete(h.file.path);
+    await save(h.file);
   };
 
   const ops: Record<string, (...args: unknown[]) => Promise<unknown>> = {
@@ -108,54 +176,79 @@ export function capHostFs(cap: Cap) {
       if (!exists && !create) throw err("ENOENT", `${path}: no such file`);
       if (exists && ((await cap.call("stat", path)) as PlainStat).isDirectory)
         throw err("EISDIR", `${path} is a directory`);
-      const h: Handle = { path, append: !!append, bytes: undefined, dirty: false };
-      if (write && (!exists || truncate)) {
-        // Written through at once: a refused write fails at open, as on a real file system.
-        h.bytes = new Uint8Array();
-        h.dirty = true;
-        await save(h);
+      // A refused create or truncate fails here. WASIX opens files for writing even to read
+      // them, so writing an existing file is checked at the first write instead.
+      if (write && (!exists || truncate)) await cap.call("writeFile", path, "");
+      let f = files.get(path);
+      if (!f) {
+        f = { path, bytes: undefined, size: 0, dirty: false, refs: 0 };
+        files.set(path, f);
       }
+      if (write && (!exists || truncate)) {
+        f.bytes = new Uint8Array();
+        f.size = 0;
+        f.dirty = false;
+        f.writable = Promise.resolve();
+      }
+      f.refs++;
       const id = next++;
-      handles.set(id, h);
+      handles.set(id, { file: f, append: !!append });
       return id;
     },
     async read(id, offset, length) {
-      const b = await load(handle(id));
-      const at = Number(offset);
-      return b.subarray(at, at + Number(length));
+      const f = handle(id).file;
+      const b = await load(f);
+      const at = Math.min(Number(offset), f.size);
+      return b.slice(at, Math.min(f.size, at + Number(length)));
     },
     async write(id, offset, bytes) {
       const h = handle(id);
+      const f = h.file;
       const data = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes as number[]);
-      const b = await load(h);
-      const at = h.append ? b.length : Number(offset);
-      const out = resize(b, Math.max(b.length, at + data.length));
-      out.set(data, at);
-      h.bytes = out;
-      h.dirty = true;
+      await mayWrite(f);
+      await load(f);
+      const at = h.append ? f.size : Number(offset);
+      const end = at + data.length;
+      const b = reserve(f, Math.max(f.size, end));
+      const before = b.slice(at, end);
+      const size = f.size;
+      if (at > f.size) b.fill(0, f.size, at);
+      b.set(data, at);
+      f.size = Math.max(f.size, end);
+      try {
+        checkText(b, at, end, f.path);
+      } catch (e) {
+        b.set(before, at);
+        f.size = size;
+        throw e;
+      }
+      f.dirty = true;
       return data.length;
     },
     async setLen(id, length) {
-      const h = handle(id);
-      h.bytes = resize(await load(h), Number(length));
-      h.dirty = true;
+      const f = handle(id).file;
+      await mayWrite(f);
+      await load(f);
+      const n = Number(length);
+      const b = reserve(f, n);
+      if (n > f.size) b.fill(0, f.size, n);
+      f.size = n;
+      f.dirty = true;
       return null;
     },
     async fileStat(id) {
-      const h = handle(id);
-      const s = (await cap.call("exists", h.path))
-        ? await stat(h.path)
+      const f = handle(id).file;
+      const s = (await cap.call("exists", f.path))
+        ? await stat(f.path)
         : { kind: "file", size: 0, modified: "0", accessed: "0", created: "0" };
-      return { ...s, size: h.bytes ? h.bytes.length : s.size };
+      return { ...s, size: f.bytes ? f.size : s.size };
     },
     async flush(id) {
-      await save(handle(id));
+      await save(handle(id).file);
       return null;
     },
     async close(id) {
-      const h = handles.get(Number(id));
-      handles.delete(Number(id));
-      if (h) await save(h);
+      await release(Number(id));
       return null;
     },
     async mkdir(p) {
@@ -163,11 +256,29 @@ export function capHostFs(cap: Cap) {
       return null;
     },
     async remove(p) {
-      await cap.call("rm", abs(p));
+      const path = abs(p);
+      // The store removes a directory only recursively: an empty one is removed that way.
+      const s = (await cap.call("stat", path)) as PlainStat;
+      if (s.isDirectory) {
+        if ((await cap.readdir(path)).length) throw err("ENOTEMPTY", `${path} is not empty`);
+        await cap.call("rm", path, { recursive: true });
+      } else await cap.call("rm", path);
+      const f = files.get(path);
+      if (f) f.dirty = false;
       return null;
     },
     async rename(from, to) {
-      await cap.move("mv", abs(from), abs(to));
+      const src = abs(from);
+      const dst = abs(to);
+      const f = files.get(src);
+      if (f) await save(f);
+      await cap.move("mv", src, dst);
+      if (f) {
+        files.delete(src);
+        f.path = dst;
+        f.writable = undefined;
+        files.set(dst, f);
+      }
       return null;
     },
     // Times are the store's own (it records the write time); symlinks do not exist.
@@ -191,6 +302,7 @@ export function capHostFs(cap: Cap) {
     /** Open files of a sandbox that ends are dropped: what was not flushed is not written. */
     close() {
       handles.clear();
+      files.clear();
     },
   };
 }

@@ -53,6 +53,10 @@ export const DEFAULT_PACKAGES = [
 ];
 const OUTPUT_BYTES = 1024 * 1024;
 const OPEN_TIMEOUT_MS = 120_000;
+/** A file operation the capability has not answered by then fails (the guest is blocked on it). */
+const FS_DEADLINE_MS = 20_000;
+/** The engine stops when no sandbox has been open for this long. */
+const IDLE_STOP_MS = 5 * 60_000;
 
 type Engine = { post(m: unknown): void; kill(): void };
 type EngineMessage =
@@ -103,14 +107,19 @@ export class WasmerKernel {
   #waiting = new Map<string, { resolve: (m: EngineMessage) => void; reject: (e: Error) => void }>();
   #next = 0;
   #opening: Promise<unknown> = Promise.resolve();
+  /** Bumped when the engine stops: sessions of an earlier engine fail at once. */
+  #generation = 0;
+  #open = 0;
+  #idle?: ReturnType<typeof setTimeout>;
 
   constructor(host: EngineHost, allowed: string[]) {
     this.#host = host;
-    this.#allowed = allowed;
+    this.#allowed = [...new Set(["wasmer/bash", ...allowed])];
   }
 
   #start(): Promise<Engine> {
-    this.#engine ??= (async () => {
+    if (this.#engine) return this.#engine;
+    const mine: Promise<Engine> = (async () => {
       let ready!: () => void;
       let failed!: (e: Error) => void;
       const started = new Promise<void>((ok, ko) => {
@@ -126,18 +135,28 @@ export class WasmerKernel {
         (line) => this.#onFsLine(line),
         (why) => {
           failed(new Error(`ENOSYS: wasmer engine exited: ${why}`));
-          this.#crash(why);
+          // Only the current engine's end matters (a stopped one exits later).
+          if (this.#engine === mine) this.#crash(why);
         },
       );
-      engine.post({ type: "init", ...this.#host.init });
-      await started;
+      engine.post({ type: "init", packages: this.#allowed, ...this.#host.init });
+      try {
+        await started;
+      } catch (e) {
+        engine.kill();
+        throw e;
+      }
       return engine;
     })();
-    this.#engine.catch(() => (this.#engine = undefined));
-    return this.#engine;
+    this.#engine = mine;
+    mine.catch(() => {
+      if (this.#engine === mine) this.#engine = undefined;
+    });
+    return mine;
   }
 
   #crash(why: string) {
+    this.#generation++;
     this.#engine = undefined;
     for (const w of this.#waiting.values())
       w.reject(new Error(`EIO: wasmer engine stopped: ${why}`));
@@ -179,7 +198,32 @@ export class WasmerKernel {
     const h = this.#mounts.get(mount);
     if (!h)
       return Promise.resolve({ error: { code: "EACCES", message: "EACCES: the run is over" } });
-    return h.handle(method, args);
+    // Node answers one request at a time for every sandbox: none may hold the others forever.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<HostFsReply>((resolve) => {
+      timer = setTimeout(
+        () =>
+          resolve({
+            error: { code: "ETIMEDOUT", message: `${method}: no answer in ${FS_DEADLINE_MS} ms` },
+          }),
+        FS_DEADLINE_MS,
+      );
+    });
+    return Promise.race([h.handle(method, args), late]).finally(() => clearTimeout(timer));
+  }
+
+  #busy() {
+    this.#open++;
+    clearTimeout(this.#idle);
+    this.#idle = undefined;
+  }
+  #free() {
+    if (--this.#open > 0) return;
+    clearTimeout(this.#idle);
+    this.#idle = setTimeout(() => {
+      if (this.#open === 0) this.stop();
+    }, IDLE_STOP_MS);
+    (this.#idle as { unref?: () => void }).unref?.();
   }
 
   #wait(key: string, timeoutMs: number): Promise<EngineMessage> {
@@ -201,30 +245,50 @@ export class WasmerKernel {
     const refused = wanted.filter((p) => !this.#allowed.includes(p));
     if (refused.length)
       throw new Error(`EPERM: wasmer: packages not allowed here: ${refused.join(", ")}`);
-    const engine = await this.#start();
+    this.#busy();
+    let engine: Engine;
+    let generation: number;
     const run = ++this.#next;
-    // One open at a time: the engine binds the next sandbox it builds to the mount it is given.
-    const opened = this.#opening.then(async () => {
-      this.#mounts.set(run, capHostFs(cap));
-      const answer = this.#wait(`open:${run}`, OPEN_TIMEOUT_MS);
-      engine.post({ type: "open", run, packages: wanted });
-      await answer;
-    });
-    this.#opening = opened.catch(() => {});
     try {
+      engine = await this.#start();
+      generation = this.#generation;
+      // One open at a time (the engine also builds one sandbox at a time, for its mount).
+      const opened = this.#opening.then(async () => {
+        this.#mounts.set(run, capHostFs(cap));
+        const answer = this.#wait(`open:${run}`, OPEN_TIMEOUT_MS);
+        engine.post({ type: "open", run, packages: wanted });
+        await answer;
+      });
+      this.#opening = opened.catch(() => {});
       await opened;
     } catch (e) {
       this.#mounts.delete(run);
+      // A late open is closed by the engine when it finishes.
+      this.#engine?.then(
+        (en) => en.post({ type: "close", run }),
+        () => {},
+      );
+      this.#free();
       throw e;
     }
     let req = 0;
+    let closed = false;
     return {
       exec: async (script, opts = {}) => {
         if (typeof script !== "string" || !script)
           throw new Error("EINVAL: wasmer: script is required");
+        if (closed) throw new Error("EBADF: wasmer: the session is closed");
+        if (generation !== this.#generation)
+          throw new Error("EIO: wasmer: the engine stopped; open a new session");
         const timeoutMs = Math.min(Math.max(Number(opts.timeoutMs) || 60_000, 1000), 300_000);
         const n = ++req;
-        const answer = this.#wait(`exec:${run}:${n}`, timeoutMs + 10_000);
+        const answer = this.#wait(`exec:${run}:${n}`, timeoutMs + 10_000).catch((e: Error) => {
+          // The engine did not stop the command in time: it is stuck, start over.
+          if (e.message.startsWith("ETIMEDOUT") && generation === this.#generation) {
+            this.stop();
+          }
+          throw e;
+        });
         engine.post({
           type: "exec",
           run,
@@ -246,9 +310,12 @@ export class WasmerKernel {
         return result as WasmerResult;
       },
       close: async () => {
+        if (closed) return;
+        closed = true;
         this.#mounts.get(run)?.close();
         this.#mounts.delete(run);
-        engine.post({ type: "close", run });
+        if (generation === this.#generation) engine.post({ type: "close", run });
+        this.#free();
       },
     };
   }
@@ -264,11 +331,15 @@ export class WasmerKernel {
   }
 
   stop() {
-    void this.#engine?.then(
+    clearTimeout(this.#idle);
+    this.#idle = undefined;
+    const engine = this.#engine;
+    if (!engine) return;
+    this.#crash("stopped");
+    void engine.then(
       (e) => e.kill(),
       () => {},
     );
-    this.#engine = undefined;
   }
 }
 
@@ -340,7 +411,18 @@ function nodeHost(enginePath: string, cache?: string): EngineHost {
       const preload = enginePath.replace(/engine\.mjs$/, "node-preload.mjs");
       const child = fork(enginePath, [], {
         execPath: proc?.execPath,
-        execArgv: ["--import", preload, "--max-old-space-size=2048", "--no-warnings"],
+        execArgv: [
+          // The engine reads its own files and the SDK's, writes only the package cache, and
+          // starts worker threads; it cannot start processes.
+          "--permission",
+          "--allow-fs-read=*",
+          ...(cache ? [`--allow-fs-write=${cache}`] : []),
+          "--allow-worker",
+          "--import",
+          preload,
+          "--max-old-space-size=2048",
+          "--no-warnings",
+        ],
         env: engineEnv(),
         // 0 1 2 3 = stdin, stdout, stderr, IPC; 4 = file requests (engine → here), 5 = replies.
         stdio: ["ignore", "ignore", "pipe", "ipc", "pipe", "pipe"],
@@ -353,11 +435,19 @@ function nodeHost(enginePath: string, cache?: string): EngineHost {
       const pipes = child.stdio as unknown as unknown[];
       const requests = pipes[4] as NodeJS.ReadableStream;
       const replies = pipes[5] as NodeJS.WritableStream;
+      // A broken pipe ends the engine (its file thread can no longer be answered).
+      const broken = (e: Error) => {
+        child.kill("SIGKILL");
+        onExit(`file channel: ${e.message}`);
+      };
+      (requests as unknown as { on(ev: "error", f: (e: Error) => void): void }).on("error", broken);
+      (replies as unknown as { on(ev: "error", f: (e: Error) => void): void }).on("error", broken);
+      requests.setEncoding("utf8");
       let buffered = "";
       // Requests come one at a time (the engine's file thread waits for each reply).
       let chain: Promise<unknown> = Promise.resolve();
-      requests.on("data", (d: Buffer) => {
-        buffered += d.toString("utf8");
+      requests.on("data", (d: string | Buffer) => {
+        buffered += d;
         let nl = buffered.indexOf("\n");
         while (nl >= 0) {
           const line = buffered.slice(0, nl);

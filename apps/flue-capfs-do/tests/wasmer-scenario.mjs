@@ -98,6 +98,27 @@ export function wasmerCases({ api, label = "", llm = false }) {
     assert.equal(r.code, "EPERM", r.error);
   });
 
+  add("the guest's own `wasmer` command cannot fetch packages", async () => {
+    const { ws, token } = await setup();
+    const r = await sh(ws, token, "wasmer run syrusakbary/cowsay moo 2>&1; echo rc=$?");
+    assert.doesNotMatch(r.stdout, /< moo >/);
+  });
+
+  add("a write the capability refuses fails at the write, not silently at close", async () => {
+    const { ws, token } = await setup();
+    const r = await sh(
+      ws,
+      token,
+      "echo more >> /workspace/proj/readme.md; echo rc=$?; printf '\\xff' > /workspace/proj/b.bin; echo rc=$?",
+      [{ readOnly: true }],
+    );
+    assert.match(r.stdout, /^rc=1\n/, r.stderr);
+    const w = await sh(ws, token, "printf '\\xff\\xfe' > /workspace/proj/b.bin; echo rc=$?");
+    assert.match(w.stdout, /rc=1/, "binary content is refused at the write");
+    const f = await files(ws);
+    assert.equal(f["/proj/readme.md"], SEED["/proj/readme.md"]);
+  });
+
   if (llm)
     add("the agent task runs Flue's tools on Wasmer (sandbox: wasmer)", async () => {
       const { ws, token } = await setup();

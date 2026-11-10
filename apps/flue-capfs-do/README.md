@@ -523,8 +523,11 @@ embedder filesystem as the sandbox's `/workspace`, called synchronously through 
 (protocol: wasmer-js `js/bindgen/src/host_filesystem.rs`). It is not in the SDK's public
 options, so the engine (`src/wasmer/engine.mjs`) builds each sandbox through the core builder
 with the run's id as the mount id; `src/wasmer/host-fs.ts` answers the protocol with the
-capability (open files are buffered and written back on flush or close; a write that is refused
-fails at open).
+capability. Open files are buffered (one buffer per path, shared by its handles) and saved on
+flush or close. WASIX drops what close returns, so nothing may fail there silently: creating or
+truncating a file is written through at open, the write right on an existing file is asked at the
+first write (WASIX opens files read-write even to read them), and content that is not UTF-8 is
+refused at the write that makes it so.
 
 | Runtime | Engine | How file operations reach the Agent cell |
 |---|---|---|
@@ -534,16 +537,30 @@ fails at open).
 
 - **Packages** come from the Wasmer registry, limited to `WASMER_PACKAGES` (JSON array or comma
   list; default `wasmer/bash`, `wasmer/coreutils`, `wasmer/grep`, `wasmer/ripgrep`,
-  `wasmer/findutils`); a run asking for another is refused (`EPERM`). On Node they are cached in
-  `WASMER_CACHE` (`serve-cellb` uses `.wasmer-cache/`); a browser caches them per origin. The
-  Node engine inherits only the proxy settings (`HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, …).
+  `wasmer/findutils`; bash is always included); a run asking for another is refused (`EPERM`).
+  The engine loads them once when it starts, and from then on has **no `fetch`**: the sandbox
+  ships a built-in `wasmer` command that would otherwise resolve any registry package with the
+  host's fetch (in the SDK's worker threads, which never have one: `node-preload.mjs` on Node, a
+  wrapper module around the SDK's worker in browsers). On Node they are cached in `WASMER_CACHE`
+  (`serve-cellb` uses `.wasmer-cache/`); a browser caches them per origin. The Node engine
+  inherits only the proxy settings (`HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, …) and runs under
+  Node's permission model: it may read files, write only the cache, start worker threads, and
+  not start processes.
 - **Isolation:** each run is a sandbox of its own (nothing outside `/workspace` survives it), with
   no network. A guest reaches only its mounts: unlike tool isolates on cellb's Node host, a WASI
   guest cannot reach the host's files. When a run ends its mount is dropped and late calls are
   refused.
+- **Engine life:** one engine per Agent cell, started at the first run and stopped after 5
+  minutes without an open sandbox. A file operation the capability has not answered in 20 s
+  fails (on Node one request is served at a time for every sandbox, so none may hold the
+  others); a command the engine fails to stop in time restarts the engine; sessions of a
+  stopped engine fail at once. Sandboxes are built one at a time, each bound to its run's mount,
+  and a sandbox whose open timed out is closed when it is built.
 - **Limits:** 60 s per command by default (at most 300 s), 1 MB of output, 256 open files and
-  16 MB per open file per sandbox. The store keeps UTF-8 text, so binary writes are refused
-  (`ENOTSUP`); symlinks and recursive removal are not in the protocol.
+  16 MB per file read or written through an open file. The store keeps UTF-8 text, so binary
+  writes are refused (`ENOTSUP`); symlinks are not in the protocol. A directory listing makes one
+  `stat` per entry, and its reply must fit the SDK's 512 KiB bridge buffer (a few thousand
+  entries).
 - **Config:** `WASMER=off` disables it; `WASMER_ENGINE` is the engine's path (Node) or URL
   (browser, default `/wasmer/engine.mjs`); `WASMER_SDK` the SDK's URL in a browser (default
   `/wasmer/sdk/dist/index.js`). `/api/runtime` reports `wasmer`: `node`, `browser`, or why not.

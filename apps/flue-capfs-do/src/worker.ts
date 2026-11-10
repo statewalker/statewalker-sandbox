@@ -76,7 +76,8 @@ function fail(e: unknown): Response {
     { status: STATUS[err.code] ?? 500 },
   );
 }
-/** Which model the `agent` task uses (never the key). */
+
+/** Where the `wasmer` task runs here ("node", "browser"), or why it does not. */
 function wasmerSummary(env: Env): string {
   try {
     wasmerHost(env);
@@ -86,6 +87,7 @@ function wasmerSummary(env: Env): string {
   }
 }
 
+/** Which model the `agent` task uses (never the key). */
 function llmSummary(env: Env) {
   try {
     const c = llmConfig(env);
