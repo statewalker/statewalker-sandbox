@@ -282,7 +282,7 @@ export async function runRefContract(
   );
   await check("a detached HEAD updates alone and is refused in a multi-ref batch", async (db) => {
     await db.batch([{ name: "refs/heads/main", new: oid(1) }]);
-    const single = await db.batch([{ name: "HEAD", new: oid(5) }]); // detaches (or creates) HEAD
+    const single = await db.batch([{ name: "HEAD", new: oid(5), noDeref: true }]); // detaches HEAD
     const head = await db.read("HEAD");
     if (!single.ok || !head || !("oid" in head) || head.oid !== oid(5)) {
       return `single ${rejected(single)} ${JSON.stringify(head)}`;

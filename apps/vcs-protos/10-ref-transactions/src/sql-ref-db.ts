@@ -6,11 +6,30 @@
  */
 import type { Db } from "@statewalker/db-api";
 import { inTransaction } from "@statewalker/db-sqlite";
-import { checkBatch, checkNames, defaultIdent, isUpdatableName } from "./batch-rules.js";
-import type { BatchResult, RefCommand, RefDb, RefValue } from "./ref-db.js";
+import {
+  addHeadLogs,
+  checkAtomic,
+  checkBatch,
+  checkNames,
+  type Deref,
+  defaultIdent,
+  isUpdatableName,
+  normalizeMessage,
+} from "./batch-rules.js";
+import type { BatchResult, RefDb, RefValue } from "./ref-db.js";
 import { ZERO_OID } from "./ref-db.js";
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** Smallest string above every string starting with `p` (code-point order), for range scans. */
+function successor(p: string): string | undefined {
+  const cps = Array.from(p, (c) => c.codePointAt(0) as number);
+  while (cps.length) {
+    let last = (cps.pop() as number) + 1;
+    if (last === 0xd800) last = 0xe000;
+    if (last <= 0x10ffff) return String.fromCodePoint(...cps, last);
+  }
+  return undefined;
+}
 type Row = { oid: string | null; symref: string | null };
 
 export async function sqlRefDb(db: Db, prefix = "refdb_"): Promise<RefDb> {
@@ -52,35 +71,48 @@ export async function sqlRefDb(db: Db, prefix = "refdb_"): Promise<RefDb> {
       return v && "oid" in v ? v.oid : undefined;
     },
     async *list(p = "refs/") {
-      // BINARY collation = UTF-8 byte order = git's order.
+      // A primary-key range scan; BINARY collation = UTF-8 byte order = git's order. Only refs/.
+      const lo = p.startsWith("refs/") ? p : "refs/";
+      const hi = successor(lo) ?? "\u{10FFFF}";
       const rows = await db.query<{ name: string; oid: string }>(
-        `SELECT name, oid FROM ${refs} WHERE oid IS NOT NULL AND substr(name, 1, length(?1)) = ?1 ORDER BY name`,
-        [p],
+        `SELECT name, oid FROM ${refs} WHERE oid IS NOT NULL AND name >= ? AND name < ? ORDER BY name`,
+        [lo, hi],
       );
-      yield* rows;
+      for (const r of rows) if (r.name.startsWith(p)) yield r;
     },
     async batch(commands, o = {}) {
+      if (commands.length === 0) return { ok: true, rejected: [] };
       const bad = checkNames(commands);
       if (bad.length) return { ok: false, rejected: bad };
       const ident = o.ident ?? defaultIdent();
-      const message = (o.message ?? "").replace(/\n/g, " ");
+      const message = normalizeMessage(o.message);
       return inTransaction(db, async (tx): Promise<BatchResult> => {
-        const cmds: (RefCommand & { via: string[] })[] = [];
+        const cmds: Deref[] = [];
         for (const c of commands) {
-          const { target, via } = await derefWith(tx, c.name);
+          const { target, via } = c.noDeref
+            ? { target: c.name, via: [] }
+            : await derefWith(tx, c.name);
           if (!isUpdatableName(target))
             return { ok: false, rejected: [{ name: c.name, reason: "invalid-name" }] };
-          cmds.push({ ...c, name: target, via });
+          cmds.push({ ...c, orig: c.name, name: target, via });
         }
+        const notAtomic = checkAtomic(cmds);
+        if (notAtomic.length) return { ok: false, rejected: notAtomic };
+        const head = await readWith(tx, "HEAD");
+        addHeadLogs(
+          cmds,
+          head && "symref" in head ? (await derefWith(tx, "HEAD")).target : undefined,
+        );
         const conflicts = await checkBatch(
           cmds,
           async (n) => (await readWith(tx, n)) !== undefined,
           async (n) =>
+            // names below n/ lie in [n + "/", n + "0"): '0' follows '/' in byte order
             (
-              await tx.query(
-                `SELECT 1 FROM ${refs} WHERE substr(name, 1, length(?1) + 1) = ?1 || '/' LIMIT 1`,
-                [n],
-              )
+              await tx.query(`SELECT 1 FROM ${refs} WHERE name >= ? AND name < ? LIMIT 1`, [
+                `${n}/`,
+                `${n}0`,
+              ])
             ).length > 0,
         );
         if (conflicts.length) return { ok: false, rejected: conflicts };
@@ -110,6 +142,7 @@ export async function sqlRefDb(db: Db, prefix = "refdb_"): Promise<RefDb> {
                ON CONFLICT(name) DO UPDATE SET oid = excluded.oid, symref = NULL`,
             [c.name, c.new],
           );
+          if ((current.get(c.name) ?? ZERO_OID) === c.new) continue; // git logs no no-op updates
           for (const n of [c.name, ...c.via]) {
             await tx.query(
               `INSERT INTO ${logs} (name, old, new, ident, message) VALUES (?, ?, ?, ?, ?)`,

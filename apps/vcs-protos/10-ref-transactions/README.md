@@ -38,6 +38,7 @@ writes refs, packed-refs or reflogs that native git misreads.
 | R5 | Concurrency: 20 concurrent batches, each moving two refs from generation n to n+1 with expected old values and retrying on mismatch/locked, end with both refs at the same generation equal to the number of successful batches — on every backend. |
 | R6 | Git files interop (Node): native git (`for-each-ref`, `show-ref`, `rev-parse`, `reflog`) reads our loose refs, `packed-refs` (with existing peel lines kept) and logs; we read refs git wrote loose and packed (`pack-refs --all`, peeled tags). Our locks make `git update-ref` fail and git's locks make our batch report `locked`. |
 | R7 | Crash (files): a batch over several loose and packed refs, killed at every primitive call in turn, leaves either all old or all new values once stale locks are broken. |
+| R7c | Readers (files, added after review): `list()` paused before or after reading packed-refs while a batch commits returns all old or all new values. |
 | R8 | Runtimes: the R2–R5 contract passes in Chromium (files on OPFS, SQL on sqlite-wasm, KV in memory) and inside a Durable Object (SQL and KV over `sqlKvStore`). The KV snapshot size for 10 000 refs is recorded against the DO value limit. |
 
 ## Scope — what this prototype does NOT do
@@ -49,89 +50,118 @@ writes refs, packed-refs or reflogs that native git misreads.
 ## Answer
 
 **Yes.** One `RefDb` API — `batch(commands)` with per-ref expected old values, all-or-nothing,
-symbolic refs dereferenced, reflogs written — runs on git's files layout, on SQL and on a KvStore,
-and a 12-case contract passes on every backend in Node, Chromium and a workerd Durable Object.
+symbolic refs dereferenced (or not, with `noDeref`), reflogs as git writes them — runs on git's
+files layout, on SQL and on a KvStore. A 20-case contract passes on every backend in Node,
+Chromium and a workerd Durable Object.
 
 - **git files**: single-ref commands use X2's loose protocol (lock with the new value, compare,
   rename). Multi-ref batches use JGit's `PackedBatchRefUpdate` algorithm: lock every ref (sorted,
-  retried for 100 ms like `core.filesRefLockTimeout`), lock `packed-refs` (1000 ms like
-  `core.packedRefsTimeout`), compare, **pack the involved loose refs first** (their current
-  values into packed-refs, then remove the loose files — readers see the same values), re-take
-  the lock, and **commit the whole batch with one rename of `packed-refs.lock`**. Killed at every
-  primitive call in turn, the batch left all old or all new values every time. Native git reads
-  everything we write (`for-each-ref`, `rev-parse`, `symbolic-ref`, `reflog`, `fsck`), we read
-  what it writes (loose, `pack-refs --all`, peeled tags), and each side's locks block the other.
+  retried for 100 ms like `core.filesRefLockTimeout`; HEAD too when a command goes through it),
+  lock `packed-refs` (1000 ms like `core.packedRefsTimeout`), re-dereference and **re-check
+  directory/file conflicts under the locks** (other writers' lock files count as pending names),
+  compare, **pack the involved loose refs first** (commit packed-refs, *then* remove the loose
+  files), re-take the lock, and **commit the whole batch with one rename of `packed-refs.lock`**.
+  Killed at every primitive call — multi-ref batches over packed-only, loose-only and
+  loose-over-stale-packed refs, single-ref updates and deletes, `setSymref` — every outcome is
+  all old or all new. Readers: `list()` scans loose refs, reads packed-refs, re-scans and retries
+  if the loose set moved, so it never mixes states. Native git reads what we write and we read
+  what it writes; git run while our batch is paused in phase 2 is refused on both the ref lock
+  and `packed-refs.lock`.
 - **SQL**: a batch is one `inTransaction` from `@statewalker/db-sqlite` — BEGIN/COMMIT on
-  node:sqlite and sqlite-wasm, `storage.transaction` in a Durable Object — with reflog rows in the
-  same transaction.
+  node:sqlite and sqlite-wasm, `storage.transaction` in a Durable Object — with checks, writes and
+  reflog rows inside it (the callback is idempotent, as a DO may re-run it). Listing and conflict
+  checks are primary-key range scans.
 - **KV**: all refs in one root value; a batch is one root compare-and-set, re-read and re-checked
-  on a lost race. 10 000 refs take 762 KiB, so a Durable Object value (2 MB) holds ~25 000 refs.
+  after a lost race (with backoff). 10 000 refs (32-character names) take 762 KiB: under the
+  ~2 MB SQLite string/BLOB limit that applies through `sqlKvStore` in a Durable Object (~25 000
+  refs), but far above the 128 KiB value limit of the DO `storage.put` KV API.
 
 Findings:
 
-1. **Crash atomicity costs a packed-refs rewrite per batch.** JGit's two phases make a
-   multi-ref batch atomic for readers and across crashes, at the price of rewriting `packed-refs`
-   (linear in all refs) and moving the involved refs from loose to packed. Git's own files backend
-   commits a transaction by renaming each ref's lock in turn, so a crash between renames can leave
-   part of it applied (reftable is git's answer). The order inside phase 1 matters: removing the
-   loose files *before* the packed-refs commit exposes stale packed values (mutation M2, caught by
-   the crash test once a ref has a different loose and packed value, as after `git pack-refs` and
-   an update).
-2. **git's batch rules, measured on git 2.43, not assumed**: a create below an existing ref is
-   refused *even if the same batch deletes it* (`refs/x` → `refs/x/y`), a batch may not touch a ref
-   and its child, and duplicates are refused. All backends apply these through one shared
-   `checkBatch`.
-3. **packed-refs header**: we write `# pack-refs with: sorted` and keep the `^peeled` lines of
-   untouched refs; git peels the others on demand (`for-each-ref %(*objectname)` is right after our
-   rewrite). Claiming `fully-peeled` would make git treat new annotated-tag refs as unpeelable.
-4. **Reflogs follow git**: delete removes the log; an update through `HEAD` logs both `HEAD` and the
-   target. Files and KV append after the commit (a crash in between loses log lines, never ref
-   values); SQL writes them in the same transaction.
-5. **OPFS readers race with writers.** A handle can disappear (`NotFoundError`) or its file be
-   replaced (`NotReadableError`) between lookup and read when a lock is released, a loose ref is
-   packed, or packed-refs is committed through `createWritable`. The adapter maps these to POSIX
-   semantics — absent, or read again — which the 20-way concurrency case needs.
-6. **The KV root is the scaling limit**: every batch rewrites the whole snapshot, and its size
-   bounds the ref count per Durable Object value. A per-key layout with a journal would lift both;
-   SQL is the better DO backend for refs anyway (one transaction, indexed listing, atomic reflog).
+1. **Crash atomicity costs a packed-refs rewrite per batch.** JGit's two phases make a multi-ref
+   batch atomic across crashes, at the price of rewriting `packed-refs` (linear in all refs) and
+   moving the involved refs from loose to packed. Git's own files backend renames each ref's lock
+   in turn (`files_transaction_finish`), so a crash between renames leaves part of a transaction
+   applied. Phase 1 must commit packed-refs before removing loose files (M2).
+2. **A name outside `refs/` never goes into packed-refs.** The first version packed a detached
+   HEAD and deleted the `HEAD` file, after which git no longer recognised the repository (review
+   blocker). A detached HEAD now updates only alone; in a multi-ref batch it is refused as
+   `not-atomic` on every backend (JGit likewise refuses symrefs in atomic batches).
+3. **Reader atomicity needs git's read order and a re-scan.** Reading packed-refs before loose
+   refs can return a value that was never committed; reading loose first without re-scanning can
+   mix old and new refs. Loose → packed → loose-again with retry passes both paused-reader tests.
+   Single-ref reads treat a loose file that vanishes mid-read as absent and fall back to packed.
+4. **Directory/file conflicts must be checked under the locks** (two concurrent batches created
+   both `refs/x` and `refs/x/y` before), and deleted refs must prune empty parent directories (as
+   git's `try_remove_empty_parents`), or `refs/heads/a/b` → delete → `refs/heads/a` fails with
+   EISDIR.
+5. **git's batch rules, measured on git 2.43**: create below an existing ref refused even if the
+   batch deletes it (JGit allows that case; we follow git), a ref and its child refused in one
+   batch, HEAD and its target refused together, delete with old = "must not exist" refused, delete
+   of an absent ref allowed, empty batch a no-op.
+6. **Reflogs as git**: appended with O_APPEND under the ref lock (no private log lock that a crash
+   could leave behind), HEAD logged also when its branch is updated directly, whitespace collapsed,
+   no tab without a message, no-op updates not logged, log removed on delete. A reflog failure
+   after the commit never fails the batch (JGit's choice). KV reflogs are best effort and not
+   ordered with concurrent batches.
+7. **packed-refs header** `# pack-refs with: sorted`, peel lines of untouched refs kept; git peels
+   the rest on demand. Loose refs are parsed as git does (`ref:` with optional spaces, an id
+   followed by anything); broken loose refs are skipped by `list`, as `for-each-ref` skips them.
+8. **OPFS readers race with writers**: `NotFoundError` = absent, `NotReadableError` = read again.
 
 ## Verified
 
-All 14 Node tests and 3 Chromium tests pass (`pnpm test 10-ref-transactions`).
+All 21 Node tests and 3 Chromium tests pass (`pnpm test 10-ref-transactions`).
 
 | # | Result |
 |---|---|
-| R1 | 54 names (dots, `.lock`, control characters, `@{`, `@`, `//`, trailing `/` or `.`, UTF-8, one-level) decided exactly as `git check-ref-format`, with and without `--allow-onelevel`; the contract checks that every backend refuses a batch with a refused name. |
-| R2 | On every backend: a batch with one mismatching (or "must not exist" but existing) ref changes nothing and names it; create + update + delete apply together; duplicates, create below/above an existing ref (even if deleted in the batch) and parent + child are refused. |
-| R3 | `HEAD → refs/heads/main` resolves; a batch on `HEAD` updates `refs/heads/main` and logs both; `setSymref` refuses a wrong expected target and "must not exist" on an existing ref. |
-| R4 | Reflog lines carry old, new, ident and message (old = zero id on create); delete drops the log. |
-| R5 | 20 concurrent batches, each moving two refs from n to n+1 in opposite lock orders with retry: both refs end at 20 on every backend (files on memory, Node fs and OPFS; SQL on node:sqlite, sqlite-wasm and DO; KV on memKvStore and X3a's sqlKvStore in Node and DO). |
-| R6 | Native git reads our loose refs, packed-refs (peel line of an annotated tag kept), symbolic HEAD and reflogs; `git fsck` passes; we read git's loose, packed and peeled refs and rewrite them correctly (packed delete, loose update, packed update in one batch). git's lock makes our batch report `locked` (and nothing changes); our `packed-refs.lock` makes `git update-ref -d` fail. |
-| R7 | A batch updating a packed ref, deleting a ref that is loose and stale-packed, and creating one, killed at every primitive call: every outcome is all old or all new; outcomes seen: crash→old, crash→new, completed→new. |
-| R8 | The contract passes in Chromium (files on OPFS, SQL on sqlite-wasm, KV in memory) and inside a SQLite-backed Durable Object (SQL; KV over `sqlKvStore`). KV root for 10 000 refs: 762 KiB. |
+| R1 | 54 names decided exactly as `git check-ref-format` (with and without `--allow-onelevel`); the review also fuzzed 3 013 random names with no rule difference. |
+| R2 | On every backend: one mismatch rejects the batch; create + update + delete apply together; invalid names, duplicates (also HEAD + its target), parent + child, create below an existing ref (alone and in a batch, and when the batch deletes it), create above existing refs, delete with old = must-not-exist are refused; delete of an absent ref and the empty batch succeed; a deleted ref's name can become a directory and back. |
+| R3 | `HEAD → refs/heads/main` resolves; a batch on HEAD updates main and logs both (old/new checked); `noDeref` detaches HEAD; a detached HEAD in a multi-ref batch is refused as `not-atomic`; `setSymref` is a compare-and-set on the target. |
+| R4 | Reflog lines: old, new, ident, message; HEAD logged for direct branch updates; no-op updates not logged; delete drops the log. Files: git's exact line format (collapsed whitespace, no tab without message) read by `git reflog`; a stale `logs/*.lock` does not disable logging; a log write failure after the commit still reports ok. |
+| R5 | 20 concurrent two-ref batches with retry end at 20 on every backend, while a concurrent `list()` never shows the two refs apart; 10 rounds of concurrent `refs/rN` / `refs/rN/y` creates never both succeed. (On SQL, statewalker-db's per-connection queue serialises the batches; two connections would meet SQLITE_BUSY instead.) |
+| R6 | Native git reads our loose refs, packed-refs (peel line kept), symbolic HEAD and reflogs, `git fsck` passes; we read git's loose, packed and peeled refs and lenient loose formats. With our batch paused inside phase 2, `git update-ref` fails on `refs/heads/main.lock` and `git update-ref -d` on `packed-refs.lock`; with git's lock held, our batch reports `locked`. |
+| R7 | Crash at every primitive call: a multi-ref batch over a packed ref, a loose-over-stale-packed ref, a loose-only ref and a new ref; a single-ref update, a single-ref delete of a loose+packed ref, and `setSymref` — every outcome all old or all new. |
+| R7c | `list()` paused before and after reading packed-refs while a batch moves a loose and a packed ref: all old or all new. |
+| R8 | The contract passes in Chromium (files on OPFS — three runs, SQL on sqlite-wasm, KV in memory) and inside a SQLite-backed Durable Object (SQL; KV over `sqlKvStore`). KV root for 10 000 refs: 762 KiB. |
 
 ### Mutation check
 
+All re-run against the final tests (the review showed that the first contract let "create below
+an existing ref" go untested).
+
 | Mutation | Caught by |
 |---|---|
-| M1 files: no phase 1 (loose refs not packed before the commit) | R6 interop (2 tests), R7 crash |
-| M2 files: loose files removed before the phase-1 packed-refs commit | R7 crash |
-| M3 files: expected old values ignored in multi-ref batches | contract on files (2 tests) |
-| M4 SQL: expected old values ignored | contract on SQL, DO |
-| M5 KV: `put` instead of root compare-and-set | 20-way concurrency on KV (3 tests) |
-| M6 parent + child in one batch allowed | contract on every backend (7 tests) |
-| M7 creates below/above existing refs allowed | contract on every backend (7 tests) |
-| M8 names ending in `.lock` accepted | R1 (2 tests) and contract on every backend |
-| M9 `@{` accepted | R1 (2 tests) and contract on every backend |
-| M10 files: ref locks never released | contract on files, R7 |
-| M11 SQL: reflog kept on delete | contract on SQL, DO |
+| M1 files: no phase 1 | R6 (2), R7, reflog-failure test |
+| M2 files: loose files removed before the phase-1 commit | R7 |
+| M5 KV: `put` instead of root compare-and-set | KV contract (3) |
+| M6 parent + child in one batch allowed | contract, every backend (7) |
+| M7 / M7a creates below or above existing refs allowed / only "below" removed | contract, every backend (7 / 6) |
+| M8 names ending in `.lock` accepted | R1 (2), contract |
+| M10 files: multi-ref locks never released | contract, R6, R7, R7b, paused-git test |
+| M11 SQL: reflog kept on delete | SQL contract, DO |
+| M12 files `list`: no loose re-scan | R7c (before) |
+| M13 files `list`: packed-refs read before loose refs | R7c (after) |
+| M14 files: no directory/file re-check under the locks | concurrent create case (2) |
+| M15 files: no directory pruning | name-reuse case on Node fs |
+| M16 detached HEAD allowed in multi-ref batches | contract, every backend (7) |
+| M17 HEAD not logged for direct branch updates | contract, every backend (7) |
+| M18 files: no-op updates logged | contract on files (2) |
+| M19 files: reflog errors fail the batch | reflog-failure test |
+| M20 delete with old = must-not-exist accepted | contract, every backend (7) |
+
+Not covered by a test: a `setSymref` racing between dereference and commit (the batch re-checks
+targets under its locks, but no test drives that race).
 
 ## Corrections
 
 | Earlier belief | What the prototype showed |
 |---|---|
 | Plan: "git-files `.lock` + packed-refs" gives atomic transactions | Only with JGit's two-phase packed-refs commit; git's own files backend is not crash-atomic across refs. |
-| Plan: "KV snapshot+root-cas vs per-key journal" — open | Root CAS works everywhere and is simplest; it is bounded by one value (~25 000 refs per DO value) and rewrites the root per batch. SQL is the DO choice; KV root CAS for small repositories and plain KvStores. |
+| First version: "readers see all or nothing" | Only after fixing the read order (loose → packed → loose again); the review found `list()` could return a never-committed value. |
+| First version: HEAD can join any batch | A detached HEAD in a multi-ref batch was packed and its file deleted, breaking the repository for git. |
+| First version: conflict checks once, before locking | They must run again under the locks; concurrent batches created `refs/x` and `refs/x/y`. |
+| Plan: "KV snapshot+root-cas vs per-key journal" — open | Root CAS works everywhere and is simplest; bounded by one value; SQL is the DO choice. |
 | OPFS file reads are safe while other workers write | Reads must treat `NotFoundError` as absent and retry `NotReadableError`. |
 
 ## Functional description
@@ -148,9 +178,15 @@ await refs.batch(
 ); // → { ok: true, rejected: [] } or { ok: false, rejected: [{ name, reason }] }
 ```
 
-`checkNames` and `checkBatch` (shared) apply git's name and conflict rules; each backend
-dereferences symbolic refs, compares, and commits in its own atomic unit — one packed-refs rename,
-one SQL transaction, or one root compare-and-set.
+Shared rules (`checkNames`, `checkAtomic`, `checkBatch`, `addHeadLogs`, `normalizeMessage`) give
+every backend git's semantics; each backend dereferences, compares and commits in its own atomic
+unit — one packed-refs rename, one SQL transaction, or one root compare-and-set.
+
+Known differences from git, accepted for the prototype: one-level pseudorefs (`ORIG_HEAD`,
+`FETCH_HEAD`) are not updatable; reflogs are written for every ref (git: `core.logAllRefUpdates`,
+not tags or bare repositories); `setSymref` writes no reflog; no `verify` command; case-insensitive
+file systems are not handled (JGit has special code); no fsync (a torn packed-refs would lose all
+packed refs — git does not fsync refs by default either); the OPFS `remove` of X2 is recursive.
 
 ## Interfaces produced
 
@@ -158,16 +194,19 @@ one SQL transaction, or one root compare-and-set.
 interface RefDb {
   read(name): Promise<{ oid } | { symref } | undefined>;
   resolve(name): Promise<string | undefined>;
-  list(prefix?): AsyncIterable<{ name; oid }>;
-  batch(commands: RefCommand[], opts?: { ident?; message? }): Promise<BatchResult>;
+  list(prefix?): AsyncIterable<{ name; oid }>;                 // refs/ only, byte order
+  batch(commands: { name; old?; new; noDeref? }[], opts?: { ident?; message? }): Promise<BatchResult>;
   setSymref(name, target, expected?: string | null): Promise<boolean>;
   reflog(name): Promise<ReflogEntry[]>;
 }
+type RejectReason = "mismatch" | "locked" | "invalid-name" | "df-conflict" | "duplicate"
+                  | "invalid-command" | "not-atomic";
 function filesRefDb(files: RefFiles, opts?: { refLockTimeoutMs?; packedLockTimeoutMs? }): RefDb;
 function sqlRefDb(db: Db, prefix?: string): Promise<RefDb>;
 function kvRefDb(kv: KvStore, root?: string): RefDb;
-function checkRefFormat(name, { allowOneLevel? }): boolean;
-interface RefFiles extends AtomicFiles { write(path, bytes); list(dir) }   // X2 + two methods
+interface RefFiles extends AtomicFiles {                         // X2 + four methods
+  write(path, bytes); list(dir); append(path, bytes); removeEmptyDir(dir);
+}
 ```
 
 ## Promotion grades
@@ -183,13 +222,11 @@ interface RefFiles extends AtomicFiles { write(path, bytes); list(dir) }   // X2
 
 ## Open threads (ranked by how much later work they would invalidate)
 
-1. **FilesApi primitives upstream**: `createExclusive`, `replace` (X2) plus `write`-own-file and a
-   recursive file `list` — the minimal set a git-compatible repository on FilesApi needs.
-2. **Ref listing at scale on files**: `list` reads every loose file and packed-refs; a large
-   repository needs packed-refs binary search (git's mmap'd sorted packed-refs) and lazy loose
-   scanning.
-3. **Multi-tab OPFS**: refs on OPFS rely on Web Locks for exclusive create; packed-refs commits use
-   `createWritable` (atomic per file). Two tabs were not exercised here (X2 did 4 workers).
-4. **Reflog atomicity** on files/KV (lines can be lost on a crash after commit) and reflog expiry.
-5. **Reftable** as a later files format if crash-atomic transactions without packed-refs rewrites
-   are needed at scale.
+1. **FilesApi primitives upstream**: `createExclusive`, `replace` (X2) plus write-own-file,
+   append, recursive file `list` and `removeEmptyDir` — the set a git-compatible repository on
+   FilesApi needs.
+2. **Ref listing at scale on files**: `list` reads every loose file twice plus packed-refs; large
+   repositories need packed-refs binary search and lazy loose scanning.
+3. **Multi-tab OPFS** with refs (X2 covered 4 workers on single refs).
+4. **Reflog atomicity** on files/KV, reflog expiry, `core.logAllRefUpdates`.
+5. **Reftable** if crash-atomic transactions without packed-refs rewrites are needed at scale.

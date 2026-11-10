@@ -14,16 +14,48 @@ export function isUpdatableName(name: string): boolean {
 
 type Rejections = { name: string; reason: RejectReason }[];
 
-/** Name checks and duplicates; run before dereferencing symbolic refs. */
+/**
+ * Name checks, duplicates and malformed commands; run before dereferencing symbolic refs.
+ * A delete whose expected old value is "must not exist" is refused, as `git update-ref --stdin`
+ * refuses `delete <ref> <zero-oid>`.
+ */
 export function checkNames(commands: RefCommand[]): Rejections {
   const out: Rejections = [];
   const seen = new Set<string>();
   for (const c of commands) {
     if (!isUpdatableName(c.name)) out.push({ name: c.name, reason: "invalid-name" });
     else if (seen.has(c.name)) out.push({ name: c.name, reason: "duplicate" });
+    else if (c.new === null && c.old === null)
+      out.push({ name: c.name, reason: "invalid-command" });
     seen.add(c.name);
   }
   return out;
+}
+
+/** A dereferenced command: `name` is the final target, `orig` what the caller named. */
+export type Deref = RefCommand & { orig: string; via: string[] };
+
+/**
+ * A name outside refs/ (a detached HEAD) cannot join a multi-ref batch: on git files it would have
+ * to be committed outside packed-refs, so not atomically with the rest. Refused on every backend
+ * so that all behave alike; alone it is a plain loose update.
+ */
+export function checkAtomic(cmds: Deref[]): Rejections {
+  if (cmds.length < 2) return [];
+  return cmds
+    .filter((c) => !c.name.startsWith("refs/"))
+    .map((c) => ({ name: c.orig, reason: "not-atomic" as const }));
+}
+
+/** git logs HEAD for an update of the branch HEAD points at, even when named directly. */
+export function addHeadLogs(cmds: Deref[], headTarget: string | undefined): void {
+  if (!headTarget) return;
+  for (const c of cmds) if (c.name === headTarget && !c.via.includes("HEAD")) c.via.push("HEAD");
+}
+
+/** git's reflog message: whitespace runs collapsed to one space, trimmed (refs.c copy_reflog_msg). */
+export function normalizeMessage(message: string | undefined): string {
+  return (message ?? "").replace(/\s+/g, " ").trim();
 }
 
 /** Proper ancestors that could be refs: `refs/a/b/c` → `refs/a`, `refs/a/b`. */

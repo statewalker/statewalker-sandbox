@@ -12,6 +12,8 @@ export interface RefCommand {
   name: string;
   old?: string | null;
   new: string | null;
+  /** Update `name` itself even if it is a symbolic ref (git `update-ref --no-deref`): detaches HEAD. */
+  noDeref?: boolean;
 }
 
 export type RejectReason =

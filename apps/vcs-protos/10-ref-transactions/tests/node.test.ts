@@ -353,10 +353,11 @@ describe("files backend robustness", () => {
     );
     expect(raw[1]).toBe(`${c0} ${c1} ${IDENT}\ttwo spaced`); // whitespace runs collapsed, as git
     expect(raw[2]).toBe(`${c1} ${c0} ${IDENT}`); // no tab without a message, as git
-    expect(git(repo, ["reflog", "show", "--format=%gs", "refs/heads/main"]).split("\n")).toEqual([
-      "",
-      "two spaced",
-      "one",
+    // git reads all three (the helper trims output, so compare ids, newest first)
+    expect(git(repo, ["reflog", "show", "--format=%H", "refs/heads/main"]).split("\n")).toEqual([
+      c0,
+      c1,
+      c0,
     ]);
   });
   it("a reflog failure after the commit still reports ok (the refs changed)", async () => {
@@ -444,6 +445,69 @@ describe("files backend robustness", () => {
     expect(viaPacked.status).not.toBe(0);
     expect(git(repo, ["rev-parse", "refs/heads/main", "refs/heads/x"])).toBe(`${c1}\n${c1}`);
   });
+});
+
+describe("R7c readers never combine states (git files)", () => {
+  for (const when of ["before", "after"] as const) {
+    it(`list() paused ${when} reading packed-refs while a batch commits returns all old or all new`, async () => {
+      const repo = newRepo();
+      const [c1, c2, c3, c4] = commits(repo, 4) as [string, string, string, string];
+      const base = nodeRefFiles(join(repo, ".git"));
+      const setup = filesRefDb(base);
+      await setup.batch([
+        { name: "refs/heads/a", new: c1 },
+        { name: "refs/heads/b", new: c1 },
+      ]); // packed
+      await setup.batch([{ name: "refs/heads/a", old: c1, new: c2 }]); // a loose over a stale packed c1
+      let pause: Promise<void> | undefined = new Promise<void>(() => {});
+      let reached: () => void = () => {};
+      const atPause = new Promise<void>((r) => {
+        reached = r;
+      });
+      let release: () => void = () => {};
+      pause = new Promise<void>((r) => {
+        release = r;
+      });
+      let first = true;
+      const reader: RefFiles = {
+        ...base,
+        read: (p) => ({
+          async *[Symbol.asyncIterator]() {
+            const gated = p === "packed-refs" && first;
+            if (gated) first = false;
+            if (gated && when === "before") {
+              reached();
+              await pause;
+            }
+            const chunks: Uint8Array[] = [];
+            for await (const c of base.read(p)) chunks.push(c);
+            if (gated && when === "after") {
+              reached();
+              await pause;
+            }
+            yield* chunks;
+          },
+        }),
+      };
+      const listing = (async () => {
+        const out: Record<string, string> = {};
+        for await (const { name, oid } of filesRefDb(reader).list("refs/heads/")) out[name] = oid;
+        return out;
+      })();
+      await atPause;
+      const r = await setup.batch([
+        { name: "refs/heads/a", old: c2, new: c3 },
+        { name: "refs/heads/b", old: c1, new: c4 },
+      ]);
+      expect(r.ok).toBe(true);
+      release();
+      const seen = await listing;
+      const pair = `${seen["refs/heads/a"]?.slice(0, 7)} ${seen["refs/heads/b"]?.slice(0, 7)}`;
+      const oldPair = `${c2.slice(0, 7)} ${c1.slice(0, 7)}`;
+      const newPair = `${c3.slice(0, 7)} ${c4.slice(0, 7)}`;
+      expect([oldPair, newPair], `saw ${pair}`).toContain(pair);
+    });
+  }
 });
 
 describe("R8 KV snapshot size", () => {

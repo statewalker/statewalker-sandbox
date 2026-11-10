@@ -11,17 +11,26 @@
  *   4. apply the batch to the packed entries and commit with ONE rename of packed-refs.lock,
  *   5. append reflogs, release the ref locks.
  * A crash before step 4's rename leaves every value old, after it every value new; stale locks
- * remain, as with git, until removed.
+ * remain, as with git, until removed. Under the locks the batch re-dereferences symbolic refs and
+ * re-runs the directory/file checks, counting other writers' lock files, so concurrent batches
+ * cannot create `refs/x` and `refs/x/y` together. A detached HEAD (a name outside refs/) is never
+ * packed: it may only be updated alone.
+ *
+ * Readers: a single read is loose-then-packed; `list` reads loose files, then packed-refs, then the
+ * loose files again and retries if they changed, so it never combines a stale packed value with a
+ * newer loose state (git reads loose before packed for the same reason).
  */
-import { checkBatch, checkNames, defaultIdent, sleep } from "./batch-rules.js";
-import type {
-  BatchOptions,
-  BatchResult,
-  RefCommand,
-  RefDb,
-  ReflogEntry,
-  RefValue,
-} from "./ref-db.js";
+import {
+  addHeadLogs,
+  checkAtomic,
+  checkBatch,
+  checkNames,
+  type Deref,
+  defaultIdent,
+  normalizeMessage,
+  sleep,
+} from "./batch-rules.js";
+import type { BatchOptions, BatchResult, RefDb, ReflogEntry, RefValue } from "./ref-db.js";
 import { ZERO_OID } from "./ref-db.js";
 import { compareRefNames, isUpdatableNameOrSymTarget } from "./refname-helpers.js";
 
@@ -51,7 +60,6 @@ export interface FilesRefDbOptions {
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-const OID = /^[0-9a-f]{40}$/;
 const PACKED = "packed-refs";
 
 interface PackedEntry {
@@ -109,19 +117,27 @@ export function filesRefDb(files: RefFiles, opts: FilesRefDbOptions = {}): RefDb
   const refLockTimeout = opts.refLockTimeoutMs ?? 100;
   const packedLockTimeout = opts.packedLockTimeoutMs ?? 1000;
 
+  /** File text, or undefined if absent — also when it vanishes between the check and the read. */
   async function readText(path: string): Promise<string | undefined> {
     if (!(await files.exists(path))) return undefined;
     let t = "";
-    for await (const c of files.read(path)) t += dec.decode(c, { stream: true });
+    let any = false;
+    for await (const c of files.read(path)) {
+      any = true;
+      t += dec.decode(c, { stream: true });
+    }
+    if (!any && !(await files.exists(path))) return undefined;
     return t + dec.decode();
   }
+  /** As git's parse_loose_ref_contents: `ref:` with optional spaces, or an id then whitespace/end. */
   async function readLoose(name: string): Promise<RefValue | undefined> {
     const text = await readText(name);
     if (text === undefined) return undefined;
-    const v = text.trim();
-    if (v.startsWith("ref: ")) return { symref: v.slice(5).trim() };
-    if (!OID.test(v)) throw new Error(`${name} is broken: ${JSON.stringify(v.slice(0, 50))}`);
-    return { oid: v };
+    const sym = /^ref:\s*(\S+)/.exec(text);
+    if (sym) return { symref: sym[1] as string };
+    const m = /^([0-9a-f]{40})(?:\s|$)/.exec(text);
+    if (!m) throw new Error(`${name} is broken: ${JSON.stringify(text.slice(0, 50))}`);
+    return { oid: m[1] as string };
   }
   const readPacked = async () => parsePacked(await readText(PACKED));
   async function read(
@@ -133,7 +149,6 @@ export function filesRefDb(files: RefFiles, opts: FilesRefDbOptions = {}): RefDb
     const e = (packed ?? (await readPacked())).get(name);
     return e ? { oid: e.oid } : undefined;
   }
-  /** Final target name of a (possibly symbolic) ref, at most 5 hops, and the symrefs passed. */
   async function deref(name: string): Promise<{ target: string; via: string[] }> {
     const via: string[] = [];
     let cur = name;
@@ -145,116 +160,175 @@ export function filesRefDb(files: RefFiles, opts: FilesRefDbOptions = {}): RefDb
     }
     throw new Error(`symbolic ref ${name} nests too deeply`);
   }
+  async function headTarget(): Promise<string | undefined> {
+    const h = await readLoose("HEAD").catch(() => undefined);
+    return h && "symref" in h ? (await deref("HEAD")).target : undefined;
+  }
+  /** Remove `path`, then its empty parent directories up to (not including) `stop`. */
+  async function removeAndPrune(path: string): Promise<void> {
+    await files.remove(path);
+    const stop = path.startsWith("logs/") ? "logs" : "refs";
+    for (
+      let d = path.slice(0, path.lastIndexOf("/"));
+      d.includes("/") && d !== stop;
+      d = d.slice(0, d.lastIndexOf("/"))
+    ) {
+      if (!(await files.removeEmptyDir(d))) break;
+    }
+  }
+  /** "ok", "held" (someone else's lock) or "conflict" (a file where a directory is needed). */
   async function lock(
     path: string,
     timeoutMs: number,
     content = new Uint8Array(0),
-  ): Promise<boolean> {
+  ): Promise<"ok" | "held" | "conflict"> {
     const until = Date.now() + timeoutMs;
     for (let wait = 1; ; wait = Math.min(wait * 2, 20)) {
-      if (await files.createExclusive(`${path}.lock`, content)) return true;
-      if (Date.now() >= until) return false;
+      try {
+        if (await files.createExclusive(`${path}.lock`, content)) return "ok";
+      } catch {
+        return "conflict"; // e.g. ENOTDIR: refs/x is a file, so refs/x/y.lock cannot exist
+      }
+      if (Date.now() >= until) return "held";
       await sleep(wait);
     }
   }
-  async function appendLog(
-    name: string,
-    old: string,
-    next: string,
-    ident: string,
-    message: string,
-  ) {
-    const path = `logs/${name}`;
-    const line = `${old} ${next} ${ident}\t${message.replace(/\n/g, " ")}\n`;
-    const full = enc.encode(((await readText(path)) ?? "") + line);
-    if (!(await files.createExclusive(`${path}.lock`, full))) return; // another writer logging: skip, as git warns
+  const unlock = (path: string) => removeAndPrune(`${path}.lock`).catch(() => {});
+  /** Commit a lock over its target; an empty directory left at the target is removed first. */
+  async function commit(path: string): Promise<void> {
+    await files.removeEmptyDir(path);
     await files.replace(`${path}.lock`, path);
   }
+  /** Reflogs are best effort after the decision, as JGit: a failure never fails a committed batch. */
   async function writeLogs(
-    cmds: { name: string; via: string[]; old: string | undefined; new: string | null }[],
+    cmds: (Deref & { old: string | undefined })[],
     o: BatchOptions,
-  ) {
+  ): Promise<void> {
     const ident = o.ident ?? defaultIdent();
-    const message = o.message ?? "";
+    const message = normalizeMessage(o.message);
     for (const c of cmds) {
-      if (c.new === null) {
-        await files.remove(`logs/${c.name}`);
-        continue;
+      try {
+        if (c.new === null) {
+          if (await files.exists(`logs/${c.name}`)) await removeAndPrune(`logs/${c.name}`);
+          continue;
+        }
+        const old = c.old ?? ZERO_OID;
+        if (old === c.new) continue; // git logs no no-op updates
+        const line = enc.encode(`${old} ${c.new} ${ident}${message ? `\t${message}` : ""}\n`);
+        for (const n of [c.name, ...c.via]) {
+          await files.removeEmptyDir(`logs/${n}`);
+          await files.append(`logs/${n}`, line);
+        }
+      } catch {
+        // as git and JGit: the ref update stands without its reflog line
       }
-      for (const n of [c.name, ...c.via])
-        await appendLog(n, c.old ?? ZERO_OID, c.new, ident, message);
     }
   }
-  async function hasChildren(name: string, packed: Map<string, PackedEntry>): Promise<boolean> {
-    for (const n of packed.keys()) if (n.startsWith(`${name}/`)) return true;
-    for await (const p of files.list(name)) if (!p.endsWith(".lock")) return true;
-    return false;
+  /**
+   * Directory/file checks against the current state, counting other writers' lock files as
+   * pending names (`mine` are this batch's own locks).
+   */
+  async function conflicts(cmds: Deref[], packed: Map<string, PackedEntry>, mine: Set<string>) {
+    return checkBatch(
+      cmds,
+      async (n) =>
+        (await read(n, packed)) !== undefined ||
+        (!mine.has(n) && (await files.exists(`${n}.lock`))),
+      async (n) => {
+        for (const k of packed.keys()) if (k.startsWith(`${n}/`)) return true;
+        for await (const p of files.list(n)) {
+          if (!p.endsWith(".lock") || !mine.has(p.slice(0, -5))) return true;
+        }
+        return false;
+      },
+    );
   }
+  /** Under the locks: every command still names the same target as when it was dereferenced. */
+  async function sameTargets(cmds: Deref[]) {
+    const out: BatchResult["rejected"] = [];
+    for (const c of cmds)
+      if (c.via.length && (await deref(c.orig)).target !== c.name)
+        out.push({ name: c.orig, reason: "mismatch" });
+    return out;
+  }
+  const fail = (rejected: BatchResult["rejected"]): BatchResult => ({ ok: false, rejected });
 
-  async function single(c: RefCommand & { via: string[] }, o: BatchOptions): Promise<BatchResult> {
+  async function single(c: Deref, o: BatchOptions): Promise<BatchResult> {
     const content = c.new === null ? new Uint8Array(0) : enc.encode(`${c.new}\n`);
-    if (!(await lock(c.name, refLockTimeout, content)))
-      return { ok: false, rejected: [{ name: c.name, reason: "locked" }] };
+    const extra = c.via.includes("HEAD") && c.name !== "HEAD" ? ["HEAD"] : [];
+    const held: string[] = [];
     let ours = true;
     try {
+      for (const n of [...extra, c.name]) {
+        const r = await lock(n, refLockTimeout, n === c.name ? content : new Uint8Array(0));
+        if (r !== "ok") return fail([{ name: n, reason: r === "held" ? "locked" : "df-conflict" }]);
+        held.push(n);
+      }
+      const moved = await sameTargets([c]);
+      if (moved.length) return fail(moved);
       const packed = await readPacked();
+      const df = await conflicts([c], packed, new Set(held));
+      if (df.length) return fail(df);
       const cur = await read(c.name, packed);
       const curOid = cur && "oid" in cur ? cur.oid : undefined;
       if (c.old !== undefined && (c.old === null ? cur !== undefined : curOid !== c.old)) {
-        return { ok: false, rejected: [{ name: c.name, reason: "mismatch" }] };
+        return fail([{ name: c.name, reason: "mismatch" }]);
       }
       if (c.new === null) {
         if (packed.has(c.name)) {
-          if (!(await lock(PACKED, packedLockTimeout)))
-            return { ok: false, rejected: [{ name: PACKED, reason: "locked" }] };
+          // git's order: drop it from packed-refs first, then remove the loose file
+          if ((await lock(PACKED, packedLockTimeout)) !== "ok")
+            return fail([{ name: PACKED, reason: "locked" }]);
           let packedOurs = true;
           try {
             const fresh = await readPacked();
             fresh.delete(c.name);
             await files.write(`${PACKED}.lock`, serializePacked(fresh));
-            packedOurs = false;
             await files.replace(`${PACKED}.lock`, PACKED);
+            packedOurs = false;
           } finally {
             if (packedOurs) await files.remove(`${PACKED}.lock`).catch(() => false);
           }
         }
-        await files.remove(c.name);
+        if (await files.exists(c.name)) await removeAndPrune(c.name);
         await writeLogs([{ ...c, old: curOid }], o);
       } else {
         await writeLogs([{ ...c, old: curOid }], o); // under the ref lock, before the rename (as git)
+        await commit(c.name);
         ours = false;
-        await files.replace(`${c.name}.lock`, c.name);
       }
       return { ok: true, rejected: [] };
     } finally {
-      if (ours) await files.remove(`${c.name}.lock`).catch(() => false);
+      for (const n of held) if (n !== c.name || ours) await unlock(n);
     }
   }
 
-  async function multi(
-    cmds: (RefCommand & { via: string[] })[],
-    o: BatchOptions,
-  ): Promise<BatchResult> {
-    const names = cmds.map((c) => c.name).sort(compareRefNames);
+  async function multi(cmds: Deref[], o: BatchOptions): Promise<BatchResult> {
+    const extra = cmds.some((c) => c.via.includes("HEAD")) ? ["HEAD"] : [];
+    const names = [...new Set([...extra, ...cmds.map((c) => c.name)])].sort(compareRefNames);
     const held: string[] = [];
     let packedHeld = false;
     try {
       for (const n of names) {
-        if (!(await lock(n, refLockTimeout)))
-          return { ok: false, rejected: [{ name: n, reason: "locked" }] };
+        const r = await lock(n, refLockTimeout);
+        if (r !== "ok") return fail([{ name: n, reason: r === "held" ? "locked" : "df-conflict" }]);
         held.push(n);
       }
-      if (!(await lock(PACKED, packedLockTimeout)))
-        return { ok: false, rejected: [{ name: PACKED, reason: "locked" }] };
+      if ((await lock(PACKED, packedLockTimeout)) !== "ok")
+        return fail([{ name: PACKED, reason: "locked" }]);
       packedHeld = true;
+      const moved = await sameTargets(cmds);
+      if (moved.length) return fail(moved);
       let packed = await readPacked();
+      const df = await conflicts(cmds, packed, new Set(held));
+      if (df.length) return fail(df);
       const loose = new Map<string, string>();
       const current = new Map<string, string | undefined>();
-      for (const n of names) {
-        const l = await readLoose(n);
-        if (l && "symref" in l) throw new Error(`${n} became a symbolic ref`);
-        if (l) loose.set(n, l.oid);
-        current.set(n, l?.oid ?? packed.get(n)?.oid);
+      for (const c of cmds) {
+        const l = await readLoose(c.name);
+        if (l && "symref" in l) throw new Error(`${c.name} became a symbolic ref`);
+        if (l) loose.set(c.name, l.oid);
+        current.set(c.name, l?.oid ?? packed.get(c.name)?.oid);
       }
       const mismatched = cmds.filter(
         (c) =>
@@ -262,23 +336,20 @@ export function filesRefDb(files: RefFiles, opts: FilesRefDbOptions = {}): RefDb
           (c.old === null ? current.get(c.name) !== undefined : current.get(c.name) !== c.old),
       );
       if (mismatched.length)
-        return {
-          ok: false,
-          rejected: mismatched.map((c) => ({ name: c.name, reason: "mismatch" as const })),
-        };
+        return fail(mismatched.map((c) => ({ name: c.name, reason: "mismatch" as const })));
       if (loose.size) {
-        // Phase 1: move the involved loose refs into packed-refs (values unchanged for readers).
-        for (const [n, v] of loose)
-          packed.set(n, {
-            oid: v,
-            ...(packed.get(n)?.oid === v ? { peeled: packed.get(n)?.peeled } : {}),
-          });
+        // Phase 1: move the involved loose refs into packed-refs (values unchanged for readers),
+        // committing packed-refs BEFORE removing the loose files.
+        for (const [n, v] of loose) {
+          const prev = packed.get(n);
+          packed.set(n, prev?.oid === v ? prev : { oid: v });
+        }
         await files.write(`${PACKED}.lock`, serializePacked(packed));
-        packedHeld = false;
         await files.replace(`${PACKED}.lock`, PACKED);
-        for (const n of loose.keys()) await files.remove(n);
-        if (!(await lock(PACKED, packedLockTimeout)))
-          return { ok: false, rejected: [{ name: PACKED, reason: "locked" }] };
+        packedHeld = false;
+        for (const n of loose.keys()) await removeAndPrune(n);
+        if ((await lock(PACKED, packedLockTimeout)) !== "ok")
+          return fail([{ name: PACKED, reason: "locked" }]);
         packedHeld = true;
         packed = await readPacked();
       }
@@ -288,8 +359,8 @@ export function filesRefDb(files: RefFiles, opts: FilesRefDbOptions = {}): RefDb
         else packed.set(c.name, { oid: c.new });
       }
       await files.write(`${PACKED}.lock`, serializePacked(packed));
-      packedHeld = false;
       await files.replace(`${PACKED}.lock`, PACKED);
+      packedHeld = false;
       await writeLogs(
         cmds.map((c) => ({ ...c, old: current.get(c.name) })),
         o,
@@ -297,9 +368,27 @@ export function filesRefDb(files: RefFiles, opts: FilesRefDbOptions = {}): RefDb
       return { ok: true, rejected: [] };
     } finally {
       if (packedHeld) await files.remove(`${PACKED}.lock`).catch(() => false);
-      for (const n of held) await files.remove(`${n}.lock`).catch(() => false);
+      for (const n of held) await unlock(n);
     }
   }
+
+  /** Direct loose refs under refs/ (broken or symbolic ones skipped, as for-each-ref warns and skips). */
+  async function scanLoose(): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    for await (const p of files.list("refs")) {
+      if (p.endsWith(".lock")) continue;
+      try {
+        const v = await readLoose(p);
+        if (v && "oid" in v) out.set(p, v.oid);
+        else if (v) out.set(p, "");
+      } catch {
+        // broken loose ref: skipped
+      }
+    }
+    return out;
+  }
+  const sameMap = (a: Map<string, string>, b: Map<string, string>) =>
+    a.size === b.size && [...a].every(([k, v]) => b.get(k) === v);
 
   return {
     read: (name) => read(name),
@@ -309,41 +398,43 @@ export function filesRefDb(files: RefFiles, opts: FilesRefDbOptions = {}): RefDb
       return v && "oid" in v ? v.oid : undefined;
     },
     async *list(prefix = "refs/") {
-      const packed = await readPacked();
-      const out = new Map<string, string>();
-      for (const [n, e] of packed) if (n.startsWith(prefix)) out.set(n, e.oid);
-      const dir = prefix.endsWith("/")
-        ? prefix.slice(0, -1)
-        : prefix.slice(0, prefix.lastIndexOf("/"));
-      for await (const p of files.list(dir)) {
-        if (!p.startsWith(prefix) || p.endsWith(".lock")) continue;
-        const v = await readLoose(p);
-        if (v && "oid" in v) out.set(p, v.oid);
-        else if (v) out.delete(p);
+      let snapshot: Map<string, string> | undefined;
+      for (let attempt = 0; attempt < 20 && !snapshot; attempt++) {
+        const loose = await scanLoose();
+        const packed = await readPacked();
+        const again = await scanLoose();
+        if (!sameMap(loose, again)) continue; // a writer moved loose refs meanwhile: read again
+        const merged = new Map<string, string>();
+        for (const [n, e] of packed) merged.set(n, e.oid);
+        for (const [n, v] of loose) {
+          if (v) merged.set(n, v);
+          else merged.delete(n); // a loose symbolic ref hides a packed value of the same name
+        }
+        snapshot = merged;
       }
-      for (const n of [...out.keys()].sort(compareRefNames))
-        yield { name: n, oid: out.get(n) as string };
+      if (!snapshot) throw new Error("refs kept changing while listing");
+      for (const n of [...snapshot.keys()].sort(compareRefNames)) {
+        if (n.startsWith(prefix) && n.startsWith("refs/"))
+          yield { name: n, oid: snapshot.get(n) as string };
+      }
     },
     async batch(commands, o = {}) {
+      if (commands.length === 0) return { ok: true, rejected: [] };
       const bad = checkNames(commands);
-      if (bad.length) return { ok: false, rejected: bad };
-      const cmds: (RefCommand & { via: string[] })[] = [];
+      if (bad.length) return fail(bad);
+      const cmds: Deref[] = [];
       for (const c of commands) {
-        const { target, via } = await deref(c.name);
+        const { target, via } = c.noDeref ? { target: c.name, via: [] } : await deref(c.name);
         if (!isUpdatableNameOrSymTarget(target))
-          return { ok: false, rejected: [{ name: c.name, reason: "invalid-name" }] };
-        cmds.push({ ...c, name: target, via });
+          return fail([{ name: c.name, reason: "invalid-name" }]);
+        cmds.push({ ...c, orig: c.name, name: target, via });
       }
-      const packed = await readPacked();
-      const conflicts = await checkBatch(
-        cmds,
-        async (n) => (await read(n, packed)) !== undefined,
-        (n) => hasChildren(n, packed),
-      );
-      if (conflicts.length) return { ok: false, rejected: conflicts };
-      return cmds.length === 1
-        ? single(cmds[0] as RefCommand & { via: string[] }, o)
-        : multi(cmds, o);
+      const notAtomic = checkAtomic(cmds);
+      if (notAtomic.length) return fail(notAtomic);
+      addHeadLogs(cmds, await headTarget());
+      const df = await conflicts(cmds, await readPacked(), new Set());
+      if (df.length) return fail(df);
+      return cmds.length === 1 ? single(cmds[0] as Deref, o) : multi(cmds, o);
     },
     async setSymref(name, target, expected) {
       if (
@@ -353,18 +444,18 @@ export function filesRefDb(files: RefFiles, opts: FilesRefDbOptions = {}): RefDb
       ) {
         throw new Error(`invalid symbolic ref ${name} -> ${target}`);
       }
-      if (!(await lock(name, refLockTimeout, enc.encode(`ref: ${target}\n`)))) return false;
+      if ((await lock(name, refLockTimeout, enc.encode(`ref: ${target}\n`))) !== "ok") return false;
       let ours = true;
       try {
         const cur = await read(name);
         if (expected === null && cur !== undefined) return false;
         if (typeof expected === "string" && !(cur && "symref" in cur && cur.symref === expected))
           return false;
+        await commit(name);
         ours = false;
-        await files.replace(`${name}.lock`, name);
         return true;
       } finally {
-        if (ours) await files.remove(`${name}.lock`).catch(() => false);
+        if (ours) await unlock(name);
       }
     },
     async reflog(name) {

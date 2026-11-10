@@ -7,8 +7,18 @@
  * the cost is a root rewrite per batch and one value as large as all refs (R8 measures it).
  */
 import type { KvStore } from "@statewalker/webrun-storage";
-import { checkBatch, checkNames, defaultIdent, isUpdatableName } from "./batch-rules.js";
-import type { BatchResult, RefCommand, RefDb, ReflogEntry, RefValue } from "./ref-db.js";
+import {
+  addHeadLogs,
+  checkAtomic,
+  checkBatch,
+  checkNames,
+  type Deref,
+  defaultIdent,
+  isUpdatableName,
+  normalizeMessage,
+  sleep,
+} from "./batch-rules.js";
+import type { BatchResult, RefDb, ReflogEntry, RefValue } from "./ref-db.js";
 import { ZERO_OID } from "./ref-db.js";
 import { compareRefNames } from "./refname.js";
 
@@ -66,18 +76,22 @@ export function kvRefDb(kv: KvStore, root = "refs"): RefDb {
       }
     },
     async batch(commands, o = {}): Promise<BatchResult> {
+      if (commands.length === 0) return { ok: true, rejected: [] };
       const bad = checkNames(commands);
       if (bad.length) return { ok: false, rejected: bad };
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         const bytes = await kv.get(root);
         const m = decode(bytes);
-        const cmds: (RefCommand & { via: string[] })[] = [];
+        const cmds: Deref[] = [];
         for (const c of commands) {
-          const { target, via } = deref(m, c.name);
+          const { target, via } = c.noDeref ? { target: c.name, via: [] } : deref(m, c.name);
           if (!isUpdatableName(target))
             return { ok: false, rejected: [{ name: c.name, reason: "invalid-name" }] };
-          cmds.push({ ...c, name: target, via });
+          cmds.push({ ...c, orig: c.name, name: target, via });
         }
+        const notAtomic = checkAtomic(cmds);
+        if (notAtomic.length) return { ok: false, rejected: notAtomic };
+        addHeadLogs(cmds, m.get("HEAD")?.startsWith("ref: ") ? deref(m, "HEAD").target : undefined);
         const conflicts = await checkBatch(
           cmds,
           async (n) => m.has(n),
@@ -99,21 +113,26 @@ export function kvRefDb(kv: KvStore, root = "refs"): RefDb {
           if (c.new === null) m.delete(c.name);
           else m.set(c.name, c.new);
         }
-        if (!(await kv.cas(root, bytes, encode(m)))) continue; // lost the race: re-read, re-check
+        if (!(await kv.cas(root, bytes, encode(m)))) {
+          await sleep(Math.random() * Math.min(2 ** attempt, 20)); // lost the race: back off, re-read, re-check
+          continue;
+        }
         const ident = o.ident ?? defaultIdent();
-        const message = (o.message ?? "").replace(/\n/g, " ");
+        const message = normalizeMessage(o.message);
+        // Reflogs after the commit, best effort (a failure never fails a committed batch). Not ordered
+        // with concurrent batches: a delete racing a re-create can drop the re-create's line.
         for (const c of cmds) {
-          if (c.new === null) {
-            await kv.remove(logKey(c.name));
-            continue;
-          }
-          for (const n of [c.name, ...c.via]) {
-            await appendLog(n, {
-              old: current.get(c.name) ?? ZERO_OID,
-              new: c.new,
-              ident,
-              message,
-            });
+          try {
+            if (c.new === null) {
+              await kv.remove(logKey(c.name));
+              continue;
+            }
+            const old = current.get(c.name) ?? ZERO_OID;
+            if (old === c.new) continue; // git logs no no-op updates
+            for (const n of [c.name, ...c.via])
+              await appendLog(n, { old, new: c.new, ident, message });
+          } catch {
+            // the ref update stands without its reflog line
           }
         }
         return { ok: true, rejected: [] };
