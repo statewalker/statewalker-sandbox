@@ -34,8 +34,10 @@ can crash the server or make it serve objects it does not advertise.
 ## Scope — what this slice does NOT do
 
 - Push (receive-pack): X8b. Protocol v0/v1 serving (git ≥ 2.26 asks v2 over HTTP; a request
-  without `Git-Protocol: version=2` is refused with a clear error). `fetch --deepen`,
-  `--unshallow`, `deepen-since`, `deepen-not`, `filter`, `packfile-uris`: later.
+  without `Git-Protocol: version=2` is refused with a clear error). `deepen-relative`
+  (`fetch --deepen`, refused with an ERR), `deepen-since`, `deepen-not`, `filter`,
+  `packfile-uris`: later. Symbolic refs other than HEAD are not listed (X5's ref store lists
+  direct refs only).
 - Gitea in Docker (the plan's oracle): `git http-backend` is the native reference here.
 
 ### Criteria amended while implementing (both towards git's behaviour)
@@ -59,19 +61,32 @@ repo, { refspecs, depth, shallow })` and `clone(url, repo)` use global `fetch`.
 - **Server**: the v2 capability advertisement (as `git http-backend` in v2, no "# service"
   preamble); `ls-refs` (symrefs, peel, ref-prefix, unborn); `fetch` (want, have, done, thin-pack,
   include-tag, no-progress, ofs-delta accepted, shallow, deepen). Wants must be advertised tips
-  (git's default). Stateless negotiation: ACK the haves present, "ready" once every want reaches
-  a common commit (git's ok_to_give_up, walking no older than the oldest common). The pack is
-  X6c's walk with the deepen boundary as shallow commits, written by X6e (or X6d) and streamed in
+  or commits reachable from them (git v2: a fetch by commit id, a ref moved since `ls-refs`);
+  anything else is "not our ref". Wants and haves are sets (duplicates cost nothing).
+  Request bodies are inflated when gzipped (git's remote-curl compresses those over 1 KiB).
+  Stateless negotiation: ACK the haves present, "ready" once every want reaches
+  a common commit (git's ok_to_give_up, walking no older than the oldest common). `deepen N` computes
+  the new boundary; a shallow client's commits now above it are unshallowed and their parents
+  sent (X6c's walk gains `receiverShallow`: the client's haves do not make those parents
+  uninteresting) — native `fetch --depth N` and `--unshallow` on a shallow clone work.
+  `include-tag` sends every tag of a chain. The pack is X6c's walk with the boundary as shallow
+  commits, written by X6e (or X6d) and streamed in
   side-band-64k through a bounded channel: progress on band 2 while searching, a cancelled
   response aborts the generation, an error after the start goes on band 3. Requests over 64 MiB,
   malformed packets, unknown commands, capabilities or arguments get an `ERR` packet. A request
   without `Git-Protocol: version=2` is refused (400).
 - **Client**: discovery (with or without the "# service" preamble), `ls-refs` limited to the
-  refspecs' prefixes, git's default negotiator (newest first; ACKed haves mark their ancestors
-  common; rounds of 16 doubling; commons re-sent each round; give-up as amended above), the pack
+  refspecs' prefixes, git's default negotiator (newest first, annotated tags peeled; ACKed haves
+  mark their ancestors common, and a popped common commit makes its parents common — so with or
+  without "ready" the common history is not sent; rounds of 16 doubling; commons re-sent each
+  round; give-up as amended above), the pack
   demultiplexed straight into `installPack` (thin bases completed from the store), shallow-info
-  into git's shallow file, refs updated forced or fast-forward, tags auto-followed. `clone` with
-  `depth` is single-branch, as git's.
+  into git's shallow file, refs updated one transaction each, forced or fast-forward (a
+  non-fast-forward ref is reported in `rejected`, the others update, as git's fetch), tags
+  auto-followed only when their whole chain is here; a refspec without a destination fetches the
+  objects only. `depth` needs a shallow store (refused otherwise) and re-asks for tips already
+  here (deepening). `clone` with `depth` is single-branch, as git's; an empty remote's clone takes
+  its unborn HEAD (`ls-refs unborn`).
 
 | | |
 |---|---|
@@ -85,7 +100,7 @@ repo, { refspecs, depth, shallow })` and `clone(url, repo)` use global `fetch`.
 
 ## Verified
 
-All 11 Node tests pass (`pnpm test 21-smart-http`). The tests were written first (red commit).
+All 21 Node tests pass (11 for R1–R7, 10 from the review of #81) (`pnpm test 21-smart-http`). The tests were written first (red commit).
 
 ### Mutation check
 
@@ -107,6 +122,24 @@ All 11 Node tests pass (`pnpm test 21-smart-http`). The tests were written first
 The mutation run found that progress was only flushed with the first pack chunk; it now goes
 straight into the response while the search reads (band 2), and an abort during the search stops
 it.
+
+### Review of #81
+
+| Finding | Resolution |
+|---|---|
+| gzip request bodies (git compresses POSTs over 1 KiB) not handled: native clones of repos with ~30 refs, fetches with ~20+ haves failed | Inflated (`Content-Encoding: gzip`); native clone of 30 branches |
+| Tag chains: include-tag sent only the outer tag; auto-follow created refs to incomplete chains | Every tag of the chain sent; auto-follow checks the chain |
+| `fetch --depth N` / `--unshallow` on a shallow clone did nothing | Real deepening: unshallow lines, the parents sent (`receiverShallow` in X6c's walk) |
+| A producer error while the client cancels: unhandled rejection, process exit | The error write's rejection is caught |
+| One open file per annotated tag per request | Tag objects read through or closed |
+| Duplicate wants multiplied `ok_to_give_up` walks | Sets; one shared walk memory |
+| Client: `depth` with the tips already here sent nothing | Re-asks (git's fetch-pack) |
+| Client: ancestors of an ACKed commit not yet seen were sent as haves (296 vs git's 16 without "ready") | Common propagates on pop (git's consecutive negotiator) |
+| Non-tip wants refused (git v2 serves reachable ones: fetch by id, moved refs) | Reachable wants served; unreachable or unknown: "not our ref" |
+| One non-fast-forward ref aborted every update | Rejected alone, reported |
+| `depth` without a shallow store left a broken repository | Refused |
+| Refspec without a destination fetched nothing; an empty remote's clone kept the local HEAD; progress never reached 100%; local annotated tags not peeled in negotiation; an ERR in the advertisement misreported | Fixed |
+| Symbolic refs other than HEAD not listed | Noted (X5's store lists direct refs) |
 
 ## Promotion grades
 

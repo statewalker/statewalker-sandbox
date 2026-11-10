@@ -317,6 +317,7 @@ export async function* writePackSearching(
       winBytes += bytesOf(entry);
       if (st) st.peakWindowBytes = Math.max(st.peakWindowBytes, winBytes);
     }
+    opts.onProgress?.(done, cands.length);
   };
   yield* writePackReusing(repo, objects, { ...opts, depth: maxDepth, refine });
 }

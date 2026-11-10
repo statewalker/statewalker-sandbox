@@ -119,6 +119,7 @@ class Remote {
       if (p?.kind !== "flush") throw new PktError("no flush after the service line");
       p = await r.read();
     }
+    if (p && text(p)?.startsWith("ERR ")) throw new Error(`remote: ${text(p)?.slice(4)}`);
     if (!p || text(p) !== "version 2") throw new Error(`${this.url} does not speak protocol v2`);
     for (;;) {
       const q = await r.read();
@@ -152,9 +153,11 @@ class Remote {
     return new PktReader(res.body as unknown as AsyncIterable<Uint8Array>);
   }
   async lsRefs(prefixes: string[]): Promise<RemoteRef[]> {
+    const unborn = (this.caps.get("ls-refs") ?? "").split(" ").includes("unborn");
     const r = await this.command("ls-refs", [
       "symrefs",
       "peel",
+      ...(unborn ? ["unborn"] : []),
       ...prefixes.map((p) => `ref-prefix ${p}`),
     ]);
     const refs: RemoteRef[] = [];
@@ -164,8 +167,9 @@ class Remote {
       const line = text(p) as string;
       if (line.startsWith("ERR ")) throw new Error(`remote: ${line.slice(4)}`);
       const [oid, name, ...attrs] = line.split(" ");
-      if (!oid || !name || !OID.test(oid)) continue; // "unborn HEAD": nothing to fetch
-      const ref: RemoteRef = { name, oid };
+      if (!oid || !name || !(OID.test(oid) || oid === "unborn")) continue;
+      // "unborn HEAD symref-target:…": an empty repository's HEAD (no id, nothing to fetch)
+      const ref: RemoteRef = { name, oid: oid === "unborn" ? "" : oid };
       for (const a of attrs) {
         if (a.startsWith("symref-target:")) ref.symref = a.slice(14);
         else if (a.startsWith("peeled:")) ref.peeled = a.slice(7);
@@ -183,31 +187,45 @@ class Negotiator {
   private common = new Set<string>();
   readonly commonSent = new Set<string>();
   constructor(private repo: Repository) {}
-  async push(oid: string) {
-    if (this.seen.has(oid)) return;
-    this.seen.add(oid);
+  /** Queues a local tip or parent (annotated tags peeled to their commit). */
+  async push(oid: string, common = false) {
+    let id = oid;
+    for (let i = 0; i < 10; i++) {
+      const t = await tagTarget(this.repo, id);
+      if (!t) break;
+      id = t;
+    }
+    if (common) this.common.add(id);
+    if (this.seen.has(id)) return;
+    this.seen.add(id);
     let when: number;
     try {
-      when = (await readCommit(this.repo, oid)).committer.when;
+      when = (await readCommit(this.repo, id)).committer.when;
     } catch {
       return; // not a commit, or below a shallow boundary
     }
     let i = this.queue.length;
     while (i > 0 && (this.queue[i - 1] as { when: number }).when < when) i--;
-    this.queue.splice(i, 0, { oid, when });
+    this.queue.splice(i, 0, { oid: id, when });
   }
-  /** The next have to send, or undefined when the local history is exhausted. */
+  /**
+   * The next have to send, or undefined when the local history is exhausted. A popped common
+   * commit makes its parents common (git's consecutive negotiator): ancestors of an ACKed have
+   * are never sent, whether or not they had been seen when the ACK came.
+   */
   async next(): Promise<string | undefined> {
     for (;;) {
       const c = this.queue.shift();
       if (!c) return undefined;
+      const isCommon = this.common.has(c.oid);
       const commit = await readCommit(this.repo, c.oid).catch(() => undefined);
       if (commit)
-        for (const p of commit.parents) if (await this.repo.objects.has(p)) await this.push(p);
-      if (!this.common.has(c.oid)) return c.oid;
+        for (const p of commit.parents)
+          if (await this.repo.objects.has(p)) await this.push(p, isCommon);
+      if (!isCommon) return c.oid;
     }
   }
-  /** An ACKed have: it and its ancestors are common (not sent again). */
+  /** An ACKed have: it and its ancestors already seen are common (the rest as they are popped). */
   async ack(oid: string): Promise<boolean> {
     if (this.commonSent.has(oid)) return false;
     this.commonSent.add(oid);
@@ -221,6 +239,36 @@ class Negotiator {
     }
     return true;
   }
+  /** Whether nothing but common commits is left (no have to send). */
+  get exhausted() {
+    return this.queue.every((q) => this.common.has(q.oid));
+  }
+}
+
+/** The object an annotated tag points at, or undefined for anything else (stream closed). */
+async function tagTarget(repo: Repository, oid: string): Promise<string | undefined> {
+  const o = await repo.objects.get(oid);
+  if (!o) return undefined;
+  if (o.type !== "tag") {
+    await o.content[Symbol.asyncIterator]().return?.();
+    return undefined;
+  }
+  const parts: Uint8Array[] = [];
+  for await (const c of o.content) parts.push(c);
+  const text = new TextDecoder().decode(await new Blob(parts as BlobPart[]).arrayBuffer());
+  return /^object ([0-9a-f]{40})/m.exec(text)?.[1];
+}
+
+/** Whether every tag of the chain starting at `oid`, and the object it peels to, is here. */
+async function chainPresent(repo: Repository, oid: string): Promise<boolean> {
+  let cur = oid;
+  for (let i = 0; i < 10; i++) {
+    if (!(await repo.objects.has(cur))) return false;
+    const next = await tagTarget(repo, cur);
+    if (!next) return true;
+    cur = next;
+  }
+  return false;
 }
 
 const nextFlush = (n: number) => (n < LARGE_FLUSH ? n * 2 : Math.floor((n * 11) / 10));
@@ -233,6 +281,9 @@ export async function fetchFrom(url: string, repo: Repository, opts: FetchOption
     opts.agent ?? "webrun-vcs/0.0",
     opts.signal,
   );
+  // a shallow fetch without somewhere to record the boundary would leave a broken repository
+  if (opts.depth && !opts.shallow)
+    throw new Error("depth needs a shallow store (git's shallow file)");
   await remote.discover();
   if (opts.depth && !(remote.caps.get("fetch") ?? "").split(" ").includes("shallow"))
     throw new Error("the server does not support shallow fetches");
@@ -244,24 +295,29 @@ export async function fetchFrom(url: string, repo: Repository, opts: FetchOption
     ...(followTags ? ["refs/tags/"] : []),
   ]);
   const updates: { name: string; oid: string; force: boolean }[] = [];
-  for (const r of remoteRefs)
+  for (const r of remoteRefs) {
+    if (!r.oid) continue; // an unborn HEAD
     for (const s of specs) {
       const dst = matchRefspec(s, r.name);
-      if (dst) updates.push({ name: dst, oid: r.oid, force: s.force });
+      // no destination ("refs/heads/main"): the objects are fetched, no ref is written
+      if (dst !== undefined) updates.push({ name: dst, oid: r.oid, force: s.force });
     }
+  }
   const stats = opts.stats;
   const wants = [...new Set(updates.map((u) => u.oid))];
   const missing: string[] = [];
   for (const w of wants) if (!(await repo.objects.has(w))) missing.push(w);
   const shallowBefore = (await opts.shallow?.read()) ?? [];
   let shallowAfter = shallowBefore;
-  if (missing.length) {
+  // deepening asks again for tips that are already here (git's fetch-pack does the same)
+  const toWant = missing.length ? missing : opts.depth ? wants : [];
+  if (toWant.length) {
     const neg = new Negotiator(repo);
     for await (const r of repo.refs.list("refs/")) await neg.push(r.oid);
     const head = await repo.refs.resolve("HEAD");
     if (head) await neg.push(head);
     const fixed = [
-      ...missing.map((w) => `want ${w}`),
+      ...toWant.map((w) => `want ${w}`),
       ...shallowBefore.map((s) => `shallow ${s}`),
       ...(opts.depth ? [`deepen ${opts.depth}`] : []),
       "thin-pack",
@@ -325,28 +381,31 @@ export async function fetchFrom(url: string, repo: Repository, opts: FetchOption
   if (followTags)
     for (const r of remoteRefs) {
       if (!r.name.startsWith("refs/tags/") || updates.some((u) => u.name === r.name)) continue;
-      if (!(await repo.objects.has(r.oid)) || !(await repo.objects.has(r.peeled ?? r.oid)))
-        continue;
+      if (!r.oid || !(await chainPresent(repo, r.oid))) continue; // the whole tag chain, or nothing
       if (!(await repo.refs.resolve(r.name)))
         updates.push({ name: r.name, oid: r.oid, force: false });
     }
-  // refs: forced or fast-forward
+  // refs: forced or fast-forward; a refused ref is reported, the others still update (git)
   const commands: { name: string; old?: string | null; new: string }[] = [];
+  const rejected: { name: string; reason: string }[] = [];
   for (const u of updates) {
+    if (!u.name) continue;
     const old = await repo.refs.resolve(u.name);
     if (old === u.oid) continue;
-    if (old && !u.force && !(await isAncestor(repo, old, u.oid)))
-      throw new Error(`${u.name}: ${u.oid} is not a fast-forward of ${old}`);
+    if (old && !u.force && !(await isAncestor(repo, old, u.oid))) {
+      rejected.push({ name: u.name, reason: "non-fast-forward" });
+      continue;
+    }
     commands.push({ name: u.name, old: old ?? null, new: u.oid });
   }
-  if (commands.length) {
-    const res = await repo.refs.batch(commands, { message: `fetch: ${url}` });
-    if (!res.ok) throw new Error(`ref update rejected: ${JSON.stringify(res.rejected)}`);
+  // one transaction per ref, as git's fetch (not atomic by default)
+  for (const c of commands) {
+    const res = await repo.refs.batch([c], { message: `fetch: ${url}` });
+    if (!res.ok) rejected.push({ name: c.name, reason: res.rejected[0]?.reason ?? "rejected" });
   }
-  const rejected: { name: string; reason: string }[] = [];
   return {
     refs: remoteRefs,
-    updated: commands.map((c) => c.name),
+    updated: commands.map((c) => c.name).filter((n) => !rejected.some((r) => r.name === n)),
     rejected,
     shallow: shallowAfter,
   };

@@ -95,28 +95,47 @@ async function* limited(body: ReadableStream<Uint8Array> | null, max: number) {
   }
 }
 
-/** Advertised refs: HEAD (symref target) and every ref, tags peeled. */
+/**
+ * The object a tag points at, or undefined for a non-tag; the object's stream is always consumed
+ * or closed (one open file per annotated tag per request leaked before).
+ */
+async function tagTarget(repo: Repository, oid: string): Promise<string | undefined> {
+  const o = await repo.objects.get(oid);
+  if (!o) return undefined;
+  if (o.type !== "tag") {
+    await o.content[Symbol.asyncIterator]().return?.();
+    return undefined;
+  }
+  const parts: Uint8Array[] = [];
+  for await (const c of o.content) parts.push(c);
+  const text = new TextDecoder().decode(await new Blob(parts as BlobPart[]).arrayBuffer());
+  return /^object ([0-9a-f]{40})/m.exec(text)?.[1];
+}
+
+interface AdvertisedRef {
+  name: string;
+  oid: string;
+  /** the first non-tag object of a tag chain */
+  peeled?: string;
+  /** every tag object of the chain, outermost first */
+  chain?: string[];
+}
+
+/** Advertised refs: HEAD (symref target) and every ref, tags peeled with their chains. */
 async function advertised(repo: Repository) {
-  const refs: { name: string; oid: string; peeled?: string; symref?: string }[] = [];
+  const refs: AdvertisedRef[] = [];
   const head = await repo.refs.read("HEAD");
   const headOid = await repo.refs.resolve("HEAD");
   for await (const r of repo.refs.list("refs/")) {
-    let peeled: string | undefined;
-    const o = await repo.objects.get(r.oid);
-    if (o?.type === "tag") {
-      // follow tag chains to the first non-tag
-      let cur = r.oid;
-      for (let i = 0; i < 10; i++) {
-        const t = await repo.objects.get(cur);
-        if (!t || t.type !== "tag") break;
-        const bytes = new Uint8Array(await new Response(t.content as never).arrayBuffer());
-        const m = /^object ([0-9a-f]{40})/m.exec(new TextDecoder().decode(bytes));
-        if (!m) break;
-        cur = m[1] as string;
-      }
-      peeled = cur;
-    } else await o?.content[Symbol.asyncIterator]().return?.();
-    refs.push(peeled ? { ...r, peeled } : r);
+    const chain: string[] = [];
+    let cur = r.oid;
+    for (let i = 0; i < 10; i++) {
+      const next = await tagTarget(repo, cur);
+      if (!next) break;
+      chain.push(cur);
+      cur = next;
+    }
+    refs.push(chain.length ? { ...r, peeled: cur, chain } : r);
   }
   return {
     refs,
@@ -160,7 +179,11 @@ async function readRequest(r: PktReader) {
   return { command, args };
 }
 
-/** git's ok_to_give_up: every want reaches a common commit (or is one), walking no older than the oldest common. */
+/**
+ * git's ok_to_give_up: every want reaches a common commit (or is one), walking no older than the
+ * oldest common. One shared memory of commits known not to reach a common one, so many wants (or
+ * duplicates) cost one walk.
+ */
 async function okToGiveUp(repo: Repository, wants: string[], common: Set<string>) {
   if (!common.size) return false;
   let oldest = Number.POSITIVE_INFINITY;
@@ -180,52 +203,87 @@ async function okToGiveUp(repo: Repository, wants: string[], common: Set<string>
     const x = await load(c);
     if (x) oldest = Math.min(oldest, x.when);
   }
+  const reaches = new Set<string>(common);
+  const dead = new Set<string>();
   for (const w of wants) {
     const seen = new Set<string>();
     const stack = [w];
     let found = false;
     while (stack.length && !found) {
       const x = stack.pop() as string;
-      if (seen.has(x)) continue;
+      if (seen.has(x) || dead.has(x)) continue;
       seen.add(x);
-      if (common.has(x)) found = true;
+      if (reaches.has(x)) found = true;
       else {
         const c = await load(x);
         if (!c || c.when < oldest) continue;
         stack.push(...c.parents);
       }
     }
-    if (!found) return false;
+    if (!found) {
+      for (const x of seen) dead.add(x);
+      return false;
+    }
+    reaches.add(w);
   }
   return true;
 }
 
-/** Commits at `depth` from the wants that have parents: the new shallow boundary (git's deepen). */
+/** Wants that are not tips must be reachable from one (git v2: a stateless fetch, a moved ref). */
+async function unreachableWants(repo: Repository, wants: string[], tips: Set<string>) {
+  const pending = new Set(wants.filter((w) => !tips.has(w)));
+  if (!pending.size) return [];
+  const seen = new Set<string>();
+  const stack = [...tips];
+  while (stack.length && pending.size) {
+    const x = stack.pop() as string;
+    if (seen.has(x)) continue;
+    seen.add(x);
+    pending.delete(x);
+    const c = await readCommit(repo, x).catch(() => undefined);
+    if (c) stack.push(...c.parents);
+  }
+  return [...pending];
+}
+
+/**
+ * git's deepen: commits at `depth` from the wants that have parents are the new shallow boundary;
+ * `interior` holds the commits above it (a client shallow commit among them is unshallowed). A
+ * parent this repository lacks (it is shallow itself) ends the walk there.
+ */
 async function deepenBoundary(repo: Repository, wants: string[], depth: number) {
   const boundary: string[] = [];
+  const interior = new Set<string>();
+  const parentsOf = new Map<string, string[]>();
   const seen = new Set<string>();
   let level: string[] = [];
-  for (const w of wants) {
-    try {
-      await readCommit(repo, w);
-      level.push(w);
-    } catch {
-      // a want that is not a commit has no history
+  const load = async (c: string) => {
+    if (!parentsOf.has(c)) {
+      const commit = await readCommit(repo, c).catch(() => undefined);
+      const present: string[] = [];
+      for (const p of commit?.parents ?? []) if (await repo.objects.has(p)) present.push(p);
+      parentsOf.set(c, commit ? present : []);
     }
-  }
+    return parentsOf.get(c) as string[];
+  };
+  for (const w of wants)
+    if ((await readCommit(repo, w).catch(() => undefined)) !== undefined) level.push(w);
   for (let d = 1; d <= depth && level.length; d++) {
     const next: string[] = [];
     for (const c of level) {
       if (seen.has(c)) continue;
       seen.add(c);
-      const commit = await readCommit(repo, c);
+      const parents = await load(c);
       if (d === depth) {
-        if (commit.parents.length) boundary.push(c);
-      } else next.push(...commit.parents);
+        if (parents.length) boundary.push(c);
+      } else {
+        interior.add(c);
+        next.push(...parents);
+      }
     }
     level = next;
   }
-  return boundary;
+  return { boundary, interior, parentsOf };
 }
 
 export function uploadPackHandler(
@@ -270,11 +328,20 @@ export function uploadPackHandler(
     if (!v2) return new Response("git protocol v2 required\n", { status: 400 });
 
     let request: Awaited<ReturnType<typeof readRequest>>;
-    const reader = new PktReader(limited(req.body, maxRequest));
+    // git's remote-curl gzips request bodies over 1 KiB
+    const encoding = (req.headers.get("content-encoding") ?? "").toLowerCase();
+    if (encoding && encoding !== "gzip" && encoding !== "identity")
+      return new Response(`unsupported content-encoding ${encoding}\n`, { status: 415 });
+    const body =
+      encoding === "gzip" && req.body
+        ? req.body.pipeThrough(new DecompressionStream("gzip") as never)
+        : req.body;
+    const reader = new PktReader(limited(body as ReadableStream<Uint8Array> | null, maxRequest));
     try {
       request = await readRequest(reader);
     } catch (e) {
       if (e instanceof ProtocolError || e instanceof PktError) return errorResponse(e.message);
+      if (e instanceof TypeError) return errorResponse(`bad request body: ${e.message}`); // gzip
       throw e;
     }
     try {
@@ -327,9 +394,10 @@ async function fetchCommand(
   args: string[],
   opts: UploadPackOptions,
 ): Promise<Response> {
-  const wants: string[] = [];
-  const haves: string[] = [];
-  const clientShallow: string[] = [];
+  // sets: duplicates cost nothing (a cheap request must not multiply the server's work)
+  const wantSet = new Set<string>();
+  const haveSet = new Set<string>();
+  const shallowSet = new Set<string>();
   let done = false;
   let thin = false;
   let progress = true;
@@ -339,13 +407,13 @@ async function fetchCommand(
     const [k, v] = [a.split(" ", 1)[0] as string, a.slice(a.indexOf(" ") + 1)];
     if (k === "want") {
       if (!OID.test(v)) throw new ProtocolError(`bad want ${v}`);
-      wants.push(v);
+      wantSet.add(v);
     } else if (k === "have") {
       if (!OID.test(v)) throw new ProtocolError(`bad have ${v}`);
-      haves.push(v);
+      haveSet.add(v);
     } else if (k === "shallow") {
       if (!OID.test(v)) throw new ProtocolError(`bad shallow ${v}`);
-      clientShallow.push(v);
+      shallowSet.add(v);
     } else if (k === "deepen") {
       const n = Number(v);
       if (!Number.isInteger(n) || n < 1) throw new ProtocolError(`bad deepen ${v}`);
@@ -358,8 +426,11 @@ async function fetchCommand(
       // accepted; REF_DELTA is written (both are valid in a pack)
     } else throw new ProtocolError(`unexpected line: '${a}'`);
   }
+  const wants = [...wantSet];
+  const clientShallow = [...shallowSet];
   if (!wants.length) throw new ProtocolError("no want");
-  // wants must be advertised tips (or peeled tag targets): git's default
+  // wants: tips (or peeled tag targets), or commits reachable from them — git v2 serves those
+  // (a fetch by commit id, a ref that moved since ls-refs); anything else is "not our ref"
   const adv = await advertised(repo);
   const tips = new Set<string>();
   for (const r of adv.refs) {
@@ -367,10 +438,14 @@ async function fetchCommand(
     if (r.peeled) tips.add(r.peeled);
   }
   if (adv.head) tips.add(adv.head.oid);
-  for (const w of wants) if (!tips.has(w)) throw new ProtocolError(`upload-pack: not our ref ${w}`);
+  for (const w of wants)
+    if (!tips.has(w) && !(await repo.objects.has(w)))
+      throw new ProtocolError(`upload-pack: not our ref ${w}`);
+  const unreachable = await unreachableWants(repo, wants, tips);
+  if (unreachable.length) throw new ProtocolError(`upload-pack: not our ref ${unreachable[0]}`);
 
   const common = new Set<string>();
-  for (const h of haves) if (await repo.objects.has(h)) common.add(h);
+  for (const h of haveSet) if (await repo.objects.has(h)) common.add(h);
   const ready = !done && !opts.neverReady && (await okToGiveUp(repo, wants, common));
   const head: Uint8Array[] = [];
   if (!done) {
@@ -385,10 +460,22 @@ async function fetchCommand(
     }
     head.push(pkt("ready\n"), DELIM);
   }
-  const boundary = deepen ? await deepenBoundary(repo, wants, deepen) : [];
+  // deepen: the new boundary; client shallow commits now above it are unshallowed and their
+  // parents sent (the client's haves must not make those uninteresting: receiverShallow)
+  let boundary: string[] = [];
+  const unshallow: string[] = [];
+  const extraWants: string[] = [];
   if (deepen) {
+    const b = await deepenBoundary(repo, wants, deepen);
+    boundary = b.boundary;
+    for (const s of clientShallow)
+      if (b.interior.has(s)) {
+        unshallow.push(s);
+        extraWants.push(...(b.parentsOf.get(s) ?? []));
+      }
     head.push(pkt("shallow-info\n"));
-    for (const b of boundary) head.push(pkt(`shallow ${b}\n`));
+    for (const x of boundary) if (!shallowSet.has(x)) head.push(pkt(`shallow ${x}\n`));
+    for (const x of unshallow) head.push(pkt(`unshallow ${x}\n`));
     head.push(DELIM);
   }
   head.push(pkt("packfile\n"));
@@ -400,18 +487,23 @@ async function fetchCommand(
       if (progress) for (const p of sideband(2, enc.encode(m))) await ch.write(p);
     };
     const signal = ch.signal;
-    const shallow = [...clientShallow, ...boundary];
-    const { objects, edges, receiverHas } = await listObjectsWithEdges(repo, wants, [...common], {
-      signal,
-      shallow,
-    });
+    const stillShallow = clientShallow.filter((x) => !unshallow.includes(x));
+    const { objects, edges, receiverHas } = await listObjectsWithEdges(
+      repo,
+      [...wants, ...extraWants.filter((x) => !common.has(x))],
+      [...common],
+      { signal, shallow: [...stillShallow, ...boundary], receiverShallow: clientShallow },
+    );
     if (includeTag) {
       const sent = new Set(objects.map((o) => o.oid));
+      // every tag of the chain (a tag of a tag): the receiver must be able to peel it
       for (const r of adv.refs)
-        if (r.peeled && sent.has(r.peeled) && !sent.has(r.oid) && !common.has(r.oid)) {
-          objects.push({ oid: r.oid, type: "tag" });
-          sent.add(r.oid);
-        }
+        if (r.peeled && r.chain && sent.has(r.peeled) && !common.has(r.oid))
+          for (const t of r.chain)
+            if (!sent.has(t) && !receiverHas.has(t)) {
+              objects.push({ oid: t, type: "tag" });
+              sent.add(t);
+            }
     }
     await say(`Enumerating objects: ${objects.length}, done.\n`);
     let last = -1;
@@ -453,7 +545,10 @@ async function fetchCommand(
       else {
         // an error after the response started: on the error band, then end
         const msg = e instanceof Error ? e.message : String(e);
-        ch.write(concat(sideband(3, enc.encode(`${msg}\n`)))).finally(() => ch.close());
+        // the client may be gone meanwhile: the write's rejection is expected, not a crash
+        ch.write(concat(sideband(3, enc.encode(`${msg}\n`))))
+          .catch(() => {})
+          .finally(() => ch.close());
       }
     },
   );
