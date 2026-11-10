@@ -71,7 +71,7 @@ async function runJob(
     });
     steps.push(r);
     if (r.done) return { result: r.result, steps, id };
-    if (steps.length > 1e6) throw new Error("no progress");
+    if (steps.length > 20_000) throw new Error("no progress");
   }
 }
 
@@ -451,4 +451,203 @@ describe("R5 inside a Durable Object, the runtime restarted between steps", () =
     }
     expect(steps).toBeGreaterThan(5);
   }, 600_000);
+});
+
+/** Review of #70: two failures, concurrent steppers, tiny budgets, thin-phase state, warm work. */
+describe("review cases (#70)", () => {
+  const enc = new TextEncoder();
+  it("B1: an older state left behind plus a failed removal in cleanup: the job still completes", async () => {
+    const pack = packAll(history, true);
+    const ref = await reference(pack);
+    const healthy = new MemFilesApi();
+    // removing the last state file left in the directory fails (cleanup's final removal)
+    const sick: FilesApi = Object.create(healthy);
+    sick.remove = async (p) => {
+      if (/_state_\d+$/.test(p)) {
+        const states = (await listNames(healthy, "/p")).filter((n) => n.includes("_state_"));
+        if (states.length === 1) throw new Error("injected: last state removal fails");
+      }
+      return healthy.remove(p);
+    };
+    const id = await startIndexJob(sick, "/p", chunks(pack));
+    let saved: [string, Uint8Array] | undefined;
+    let result: Awaited<ReturnType<typeof runJob>>["result"] | undefined;
+    try {
+      for (;;) {
+        const r = await stepIndexJob(sick, "/p", id, { units: 5, cold: true });
+        if (r.done) {
+          result = r.result;
+          break;
+        }
+        const names = await listNames(healthy, "/p");
+        const st = names.find((n) => n.endsWith("_state_9"));
+        if (st && !saved) saved = [st, await collect(healthy.read(`/p/${st}`))];
+        // a commit whose removal of the previous state failed (swallowed): state_9 stays behind
+        if (saved && !names.includes(saved[0])) await healthy.write(`/p/${saved[0]}`, [saved[1]]);
+      }
+    } catch {
+      // the injected failure in cleanup
+    }
+    expect(saved).toBeDefined();
+    if (!result) {
+      for (;;) {
+        const r = await stepIndexJob(healthy, "/p", id, { units: 5, cold: true });
+        if (r.done) {
+          result = r.result;
+          break;
+        }
+      }
+    }
+    expect(Buffer.compare(Buffer.from(result.idx), Buffer.from(ref.idx))).toBe(0);
+    expect(await listNames(healthy, "/p")).toEqual([
+      `pack-${ref.packId}.idx`,
+      `pack-${ref.packId}.pack`,
+    ]);
+  }, 300_000);
+
+  /** 0–3 ms of latency on every storage operation, so concurrent steps interleave. */
+  const slow = (files: FilesApi): FilesApi => {
+    const f: FilesApi = Object.create(files);
+    const nap = () => new Promise((r) => setTimeout(r, Math.random() * 3));
+    f.read = (p, o) =>
+      (async function* () {
+        await nap();
+        yield* files.read(p, o);
+      })();
+    for (const m of ["write", "remove", "move", "stats", "exists"] as const) {
+      const orig = (files[m] as (...a: unknown[]) => Promise<unknown>).bind(files);
+      (f as unknown as Record<string, unknown>)[m] = async (...a: unknown[]) => {
+        await nap();
+        return orig(...a);
+      };
+    }
+    f.list = (p, o) =>
+      (async function* () {
+        await nap();
+        yield* files.list(p, o);
+      })();
+    return f;
+  };
+  it("B2: two concurrent steppers in one isolate never corrupt or wedge the job", async () => {
+    const pack = packAll(repoWithHistory(8), true);
+    const ref = await reference(pack);
+    for (const [ua, ub, cold] of [
+      [5, 40, false],
+      [40, 5, true],
+      [1, 1000, false],
+      [3, 9, true],
+    ] as const) {
+      for (let pre = 0; pre < 8; pre++) {
+        const files = slow(new MemFilesApi()); // two isolates' interleaving at I/O
+        const id = await startIndexJob(files, "/p", chunks(pack));
+        for (let k = 0; k < pre; k++) await stepIndexJob(files, "/p", id, { units: 10 });
+        const pair = await Promise.all([
+          stepIndexJob(files, "/p", id, { units: ua, cold }),
+          stepIndexJob(files, "/p", id, { units: ub, cold }),
+        ]);
+        let idx = pair.find((p) => p.done)?.done
+          ? (pair.find((p) => p.done) as { result: { idx: Uint8Array } }).result.idx
+          : undefined;
+        for (let n = 0; !idx; n++) {
+          const r = await stepIndexJob(files, "/p", id, { units: 10 });
+          if (r.done) idx = r.result.idx;
+          expect(n).toBeLessThan(10_000);
+        }
+        expect(
+          Buffer.compare(Buffer.from(idx), Buffer.from(ref.idx)),
+          `${ua}/${ub}/${cold}/${pre}`,
+        ).toBe(0);
+        expect(await listNames(files, "/p"), `${ua}/${ub}/${cold}/${pre}`).toEqual([
+          `pack-${ref.packId}.idx`,
+          `pack-${ref.packId}.pack`,
+        ]);
+      }
+    }
+  }, 300_000);
+
+  /** 20 000 blobs, each with a REF_DELTA child: resolve-phase setup is real work. */
+  const refHeavy = () => {
+    const e: CraftEntry[] = [];
+    for (let i = 0; i < 20_000; i++) {
+      const data = enc.encode(`blob ${i} ${"y".repeat(40)}`);
+      e.push({ kind: 3, data });
+      const t = enc.encode(String(i).padStart(10, "0"));
+      e.push({
+        kind: 7,
+        baseOid: oidOf("blob", data),
+        data: delta(data.length, 20, [0x80 | 0x10, 10, t.length, ...t]),
+      });
+    }
+    return buildPack(e);
+  };
+  for (const cold of [false, true]) {
+    it(`B3: budgetMs 2 (${cold ? "cold" : "warm"}): every step makes progress and the job completes`, async () => {
+      const pack = refHeavy();
+      const ref = await reference(pack);
+      const { steps, result } = await runJob(new MemFilesApi(), pack, Number.POSITIVE_INFINITY, {
+        budgetMs: 2,
+        cold,
+      });
+      for (const s of steps.slice(0, -1)) expect(s.units).toBeGreaterThanOrEqual(1);
+      expect(Buffer.compare(Buffer.from(result.idx), Buffer.from(ref.idx))).toBe(0);
+    }, 600_000);
+  }
+
+  it("C1: a thin pack with 300 bases, 1-unit steps: state stays small, a few thin files", async () => {
+    const bases: Record<string, Uint8Array> = {};
+    const e: CraftEntry[] = [];
+    for (let k = 0; k < 300; k++) {
+      const A = enc.encode(`external base ${k} `.repeat(30));
+      bases[oidOf("blob", A)] = A;
+      const t = enc.encode(`+${k}`);
+      e.push({
+        kind: 7,
+        baseOid: oidOf("blob", A),
+        data: delta(A.length, A.length + t.length, [
+          0x80 | 0x10 | 0x20,
+          A.length & 255,
+          A.length >> 8,
+          t.length,
+          ...t,
+        ]),
+      });
+    }
+    const pack = buildPack(e);
+    const externalBase: ExternalBase = async (o) =>
+      bases[o] ? { type: "blob", data: bases[o] } : undefined;
+    const ref = await reference(pack, externalBase);
+    const files = new MemFilesApi();
+    const write = files.write.bind(files);
+    let maxState = 0;
+    const thinFiles = new Set<string>();
+    files.write = async (p, content) => {
+      if (/_state_\d+$/.test(p)) {
+        const b = await collect(content as AsyncIterable<Uint8Array>);
+        maxState = Math.max(maxState, b.length);
+        return write(p, [b]);
+      }
+      if (/tmp_thin_/.test(p)) thinFiles.add(p);
+      return write(p, content);
+    };
+    const { result, steps } = await runJob(files, pack, 1, { externalBase });
+    console.log(`C1: ${steps.length} steps, max state ${maxState} B, ${thinFiles.size} thin files`);
+    expect(Buffer.compare(Buffer.from(result.idx), Buffer.from(ref.idx))).toBe(0);
+    expect(maxState).toBeLessThanOrEqual(1024);
+    expect(thinFiles.size).toBeLessThanOrEqual(2);
+    expect(await listNames(files, "/p")).toEqual([
+      `pack-${ref.packId}.idx`,
+      `pack-${ref.packId}.pack`,
+    ]);
+  }, 300_000);
+
+  it("C2: warm steps keep the resolver: a 3 000-deep comb in steps of 50 loads ≤ 2× the one-shot", async () => {
+    const pack = comb(3000);
+    const one = await installX6b1(new MemFilesApi(), "/p", chunks(pack));
+    const { result } = await runJob(new MemFilesApi(), pack, 50, { cold: false });
+    console.log(
+      `C2: one-shot ${one.stats.deltaLoads} loads, warm steps ${result.stats.deltaLoads}`,
+    );
+    expect(Buffer.compare(Buffer.from(result.idx), Buffer.from(one.idx))).toBe(0);
+    expect(result.stats.deltaLoads).toBeLessThanOrEqual(2 * one.stats.deltaLoads);
+  }, 300_000);
 });
