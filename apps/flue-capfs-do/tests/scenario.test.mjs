@@ -4,9 +4,12 @@
 // scripts/run-env.mjs starts a runtime (wrangler | cellb | celld) and runs this file.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import { Biscuit, generateKeypair } from "@statewalker/webrun-biscuit";
 import { bundleTodoTool } from "./fixtures/bundle-fixture.mjs";
+
+const TODO_TOOL = new URL("./fixtures/todo-tool.ts", import.meta.url);
 
 const BASE = process.env.BASE_URL ?? "http://127.0.0.1:8787";
 const ADMIN = process.env.ADMIN_KEY ?? "dev-admin-key";
@@ -529,6 +532,64 @@ export default class extends WorkerEntrypoint {
       });
       assert.equal(bad.code, "EPERM", bad.error);
       assert.match(bad.error, /dynamic import/);
+    });
+
+    test("a tool's Node-style sources are bundled in the Agent cell", async (t) => {
+      const rt = (await http("/api/runtime")).value;
+      const ws = freshWs();
+      await seed(ws, SEED);
+      const { token } = await session(ws, "alice", ["/p1", "/proj"]);
+      const sources = { "/index.ts": readFileSync(TODO_TOOL, "utf8") };
+      const node = await bundleTodoTool();
+      // esbuild-wasm in the cell and esbuild on Node: the same bundle, the same hash (so a hash
+      // approved from a build machine also admits the cell's bundle).
+      const b = await run(`bc-${ws}`, ws, token, transport, {
+        kind: "bundle",
+        sources,
+        entry: "/index.ts",
+      });
+      assert.equal(b.ok, true, b.error);
+      assert.equal(b.value.result.check.ok, true, b.value.result.check.problems.join("; "));
+      assert.equal(b.value.result.hash, node.hash);
+      // Run-side keys are the deployment's; a source that fails the check is reported.
+      const own = await run(`bc-${ws}`, ws, token, transport, {
+        kind: "bundle",
+        sources,
+        entry: "/index.ts",
+        config: { external: ["node:fs"] },
+      });
+      assert.equal(own.code, "EINVAL", own.error);
+      const sneaky = { "/index.ts": 'export default async (input) => eval(input.code);' };
+      const s = await run(`bc-${ws}`, ws, token, transport, {
+        kind: "bundle",
+        sources: sneaky,
+        entry: "/index.ts",
+      });
+      assert.equal(s.ok, true, s.error);
+      assert.equal(s.value.result.check.ok, false);
+      if (rt.toolIsolates === "none") return t.skip("no Worker Loader binding in this runtime");
+      const bad = await run(`bc-${ws}`, ws, token, transport, {
+        kind: "tool",
+        sources: sneaky,
+        entry: "/index.ts",
+      });
+      assert.equal(bad.code, "EPERM", bad.error);
+      // Built in the cell, run as a bundle: the policy applies as to any bundle.
+      const r = await run(
+        `bc-${ws}`,
+        ws,
+        token,
+        transport,
+        { kind: "tool", sources, entry: "/index.ts", input: { dir: "/proj" } },
+        [{ scope: "/proj", readOnly: true }],
+      );
+      if (rt.toolIsolates === "refused") {
+        assert.equal(r.code, "EPERM", r.error);
+        return;
+      }
+      assert.equal(r.ok, true, r.error);
+      assert.deepEqual(r.value.result.todos, ["TODO: write tests"]);
+      assert.equal(r.value.result.write, "EACCES");
     });
 
     test("tool isolates keep no state between callers", async (t) => {

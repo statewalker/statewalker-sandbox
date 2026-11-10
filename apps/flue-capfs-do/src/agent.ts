@@ -28,6 +28,7 @@ import { attenuationBlock } from "./policy.ts";
 import { engineHost } from "./python/hosts.ts";
 import { PythonKernel, type PythonRunRequest } from "./python/kernel.ts";
 import { deploymentToolConfig } from "./tools/config.ts";
+import { bundleInCell, type InCellBundleRequest } from "./tools/in-cell.ts";
 import { admitTool, toolPolicy } from "./tools/policy.ts";
 
 export type AttenuationSpec = {
@@ -44,6 +45,10 @@ export type Task =
   | { kind: "bash"; script: string; cwd?: string }
   | { kind: "flue"; calls: { tool: string; params: Record<string, unknown> }[]; cwd?: string }
   | { kind: "tool"; code: string; input?: unknown; bundled?: boolean }
+  /** Sources bundled in this cell, then run as a bundle (the check and policy apply). */
+  | ({ kind: "tool"; code?: undefined; input?: unknown } & InCellBundleRequest)
+  /** Sources bundled in this cell: the bundle, its hash and the check's verdict. */
+  | ({ kind: "bundle" } & InCellBundleRequest)
   | { kind: "revocationId" }
   | ({ kind: "python" } & PythonRunRequest)
   | ({ kind: "agent" } & AgentLoopRequest);
@@ -163,8 +168,19 @@ export class Agent extends DurableObject<AgentEnv> {
       }
       case "flue":
         return this.#flue(name, cap, task);
-      case "tool":
-        return this.#tool(name, cap, task.code, task.input, !!task.bundled);
+      case "tool": {
+        if (typeof task.code === "string")
+          return this.#tool(name, cap, task.code, task.input, !!task.bundled);
+        const config = deploymentToolConfig(this.env.TOOL_BUNDLE);
+        const built = await bundleInCell(task as InCellBundleRequest, config);
+        if (!built.check.ok)
+          throw new Error(`EPERM: the bundle fails the check: ${built.check.problems.join("; ")}`);
+        return this.#tool(name, cap, built.code, task.input, true);
+      }
+      case "bundle": {
+        const built = await bundleInCell(task, deploymentToolConfig(this.env.TOOL_BUNDLE));
+        return { hash: built.hash, check: built.check, size: built.code.length, code: built.code };
+      }
       case "revocationId":
         return cap.revocationId();
       case "python":

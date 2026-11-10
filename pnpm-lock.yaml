@@ -425,12 +425,18 @@ importers:
       '@statewalker/webrun-bundler':
         specifier: 0.1.1
         version: 0.1.1(esbuild-wasm@0.28.2)
+      '@statewalker/webrun-files-mem':
+        specifier: 'catalog:'
+        version: 0.10.3
       acorn:
         specifier: ^8.15.0
         version: 8.19.0
       acorn-walk:
         specifier: ^8.3.4
         version: 8.3.5
+      esbuild-wasm:
+        specifier: 0.28.2
+        version: 0.28.2
       eslint-scope:
         specifier: ^8.4.0
         version: 8.4.0
@@ -450,9 +456,6 @@ importers:
       '@statewalker/cellb':
         specifier: 0.8.0
         version: 0.8.0(@statewalker/webrun-bundler@0.1.1(esbuild-wasm@0.28.2))(@statewalker/webrun-modules@0.3.6)(@statewalker/webrun-site-builder@0.2.2(@statewalker/webrun-files@0.10.3))(@statewalker/webrun-site-host@0.3.0(@statewalker/webrun-files@0.10.3))(esbuild@0.28.2)
-      '@statewalker/webrun-files-mem':
-        specifier: 'catalog:'
-        version: 0.10.3
       '@statewalker/webrun-files-node':
         specifier: 'catalog:'
         version: 0.10.3
