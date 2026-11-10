@@ -484,12 +484,12 @@ tests/helpers/fake-llm.mjs a fake OpenAI-compatible streaming server for the age
 tests/python-scenario.mjs  the Python cases, shared by tests/python.test.mjs (HTTP) and tests/browser.test.mjs
 ```
 
-### Results (9 Nov 2026)
+### Results (10 Nov 2026; the celld 0.6.0 column from 9 Nov)
 
 | Check | wrangler | cellb | cellb, bundled-only | cellb on celld bucket | celld 0.6.0 |
 |---|---|---|---|---|---|
-| scenario, stub transport (13) | ✅ 13 | ✅ 12, 1 skipped | ✅ 12, 1 skipped | ✅ 12, 1 skipped | n/a: celld refuses RpcTargets across isolates |
-| scenario, token transport (13) | ✅ 13 | ✅ 12, 1 skipped | ✅ 12, 1 skipped | ✅ 12, 1 skipped | ✅ 13 |
+| scenario, stub transport (15) | ✅ 15 | ✅ 12, 3 skipped | ✅ 12, 3 skipped | ✅ 12, 3 skipped | n/a: celld refuses RpcTargets across isolates |
+| scenario, token transport (15) | ✅ 15 | ✅ 12, 3 skipped | ✅ 12, 3 skipped | ✅ 12, 3 skipped | ✅ 13 of the 13 before the run-lease tests (9 Nov); not re-run since |
 | scenario, runtime and admin (2) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | durability across a restart | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `examples/walkthrough.mjs` | ✅ | ✅ | not run | not run | not run |
@@ -557,13 +557,13 @@ shim-only isolates in cellb, or yesterday's vm runner.
 - **Tools get `ToolFiles` (stub transport) or a `ToolFilesEntrypoint` binding (token transport),
   never the capability object or the token.** They can use it but not attenuate or hand it off,
   only during the call (a run lease checked with the Agent cell on every binding call), and each
-  call gets a new isolate. Two notes on the entrypoint:
+  call gets a new isolate. An isolate keyed by the code would keep its globals, so whatever one
+  user's call read could be returned to the next user. Two notes on the entrypoint:
   - It is a named export of the Worker. Other Workers of the same Cloudflare account could bind
     to it with props of their own, but without the nonce of a live run it refuses everything.
   - cellb 0.5.2 dispatches any function-valued name of an entrypoint instance, `Object.prototype`
     methods included, so `valueOf()` would return the instance with its props. The entrypoint
-    shadows those methods; workerd and celld do not dispatch them at all. An isolate keyed by the code would keep its globals,
-  so whatever one user's call read could be returned to the next user.
+    shadows those methods; workerd and celld do not dispatch them at all.
 - **Limits of the prototype:** contents are stored as UTF-8 text (not binary-safe). `readdir`
   and recursive operations run one Datalog authorization per entry, so a large tree, or a
   costly attenuation block, makes `ls -R`/`grep -r` slow for the Workspace cell. A revocation id
