@@ -184,7 +184,11 @@ const mem = () => {
   return m.heapUsed + m.arrayBuffers;
 };
 const gc = () => (globalThis as { gc?: () => void }).gc?.();
-/** Samples heap + array buffers every 5 ms and once more when `run` resolves. */
+/**
+ * Samples *live* heap + array buffers: every 50 ms a full GC, then a reading, and once more when
+ * `run` resolves. Without the GC the reading includes garbage awaiting collection, which varies
+ * with the Node version (Node 24 in CI showed +70 MB where Node 22 showed +36 MB for the same run).
+ */
 /** Full GC, then a pause so ArrayBuffer backing stores freed by earlier tests are really released. */
 async function settle() {
   for (let i = 0; i < 3; i++) {
@@ -196,12 +200,14 @@ async function peakDuring<T>(run: () => Promise<T>): Promise<{ result: T; peak: 
   await settle();
   const base = mem();
   let peak = 0;
-  const timer = setInterval(() => {
+  const sample = () => {
+    gc();
     peak = Math.max(peak, mem() - base);
-  }, 5);
+  };
+  const timer = setInterval(sample, 50);
   try {
     const result = await run();
-    peak = Math.max(peak, mem() - base);
+    sample();
     return { result, peak };
   } finally {
     clearInterval(timer);
