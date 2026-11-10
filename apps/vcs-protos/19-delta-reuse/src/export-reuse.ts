@@ -39,6 +39,8 @@ export interface ReuseStats {
   reusedDelta: number;
   thinDelta: number;
   deflated: number;
+  /** deltas computed by a `refine` step (X6e's search) */
+  computed?: number;
 }
 export interface ReuseOptions {
   signal?: AbortSignal;
@@ -47,10 +49,10 @@ export interface ReuseOptions {
   stats?: ReuseStats;
 }
 
-const TYPE_CODE: Record<ObjectType, number> = { commit: 1, tree: 2, blob: 3, tag: 4 };
+export const TYPE_CODE: Record<ObjectType, number> = { commit: 1, tree: 2, blob: 3, tag: 4 };
 const REF_DELTA = 7;
 /** git pack-objects' default --depth */
-const MAX_DEPTH = 50;
+export const MAX_DEPTH = 50;
 /** copied entries up to this compressed size are buffered for the CRC check; larger are read twice */
 const BUFFER_MAX = 2 ** 20;
 const unhex = (h: string) =>
@@ -70,15 +72,28 @@ function entryHeader(kind: number, size: number, baseOid?: string): Uint8Array {
   return Uint8Array.from(out);
 }
 
-type Plan =
+export type Plan =
   | { mode: "whole"; entry: PackedEntry }
   | { mode: "delta" | "thin"; entry: PackedEntry; base: string }
+  /** a delta computed against `base` (sent, or one the receiver has): its bytes when written */
+  | { mode: "computed"; base: string; delta: () => Promise<Uint8Array> }
   | { mode: "deflate" };
+
+export interface WriteOptions extends ReuseOptions {
+  receiverHas?: (oid: string) => boolean;
+  /**
+   * Called with the reuse plan (cycle-free) before writing: may replace "whole" and "deflate"
+   * plans with "computed" ones (X6e's delta search). Their bases must not form cycles.
+   */
+  refine?: (plan: Map<string, Plan>) => Promise<void>;
+  /** the deepest chain written (git's --depth); deeper deltas are sent whole. Default 50. */
+  depth?: number;
+}
 
 export async function* writePackReusing(
   repo: Repository,
   objects: ToSend[],
-  opts: ReuseOptions & { receiverHas?: (oid: string) => boolean } = {},
+  opts: WriteOptions = {},
 ): AsyncGenerator<Uint8Array> {
   const signal = opts.signal;
   const stats = opts.stats;
@@ -113,7 +128,9 @@ export async function* writePackReusing(
     if (cur && state.get(cur) === "visiting") plan.set(cur, { mode: "deflate" }); // break the cycle here
     for (const c of chain) state.set(c, "done");
   }
+  await opts.refine?.(plan);
   // --- depth cap and base-first order (bases among the copied deltas, now acyclic)
+  const maxDepth = opts.depth ?? MAX_DEPTH;
   const depth = new Map<string, number>();
   const order: ToSend[] = [];
   const byOid = new Map(objects.map((o) => [o.oid, o]));
@@ -123,8 +140,14 @@ export async function* writePackReusing(
     const p = plan.get(oid) as Plan;
     let d = 0;
     if (p.mode === "delta") {
-      d = place(p.base) + 1; // depth ≤ MAX_DEPTH bounds this recursion
-      if (d > MAX_DEPTH) {
+      d = place(p.base) + 1; // depth ≤ maxDepth bounds this recursion
+      if (d > maxDepth) {
+        plan.set(oid, { mode: "deflate" });
+        d = 0;
+      }
+    } else if (p.mode === "computed") {
+      d = sending.has(p.base) ? place(p.base) + 1 : 1;
+      if (d > maxDepth) {
         plan.set(oid, { mode: "deflate" });
         d = 0;
       }
@@ -151,6 +174,21 @@ export async function* writePackReusing(
     for (const { oid, type } of order) {
       signal?.throwIfAborted();
       const p = plan.get(oid) as Plan;
+      if (p.mode === "computed") {
+        const data = await p.delta();
+        signal?.throwIfAborted();
+        yield emit(entryHeader(REF_DELTA, data.length, p.base));
+        const pending: Uint8Array[] = [];
+        const d = new Deflate();
+        d.onData = (c: Uint8Array) => {
+          pending.push(c);
+        };
+        d.push(data, true);
+        if (d.err) throw new Error(`deflate failed: ${d.msg}`);
+        for (const c of pending) yield emit(c);
+        if (stats) stats.computed = (stats.computed ?? 0) + 1;
+        continue;
+      }
       if (p.mode !== "deflate") {
         // the CRC is checked before the first byte goes out
         const buffered = await checkedCopy(p.entry, signal).catch((e) => {
