@@ -137,7 +137,8 @@ export class Agent extends DurableObject<AgentEnv> {
         return this.#python().run(cap, task);
       case "agent":
         return runAgentLoop(cap, task, this.env, this.ctx.storage as never, {
-          scope: scope ?? (await sessionScope(cap, [])),
+          // Only a session needs the scope (one more call to the Workspace).
+          scope: task.session === undefined ? "" : (scope ?? (await sessionScope(cap, []))),
           sandboxId: name,
         });
       default:

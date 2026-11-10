@@ -151,22 +151,36 @@ type Message = {
 const textOf = (m: Message | undefined) =>
   typeof m?.content === "string" ? m.content : (m?.content ?? []).map((c) => c.text ?? "").join("");
 
-// One run at a time per session (per Agent cell: a cell runs in one isolate).
+// One run at a time per session (per Agent cell: a cell runs in one isolate). `hold` keeps
+// the session locked past the return, until a run that outlived its deadline has settled.
 const sessionLocks = new Map<string, Promise<unknown>>();
-async function withSessionLock<T>(key: string | undefined, fn: () => Promise<T>): Promise<T> {
-  if (!key) return fn();
+async function withSessionLock<T>(
+  key: string | undefined,
+  fn: (hold: (p: Promise<unknown>) => void) => Promise<T>,
+): Promise<T> {
+  let held: Promise<unknown> = Promise.resolve();
+  const hold = (p: Promise<unknown>) => {
+    held = p;
+  };
+  if (!key) return fn(hold);
   const prev = sessionLocks.get(key) ?? Promise.resolve();
-  const run = prev.catch(() => {}).then(fn);
-  const tail = run.catch(() => {});
+  const run = prev.catch(() => {}).then(() => fn(hold));
+  const tail = run.catch(() => {}).then(() => held.catch(() => {}));
   sessionLocks.set(key, tail);
-  try {
-    return await run;
-  } finally {
+  tail.then(() => {
     if (sessionLocks.get(key) === tail) sessionLocks.delete(key);
-  }
+  });
+  return run;
 }
 
-async function touchSession(storage: Storage, key: string) {
+// The cell's session index is updated one run at a time (sessions have locks of their own).
+let indexQueue: Promise<unknown> = Promise.resolve();
+function touchSession(storage: Storage, key: string) {
+  const next = indexQueue.catch(() => {}).then(() => updateIndex(storage, key));
+  indexQueue = next;
+  return next;
+}
+async function updateIndex(storage: Storage, key: string) {
   const index = ((await storage.get<string[]>(SESSION_INDEX)) ?? []).filter((k) => k !== key);
   index.push(key);
   for (const old of index.splice(0, Math.max(0, index.length - SESSIONS_PER_CELL)))
@@ -204,7 +218,7 @@ export async function runAgentLoop(
   ].map((make) => make(sandbox));
 
   const sessionKey = req.session ? `agent-session:${scope}:${String(req.session)}` : undefined;
-  return withSessionLock(sessionKey, async () => {
+  return withSessionLock(sessionKey && `${sandboxId}\n${sessionKey}`, async (hold) => {
     const model = modelOf(config);
     // What is sent back each turn stays within the context, leaving room for the reply.
     const contextBytes = Math.max(
@@ -230,12 +244,15 @@ export async function runAgentLoop(
     const timeoutMs = Math.min(Math.max(Number(req.timeoutMs) || 120_000, 1000), 600_000);
     let turns = 0;
     let stopped: string | undefined;
-    agent.subscribe((e: { type: string; message?: Message }) => {
+    agent.subscribe((e: { type: string; message?: Message; toolResults?: unknown[] }) => {
       if (e.type !== "turn_end" || stopped) return; // the turn cut short by the abort does not count
       turns += 1;
       // Only a turn that asked for tools leads to another one: a run that ends on its last
       // allowed turn is not a limit stop.
-      if (turns >= maxTurns && e.message?.stopReason === "toolUse") {
+      if (
+        turns >= maxTurns &&
+        (e.message?.stopReason === "toolUse" || (e.toolResults?.length ?? 0) > 0)
+      ) {
         stopped = `stopped after ${maxTurns} turns`;
         agent.abort();
       }
@@ -250,14 +267,15 @@ export async function runAgentLoop(
         hard = setTimeout(resolve, GRACE_MS);
       }, timeoutMs);
     });
+    const loop = (async () => {
+      await agent.prompt(req.prompt);
+      await agent.waitForIdle();
+    })();
+    // A run that outlives the grace period keeps its session locked until it settles: a tool
+    // that ignores the abort may still finish a write, but no other run on the session starts.
+    hold(loop);
     try {
-      await Promise.race([
-        (async () => {
-          await agent.prompt(req.prompt);
-          await agent.waitForIdle();
-        })(),
-        deadline,
-      ]);
+      await Promise.race([loop, deadline]);
     } finally {
       clearTimeout(timer);
       clearTimeout(hard);
@@ -308,9 +326,15 @@ export async function runAgentLoop(
       }),
       { input: 0, output: 0 },
     );
+    for (const c of toolCalls)
+      if (!c.done) {
+        c.isError = true;
+        c.result = "no result (the run was stopped)";
+      }
+    // The provider's message, without the URLs it may name, and clipped.
     const providerError =
       last?.stopReason === "error"
-        ? clip(String(last.errorMessage ?? "error"), ERROR_LIMIT)
+        ? clip(String(last.errorMessage ?? "error").replace(/\b\w+:\/\/\S+/g, "<url>"), ERROR_LIMIT)
         : undefined;
     const errors = [stopped, providerError].filter(Boolean);
 

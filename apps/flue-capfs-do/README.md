@@ -342,7 +342,9 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
   endpoint or sees the key; `/api/runtime` reports `llm: {model, api, host}` (or `null`, and
   the task fails with `ENOSYS`).
 - **Limits:** `maxTurns` (default 12, at most 50) and `timeoutMs` (default 120 s, at most
-  600 s; a tool that ignores the abort gets 5 s more, then the run returns). A run cut short
+  600 s; a tool that ignores the abort gets 5 s more, then the run returns, its calls without
+  a result marked as errors; such a tool can still finish after the run returned, and its
+  session stays locked until it does). A run cut short
   returns `stopReason: "limit"` and the reason in `error`; a run that ends on its last allowed
   turn is not cut short. `prompt` and `instructions` are at most 100 000 characters each.
 - **Sessions:** with `session`, the conversation is kept in the cell that runs it (the last
@@ -356,8 +358,10 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
     each turn stays within `contextWindow` (about 3 characters a token, less `maxTokens`). It
     is trimmed to start with a user message and without aborted or failed replies, so a provider
     accepts it.
-  - A cell keeps at most 32 sessions and drops the least recently used one beyond that. Runs on
-    the same session wait for each other.
+  - A cell keeps at most 32 sessions and drops the least recently used one beyond that, whoever
+    owns it: a holder can push other capabilities' sessions out of a cell (losing their
+    history, not leaking it). Runs on the same session wait for each other; the wait does not
+    count against `timeoutMs`.
 - **The result** is the last reply, each tool call with its arguments and (clipped) result
   (paired by call id), and token usage. Replies and tool results are clipped at 4000
   characters, a provider error at 500.
