@@ -9,6 +9,7 @@ import { gitObjects } from "../../09-git-objects/src/git-objects.js";
 import { filesStagingStore } from "../../09-git-objects/src/staging.js";
 import {
   openPack,
+  PackError,
   type PackReader,
   type PackReaderOptions,
   type ReadObject,
@@ -40,10 +41,23 @@ export async function openObjectDatabase(
     skipped: [],
     async get(oid, o) {
       if (!OID.test(oid)) return undefined;
+      // A copy that fails (a corrupt entry, a bad delta) is passed over for the next pack, then
+      // the loose objects, as git's find_pack_entry/mark_bad_packed_object do; the first error is
+      // raised only when no other copy exists. This covers errors raised before `get` returns
+      // (deltas, headers); a streamed whole object fails while it is read, past this point.
+      let failed: unknown;
       for (const p of packs) {
-        if (p.has(oid)) return p.get(oid, o);
+        if (!p.has(oid)) continue;
+        try {
+          return await p.get(oid, o);
+        } catch (e) {
+          if (!(e instanceof PackError)) throw e;
+          failed ??= e;
+        }
       }
-      return loose.get(oid, { verify: o?.verify });
+      const fromLoose = await loose.get(oid, { verify: o?.verify });
+      if (fromLoose || !failed) return fromLoose;
+      throw failed;
     },
     async has(oid) {
       if (!OID.test(oid)) return false;
@@ -67,9 +81,16 @@ export async function openObjectDatabase(
       }
     },
   };
+  const maxObjectSize = opts.maxObjectSize ?? 2 ** 30;
   const externalBase = async (oid: string, visiting: Set<string>) => {
     const o = await db.get(oid, { visiting });
     if (!o) return undefined;
+    // A loose base is not bounded by its pack's limit: check its declared size before buffering
+    // it (a loose zlib bomb of a few hundred KB can declare hundreds of MiB).
+    if (o.size > maxObjectSize)
+      throw new PackError(
+        `REF_DELTA base ${oid} is ${o.size} bytes, over the limit of ${maxObjectSize}`,
+      );
     const parts: Uint8Array[] = [];
     for await (const c of o.content) parts.push(c);
     const data = new Uint8Array(o.size);
