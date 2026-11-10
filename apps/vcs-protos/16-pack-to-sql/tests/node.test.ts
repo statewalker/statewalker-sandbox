@@ -2,6 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deflateSync } from "node:zlib";
 import type { Db } from "@statewalker/db-api";
 import { newNodeSqliteDb } from "@statewalker/db-sqlite-node";
 import type { FilesApi } from "@statewalker/webrun-files";
@@ -10,7 +11,8 @@ import { SqliteFilesApi } from "@statewalker/webrun-files-sqlite";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, describe, expect, it } from "vitest";
-import { git, packAll, repoWithHistory } from "../../12-index-pack/src/git-repo.js";
+import { buildPack, type CraftEntry, oidOf } from "../../12-index-pack/src/craft.js";
+import { git, noise, packAll, repoWithHistory } from "../../12-index-pack/src/git-repo.js";
 import { openPack } from "../../13-pack-reader/src/pack-reader.js";
 import { installPack } from "../../14-thin-packs/src/index-pack.js";
 import { explodedObjects, explodeStep } from "../src/explode.js";
@@ -31,6 +33,12 @@ const collect = async (s: AsyncIterable<Uint8Array> | Iterable<Uint8Array>) => {
   const parts: Uint8Array[] = [];
   for await (const c of s) parts.push(c);
   return new Uint8Array(Buffer.concat(parts));
+};
+
+const collectNames = async (files: FilesApi) => {
+  const out: string[] = [];
+  for await (const e of files.list("/objects/pack")) out.push(e.name);
+  return out;
 };
 
 /** Installs `pack` into `files` (X6b1) and opens it (X6r). */
@@ -315,4 +323,99 @@ describe("R5 inside a Durable Object, the runtime restarted between steps", () =
     expect(v.total).toBeGreaterThan(100);
     expect(steps).toBeGreaterThan(3);
   }, 600_000);
+});
+
+/** Review of #71: input validation, byte-bounded batches, verified inline objects, one resolve. */
+describe("review cases (#71)", () => {
+  it("batch or units below 1 are refused (batch 0 spun the thread)", async () => {
+    const reader = await readerOf(new MemFilesApi(), packAll(history, true));
+    const db = await newNodeSqliteDb();
+    for (const bad of [{ batch: 0 }, { batch: Number.NaN }, { units: 0 }, { units: -1 }])
+      await expect(explodeStep(db, reader, bad), JSON.stringify(bad)).rejects.toThrow(
+        /batch|units/,
+      );
+  });
+  it("a batch is bounded by bytes: 120 incompressible ~1 MB objects add < 48 MiB", async () => {
+    const e: CraftEntry[] = [];
+    for (let i = 0; i < 120; i++) e.push({ kind: 3, data: noise(1_000_000 - i, i + 1) });
+    const pack = buildPack(e);
+    const reader = await readerOf(new MemFilesApi(), pack);
+    const db = await newNodeSqliteDb();
+    const gc = () => (globalThis as { gc?: () => void }).gc?.();
+    const live = () => process.memoryUsage().arrayBuffers;
+    gc();
+    gc();
+    const base = live();
+    let peak = 0;
+    const get = reader.get.bind(reader);
+    reader.get = async (id, o) => {
+      gc();
+      gc();
+      peak = Math.max(peak, live() - base);
+      return get(id, o);
+    };
+    await explodeAll(db, reader);
+    console.log(`byte budget: peak +${(peak / 2 ** 20).toFixed(1)} MiB`);
+    expect(peak).toBeLessThan(48 * 2 ** 20);
+  }, 300_000);
+  it("an inline object whose pack bytes changed at rest is refused, not stored under its id", async () => {
+    const A = new TextEncoder().encode("the original content ".repeat(20));
+    const B = new TextEncoder().encode("THE CHANGED  CONTENT ".repeat(20)); // same length
+    const zA = deflateSync(A, { level: 0 });
+    const zB = deflateSync(B, { level: 0 });
+    expect(zB.length).toBe(zA.length);
+    const pack = buildPack([
+      { kind: 3, data: A, rawZ: zA },
+      { kind: 3, data: new Uint8Array(3) },
+    ]);
+    const files = new MemFilesApi();
+    const reader = await readerOf(files, pack);
+    // corrupt the stored pack: B's zlib (valid, same length) where A's was
+    const name = (await collectNames(files)).find((n) => n.endsWith(".pack")) as string;
+    const stored = await collect(files.read(`/objects/pack/${name}`));
+    const at = Buffer.from(stored).indexOf(Buffer.from(zA));
+    expect(at).toBeGreaterThan(0);
+    stored.set(zB, at);
+    await files.write(`/objects/pack/${name}`, [stored]);
+    const reopened = await openPack(
+      files,
+      `/objects/pack/${name}`,
+      `/objects/pack/${name.replace(/\.pack$/, ".idx")}`,
+    );
+    const db = await newNodeSqliteDb();
+    await expect(explodeAll(db, reopened)).rejects.toThrow();
+    const objects = await explodedObjects(db);
+    expect(await objects.has(oidOf("blob", A))).toBe(false);
+    void reader;
+  });
+  it("each object is resolved once (the large path re-read it)", async () => {
+    const reader = await readerOf(new MemFilesApi(), packAll(withBig, true));
+    const gets = new Map<string, number>();
+    const get = reader.get.bind(reader);
+    reader.get = (id, o) => {
+      gets.set(id, (gets.get(id) ?? 0) + 1);
+      return get(id, o);
+    };
+    await explodeAll(await newNodeSqliteDb(), reader);
+    expect([...gets.values()].every((n) => n === 1)).toBe(true);
+    expect(gets.size).toBe(reader.count);
+  });
+  it("a second explode of the same pack stages no chunk rows again (existing objects skipped)", async () => {
+    const reader = await readerOf(new MemFilesApi(), packAll(withBig, true));
+    const db = await newNodeSqliteDb();
+    await explodeAll(db, reader);
+    await db.query("DELETE FROM obj_explode");
+    let chunkInserts = 0;
+    const counted: Db = Object.create(db);
+    counted.query = async (sql, params) => {
+      if (/INSERT INTO obj_chunks/.test(sql)) chunkInserts++;
+      return db.query(sql, params);
+    };
+    for (const sym of Object.getOwnPropertySymbols(db))
+      (counted as unknown as Record<symbol, unknown>)[sym] = (
+        db as unknown as Record<symbol, unknown>
+      )[sym];
+    await explodeAll(counted, reader);
+    expect(chunkInserts).toBe(0);
+  });
 });
