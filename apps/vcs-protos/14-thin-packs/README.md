@@ -115,7 +115,7 @@ All 24 Node tests, the 45 X6a tests re-run against this module and 1 Chromium te
 
 ### Mutation check
 
-Each mutation applied alone to `src/index-pack.ts`, the matching tests run (`-t`), file restored.
+Each mutation applied alone to `src/index-pack.ts`, the matching tests run (`-t`), file restored; re-run against the code after the review fixes.
 
 | Mutation | Caught by |
 |---|---|
@@ -130,7 +130,11 @@ Each mutation applied alone to `src/index-pack.ts`, the matching tests run (`-t`
 | M9 sweep ignores the age | R6 (2) |
 | M10 sweep removes any file | R6 |
 | M11 appended entry's CRC without its header | R1 (4: idx differs from git's for our pack) |
-| M12 REF children never found | R1, R1b, R2 (13) |
+| M12 REF children never found | R1, R1b, R2 (19) |
+| M13 tables allocated from the header count (the review's finding 1) | R3b declared-count pack |
+| M14 window refills the whole remaining file (the review's mutation) | R5b window bound |
+| M15 a missing id asked again per delta | R1b unknown base (calls) |
+| M16 appended entries read from the received pack (the review's mutation) | R3b appended re-read (2) |
 
 ### X6a against X6b1 (`scripts/compare.ts`, Node 22, same packs, on local disk)
 
