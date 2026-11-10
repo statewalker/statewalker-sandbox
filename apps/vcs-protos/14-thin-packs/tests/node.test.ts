@@ -273,6 +273,62 @@ describe("R1b thin-pack refusals and base lookups", () => {
     expect(ids).toEqual([Aid, Bid, oidOf("blob", C), Aid].sort());
     expect((await listed(files)).sort()).toEqual([`pack-${r.packId}.idx`, `pack-${r.packId}.pack`]);
   });
+  it("the stored pack changing while it is completed is detected", async () => {
+    const files = memRepo();
+    calls = [];
+    const p = thin([
+      { kind: 3, data: other },
+      { kind: 7, baseOid: Aid, data: dAB },
+    ]);
+    const read = files.read.bind(files);
+    // the completion re-reads the received part [12, size - 20): flip a byte in that read only
+    files.read = (path, o) =>
+      (async function* () {
+        const copy = /tmp_pack_[^/]*$/.test(path) && o?.start === 12 && o.length === p.length - 32;
+        for await (const c of read(path, o)) {
+          if (!copy) yield c;
+          else {
+            const x = c.slice();
+            x[0] = (x[0] as number) ^ 1;
+            yield x;
+          }
+        }
+      })();
+    const err = await installPack(files, "/objects/pack", chunks(p), {
+      externalBase: baseOf({ [Aid]: A }),
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(PackError);
+    expect(String(err)).toMatch(/changed/);
+    expect(await listed(files)).toEqual([]);
+  });
+  it("an evicted base reached through REF links is re-derived (git's idx, 1-byte cache)", async () => {
+    const enc = new TextEncoder();
+    const blob = (s: string) => enc.encode(s.repeat(30));
+    const ext = (b: Uint8Array, tail: string) => {
+      const t = enc.encode(tail);
+      return {
+        data: new Uint8Array([...b, ...t]),
+        d: delta(b.length, b.length + t.length, [...copyAll(b.length), t.length, ...t]),
+      };
+    };
+    const a = blob("root ");
+    const b = ext(a, "B");
+    const c1 = ext(b.data, "C1");
+    const c2 = ext(b.data, "C2");
+    const d2 = ext(c2.data, "D2");
+    // A ← B ← {C1, C2 ← D2}, all REF_DELTA: after C2's subtree B's evicted content must be
+    // rebuilt from A through B's recorded base
+    const p = buildPack([
+      { kind: 3, data: a },
+      { kind: 7, baseOid: oidOf("blob", a), data: b.d },
+      { kind: 7, baseOid: oidOf("blob", b.data), data: c1.d },
+      { kind: 7, baseOid: oidOf("blob", b.data), data: c2.d },
+      { kind: 7, baseOid: oidOf("blob", c2.data), data: d2.d },
+    ]);
+    const r = await installPack(memRepo(), "/objects/pack", chunks(p), { baseCacheBytes: 1 });
+    expect(Buffer.compare(Buffer.from(r.idx), Buffer.from(gitIdx(p)))).toBe(0);
+    expect(r.stats.deltaLoads).toBeGreaterThan(5); // B was rebuilt, not kept
+  });
   it("a complete pack never calls externalBase", async () => {
     const files = memRepo();
     calls = [];
