@@ -14,7 +14,7 @@ describe("R1/R2 on sqlite-wasm in Chromium", () => {
       () => sqlBlobStore(db, { prefix: `t${n++}_`, chunkSize: 4096 }),
       4096,
     );
-    expect(r.cases).toBe(22);
+    expect(r.cases).toBe(24);
     expect(r.failed).toEqual([]);
   });
   it("X4 object contract", async () => {

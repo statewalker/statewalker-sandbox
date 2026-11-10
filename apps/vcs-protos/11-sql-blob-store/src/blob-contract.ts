@@ -207,27 +207,40 @@ export async function runBlobContract(
     const r = await s.putStaged(streamOf("second"), () => "k");
     return !r.stored && (await text(s.get("k"))) === "first" && (await ids(s)).join() === "k";
   });
+  await check("sweepStaged never removes a put still in flight in this store", async (s) => {
+    await s.put("keep", streamOf("kept"));
+    const gate = new Promise<void>(() => {}); // never resolved: the put stays in flight
+    async function* stuck() {
+      yield pattern(chunkSize + 5);
+      await gate;
+    }
+    void s.putStaged(stuck(), () => "never").catch(() => {});
+    await new Promise((r) => setTimeout(r, 50));
+    const removed = (await s.sweepStaged?.(0)) ?? -1;
+    const ok =
+      removed === 0 && (await ids(s)).join() === "keep" && (await text(s.get("keep"))) === "kept";
+    return ok || `removed ${removed}`;
+  });
+  await check("content of chunk-1, chunk, chunk+1 and 2 chunks round-trips", async (s) => {
+    for (const n of [chunkSize - 1, chunkSize, chunkSize + 1, 2 * chunkSize]) {
+      const d = pattern(n, n);
+      await s.put(`n${n}`, streamOf(d.subarray(0, 1), d.subarray(1)));
+      if (!eq(await collect(s.get(`n${n}`)), d) || (await s.size(`n${n}`)) !== n)
+        return `size ${n}`;
+      if (!eq(await collect(s.get(`n${n}`, { start: n - 1 })), d.subarray(n - 1)))
+        return `tail ${n}`;
+    }
+    return true;
+  });
   await check(
-    "sweepStaged removes temporaries left by an interrupted put, and nothing else",
+    "ids that are not well-formed Unicode are refused; list keeps its lower bound",
     async (s) => {
-      await s.put("keep", streamOf("kept"));
-      // never resolved: the put stays half-written, as after a crash (resuming it after a sweep would
-      // commit a blob with missing rows — the same hazard as `git prune` of an active tmp file)
-      const gate = new Promise<void>(() => {});
-      async function* stuck() {
-        yield pattern(chunkSize + 5);
-        await gate; // never released: the put stays half-written
-      }
-      void s.putStaged(stuck(), () => "never").catch(() => {});
-      await new Promise((r) => setTimeout(r, 50));
-      const tooYoung = (await s.sweepStaged?.(3_600_000)) ?? -1; // younger than an hour: kept
-      const removed = (await s.sweepStaged?.(0)) ?? -1;
-      if (tooYoung !== 0) return `swept a fresh temporary (${tooYoung})`;
+      const lone = await rejects(s.put("a\uD800", streamOf("x")));
+      await s.put("b", streamOf("1"));
+      await s.put("\u{10FFFF}", streamOf("2"));
+      const top = await ids(s, "\u{10FFFF}");
       return (
-        (removed >= 1 &&
-          (await ids(s)).join() === "keep" &&
-          (await text(s.get("keep"))) === "kept") ||
-        `removed ${removed}`
+        (lone && top.join() === "\u{10FFFF}") || `lone refused ${lone}, list ${JSON.stringify(top)}`
       );
     },
   );

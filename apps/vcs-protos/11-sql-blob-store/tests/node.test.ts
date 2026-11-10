@@ -17,7 +17,7 @@ import { filesStagingStore } from "../../09-git-objects/src/staging.js";
 import { pattern, runBlobContract } from "../src/blob-contract.js";
 import { sqlBlobStore } from "../src/sql-blob-store.js";
 
-const BLOB_CASES = 22;
+const BLOB_CASES = 24;
 const OBJECT_CASES = 20;
 const CHUNK = 4096; // small rows so multi-row cases stay cheap
 const MiB = 2 ** 20;
@@ -136,7 +136,84 @@ describe("R3 atomicity", () => {
   });
 });
 
-/** Live heap + array buffers, sampled after a full GC every 50 ms (see X4). */
+describe("R3b a sweep by another store instance never yields a broken blob", () => {
+  it("a put whose staged rows were swept meanwhile rejects; nothing visible; a retry works", async () => {
+    const db = await newNodeSqliteDb({ path: tmpFile() });
+    const a = await sqlBlobStore(db, { chunkSize: CHUNK });
+    const b = await sqlBlobStore(db, { chunkSize: CHUNK }); // e.g. a restarted process
+    const data = pattern(CHUNK * 3 + 7, 13);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let staged: () => void = () => {};
+    const atGate = new Promise<void>((r) => {
+      staged = r;
+    });
+    const put = a.putStaged(
+      (async function* () {
+        yield data.subarray(0, CHUNK * 2 + 1); // two rows flushed
+        staged();
+        await gate;
+        yield data.subarray(CHUNK * 2 + 1);
+      })(),
+      () => "obj",
+    );
+    await atGate;
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await b.sweepStaged?.(0)).toBeGreaterThanOrEqual(1);
+    release();
+    await expect(put).rejects.toThrow();
+    expect(await a.has("obj")).toBe(false);
+    expect(await b.sweepStaged?.(0)).toBe(0);
+    await a.put(
+      "obj",
+      (async function* () {
+        yield data;
+      })(),
+    );
+    const back: Uint8Array[] = [];
+    for await (const c of a.get("obj")) back.push(c);
+    expect(Buffer.concat(back).equals(Buffer.from(data))).toBe(true);
+  });
+});
+
+describe("R3c trap: two Db connections on one file", () => {
+  it("concurrent puts through two connections fail cleanly with 'database is locked', never corrupt", async () => {
+    const path = tmpFile();
+    const d1 = await newNodeSqliteDb({ path });
+    const d2 = await newNodeSqliteDb({ path });
+    const s1 = await sqlBlobStore(d1, { chunkSize: CHUNK });
+    const s2 = await sqlBlobStore(d2, { chunkSize: CHUNK });
+    const datas = Array.from({ length: 40 }, (_, i) => pattern(CHUNK * 2 + i, 100 + i));
+    const results = await Promise.allSettled(
+      datas.map((d, i) =>
+        (i % 2 ? s1 : s2).put(
+          `k${i}`,
+          (async function* () {
+            yield d;
+          })(),
+        ),
+      ),
+    );
+    const failed = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+    console.log(
+      `R3c two connections: ${failed.length}/40 puts failed (${String(failed[0]?.reason).slice(0, 60)})`,
+    );
+    for (const [i, r] of results.entries()) {
+      const has = await s1.has(`k${i}`);
+      expect(has, `k${i}`).toBe(r.status === "fulfilled");
+      if (has) {
+        const back: Uint8Array[] = [];
+        for await (const c of s1.get(`k${i}`)) back.push(c);
+        expect(Buffer.concat(back).equals(Buffer.from(datas[i] as Uint8Array))).toBe(true);
+      }
+    }
+    for (const r of failed) expect(String(r.reason)).toMatch(/locked|busy/i);
+  });
+});
+
+/** Live heap + array buffers after a full GC (see X4). */
 const gc = () => (globalThis as { gc?: () => void }).gc?.();
 const mem = () => {
   const m = process.memoryUsage();
@@ -148,23 +225,6 @@ async function settle() {
     await new Promise((r) => setTimeout(r, 50));
   }
 }
-async function peakDuring<T>(run: () => Promise<T>) {
-  await settle();
-  const base = mem();
-  let peak = 0;
-  const sample = () => {
-    gc();
-    peak = Math.max(peak, mem() - base);
-  };
-  const t = setInterval(sample, 50);
-  try {
-    const result = await run();
-    sample();
-    return { result, peak };
-  } finally {
-    clearInterval(t);
-  }
-}
 
 describe("R4 bounded memory (1 MiB rows)", () => {
   it("a 64 MB incompressible blob is written and read back with < 16 MB live", async () => {
@@ -172,24 +232,45 @@ describe("R4 bounded memory (1 MiB rows)", () => {
     const s = await sqlBlobStore(db);
     const MB = 64;
     const chunk = pattern(MiB, 9);
-    const w = await peakDuring(() =>
-      s.putStaged(
-        (async function* () {
-          for (let i = 0; i < MB; i++) yield chunk.slice();
-        })(),
-        () => "big",
-      ),
+    // node:sqlite is synchronous behind promises, so a timer never fires mid-stream: sample live
+    // memory (after a full GC) inside the producer and the consumer loops, every 8 MiB
+    await settle();
+    let base = mem();
+    const rss0 = process.memoryUsage().rss;
+    let wPeak = 0;
+    await s.putStaged(
+      (async function* () {
+        for (let i = 0; i < MB; i++) {
+          if (i % 8 === 7) {
+            gc();
+            wPeak = Math.max(wPeak, mem() - base);
+          }
+          yield chunk.slice();
+        }
+      })(),
+      () => "big",
     );
+    gc();
+    wPeak = Math.max(wPeak, mem() - base);
+    const rssW = process.memoryUsage().rss - rss0;
+    await settle();
+    base = mem();
+    let rPeak = 0;
     let total = 0;
-    const r = await peakDuring(async () => {
-      for await (const c of s.get("big")) total += c.length;
-    });
+    let k = 0;
+    for await (const c of s.get("big")) {
+      total += c.length;
+      if (++k % 8 === 0) {
+        gc();
+        rPeak = Math.max(rPeak, mem() - base);
+      }
+    }
     console.log(
-      `R4 64 MB: write peak +${(w.peak / MiB).toFixed(1)} MB, read peak +${(r.peak / MiB).toFixed(1)} MB`,
+      `R4 64 MB: write peak +${(wPeak / MiB).toFixed(1)} MB, read peak +${(rPeak / MiB).toFixed(1)} MB (heap + arrayBuffers, sampled in-loop); RSS +${(rssW / MiB).toFixed(1)} MB during the write`,
     );
     expect(total).toBe(MB * MiB);
-    expect(w.peak).toBeLessThan(16 * MiB);
-    expect(r.peak).toBeLessThan(16 * MiB);
+    expect(wPeak).toBeLessThan(16 * MiB);
+    expect(rPeak).toBeLessThan(16 * MiB);
   }, 120_000);
 });
 
@@ -220,8 +301,17 @@ describe("R6 native vs composition (node:sqlite file)", () => {
     );
     const large = Array.from({ length: 16 }, (_, i) => pattern(MiB, 1000 + i));
     const rows: string[] = [];
-    for (const kind of ["native", "composition"] as const) {
+    for (const [kind, wal] of [
+      ["native", false],
+      ["composition", false],
+      ["native", true],
+      ["composition", true],
+    ] as const) {
       const real = await newNodeSqliteDb({ path: tmpFile() });
+      if (wal) {
+        await real.exec("PRAGMA journal_mode = WAL");
+        await real.exec("PRAGMA synchronous = NORMAL");
+      }
       const { db, stats } = instrumented(real);
       const store =
         kind === "native"
@@ -249,7 +339,7 @@ describe("R6 native vs composition (node:sqlite file)", () => {
       for (const id of lids) for await (const _ of objs.getRaw(id));
       const t4 = performance.now();
       rows.push(
-        `${kind.padEnd(12)} small put ${(t1 - t0).toFixed(0)} ms (${(s1 / 2000).toFixed(1)} stmt/obj), small get ${(t2 - t1).toFixed(0)} ms (${((s2 - s1) / 2000).toFixed(1)} stmt/obj), 16 MiB put ${(t3 - t2).toFixed(0)} ms, get ${(t4 - t3).toFixed(0)} ms`,
+        `${kind.padEnd(12)} ${wal ? "WAL+NORMAL " : "delete+FULL"} small put ${(t1 - t0).toFixed(0)} ms (${(s1 / 2000).toFixed(1)} stmt/obj), small get ${(t2 - t1).toFixed(0)} ms (${((s2 - s1) / 2000).toFixed(1)} stmt/obj), 16 MiB put ${(t3 - t2).toFixed(0)} ms, get ${(t4 - t3).toFixed(0)} ms`,
       );
       expect(ids.length).toBe(2000);
       await real.close();
