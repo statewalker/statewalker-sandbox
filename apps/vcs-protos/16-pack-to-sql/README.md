@@ -70,7 +70,7 @@ Measured on node:sqlite, one file database each (1 050 objects, 13.8 MB of conte
 
 ## Verified
 
-All 9 Node tests pass (`pnpm test 16-pack-to-sql`).
+All 9 Node tests pass (`pnpm test 16-pack-to-sql`). The tests were written alongside the implementation; the mutation table stands in for the red runs.
 
 | # | Result |
 |---|---|
