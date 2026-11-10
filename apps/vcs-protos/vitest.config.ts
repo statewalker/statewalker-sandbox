@@ -34,6 +34,9 @@ export default defineConfig({
             "@noble/hashes/sha2.js",
             "@noble/hashes/blake3.js",
             "@statewalker/db-sqlite-browser",
+            "@statewalker/webrun-files-browser",
+            "@statewalker/webrun-files-sqlite",
+            "@statewalker/webrun-storage",
           ],
           // sqlite-wasm locates sqlite3.wasm next to its own module; pre-bundling would move it.
           exclude: ["@sqlite.org/sqlite-wasm"],

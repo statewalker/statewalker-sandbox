@@ -15,6 +15,7 @@ then tests written first (red), then the implementation (green), then findings.
 | `06-wasm-hash-tier` | X1e — **works everywhere; BLAKE3 16× (Node) to 35× faster; workerd SHA via DigestStream** | Can a WASM hash tier run in every runtime, including workerd, and is it fast enough for browser Xet? |
 | `07-lockfile-cas` | X2 — **works on mem, Node, OPFS; native git interop** | Can git's lock-file protocol give a crash-safe, linearizable ref compare-and-set on FilesApi, interoperating with native git? |
 | `08-sqlite-kv-cas` | X3a — **works on node:sqlite, sqlite-wasm, workerd DO; one owner per OPFS sahpool pool** | Can a KvStore whose compare-and-set is one SQL statement be linearizable on node:sqlite, sqlite-wasm and a Durable Object? |
+| `09-git-objects` | X4 — **git's ids and loose objects on every backend; seam needs `putStaged`, FilesApi must stream writes** | Can one raw-bytes git object kernel over BlobStore give git's ids and git's loose objects on every backend? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.

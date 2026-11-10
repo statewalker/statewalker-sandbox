@@ -29,6 +29,11 @@
     "@statewalker/db-sqlite-browser": "^0.2.1",
     "@statewalker/db-sqlite-do": "^0.1.0",
     "@statewalker/db-sqlite-node": "^0.3.0",
+    "@statewalker/webrun-files": "^0.10.3",
+    "@statewalker/webrun-files-browser": "^0.10.2",
+    "@statewalker/webrun-files-mem": "^0.10.3",
+    "@statewalker/webrun-files-node": "^0.10.3",
+    "@statewalker/webrun-files-sqlite": "^0.11.0",
     "@statewalker/webrun-storage": "^0.2.2",
     "pako": "^3.0.2"
   },
