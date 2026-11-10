@@ -1,7 +1,7 @@
 # 12 — Can a pure-TS index-pack install real git packs byte-identically, in bounded memory, everywhere?
 
 Plan id **X6** ("Streaming, resumable pack ingest/export"), first slice **X6a: index-pack**.
-Status: **answered — yes: `.idx` byte-identical to git's for every pack tried, git reads what we install, corrupt packs leave nothing, a 64 MiB pack indexes in under 1 MiB of live memory.**
+Status: **answered — yes: `.idx` byte-identical to git's for every pack tried (and git's refusal for every pack git refuses), git reads what we install, corrupt and hostile packs leave nothing; memory follows the delta chain being resolved, bounded by a base cache, not the pack.**
 
 ## Question
 
@@ -47,92 +47,118 @@ incompressible objects needs memory proportional to the pack.
 
 ## Answer
 
-**Yes.** `installPack(files, "objects/pack", stream)` — about 410 lines on FilesApi, plus a 66-line delta applier and an 18-line CRC-32 — follows git's
-index-pack: store the stream as `tmp_pack_*`, one sequential pass (entry headers, delta bases,
-every zlib stream inflated once with exact ends, CRC-32 of each entry, ids of non-delta objects,
-trailer), delta resolution from each base down to its children by re-reading entries by offset,
-an `.idx` v2, then rename the pack and — last — the idx into place.
+**Yes.** `installPack(files, "objects/pack", stream, { maxObjectSize, baseCacheBytes })` follows
+git's index-pack on FilesApi: store the stream as `tmp_pack_*`, one sequential pass (entry headers,
+delta bases, every zlib stream inflated once with exact ends — and stopped at the first byte past
+the declared size — CRC-32 of each entry, ids of non-delta objects, trailer), delta resolution from
+each base down to its children re-reading entries by offset, an `.idx` v2, then rename the pack and
+— last — the idx into place.
 
 - Its `.idx` equals `git index-pack`'s byte for byte for OFS_DELTA and REF_DELTA packs of a
-  60-commit history, a `gc --aggressive` pack, and a pack with a 4 MiB incompressible blob plus a
-  delta against it; ids, offsets and CRCs match `git show-index` for every entry.
+  60-commit history, a `gc --aggressive` pack, a pack with a 4 MiB incompressible blob plus a delta
+  against it, and 11 hand-built packs git never writes itself; for every hand-built pack git
+  refuses (count mismatches, REF cycles, duplicate bases, a base before the pack) we refuse too.
 - Native git reads an installed pack (`verify-pack`, `fsck --full`, `cat-file` of every object).
-- Seven kinds of corrupt input are refused with `PackError` and leave `objects/pack/` empty.
-- A 64 MiB pack of incompressible blobs is indexed with +0.6 MiB live: memory follows the delta
-  chain being resolved, never the pack.
-- The same code indexes the fixture byte-identically in Chromium (OPFS) and in a Durable Object
-  (SqliteFilesApi).
+- Corrupt and hostile input is refused with `PackError` and leaves `objects/pack/` empty: a 64 MiB
+  inflate bomb stops at its first extra byte (30 ms; git: 12 ms), a delta declaring 4 GiB or 1 TiB
+  is refused before anything is allocated, objects over `maxObjectSize` are refused by header.
+- Memory: a 4 MiB base with a 50-deep chain resolves in +4–9 MiB live (the first version held the
+  whole chain: +200 MiB); bases beyond `baseCacheBytes` are evicted and re-derived; a 64 MiB pack of
+  incompressible blobs indexes in +0.3–0.8 MiB.
+- Chromium (OPFS) and a Durable Object (SqliteFilesApi) index the fixture byte-identically.
 
 Findings:
 
-1. **Two passes over local storage, one over the network.** git's index-pack parses while
-   writing; here the stream is written first (streaming) and parsed by a sequential read, which
-   keeps the parser a plain loop over FilesApi and costs one extra local read. Deltas then need
-   random access to the stored pack anyway (FilesApi `read({ start, length })` on every backend).
-2. **The idx is the commit point.** git readers only see packs through their `.idx`, so writing the
-   pack first and the idx last gives quarantine for free: a crash leaves at most a pack without idx
-   (or temporaries), which `git gc` cleans and our reader ignores. On failure we remove both.
-3. **Bases are inflated only if they have children**, and children are resolved depth first with
-   an explicit stack (aggressive packs chain deeply); a 4 MiB base and its delta child are held
-   together while resolving, which is the memory bound — not the pack size.
-4. **The delta applier checks every bound** (base size, copy range, result size both ways,
-   truncated operands, the reserved instruction 0). The vcs-utils applier the plan flagged in X1
-   does not; this one is 66 lines, after git's `patch-delta.c` and JGit's `BinaryDelta`.
-5. **The expected pack length comes from the stored file**, so "bytes after the trailer" fails the
-   length check before the explicit end-of-stream check (an equivalent mutant, M9).
-6. **Thin packs are refused** with a clear error (REF_DELTA bases outside the pack); fixing them
-   (`--fix-thin`, appending local bases and rewriting the trailer) is X6b, as are resumable steps
-   for Durable Objects and exploding packs into SQL in batched transactions.
+1. **Delta memory needs git's base cache, not a plain stack.** Holding every ancestor while
+   descending cost depth × object size (review blocker: a 4 MB pack with a 50-deep chain needed
+   +200 MiB, beyond a DO). Now a frame whose children are all taken is released before its last
+   child is descended into (a linear chain holds base + result), frames below the top keep content
+   only within `baseCacheBytes` (default 32 MiB), and an evicted base is re-derived along its own
+   base links — git's `delta_base_cache_limit` with `prune_base_data`/`get_base_data`.
+2. **Hostile sizes must never drive allocation or work.** Delta application first walks all
+   instructions, checking every bound and summing the output, and allocates only if that equals the
+   declared size and is within `maxObjectSize` (default 1 GiB); inflation stops at the first byte
+   past an entry's declared size (a 510 KB pack inflating to 512 MiB took 5 s of CPU before).
+   Allocation failures are not disguised as format errors.
+3. **Two passes over local storage, one over the network**; deltas need random access to the stored
+   pack anyway. Each delta is a fresh ranged read (a stat/open/close on Node): 1.9 s against git's
+   0.25 s for a 4.6 MB, 5 000-object pack — fine for the prototype, a target for X6b.
+4. **The idx is the commit point** (pack renamed first, idx last); readers never see a pack without
+   its idx, failures remove both temporaries, and the read of the stored pack is released even when
+   parsing fails (otherwise Windows could not delete the temporary). Node writes are fsync'ed before
+   the renames (git fsyncs packs); SqliteFilesApi commits transactionally and OPFS on `close()`.
+5. **Duplicate bases follow git**: a delta reachable from two bases with the same id is refused
+   ("already resolved (duplicate base)"); plain duplicate objects index exactly as git does.
+6. **Limits for X6b**: about 0.9 KB of heap per entry (entry objects, maps) — a pack of 200 000
+   objects peaks near +170 MiB, so a Durable Object tops out around 100–150 thousand objects until
+   entries move to typed arrays; thin packs are refused; SHA-1 without collision detection and no
+   check against objects already in the repository (git's `check_collision`).
 
 ## Verified
 
-All 24 Node tests and 1 Chromium test pass (`pnpm test 12-index-pack`).
+All 42 Node tests and 1 Chromium test pass (`pnpm test 12-index-pack`).
 
 | # | Result |
 |---|---|
-| R1 | Four packs made by native git (OFS_DELTA; REF_DELTA; `gc --aggressive`; a 4 MiB incompressible blob with a one-byte-changed version as a delta): `.idx` byte-identical to `git index-pack`'s; every entry's id and CRC equal `git show-index`'s at its offset; > 300 entries for the history packs. |
-| R2 | Installed into an empty repository: `pack-<id>.pack` and `pack-<id>.idx` only; `git verify-pack`, `git fsck --full` pass; `git cat-file` of every object equals the source repository's. Renames happen pack first, idx last (R2b). |
-| R3 | Refused with `PackError`, `objects/pack/` left empty: truncated; trailer byte flipped; a compressed byte flipped; an entry's declared size disagreeing with its data (trailer recomputed); an OFS_DELTA base before the pack; a thin pack (REF_DELTA bases absent); bytes after the trailer. |
-| R4 | 64 MiB pack of 64 incompressible 1 MiB blobs: +0.6 MiB live (heap + array buffers after GC, sampled inside 8 195 reads of the stored pack). |
-| R5 | The committed fixture (40-commit history, 51 KB pack) indexes to git's committed `.idx` byte for byte in Chromium on OPFS and in a Durable Object on SqliteFilesApi. |
-| R6 | The delta applier applies a copy+insert delta and refuses base-size mismatch, copy beyond the base, result longer or shorter than declared, truncated insert, truncated copy operands, instruction 0. |
+| R1 | Four packs made by native git (OFS_DELTA 245 deltas; REF_DELTA 245; `gc --aggressive`; a 4 MiB blob with a delta child; chains up to 40): `.idx` byte-identical to `git index-pack`'s, every id and CRC equal `git show-index`'s. R1b: 11 hand-built packs — zero objects, v3, count too high/low, the same blob twice, REF on REF, forward REF, OFS on REF, REF cycle, duplicate base, base before the pack — give git's idx or git's refusal. Large offsets (> 2³¹, up to 2⁴⁰) in `writeIdx` decode through `git show-index`. |
+| R2 | Installed into an empty repository: `pack-<id>.pack` and `.idx` only; `verify-pack`, `fsck --full` pass; `cat-file` of every object equals the source; pack renamed before idx (R2b). |
+| R3 | Refused with `PackError`, `objects/pack/` empty: truncated; trailer flipped; a compressed byte flipped; a declared size disagreeing with the data (trailer recomputed); an OFS_DELTA base inside the pack but not at an entry; a thin pack; bytes after the trailer. R3b: a delta declaring 4 GiB (live memory < +64 MiB) and, with no size limit, 1 TiB — refused before allocating; a 10-byte entry inflating to 64 MiB refused in < 200 ms; `maxObjectSize` refuses by header. |
+| R4 | 64 MiB of incompressible blobs (no deltas: phase 1 only): +0.3–0.8 MiB live. R4b (live memory sampled on every read): a 4 MiB base with a 50-deep linear chain: +4–9 MiB; a two-level tree (4 MiB base → 3 deltas → 3 chains of 3) with a 1-byte and a 64 MiB base budget: idx identical, < 24 MiB, and the base inflated once with the large budget but re-derived several times with the 1-byte one. |
+| R5 | The committed fixture indexes to git's committed `.idx` in Chromium (OPFS) and a Durable Object (SqliteFilesApi). |
+| R6 | The delta applier refuses base-size mismatch, copy beyond the base, result longer or shorter than declared, truncated insert or copy operands, instruction 0. |
 
 ### Mutation check
+
+All re-run against the final code. (M4 and M6 were not used as numbers.)
 
 | Mutation | Caught by |
 |---|---|
 | M1 CRC computed without the entry header | R1 (4), R2, R4 |
 | M2 trailer not checked | R3 trailer flipped |
-| M3 inflated size not compared with the header | R3 declared-size case (added: the first contract had no case where only this check could fire) |
-| M5 delta copy bound not checked | R6 copy beyond the base |
+| M3 inflated size not compared with the header | R3 declared-size case |
+| M5 delta copy bound not checked | R6 |
 | M7 temporaries kept on error | R3 (6 tests) |
 | M8 OFS_DELTA base not validated in phase 1 | equivalent: the delta stays unresolved and phase 2 refuses the pack |
-| M9 bytes after the trailer accepted by the end check | equivalent: the stored length already fails the trailer position check |
+| M9 bytes after the trailer accepted by the end check | equivalent: the stored length already fails the trailer position check (the end check is a guard against a file changing after `stats`) |
 | M10 unresolved deltas not reported | R3 thin pack |
-| M11 fan-out shifted by one | R1 (4), R2, R4 |
+| M11 fan-out shifted by one | R1, R2, R4 |
 | M12 idx renamed before the pack | R2b |
-| M13 base content corrupted between children | R1 (4), R2 |
+| M13 base content corrupted between children | R1, R2 |
+| N1 parent frame not released before descending | R4b linear chain and tree |
+| N2 base cache budget ignored | R4b tree (base read once instead of re-derived) |
+| N3 inflation not stopped past the declared size | R3b bomb timing |
+| N4 delta result allocated before validation | R3b 1 TiB case |
+| N5 duplicate base accepted | R1b duplicate base |
+| N6 `maxObjectSize` not checked | R3b |
+| N7 re-derivation skips the delta chain | R4b tree (idx differs) |
+| N8 read not released when parsing fails | not asserted: the mutated run hung on the open file handle (Node also warns "closing file descriptor on garbage collection") |
 
 ## Corrections
 
 | Earlier belief | What the prototype showed |
 |---|---|
-| Plan: ingest strategy per backend is open | For FilesApi backends (Node, OPFS, SqliteFilesApi in a DO) git's own model — keep the pack, write an idx — works unchanged and is byte-compatible; exploding into objects is only needed for the native SQL store (X6b). |
-| vcs-utils' delta code can be reused | It lacks bounds checks; a 66-line checked applier is smaller than fixing it. |
+| First version: "memory bounded by the delta chain … a base and its child are held together" | The whole chain was held (+200 MiB for 50 × 4 MiB); the 64 MiB test pack had no deltas and measured phase 1 only. Fixed with early release and a base cache. |
+| First version: "follows git" for every pack | Duplicate bases were accepted where git refuses; now refused. |
+| A pure-TS index-pack is safe against hostile packs because it checks sizes | Only if sizes are checked before allocating and inflation stops at the declared size. |
+| Plan: ingest strategy per backend is open | For FilesApi backends git's own model — keep the pack, write an idx — works unchanged; exploding into objects is only needed for the native SQL store (X6b). |
+| vcs-utils' delta code can be reused | It lacks bounds checks; a checked applier is about 80 lines. |
 
 ## Functional description
 
 ```ts
-const { packId, entries, idx } = await installPack(files, "/objects/pack", stream);
-// files: any FilesApi with streaming write, ranged read, stats, move, remove
+const { packId, entries, idx } = await installPack(files, "/objects/pack", stream, {
+  maxObjectSize: 2 ** 30,     // refuse larger objects and delta results
+  baseCacheBytes: 32 * 2 ** 20, // resolved bases kept while resolving deltas
+});
 ```
 
 ## Interfaces produced
 
 ```ts
-function installPack(files: FilesApi, packDir: string, source: AsyncIterable<Uint8Array>): Promise<{ packId; entries; idx }>;
+function installPack(files: FilesApi, packDir: string, source: AsyncIterable<Uint8Array>,
+  opts?: { maxObjectSize?: number; baseCacheBytes?: number }): Promise<{ packId; entries; idx }>;
 function writeIdx(entries: { oid; offset; crc32 }[], packId: string): Uint8Array;   // .idx v2
-function applyDelta(base: Uint8Array, delta: Uint8Array): Uint8Array;               // checked
+function applyDelta(base: Uint8Array, delta: Uint8Array, maxSize?: number): Uint8Array;
 class PackError extends Error {}
 ```
 
@@ -140,16 +166,16 @@ class PackError extends Error {}
 
 | File | Grade | Why |
 |---|---|---|
-| `src/index-pack.ts`, `src/delta.ts`, `src/crc32.ts` | **Adopt** | git-compatible pack ingest for every FilesApi backend |
-| `src/git-repo.ts`, `scripts/make-fixture.ts` | **Source** | native-git pack fixtures for tests |
+| `src/index-pack.ts`, `src/delta.ts`, `src/crc32.ts` | **Adopt** | git-compatible pack ingest for every FilesApi backend (imports X1d's inflater by path: package before promotion) |
+| `src/craft.ts`, `src/git-repo.ts`, `scripts/make-fixture.ts` | **Source** | hand-built and native-git pack fixtures |
 | `src/do-entry.ts` | **Source** | DO harness |
 
 ## Open threads (ranked by how much later work they would invalidate)
 
-1. **X6b**: thin packs (`--fix-thin`), resumable time-sliced indexing for Durable Objects (state:
-   parsed entries + resolution frontier), and exploding a pack into the native SQL store in
-   batched transactions (X3b's open thread).
-2. **Reading objects from packs** (idx binary search, offset → inflate, delta chains with a base
-   cache) behind X4's kernel interface — needed before loose objects can stop being the default.
+1. **X6b**: thin packs (`--fix-thin`), resumable time-sliced indexing for Durable Objects, entries in
+   typed arrays (100k+ objects in a DO), exploding a pack into the native SQL store in batched
+   transactions, one open reader for all delta loads.
+2. **Reading objects from packs** (idx lookup, offset → inflate, delta chains with this base cache)
+   behind X4's kernel interface.
 3. **X6c**: pack export (pack-objects) with credit-based backpressure and cancel.
-4. `.rev` files and pack bitmaps (optional caches in git).
+4. SHA-1 collision detection and `check_collision` against existing objects before promotion.

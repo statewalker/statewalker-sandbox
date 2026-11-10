@@ -20,7 +20,7 @@ import {
   type StreamInflater,
 } from "../../04-pooled-inflater/src/pooled-inflater.js";
 import { CRC_INIT, crc32Update, crcFinal } from "./crc32.js";
-import { applyDelta } from "./delta.js";
+import { applyDelta, DeltaError } from "./delta.js";
 
 export class PackError extends Error {
   override name = "PackError";
@@ -137,13 +137,30 @@ class PackReader {
   async atEnd(): Promise<boolean> {
     return !(await this.fill());
   }
+  /** Releases the underlying read (a Node FileHandle) also when parsing fails. */
+  async close(): Promise<void> {
+    await this.it.return?.();
+  }
 }
 
 /** Phase 1: one pass over the stored pack. */
-async function parse(files: FilesApi, path: string, packLen: number) {
+async function parse(files: FilesApi, path: string, packLen: number, maxObjectSize: number) {
   if (packLen < 32) throw new PackError("pack too short");
   const pool = createInflaterPool();
   const r = new PackReader(files.read(path), packLen - 20);
+  try {
+    return await parseWith(r, pool, packLen, maxObjectSize);
+  } finally {
+    await r.close();
+  }
+}
+
+async function parseWith(
+  r: PackReader,
+  pool: ReturnType<typeof createInflaterPool>,
+  packLen: number,
+  maxObjectSize: number,
+) {
   const head = await r.bytes(12);
   if (String.fromCharCode(...head.subarray(0, 4)) !== "PACK")
     throw new PackError("not a pack (bad signature)");
@@ -168,6 +185,11 @@ async function parse(files: FilesApi, path: string, packLen: number) {
       size += (b & 0x7f) * mul;
       mul *= 128;
       if (mul > 2 ** 53) throw new PackError(`object size overflow at ${offset}`);
+    }
+    if (size > maxObjectSize) {
+      throw new PackError(
+        `entry at ${offset} declares ${size} bytes, over the limit of ${maxObjectSize}`,
+      );
     }
     const e: Entry = { offset, kind, size, dataStart: 0, end: 0, crc: 0 };
     if (kind === OFS_DELTA) {
@@ -195,9 +217,17 @@ async function parse(files: FilesApi, path: string, packLen: number) {
     try {
       await r.inflate(inflater, (out) => {
         got += out.length;
+        // stop at the first byte past the declared size: never inflate a bomb to its end
+        if (got > size)
+          throw new PackError(`entry at ${offset} inflates past its declared ${size} bytes`);
         objHash?.update(out);
       });
     } catch (err) {
+      try {
+        inflater.end();
+      } catch {
+        // an unfinished stream reports truncation on end(); the error below says more
+      }
       if (err instanceof PackError) throw err;
       throw new PackError(`entry at ${offset}: ${(err as Error).message}`);
     }
@@ -230,7 +260,25 @@ async function load(
   e: Entry,
   inflater: StreamInflater,
 ): Promise<Uint8Array> {
-  const out = new Uint8Array(e.size);
+  try {
+    return await loadWith(files, path, e, inflater);
+  } catch (err) {
+    try {
+      inflater.end();
+    } catch {
+      // see parse
+    }
+    throw err;
+  }
+}
+
+async function loadWith(
+  files: FilesApi,
+  path: string,
+  e: Entry,
+  inflater: StreamInflater,
+): Promise<Uint8Array> {
+  const out = new Uint8Array(e.size); // e.size ≤ maxObjectSize, checked in phase 1
   let o = 0;
   let done = false;
   for await (const c of files.read(path, { start: e.dataStart, length: e.end - e.dataStart })) {
@@ -248,14 +296,25 @@ async function load(
   return out;
 }
 
-/** Phase 2: resolve every delta from its base downwards (explicit stack: chains can be deep). */
+/**
+ * Phase 2: resolve every delta from its base downwards, depth first (explicit stack: chains can
+ * be thousands deep). Memory, as git's index-pack (delta_base_cache_limit, prune_base_data /
+ * get_base_data):
+ *  - a frame whose children are all taken is released BEFORE its last child is descended into,
+ *    so a linear chain holds the current base and the new result, not the whole chain;
+ *  - frames below the top keep their content only within `baseCacheBytes`; an evicted base is
+ *    re-derived on demand by following its own base links (entry → base entry … → a cached frame
+ *    or a non-delta root), so releasing frames early never breaks re-derivation.
+ */
 async function resolveDeltas(
   files: FilesApi,
   path: string,
   parsed: Awaited<ReturnType<typeof parse>>,
+  opts: { maxObjectSize: number; baseCacheBytes: number },
 ) {
   const ofsChildren = new Map<number, Entry[]>();
   const refChildren = new Map<string, Entry[]>();
+  const byOid = new Map<string, Entry>();
   for (const e of parsed.entries) {
     if (e.baseOffset !== undefined) {
       const l = ofsChildren.get(e.baseOffset) ?? [];
@@ -265,38 +324,108 @@ async function resolveDeltas(
       const l = refChildren.get(e.baseOid) ?? [];
       l.push(e);
       refChildren.set(e.baseOid, l);
+    } else if (e.oid && !byOid.has(e.oid)) {
+      byOid.set(e.oid, e);
     }
   }
   const childrenOf = (e: Entry) => [
     ...(ofsChildren.get(e.offset) ?? []),
     ...(refChildren.get(e.oid as string) ?? []),
   ];
+  const loadEntry = (e: Entry) => load(files, path, e, parsed.pool.acquire());
+  const patch = (base: Uint8Array, d: Uint8Array, at: number) => {
+    try {
+      return applyDelta(base, d, opts.maxObjectSize);
+    } catch (err) {
+      // only format errors become PackError; anything else (e.g. allocation failure) is not ours
+      if (err instanceof DeltaError) throw new PackError(`delta at ${at}: ${err.message}`);
+      throw err;
+    }
+  };
+
+  type Frame = { entry: Entry; type: ObjectTypeName; content: Uint8Array | null; pending: Entry[] };
+  const stack: Frame[] = [];
+  const cached = new Map<number, Frame>(); // entry offset → its frame on the stack
+  let held = 0;
+  const evict = () => {
+    for (let i = 0; i < stack.length - 1 && held > opts.baseCacheBytes; i++) {
+      const f = stack[i] as Frame;
+      if (f.content) {
+        held -= f.content.length;
+        f.content = null;
+      }
+    }
+  };
+  const push = (f: Frame) => {
+    stack.push(f);
+    cached.set(f.entry.offset, f);
+    held += f.content?.length ?? 0;
+    evict();
+  };
+  const pop = () => {
+    const f = stack.pop() as Frame;
+    cached.delete(f.entry.offset);
+    held -= f.content?.length ?? 0;
+  };
+  /** Content of a resolved entry: from its frame if cached, else re-derived along its base links. */
+  const derive = async (e: Entry): Promise<Uint8Array> => {
+    const chain: Entry[] = [];
+    let cur: Entry | undefined = e;
+    let content: Uint8Array | undefined;
+    while (cur) {
+      const c = cached.get(cur.offset)?.content;
+      if (c) {
+        content = c;
+        break;
+      }
+      if (cur.baseOffset === undefined && cur.baseOid === undefined) {
+        content = await loadEntry(cur);
+        break;
+      }
+      chain.push(cur);
+      cur =
+        cur.baseOffset !== undefined
+          ? parsed.byOffset.get(cur.baseOffset)
+          : byOid.get(cur.baseOid as string);
+    }
+    if (!content) throw new PackError(`cannot re-derive the base of the entry at ${e.offset}`);
+    for (let k = chain.length - 1; k >= 0; k--) {
+      const c = chain[k] as Entry;
+      content = patch(content, await loadEntry(c), c.offset);
+    }
+    return content;
+  };
+
   for (const root of parsed.entries) {
     if (!root.oid || root.baseOffset !== undefined || root.baseOid !== undefined) continue;
-    if (childrenOf(root).length === 0) continue;
-    // stack of (base content, pending children)
-    const stack: { content: Uint8Array; type: ObjectTypeName; pending: Entry[] }[] = [
-      {
-        content: await load(files, path, root, parsed.pool.acquire()),
-        type: root.type as ObjectTypeName,
-        pending: childrenOf(root),
-      },
-    ];
+    const kids = childrenOf(root);
+    if (kids.length === 0) continue;
+    push({
+      entry: root,
+      type: root.type as ObjectTypeName,
+      content: await loadEntry(root),
+      pending: kids,
+    });
     while (stack.length) {
-      const top = stack[stack.length - 1] as (typeof stack)[number];
+      const top = stack[stack.length - 1] as Frame;
       const child = top.pending.pop();
       if (!child) {
-        stack.pop();
+        pop();
         continue;
       }
-      if (child.oid) continue; // already resolved through another base (duplicate object)
-      const delta = await load(files, path, child, parsed.pool.acquire());
-      let result: Uint8Array;
-      try {
-        result = applyDelta(top.content, delta);
-      } catch (err) {
-        throw new PackError(`delta at ${child.offset}: ${(err as Error).message}`);
+      if (child.oid) {
+        // reachable from two bases with the same id (git: "already resolved (duplicate base)")
+        throw new PackError(
+          `delta at offset ${child.offset} already resolved (duplicate base ${top.entry.oid})`,
+        );
       }
+      let base = top.content;
+      if (!base) {
+        base = await derive(top.entry);
+        top.content = base;
+        held += base.length;
+      }
+      const result = patch(base, await loadEntry(child), child.offset);
       child.type = top.type;
       child.objectSize = result.length;
       child.oid = hex(
@@ -306,8 +435,10 @@ async function resolveDeltas(
           .update(result)
           .digest(),
       );
+      if (!byOid.has(child.oid)) byOid.set(child.oid, child);
       const grand = childrenOf(child);
-      if (grand.length) stack.push({ content: result, type: top.type, pending: grand });
+      if (top.pending.length === 0) pop(); // release the parent before descending (linear chains)
+      if (grand.length) push({ entry: child, type: child.type, content: result, pending: grand });
     }
   }
   const missing = parsed.entries.filter((e) => !e.oid);
@@ -382,8 +513,10 @@ export async function installPack(
   files: FilesApi,
   packDir: string,
   source: AsyncIterable<Uint8Array>,
-  _opts: InstallOptions = {},
+  opts: InstallOptions = {},
 ): Promise<InstallResult> {
+  const maxObjectSize = opts.maxObjectSize ?? 2 ** 30;
+  const baseCacheBytes = opts.baseCacheBytes ?? 32 * 2 ** 20;
   const dir = packDir.replace(/\/+$/, "");
   const tmpPack = `${dir}/tmp_pack_${rand()}`;
   const tmpIdx = `${dir}/tmp_idx_${rand()}`;
@@ -391,8 +524,8 @@ export async function installPack(
     await files.write(tmpPack, source);
     const stats = await files.stats(tmpPack);
     if (stats?.kind !== "file") throw new PackError("pack was not stored");
-    const parsed = await parse(files, tmpPack, stats.size);
-    await resolveDeltas(files, tmpPack, parsed);
+    const parsed = await parse(files, tmpPack, stats.size, maxObjectSize);
+    await resolveDeltas(files, tmpPack, parsed, { maxObjectSize, baseCacheBytes });
     const entries: IndexedEntry[] = parsed.entries.map((e) => ({
       oid: e.oid as string,
       offset: e.offset,

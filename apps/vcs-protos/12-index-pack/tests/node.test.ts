@@ -354,6 +354,22 @@ describe("R3b hostile packs fail fast, without allocating what they declare", ()
     expect(live() - before).toBeLessThan(64 * 2 ** 20);
     expect(packDirOf(repo)).toEqual([]);
   });
+  it("with no size limit, a delta declaring 1 TiB is still refused before allocating", async () => {
+    const pack = buildPack([
+      { kind: 3, data: A },
+      {
+        kind: 7,
+        data: delta(A.length, 2 ** 40, [...copyAll(A.length)]),
+        baseOid: oidOf("blob", A),
+      },
+    ]);
+    const repo = emptyRepo();
+    const files = new StreamingNodeFilesApi(join(repo, ".git"));
+    await expect(
+      installPack(files, "/objects/pack", chunks(pack), { maxObjectSize: 2 ** 50 }),
+    ).rejects.toBeInstanceOf(PackError);
+    expect(packDirOf(repo)).toEqual([]);
+  });
   it("an entry declaring 10 bytes that inflates to 64 MiB stops at byte 11", async () => {
     const pack = buildPack([{ kind: 3, data: new Uint8Array(64 * 2 ** 20), sizeOverride: 10 }]);
     const t0 = performance.now();
@@ -381,14 +397,20 @@ describe("R4b memory bounded on deep and branching delta chains", () => {
     return m.heapUsed + m.arrayBuffers;
   };
   /** Install with live memory sampled inside every read of the stored pack. */
-  async function measured(pack: Uint8Array, opts?: { baseCacheBytes?: number }) {
+  async function measured(
+    pack: Uint8Array,
+    opts?: { baseCacheBytes?: number },
+    baseStart?: number,
+  ) {
     const repo = emptyRepo();
     const files = new StreamingNodeFilesApi(join(repo, ".git"));
     const read = files.read.bind(files);
     let peak = 0;
     let base = 0;
+    let baseReads = 0;
     files.read = (p, o) =>
       (async function* () {
+        if (o?.start !== undefined && o.start === baseStart) baseReads++;
         for await (const c of read(p, o)) {
           // every read: a delta chain of tiny entries makes few reads, each one matters
           gc();
@@ -403,7 +425,7 @@ describe("R4b memory bounded on deep and branching delta chains", () => {
     const r = await installPack(files, "/objects/pack", chunks(pack), opts);
     gc();
     peak = Math.max(peak, live() - base);
-    return { r, peak };
+    return { r, peak, baseReads };
   }
   const big = noise(4 * MiB, 7);
   const grow = (len: number, tag: number) => delta(len, len + 1, [...copyAll(len), 1, tag & 255]);
@@ -417,26 +439,37 @@ describe("R4b memory bounded on deep and branching delta chains", () => {
     expect(Buffer.from(r.idx).equals(Buffer.from(gitIdx(pack)))).toBe(true);
     expect(peak).toBeLessThan(24 * MiB);
   }, 120_000);
-  it("a branching tree (4 MiB base, 8 children with 5-deep chains) stays within the base cache budget", async () => {
+  it("a two-level tree (4 MiB base → 3 deltas → 3 chains each) re-derives evicted bases within the budget", async () => {
     const entries: CraftEntry[] = [{ kind: 3, data: big }];
-    for (let c = 0; c < 8; c++) {
-      let parent = 0;
-      let len = big.length;
-      for (let d = 0; d < 5; d++) {
-        entries.push({ kind: 6, data: grow(len, c * 16 + d), baseIdx: parent });
-        parent = entries.length - 1;
-        len++;
+    for (let c = 0; c < 3; c++) {
+      entries.push({ kind: 6, data: grow(big.length, 100 + c), baseIdx: 0 });
+      const mid = entries.length - 1;
+      for (let g = 0; g < 3; g++) {
+        let parent = mid;
+        let len = big.length + 1;
+        for (let d = 0; d < 3; d++) {
+          entries.push({ kind: 6, data: grow(len, c * 16 + g * 4 + d), baseIdx: parent });
+          parent = entries.length - 1;
+          len++;
+        }
       }
     }
     const pack = buildPack(entries);
-    for (const budget of [1, 12 * MiB]) {
-      const { r, peak } = await measured(pack, { baseCacheBytes: budget });
+    // data of the root entry starts after its 4-byte header (4 MiB needs a 4-byte size varint)
+    const baseStart = 12 + 4;
+    const reads: number[] = [];
+    for (const budget of [1, 64 * MiB]) {
+      const { r, peak, baseReads } = await measured(pack, { baseCacheBytes: budget }, baseStart);
+      reads.push(baseReads);
       console.log(
-        `R4b branching tree, budget ${budget}: peak +${(peak / MiB).toFixed(1)} MiB live`,
+        `R4b two-level tree, budget ${budget}: peak +${(peak / MiB).toFixed(1)} MiB live, base read ${baseReads}x`,
       );
       expect(Buffer.from(r.idx).equals(Buffer.from(gitIdx(pack))), `budget ${budget}`).toBe(true);
-      expect(peak).toBeLessThan(budget === 1 ? 16 * MiB : 32 * MiB);
+      expect(peak).toBeLessThan(24 * MiB);
     }
+    // unlimited: the base is inflated once; a 1-byte budget evicts it and re-derives it on demand
+    expect(reads[1]).toBe(1);
+    expect(reads[0] as number).toBeGreaterThan(1);
   }, 120_000);
 });
 
