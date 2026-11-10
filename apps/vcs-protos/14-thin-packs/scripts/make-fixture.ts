@@ -41,8 +41,9 @@ for (const a of appended)
     base64: git(sender, ["cat-file", a.type, a.oid]).toString("base64"),
   };
 
+const mem = new MemFilesApi();
 const r = await installPack(
-  new MemFilesApi(),
+  mem,
   "/objects/pack",
   (async function* () {
     yield thin;
@@ -56,6 +57,14 @@ const r = await installPack(
     },
   },
 );
+// git's own index of our completed pack must equal ours
+const parts: Uint8Array[] = [];
+for await (const c of mem.read(`/objects/pack/pack-${r.packId}.pack`)) parts.push(c);
+const ours = join(receiver, "ours.pack");
+writeFileSync(ours, Buffer.concat(parts));
+git(receiver, ["index-pack", "-o", join(receiver, "ours.idx"), ours]);
+if (Buffer.compare(readFileSync(join(receiver, "ours.idx")), Buffer.from(r.idx)) !== 0)
+  throw new Error("our .idx differs from git index-pack's for the completed pack");
 const out = new URL("../fixtures/", import.meta.url).pathname;
 writeFileSync(join(out, "thin.pack"), thin);
 writeFileSync(join(out, "bases.json"), `${JSON.stringify(bases, null, 1)}\n`);

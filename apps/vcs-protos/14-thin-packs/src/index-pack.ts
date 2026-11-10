@@ -19,7 +19,7 @@
  */
 import { sha1 } from "@noble/hashes/legacy.js";
 import type { FilesApi } from "@statewalker/webrun-files";
-import { deflate } from "pako";
+import { Deflate } from "pako";
 import {
   createInflaterPool,
   type StreamInflater,
@@ -111,7 +111,7 @@ class Entries {
   hdr: Uint8Array; // header length: data starts at offset + hdr
   oid: Uint8Array; // 20 bytes per entry, once resolved
   refOid: Uint8Array; // 20 bytes per entry, REF_DELTA base ids
-  constructor(private cap: number) {
+  constructor(public cap: number) {
     this.offset = new Float64Array(cap);
     this.size = new Float64Array(cap);
     this.objSize = new Float64Array(cap);
@@ -123,10 +123,13 @@ class Entries {
     this.oid = new Uint8Array(cap * 20);
     this.refOid = new Uint8Array(cap * 20);
   }
-  /** Room for `more` entries (thin completion appends a few). */
+  /** Room for `more` entries beyond `n`. */
   reserve(more: number) {
-    if (this.n + more <= this.cap) return;
-    const cap = Math.max(this.n + more, Math.ceil(this.cap * 1.25));
+    if (this.n + more > this.cap) this.growTo(this.n + more);
+  }
+  /** Reallocates every array to `cap` entries, one array at a time (transient: one array). */
+  growTo(cap: number) {
+    if (cap <= this.cap) return;
     const g = <T extends Float64Array | Uint32Array | Int32Array | Uint8Array>(a: T, w = 1): T => {
       const b = new (a.constructor as new (n: number) => T)(cap * w);
       b.set(a);
@@ -283,8 +286,11 @@ async function parseWith(
       `pack declares ${count} entries, more than its ${packLen} bytes can hold (truncated?)`,
     );
   }
-  const t = new Entries(count);
+  // Tables start small and grow (doubling, capped at the declared count) as entries are parsed:
+  // a header can claim up to (size - 32) / 9 entries, and only parsed entries earn memory.
+  const t = new Entries(Math.min(count, 4096));
   for (let i = 0; i < count; i++) {
+    if (i === t.cap) t.growTo(Math.min(count, t.cap * 2));
     r.crc = CRC_INIT;
     const offset = r.pos;
     if (offset >= packLen - 20) throw new PackError(`entry ${i} starts inside the trailer`);
@@ -419,15 +425,12 @@ class WindowReader {
   }
 }
 
-interface Store {
-  /** where entry bytes [start, start+length) of the logical pack live */
-  locate(start: number): { path: string; fileStart: number; fileEnd: number };
-}
+/** Bytes [start, start + length) of the logical pack (received part, then appended entries). */
+type RangeRead = (start: number, length: number) => AsyncIterable<Uint8Array>;
 
 /** Inflates one entry's data (exactly `size` bytes). */
 async function loadEntry(
-  win: WindowReader,
-  store: Store,
+  read: RangeRead,
   t: Entries,
   i: number,
   end: number,
@@ -436,13 +439,11 @@ async function loadEntry(
   const size = t.size[i] as number; // ≤ maxObjectSize, checked when the entry was parsed
   const offset = t.offset[i] as number;
   const dataStart = offset + (t.hdr[i] as number);
-  const loc = store.locate(offset);
   const out = new Uint8Array(size);
   let o = 0;
   let done = false;
   try {
-    const from = dataStart - loc.fileStart;
-    for await (const c of win.range(loc.path, loc.fileEnd, from, end - dataStart)) {
+    for await (const c of read(dataStart, end - dataStart)) {
       for (let at = 0; at < c.length && !done; at += SLICE) {
         const r = inflater.push(c.subarray(at, at + SLICE));
         for (const x of r.out) {
@@ -464,8 +465,6 @@ async function loadEntry(
   return out;
 }
 
-type Frame = { i: number; type: number; content: Uint8Array | null; pending: number[] };
-
 /**
  * Phase 2 (and thin completion): resolution state shared by every root. Memory, as git's
  * index-pack (delta_base_cache_limit, prune_base_data / get_base_data):
@@ -474,13 +473,23 @@ type Frame = { i: number; type: number; content: Uint8Array | null; pending: num
  *  - frames below the top keep their content only within `baseCacheBytes`; an evicted base is
  *    re-derived by following base links (`t.base`) to a cached frame or a whole object, and the
  *    bases rebuilt on the way are kept in their frames (git's get_base_data).
+ * The stack itself is typed arrays (entry, type, child cursors: 17 bytes a level) and the frames'
+ * contents one array slot each, so a 100 000-deep comb costs a few MiB, not an object per level.
+ * Children are taken in X6a's order: REF children last-first, then OFS children last-first.
  */
 class Resolver {
-  private readonly ofsHead: Int32Array; // first OFS child of an entry, -1 none
-  private readonly ofsNext: Int32Array; // next OFS child of the same base
+  private readonly ofsHead: Int32Array; // last OFS child (in pack order) of an entry, -1 none
+  private readonly ofsNext: Int32Array; // previous OFS child of the same base
   private readonly refs: Int32Array; // REF_DELTA entries sorted by (base id, position)
-  private readonly stack: Frame[] = [];
-  private readonly cached = new Map<number, Frame>();
+  private depthOf: Int32Array; // entry → its stack level, -1 when not on the stack
+  private sI = new Int32Array(64);
+  private sType = new Uint8Array(64);
+  private sOfs = new Int32Array(64); // next OFS child to take, -1 none
+  private sRef = new Int32Array(64); // next REF child position in `refs` (counting down)
+  private sRefLo = new Int32Array(64); // first REF child position
+  private readonly contents: (Uint8Array | null)[] = [];
+  private depth = 0;
+  private evictFrom = 0; // levels below this hold no content
   private held = 0;
   loads = 0;
   constructor(
@@ -491,8 +500,9 @@ class Resolver {
     const n = t.n;
     this.ofsHead = new Int32Array(n).fill(-1);
     this.ofsNext = new Int32Array(n).fill(-1);
+    this.depthOf = new Int32Array(n).fill(-1);
     let refCount = 0;
-    for (let i = n - 1; i >= 0; i--) {
+    for (let i = 0; i < n; i++) {
       if (t.kind[i] === OFS_DELTA) {
         const b = t.base[i] as number;
         this.ofsNext[i] = this.ofsHead[b] as number;
@@ -505,11 +515,20 @@ class Resolver {
     refs.sort((a, b) => cmpOid(t.refOid, a, t.refOid, b) || a - b);
     this.refs = refs;
   }
-  /** OFS children in pack order, then REF children (by the resolved id) in pack order */
-  private childrenOf(i: number): number[] {
-    const out: number[] = [];
-    if (i < this.ofsHead.length)
-      for (let c = this.ofsHead[i] as number; c >= 0; c = this.ofsNext[c] as number) out.push(c);
+  /** Distinct base ids of the REF_DELTAs still unresolved (an upper bound on appended bases). */
+  distinctUnresolvedBases(): number {
+    const t = this.t;
+    let count = 0;
+    let last = -1;
+    for (const c of this.refs) {
+      if (t.type[c]) continue;
+      if (last < 0 || cmpOid(t.refOid, last, t.refOid, c) !== 0) count++;
+      last = c;
+    }
+    return count;
+  }
+  /** [lo, hi) of the REF children of entry i (by its resolved id) */
+  private refRange(i: number): [number, number] {
     const t = this.t;
     let lo = 0;
     let hi = this.refs.length;
@@ -518,12 +537,27 @@ class Resolver {
       if (cmpOid(t.refOid, this.refs[mid] as number, t.oid, i) < 0) lo = mid + 1;
       else hi = mid;
     }
-    for (let k = lo; k < this.refs.length; k++) {
-      const c = this.refs[k] as number;
-      if (cmpOid(t.refOid, c, t.oid, i) !== 0) break;
-      out.push(c);
+    let end = lo;
+    while (end < this.refs.length && cmpOid(t.refOid, this.refs[end] as number, t.oid, i) === 0)
+      end++;
+    return [lo, end];
+  }
+  private hasChildren(i: number): boolean {
+    const [lo, hi] = this.refRange(i);
+    return hi > lo || (i < this.ofsHead.length && (this.ofsHead[i] as number) >= 0);
+  }
+  private hasMore(d: number): boolean {
+    return (this.sRef[d] as number) >= (this.sRefLo[d] as number) || (this.sOfs[d] as number) >= 0;
+  }
+  private nextChild(d: number): number {
+    const r = this.sRef[d] as number;
+    if (r >= (this.sRefLo[d] as number)) {
+      this.sRef[d] = r - 1;
+      return this.refs[r] as number;
     }
-    return out;
+    const c = this.sOfs[d] as number;
+    if (c >= 0) this.sOfs[d] = this.ofsNext[c] as number;
+    return c;
   }
   private patch(base: Uint8Array, d: Uint8Array, at: number) {
     try {
@@ -538,26 +572,60 @@ class Resolver {
     this.loads++;
     return this.load(i);
   }
-  private evict() {
-    const s = this.stack;
-    for (let k = 0; k < s.length - 1 && this.held > this.opts.baseCacheBytes; k++) {
-      const f = s[k] as Frame;
-      if (f.content) {
-        this.held -= f.content.length;
-        f.content = null;
-      }
+  private levelOf(i: number): number {
+    return i < this.depthOf.length ? (this.depthOf[i] as number) : this.appendedLevel(i);
+  }
+  /** appended entries are only ever roots (level 0) */
+  private appendedLevel(i: number): number {
+    return this.depth > 0 && this.sI[0] === i ? 0 : -1;
+  }
+  private setContent(d: number, c: Uint8Array | null) {
+    const old = this.contents[d];
+    if (old) this.held -= old.length;
+    this.contents[d] = c;
+    if (c) {
+      this.held += c.length;
+      if (d < this.evictFrom) this.evictFrom = d;
     }
   }
-  private push(f: Frame) {
-    this.stack.push(f);
-    this.cached.set(f.i, f);
-    this.held += f.content?.length ?? 0;
+  private evict() {
+    for (let d = this.evictFrom; d < this.depth - 1 && this.held > this.opts.baseCacheBytes; d++) {
+      if (this.contents[d]) this.setContent(d, null);
+      this.evictFrom = d + 1;
+    }
+  }
+  private push(i: number, type: number, content: Uint8Array) {
+    const d = this.depth;
+    if (d === this.sI.length) {
+      const grow = <T extends Int32Array | Uint8Array>(a: T): T => {
+        const b = new (a.constructor as new (n: number) => T)(a.length * 2);
+        b.set(a);
+        return b;
+      };
+      this.sI = grow(this.sI);
+      this.sType = grow(this.sType);
+      this.sOfs = grow(this.sOfs);
+      this.sRef = grow(this.sRef);
+      this.sRefLo = grow(this.sRefLo);
+    }
+    const [lo, hi] = this.refRange(i);
+    this.sI[d] = i;
+    this.sType[d] = type;
+    this.sRefLo[d] = lo;
+    this.sRef[d] = hi - 1;
+    this.sOfs[d] = i < this.ofsHead.length ? (this.ofsHead[i] as number) : -1;
+    if (i < this.depthOf.length) this.depthOf[i] = d;
+    this.depth++;
+    this.setContent(d, content);
     this.evict();
   }
   private pop() {
-    const f = this.stack.pop() as Frame;
-    this.cached.delete(f.i);
-    this.held -= f.content?.length ?? 0;
+    const d = --this.depth;
+    const i = this.sI[d] as number;
+    if (i < this.depthOf.length) this.depthOf[i] = -1;
+    this.setContent(d, null);
+    this.contents.length = d;
+    if (this.evictFrom > d) this.evictFrom = d;
   }
   private async derive(i: number): Promise<Uint8Array> {
     const t = this.t;
@@ -565,7 +633,8 @@ class Resolver {
     let cur = i;
     let content: Uint8Array | undefined;
     for (;;) {
-      const c = this.cached.get(cur)?.content;
+      const lv = this.levelOf(cur);
+      const c = lv >= 0 ? this.contents[lv] : null;
       if (c) {
         content = c;
         break;
@@ -581,10 +650,9 @@ class Resolver {
     for (let k = chain.length - 1; k >= 0; k--) {
       const c = chain[k] as number;
       content = this.patch(content, await this.loadCounted(c), t.offset[c] as number);
-      const f = k > 0 ? this.cached.get(c) : undefined;
-      if (f && !f.content) {
-        f.content = content;
-        this.held += content.length;
+      const lv = k > 0 ? this.levelOf(c) : -1;
+      if (lv >= 0 && !this.contents[lv]) {
+        this.setContent(lv, content);
         this.evict();
       }
     }
@@ -593,18 +661,12 @@ class Resolver {
   /** Resolves every delta below the whole object `root` (content given, or loaded). */
   async resolveFrom(root: number, content?: Uint8Array): Promise<void> {
     const t = this.t;
-    const kids = this.childrenOf(root);
-    if (kids.length === 0) return;
-    this.push({
-      i: root,
-      type: t.type[root] as number,
-      content: content ?? (await this.loadCounted(root)),
-      pending: kids,
-    });
-    while (this.stack.length) {
-      const top = this.stack[this.stack.length - 1] as Frame;
-      const child = top.pending.pop();
-      if (child === undefined) {
+    if (!this.hasChildren(root)) return;
+    this.push(root, t.type[root] as number, content ?? (await this.loadCounted(root)));
+    while (this.depth) {
+      const d = this.depth - 1;
+      const child = this.nextChild(d);
+      if (child < 0) {
         this.pop();
         continue;
       }
@@ -612,18 +674,18 @@ class Resolver {
       // refuses such packs ("already resolved (duplicate base)"); current git accepts them and
       // so do we: the delta resolves to the same object.
       if (t.type[child]) continue;
-      let base = top.content;
+      let base = this.contents[d] ?? null;
       if (!base) {
-        base = await this.derive(top.i);
-        top.content = base;
-        this.held += base.length;
+        base = await this.derive(this.sI[d] as number);
+        this.setContent(d, base);
         this.evict();
       }
+      const type = this.sType[d] as number;
       const result = this.patch(base, await this.loadCounted(child), t.offset[child] as number);
-      const typeName = TYPE_NAMES[top.type] as ObjectTypeName;
-      t.type[child] = top.type;
+      const typeName = TYPE_NAMES[type] as ObjectTypeName;
+      t.type[child] = type;
       t.objSize[child] = result.length;
-      t.base[child] = top.i;
+      t.base[child] = this.sI[d] as number;
       t.oid.set(
         sha1
           .create()
@@ -632,9 +694,8 @@ class Resolver {
           .digest(),
         child * 20,
       );
-      const grand = this.childrenOf(child);
-      if (top.pending.length === 0) this.pop(); // release the parent before descending
-      if (grand.length) this.push({ i: child, type: top.type, content: result, pending: grand });
+      if (!this.hasMore(d)) this.pop(); // release the parent before descending
+      if (this.hasChildren(child)) this.push(child, type, result);
     }
   }
 }
@@ -745,29 +806,121 @@ async function* guardedPack(
   }
 }
 
+/** Appended entries are batched: written to `tmp_thin_*` files of about this size. */
+const BATCH = 2 ** 20;
+
+/**
+ * Appended entries, in offset order, as segments of the logical pack: written files of up to
+ * BATCH bytes (an entry larger than BATCH gets a file of its own) and one in-memory batch being
+ * filled. A fetch needing hundreds of bases writes a few files, not one per base.
+ */
+class AppendedStore {
+  readonly segments: { start: number; length: number; path: string | null }[] = [];
+  private buf: Uint8Array | null = null;
+  private fill = 0;
+  private k = 0;
+  constructor(
+    private readonly files: FilesApi,
+    private readonly prefix: string,
+    public end: number,
+  ) {}
+  get paths(): string[] {
+    return this.segments.flatMap((g) => (g.path ? [g.path] : []));
+  }
+  /** Every path this store may have written or be writing (for cleanup on failure). */
+  get allPaths(): string[] {
+    return Array.from({ length: this.k }, (_, j) => `${this.prefix}${j}`);
+  }
+  async add(parts: Uint8Array[], total: number): Promise<void> {
+    if (total > BATCH) {
+      await this.flush();
+      const path = `${this.prefix}${this.k++}`;
+      this.segments.push({ start: this.end, length: total, path });
+      await this.files.write(path, parts);
+      this.end += total;
+      return;
+    }
+    if (this.fill + total > BATCH) await this.flush();
+    if (!this.buf) this.buf = new Uint8Array(BATCH);
+    if (this.fill === 0) this.segments.push({ start: this.end, length: 0, path: null });
+    for (const x of parts) {
+      this.buf.set(x, this.fill);
+      this.fill += x.length;
+    }
+    (this.segments[this.segments.length - 1] as { length: number }).length += total;
+    this.end += total;
+  }
+  async flush(): Promise<void> {
+    if (this.fill === 0) return;
+    const g = this.segments[this.segments.length - 1] as { path: string | null };
+    const path = `${this.prefix}${this.k++}`;
+    await this.files.write(path, [(this.buf as Uint8Array).subarray(0, this.fill)]);
+    g.path = path;
+    this.fill = 0;
+  }
+  release() {
+    this.buf = null;
+  }
+  /** Bytes [start, start + length) of the appended part. */
+  read(win: WindowReader, start: number, length: number): AsyncIterable<Uint8Array> {
+    let lo = 0;
+    let hi = this.segments.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >>> 1;
+      if ((this.segments[mid]?.start as number) <= start) lo = mid;
+      else hi = mid - 1;
+    }
+    const g = this.segments[lo] as { start: number; length: number; path: string | null };
+    if (start + length > g.start + g.length)
+      throw new PackError(`appended entry at ${start} crosses its segment`);
+    if (g.path) return win.range(g.path, g.length, start - g.start, length);
+    const at = start - g.start;
+    const view = (this.buf as Uint8Array).subarray(at, at + length);
+    return (async function* () {
+      yield view;
+    })();
+  }
+}
+
+/** zlib (pako, level 6) of `data` as the deflater's own chunks: no concatenated copy. */
+function deflateChunks(data: Uint8Array): Uint8Array[] {
+  const out: Uint8Array[] = [];
+  const d = new Deflate();
+  d.onData = (c: Uint8Array) => {
+    out.push(c);
+  };
+  d.push(data, true);
+  if (d.err) throw new Error(`deflate failed: ${d.msg}`);
+  return out;
+}
+
 /**
  * Thin completion (git's fix_unresolved_deltas): REF_DELTAs still unresolved, in pack order; each
- * missing base is looked up once, verified, written to its own `tmp_thin_*` file as a pack entry
- * (it becomes entry n of the completed pack) and its subtree resolved at once, so a later delta on
- * a thin delta's result is already resolved.
+ * missing base id is looked up once (a miss is remembered), verified, appended as a pack entry (it
+ * becomes entry n of the completed pack) and its subtree resolved at once, so a later delta on a
+ * thin delta's result is already resolved. The table grows once, by the number of distinct
+ * missing ids. `externalBase` should refuse objects over `maxObjectSize` itself: the data is
+ * materialised before it can be checked here.
  */
 async function completeThin(
   t: Entries,
   resolver: Resolver,
   externalBase: ExternalBase,
-  files: FilesApi,
-  appendedFiles: { path: string; start: number; length: number }[],
-  tmpPrefix: string,
-  dataEnd: number,
+  store: AppendedStore,
   maxObjectSize: number,
 ) {
   const received = t.n;
-  let end = dataEnd;
+  t.reserve(resolver.distinctUnresolvedBases());
+  const misses = new Set<string>();
   for (let i = 0; i < received; i++) {
     if (t.kind[i] !== REF_DELTA || t.type[i]) continue;
     const oid = hex(t.refOid.subarray(i * 20, i * 20 + 20));
+    if (misses.has(oid)) continue;
     const base = await externalBase(oid);
-    if (!base) continue; // reported with the other unresolved deltas
+    if (!base) {
+      misses.add(oid); // reported with the other unresolved deltas
+      continue;
+    }
     const code = TYPE_CODE[base.type];
     if (!code) throw new PackError(`base ${oid}: unknown type ${base.type}`);
     if (base.data.length > maxObjectSize)
@@ -780,27 +933,29 @@ async function completeThin(
         .digest(),
     );
     if (id !== oid) throw new PackError(`base ${oid} from the repository hashes to ${id}`);
-    const header = objectHeader(code, base.data.length);
-    const z = deflate(base.data);
-    const crc = crcFinal(crc32Update(crc32Update(CRC_INIT, header), z));
-    const path = `${tmpPrefix}${appendedFiles.length}`;
-    appendedFiles.push({ path, start: end, length: header.length + z.length });
-    await files.write(path, [header, z]);
+    const parts = [objectHeader(code, base.data.length), ...deflateChunks(base.data)];
+    let total = 0;
+    let crc = CRC_INIT;
+    for (const x of parts) {
+      total += x.length;
+      crc = crc32Update(crc, x);
+    }
+    const start = store.end;
+    await store.add(parts, total);
     t.reserve(1);
     const k = t.n++;
-    t.offset[k] = end;
+    t.offset[k] = start;
     t.kind[k] = code;
     t.type[k] = code;
     t.size[k] = base.data.length;
     t.objSize[k] = base.data.length;
-    t.hdr[k] = header.length;
-    t.crc[k] = crc;
+    t.hdr[k] = (parts[0] as Uint8Array).length;
+    t.crc[k] = crcFinal(crc);
     t.base[k] = -1;
     t.oid.set(t.refOid.subarray(i * 20, i * 20 + 20), k * 20);
-    end += header.length + z.length;
     await resolver.resolveFrom(k, base.data);
   }
-  return end;
+  await store.flush();
 }
 
 /**
@@ -814,7 +969,7 @@ async function* completedPack(
   receivedEnd: number,
   receivedTrailer: string,
   count: number,
-  appended: { path: string }[],
+  appended: string[],
   done: (packId: string) => void,
 ): AsyncGenerator<Uint8Array> {
   const h = sha1.create();
@@ -837,8 +992,8 @@ async function* completedPack(
   }
   if (hex(original.digest()) !== receivedTrailer)
     throw new PackError("the stored pack changed while it was being completed");
-  for (const a of appended) {
-    for await (const c of files.read(a.path)) {
+  for (const path of appended) {
+    for await (const c of files.read(path)) {
       h.update(c);
       yield c;
     }
@@ -863,8 +1018,8 @@ export async function installPack(
   const tmpPack = `${dir}/tmp_pack_${id}`;
   const tmpIdx = `${dir}/tmp_idx_${id}`;
   const tmpFixed = `${dir}/tmp_pack_${id}_fixed`;
-  const appended: { path: string; start: number; length: number }[] = [];
   const win = new WindowReader(files, windowBytes);
+  let appended: AppendedStore | undefined;
   try {
     await files.write(tmpPack, guardedPack(source, maxPackSize));
     const stats = await files.stats(tmpPack);
@@ -873,47 +1028,26 @@ export async function installPack(
     const t = parsed.t;
     const received = t.n;
     const dataEnd = stats.size - 20;
-    const store: Store = {
-      locate(offset) {
-        if (offset < dataEnd) return { path: tmpPack, fileStart: 0, fileEnd: stats.size };
-        // appended entries: one file each, in offset order
-        let lo = 0;
-        let hi = appended.length - 1;
-        while (lo < hi) {
-          const mid = (lo + hi + 1) >>> 1;
-          if ((appended[mid]?.start as number) <= offset) lo = mid;
-          else hi = mid - 1;
-        }
-        const a = appended[lo] as { path: string; start: number; length: number };
-        return { path: a.path, fileStart: a.start, fileEnd: a.length };
-      },
-    };
+    appended = new AppendedStore(files, `${dir}/tmp_thin_${id}_`, dataEnd);
+    const store = appended;
+    const read: RangeRead = (start, length) =>
+      start < dataEnd
+        ? win.range(tmpPack, stats.size, start, length)
+        : store.read(win, start, length);
     const endOf = (i: number) => {
       if (i + 1 < t.n) return t.offset[i + 1] as number;
-      if (i < received) return dataEnd;
-      const a = appended[appended.length - 1] as { start: number; length: number };
-      return a.start + a.length;
+      return i < received ? dataEnd : store.end;
     };
     const resolver = new Resolver(
       t,
-      (i) => loadEntry(win, store, t, i, endOf(i), parsed.pool.acquire()),
+      (i) => loadEntry(read, t, i, endOf(i), parsed.pool.acquire()),
       { maxObjectSize, baseCacheBytes },
     );
     for (let i = 0; i < received; i++)
       if (t.type[i] && t.kind[i] !== OFS_DELTA && t.kind[i] !== REF_DELTA)
         await resolver.resolveFrom(i);
-    if (opts.externalBase) {
-      await completeThin(
-        t,
-        resolver,
-        opts.externalBase,
-        files,
-        appended,
-        `${dir}/tmp_thin_${id}_`,
-        dataEnd,
-        maxObjectSize,
-      );
-    }
+    if (opts.externalBase) await completeThin(t, resolver, opts.externalBase, store, maxObjectSize);
+    store.release();
     win.release();
     let missing = 0;
     let firstRef = -1;
@@ -931,11 +1065,12 @@ export async function installPack(
     }
     let packId = parsed.packId;
     let packFile = tmpPack;
-    if (appended.length) {
+    const appendedCount = t.n - received;
+    if (appendedCount) {
       let fixedId = "";
       await files.write(
         tmpFixed,
-        completedPack(files, tmpPack, dataEnd, parsed.packId, t.n, appended, (p) => {
+        completedPack(files, tmpPack, dataEnd, parsed.packId, t.n, store.paths, (p) => {
           fixedId = p;
         }),
       );
@@ -943,7 +1078,7 @@ export async function installPack(
       packId = fixedId;
       packFile = tmpFixed;
       await files.remove(tmpPack);
-      for (const a of appended) await files.remove(a.path);
+      for (const path of store.paths) await files.remove(path);
     }
     const idx = writeIdxFrom(t, packId);
     const result: InstallResult = {
@@ -963,7 +1098,7 @@ export async function installPack(
         Object.defineProperty(this, "entries", { value: out });
         return out;
       },
-      stats: { appended: appended.length, storageReads: win.reads, deltaLoads: resolver.loads },
+      stats: { appended: appendedCount, storageReads: win.reads, deltaLoads: resolver.loads },
     };
     const name = `${dir}/pack-${packId}`;
     if ((await files.exists(`${name}.pack`)) && (await files.exists(`${name}.idx`))) {
@@ -978,7 +1113,8 @@ export async function installPack(
     return result;
   } catch (e) {
     win.release();
-    for (const p of [tmpPack, tmpIdx, tmpFixed, ...appended.map((a) => a.path)])
+    appended?.release();
+    for (const p of [tmpPack, tmpIdx, tmpFixed, ...(appended?.allPaths ?? [])])
       await files.remove(p).catch(() => false);
     throw e;
   }
