@@ -286,11 +286,17 @@ async function parseWith(
       `pack declares ${count} entries, more than its ${packLen} bytes can hold (truncated?)`,
     );
   }
-  // Tables start small and grow (doubling, capped at the declared count) as entries are parsed:
+  // Tables start small and grow (capped at the declared count) as entries are parsed:
   // a header can claim up to (size - 32) / 9 entries, and only parsed entries earn memory.
   const t = new Entries(Math.min(count, 4096));
   for (let i = 0; i < count; i++) {
-    if (i === t.cap) t.growTo(Math.min(count, t.cap * 2));
+    if (i === t.cap) {
+      // grow towards the count the bytes parsed so far predict (average entry size, +6%), but
+      // by 1.25×–2× only: a garbage tail cannot make the prediction allocate for it
+      const predicted = Math.ceil(((i * (packLen - 32)) / Math.max(1, r.pos - 12)) * 1.06);
+      const next = Math.min(t.cap * 2, Math.max(Math.ceil(t.cap * 1.25), predicted));
+      t.growTo(Math.min(count, next));
+    }
     r.crc = CRC_INIT;
     const offset = r.pos;
     if (offset >= packLen - 20) throw new PackError(`entry ${i} starts inside the trailer`);
@@ -477,6 +483,9 @@ async function loadEntry(
  * contents one array slot each, so a 100 000-deep comb costs a few MiB, not an object per level.
  * Children are taken in X6a's order: REF children last-first, then OFS children last-first.
  */
+/** heap bytes of a Uint8Array beyond its data (object + backing store header), counted in the budget */
+const OBJECT_OVERHEAD = 96;
+
 class Resolver {
   private readonly ofsHead: Int32Array; // last OFS child (in pack order) of an entry, -1 none
   private readonly ofsNext: Int32Array; // previous OFS child of the same base
@@ -581,10 +590,10 @@ class Resolver {
   }
   private setContent(d: number, c: Uint8Array | null) {
     const old = this.contents[d];
-    if (old) this.held -= old.length;
+    if (old) this.held -= old.length + OBJECT_OVERHEAD;
     this.contents[d] = c;
     if (c) {
-      this.held += c.length;
+      this.held += c.length + OBJECT_OVERHEAD;
       if (d < this.evictFrom) this.evictFrom = d;
     }
   }

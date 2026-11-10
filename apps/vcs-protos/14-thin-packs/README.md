@@ -52,8 +52,9 @@ entries still need memory of the order of X6a's.
 whole Node suite passes against this module).
 
 - **Thin packs.** After phase 2, the REF_DELTAs still unresolved are walked in pack order (git's
-  `fix_unresolved_deltas`); each missing base is asked for once, must hash to the requested id, is
-  appended as a whole object (pako, zlib level 6) and its subtree is resolved at once — a delta on
+  `fix_unresolved_deltas`); each missing base id is asked for once (a miss is remembered; git
+  asks again per delta), must hash to the requested id, is appended as a whole object (pako, zlib
+  level 6, kept as the deflater's chunks) and its subtree is resolved at once — a delta on
   a thin delta's result needs no lookup, a base shared by several deltas is appended once. The pack
   is then rewritten with the new count and a new trailer (`fixup_pack_header_footer`); while the
   received part is copied it is re-hashed with its original header and must still match its
@@ -66,18 +67,30 @@ whole Node suite passes against this module).
   default level), so the pack id differs from git's for the same thin pack. Both are valid; nothing
   downstream depends on the id beyond naming the files.
 - **Compact entries.** Per-entry state is struct-of-arrays — offsets, sizes, CRC, kind, type,
-  header length, base index, id and REF base id: 75 bytes an entry, allocated once from the
-  header's count (plus 8 for the child links during phase 2 and 4 for the idx sort order). OFS children are linked lists in two `Int32Array`s, REF children a sorted index
-  searched by id, and a resolved delta records the entry it was resolved against, so re-deriving
-  an evicted base follows indices instead of maps. A 200 000-object pack (half OFS/REF deltas)
-  installs with a peak of +14 MiB live and git's `.idx` (X6a: +135 MiB, table below).
-- **Counts checked before allocating.** A header declaring more entries than `(size − 32) / 9`
-  (the smallest entry: a 1-byte header and an 8-byte zlib stream) is refused before the tables are
-  allocated.
+  header length, base index, id and REF base id: 75 bytes an entry (plus 12 for the child links
+  and stack positions during phase 2, 4 for the idx sort order). OFS children are linked lists in
+  two `Int32Array`s, REF children a sorted index searched by id, and a resolved delta records the
+  entry it was resolved against, so re-deriving an evicted base follows indices, not maps. A
+  200 000-object pack (half OFS/REF deltas) installs with a peak of +18.7 MiB live and git's
+  `.idx` (X6a: +135 MiB, table below).
+- **Only parsed entries earn memory.** A header declaring more entries than `(size − 32) / 9`
+  (the smallest entry: a 1-byte header and an 8-byte zlib stream) is refused at once; below that,
+  the tables start at 4 096 entries and grow as entries are parsed — towards the count the bytes
+  parsed so far predict, but by 1.25×–2× a step — so a 16 MiB pack declaring 1.86 million entries
+  with garbage after 100 000 valid ones is refused at +9.6 MiB (+110 MiB when the tables were
+  allocated from the header: found by the review).
+- **The resolution stack is typed arrays** (entry, type, two child cursors: 17 bytes a level) and
+  one content slot per level; cached contents count 96 bytes of object overhead against the
+  budget. A 100 000-deep comb (a REF chain with an OFS leaf on every node) peaks at +22–24 MiB
+  with a 2 MiB cache (+68 MiB with a frame object, array and Map entry per level: the review).
 - **Bounded window.** Phase 2 re-reads entries through one window (default 1 MiB, never two held):
   an entry inside it costs no storage read, a miss refills it from that entry on, entries over half
   the window are streamed directly. The 60-commit history pack's 254 entry loads take 1 storage
   read (X6a: 254).
+- **Appended entries are batched**: a fetch needing hundreds of bases writes ~1 MiB `tmp_thin_*`
+  files (an entry over 1 MiB alone), the batch being filled is read from memory; an evicted
+  appended base is re-read from its batch (tests for both paths, which the review found
+  untested). The table grows once, by the number of distinct missing ids.
 - **Temporaries.** `sweepPackTemporaries(files, packDir, { olderThanMs, now? })` removes the
   `tmp_*` files of the pack directory older than the threshold — git prune's rule; young ones may
   belong to an install in progress — and never touches `pack-*` or other files.
@@ -86,19 +99,19 @@ whole Node suite passes against this module).
 
 ## Verified
 
-All 18 Node tests, the 45 X6a tests re-run against this module and 1 Chromium test pass
+All 24 Node tests, the 45 X6a tests re-run against this module and 1 Chromium test pass
 (`pnpm test 14-thin-packs`).
 
 | # | Result |
 |---|---|
 | R1 | Four thin packs (REF_DELTA and OFS_DELTA: last 5 of 30 commits; one commit; a 4 MiB blob with a one-byte edit) completed with `externalBase` over the receiver's object database (X6r): same object set as `git index-pack --fix-thin`, appended bases equal in order and type, received entries' offsets and CRCs equal git's, pack named after its trailer, `.idx` equal to git's for our pack, `verify-pack`, `fsck --full`, `cat-file` of every object equal to the sender's. |
-| R1b | Refused with `PackError`, nothing left in the pack directory: no `externalBase`; unknown base ("2 unresolved deltas"); a base hashing to another id. A REF on a thin delta's result: one lookup, one appended base, 4 objects; a complete pack never calls `externalBase` and keeps its id. |
+| R1b | Refused with `PackError`, nothing left in the pack directory: no `externalBase`; unknown base ("2 unresolved deltas", asked once for two deltas); a base hashing to another id. A REF on a thin delta's result: one lookup, one appended base, 4 objects; a complete pack never calls `externalBase` and keeps its id. |
 | R2 | X6a's suite (45 tests: four native-git variants with git-identical `.idx`, 11 crafted packs, corrupt and hostile packs, memory on deep and branching chains, large offsets, the delta applier, the DO run) passes with X6a's module replaced by this one (`vi.mock`). |
-| R3 | 200 000 objects: peak +14.0 MiB live (sampled after GC on every storage read), `.idx` identical to git's. |
+| R3 | 200 000 objects: peak +18.7 MiB live (sampled after two GCs on every storage read), `.idx` identical to git's. R3b: the declared-count pack above refused at +9.6 MiB; the 100 000-deep comb (2 MiB cache, sampled every 500 of its 523 588 reads with a 64-byte window) +22–24 MiB, `.idx` identical to git's. Memory is sampled after two forced collections: after one, V8's concurrent ArrayBuffer sweeper still counted freed tables (the comb read 27, then 45 MiB on two identical runs). |
 | R4 | A header declaring 2³²−1 entries in a one-entry pack: refused, < 16 MiB live. |
-| R5 | 254 entry loads, 1 storage read (+1 for phase 1); `.idx` identical to git's. The criterion first said "≥ 300 deltas": the pack has 245 (X6a's count). |
+| R5 | 254 entry loads, 1 storage read (+1 for phase 1); `.idx` identical to git's. The criterion first said "≥ 300 deltas": the pack has 245 (X6a's count). R5b: with a 4 KiB window over the same pack, no storage read is longer than the window (a whole-file refill, the review's mutation, fails it). |
 | R6 | Node: `tmp_pack_old`, `tmp_idx_old` (3 days) removed with a 1-day threshold; `tmp_pack_young`, an old `garbage.txt` and old `pack-*` kept. MemFilesApi: kept at `now`, removed 5 s later with a 1 s threshold. |
-| R7 | The fixture completes to the committed `.idx` on Node, in a Durable Object and in Chromium. |
+| R7 | The fixture completes to the committed `.idx` on Node, in a Durable Object and in Chromium; `make-fixture.ts` checks that `.idx` against git's index of the completed pack. |
 
 ### Mutation check
 
@@ -143,6 +156,7 @@ const r = await installPack(files, "/.git/objects/pack", stream, {
 });
 r.packId; r.count; r.idx; r.stats;   // { appended, storageReads, deltaLoads }
 r.entries;                           // IndexedEntry[], materialised on first access
+                                     // (the result keeps the entry table alive until dropped)
 await sweepPackTemporaries(files, "/.git/objects/pack", { olderThanMs: 14 * 24 * 3600e3 });
 ```
 

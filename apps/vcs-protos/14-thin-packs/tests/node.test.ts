@@ -344,7 +344,11 @@ describe("R1b thin-pack refusals and base lookups", () => {
   });
 });
 
-const gc = () => (globalThis as { gc?: () => void }).gc?.();
+/** two collections: the first may leave ArrayBuffer backing stores to the concurrent sweeper */
+const gc = () => {
+  (globalThis as { gc?: () => void }).gc?.();
+  (globalThis as { gc?: () => void }).gc?.();
+};
 const live = () => {
   const m = process.memoryUsage();
   return m.heapUsed + m.arrayBuffers;
@@ -570,7 +574,7 @@ describe("R3b/R5b review cases", () => {
     console.log(`R3b declared-count pack: peak +${(peak / MiB).toFixed(1)} MiB`);
     expect(peak).toBeLessThan(16 * MiB);
   });
-  it("a 100 000-deep comb (REF chain, an OFS leaf on every node) installs with < 40 MiB extra live", async () => {
+  it("a 100 000-deep comb (REF chain, an OFS leaf on every node), 2 MiB cache: < 40 MiB extra live", async () => {
     const N = 100_000;
     const prefix = "x".repeat(50);
     const content = (t: string) => enc.encode(prefix + t.padStart(10, "0"));
@@ -601,7 +605,10 @@ describe("R3b/R5b review cases", () => {
     };
     gc();
     base = live();
-    const r = await installPack(files, "/objects/pack", chunks(pack), { windowBytes: 64 });
+    const r = await installPack(files, "/objects/pack", chunks(pack), {
+      windowBytes: 64,
+      baseCacheBytes: 2 * MiB,
+    });
     console.log(`R3b comb: ${r.stats.storageReads} reads, peak +${(peak / MiB).toFixed(1)} MiB`);
     expect(Buffer.compare(Buffer.from(r.idx), Buffer.from(ref))).toBe(0);
     expect(r.stats.storageReads).toBeGreaterThan(10_000); // sampled throughout phase 2
