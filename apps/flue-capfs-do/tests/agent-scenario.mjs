@@ -92,16 +92,70 @@ export function agentCases({ api, transports = ["stub", "token"], label = "" }) 
     assert.match(r.error, /3 turns/);
   });
 
+  add("a run that ends on its last allowed turn is not a limit stop", async () => {
+    const { ws, token } = await setup();
+    const r = ok(await ask(ws, token, "token", { prompt: "READ /proj/readme.md", maxTurns: 2 }));
+    assert.equal(r.stopReason, "stop");
+    assert.equal(r.turns, 2);
+    assert.equal(r.error, undefined);
+    assert.match(r.reply, /^RESULT: /);
+  });
+
+  add("a run stops at its timeout", async () => {
+    const { ws, token } = await setup();
+    const t0 = Date.now();
+    const r = ok(await ask(ws, token, "token", { prompt: "SLOW", timeoutMs: 1000 }));
+    assert.equal(r.stopReason, "limit");
+    assert.match(r.error, /1000 ms/);
+    assert.ok(Date.now() - t0 < 2900, "the abort cut the model call short");
+  });
+
+  add("tool results are paired with their calls (two calls in one turn)", async () => {
+    const { ws, token } = await setup();
+    const r = ok(await ask(ws, token, "token", { prompt: "TWO /proj/readme.md /p10/secret.txt" }));
+    assert.deepEqual(
+      r.toolCalls.map((c) => [c.arguments.path, c.isError]),
+      [
+        ["/proj/readme.md", false],
+        ["/p10/secret.txt", true],
+      ],
+    );
+    assert.match(r.toolCalls[0].result, /# proj/);
+    assert.doesNotMatch(r.toolCalls[1].result, /# proj|p10 secret/);
+  });
+
+  add("the deployment's key reaches the model endpoint", async () => {
+    const { ws, token } = await setup();
+    const r = ok(await ask(ws, token, "token", { prompt: "KEY" }));
+    assert.equal(r.reply, "KEY: Bearer sk-fake");
+  });
+
   add("a session continues for its capability, and starts fresh for another", async () => {
     const { ws, token } = await setup();
     ok(await ask(ws, token, "token", { prompt: "READ /proj/readme.md", session: "s1" }));
     const again = ok(await ask(ws, token, "token", { prompt: "HISTORY", session: "s1" }));
-    // system, user, assistant (tool call), tool result, assistant, user
+    // Sent to the model: system, then the stored user, assistant (tool call), tool result,
+    // assistant, and the new user message.
     assert.equal(again.reply, "MESSAGES: 6");
+    // Stored after the run: those five without the system prompt, plus HISTORY's two.
     assert.equal(again.session.messages, 6);
     const other = await admin(`/api/w/${ws}/sessions`, { user: "bob", rights: ["/proj"] });
     const bob = ok(await ask(ws, other.token, "token", { prompt: "HISTORY", session: "s1" }));
     assert.equal(bob.reply, "MESSAGES: 2", "bob does not see alice's conversation");
+  });
+
+  add("a session continues through the same delegation chain, not through another", async () => {
+    const { ws, token } = await setup();
+    const chain = [{ readOnly: true }];
+    ok(await ask(ws, token, "token", { prompt: "READ /proj/readme.md", session: "c1" }, chain));
+    const again = ok(await ask(ws, token, "token", { prompt: "HISTORY", session: "c1" }, chain));
+    assert.equal(again.reply, "MESSAGES: 6", "the chain's fresh block keys do not reset it");
+    const direct = ok(await ask(ws, token, "token", { prompt: "HISTORY", session: "c1" }));
+    assert.equal(direct.reply, "MESSAGES: 2", "without the chain it is another conversation");
+    const scoped = ok(
+      await ask(ws, token, "token", { prompt: "HISTORY", session: "c1" }, [{ scope: "/proj" }]),
+    );
+    assert.equal(scoped.reply, "MESSAGES: 2", "another chain is another conversation");
   });
 
   return cases;

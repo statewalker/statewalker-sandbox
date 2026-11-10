@@ -11,7 +11,9 @@ import * as esbuild from "esbuild";
 const dir = fileURLToPath(new URL("..", import.meta.url));
 const out = `${dir}dist`;
 
-/** `vars` are added to the built project's wrangler.json (cellb in a browser reads vars from it). */
+/** `vars` are added to the built project's wrangler.json (cellb in a browser reads vars from it).
+ * They are public: the page loads that file, so never pass a real secret (the tests pass a dummy
+ * LLM_API_KEY). */
 export async function buildBrowser({ quiet = false, vars = {} } = {}) {
   rmSync(out, { recursive: true, force: true });
   mkdirSync(`${out}/browser`, { recursive: true });

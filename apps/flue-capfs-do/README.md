@@ -335,24 +335,44 @@ curl -s -X POST localhost:8787/api/agents/a1/run -H 'content-type: application/j
 #             "usage":{"input":…,"output":…},"session":{"name":"s1","messages":4}}}
 ```
 
-- **The model is the deployment's.** The `LLM` var names an OpenAI-compatible endpoint
+- **The model is the deployment's.** The `LLM` var names the endpoint
   (`{"baseUrl", "model", "api"?, "contextWindow"?, "maxTokens"?, "headers"?}`, as JSON);
-  `api` is `openai-completions` (default), `openai-responses` or `anthropic-messages`. The
-  `LLM_API_KEY` secret is its key. Nothing in a request chooses the endpoint or sees the key;
-  `/api/runtime` reports `llm: {model, api, host}` (or `null`, and the task fails with
-  `ENOSYS`).
+  `api` is `openai-completions` (default, any OpenAI-compatible server), `openai-responses` or
+  `anthropic-messages`. The `LLM_API_KEY` secret is its key. Nothing in a request chooses the
+  endpoint or sees the key; `/api/runtime` reports `llm: {model, api, host}` (or `null`, and
+  the task fails with `ENOSYS`).
 - **Limits:** `maxTurns` (default 12, at most 50) and `timeoutMs` (default 120 s, at most
-  600 s). A run cut short returns `stopReason: "limit"` and the reason in `error`.
-- **Sessions:** with `session`, the conversation is kept in the Agent cell under the
-  capability's revocation id and the name (the last 200 messages, at most 1 MB) and continued
-  next time. The messages hold file contents read with that capability, so another capability
-  starts its own conversation even under the same name.
-- **The result** is the last reply, each tool call with its arguments and (clipped) result,
-  and token usage. Replies and tool results are clipped at 4000 characters.
+  600 s; a tool that ignores the abort gets 5 s more, then the run returns). A run cut short
+  returns `stopReason: "limit"` and the reason in `error`; a run that ends on its last allowed
+  turn is not cut short. `prompt` and `instructions` are at most 100 000 characters each.
+- **Sessions:** with `session`, the conversation is kept in the cell that runs it (the last
+  hop's), and continued next time. Its key is the capability the request brought (its
+  revocation id) and, with a `chain`, a digest of the chain: the same token through the same
+  chain continues it, while another token or another chain starts its own. The token the last
+  hop holds cannot be the key, since attenuation mints fresh block keys on every run. The
+  messages hold file contents read with that capability, which is why another capability never
+  sees them.
+  - A stored history keeps at most 200 messages and 1 MB of UTF-8 JSON, and what is sent back
+    each turn stays within `contextWindow` (about 3 characters a token, less `maxTokens`). It
+    is trimmed to start with a user message and without aborted or failed replies, so a provider
+    accepts it.
+  - A cell keeps at most 32 sessions and drops the least recently used one beyond that. Runs on
+    the same session wait for each other.
+- **The result** is the last reply, each tool call with its arguments and (clipped) result
+  (paired by call id), and token usage. Replies and tool results are clipped at 4000
+  characters, a provider error at 500.
 - **Tests** use a fake OpenAI-compatible server (`tests/helpers/fake-llm.mjs`) whose replies
   are driven by the prompt (`READ <path>`, `WRITE <path> <text>`, `BASH <script>`, `LOOP`,
   `HISTORY`), so the cases (`tests/agent-scenario.mjs`) check what the tools did, not what a
   model chose to say. `run-env.mjs` passes it to every runtime as `LLM` with a dummy key.
+- **Known exposure:**
+  - Any valid capability may run the model: there is no per-capability right to it and no rate
+    limit, so a narrow read-only token can still spend up to 50 turns of the deployment's budget
+    per run. A real deployment would gate the task on a fact in the session token and meter it.
+  - The key is a secret only on workerd (`wrangler secret put LLM_API_KEY`). On cellb, `--var`
+    makes it a plain var, and in the browser build it would be in `dist/cellb/wrangler.json`,
+    which the page loads: anyone who can load the page can read it. The tests pass a dummy key
+    there; a browser deployment needs a proxy that adds the key instead.
 - **Bundle size:** the loop and the three model APIs add about 2.5 MB to the Worker
   (7.4 MB, 1.25 MB gzipped, in `wrangler deploy --dry-run`).
 - **In the browser**, pi-ai probes `node:fs`/`node:os`/`node:path` while it loads whenever
@@ -408,6 +428,7 @@ src/capfs.ts        just-bash IFileSystem over a capability; /dev/null sink; saf
 src/agent.ts        Agent DO: bash, Flue tools, Worker Loader tools, delegation chain
 src/flue-compat.ts  `rg` shim so Flue's grep tool works on just-bash
 src/agent-loop.ts   the `agent` task: pi-agent-core loop, Flue's tools over the capability, sessions
+src/agent-history.ts  how a session history is trimmed (unit-tested)
 src/node-probe-guard.ts  hides process.versions.node from pi-ai's load-time probes in the browser
 src/tools/config.ts  ToolBundleConfig: defaults (tool-bundle.config.json) ← overrides ← TOOL_BUNDLE
 src/tools/shims.ts   fs shim over `files`, POSIX path, deny modules, the WorkerEntrypoint wrapper

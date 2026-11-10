@@ -7,9 +7,11 @@
 // endpoint ({ baseUrl, model, api?, contextWindow?, maxTokens?, headers? }) and the `LLM_API_KEY`
 // secret holds its key. Nothing in a request chooses the endpoint or sees the key.
 //
-// A conversation can be kept in the Agent cell (`session`), stored per capability (its
-// revocation id): the messages hold file contents read with that capability, so another
-// capability starts its own conversation even under the same session name.
+// A conversation can be kept in the Agent cell (`session`), stored per capability: the messages
+// hold file contents read with that capability, so another capability starts its own
+// conversation even under the same session name. The key is the capability the request brought
+// (its revocation id) and the delegation chain it named (`scope`, from Agent.run), not the token
+// the last hop holds: attenuation mints fresh block keys on every run.
 
 import { Agent as LoopAgent } from "@earendil-works/pi-agent-core";
 import * as anthropicMessages from "@earendil-works/pi-ai/api/anthropic-messages";
@@ -26,6 +28,7 @@ import {
   bash as flueBash,
 } from "@flue/runtime";
 import { Bash } from "just-bash/browser";
+import { trimHistory } from "./agent-history.ts";
 import { CapFs } from "./capfs.ts";
 import type { Cap } from "./caps.ts";
 import { rgForFlue } from "./flue-compat.ts";
@@ -52,6 +55,12 @@ export interface LlmConfig {
   headers?: Record<string, string>;
 }
 
+export interface AgentLoopOptions {
+  /** Where the session is kept: the requester's revocation id and chain (see Agent.run). */
+  scope: string;
+  sandboxId: string;
+}
+
 export interface AgentLoopEnv {
   LLM?: unknown;
   LLM_API_KEY?: string;
@@ -60,11 +69,22 @@ export interface AgentLoopEnv {
 interface Storage {
   get<T>(key: string): Promise<T | undefined>;
   put(key: string, value: unknown): Promise<void>;
+  delete(key: string): Promise<unknown>;
 }
 
 const SESSION_MESSAGES = 200;
 const SESSION_BYTES = 1024 * 1024;
+/** Sessions kept per Agent cell; the least recently used one is dropped beyond this. */
+const SESSIONS_PER_CELL = 32;
+const SESSION_INDEX = "agent-sessions";
 const TEXT_LIMIT = 4000;
+const ERROR_LIMIT = 500;
+/** prompt and instructions, each. */
+const INPUT_LIMIT = 100_000;
+/** After the timeout aborts the loop, how long it may take to wind down. */
+const GRACE_MS = 5000;
+/** Rough characters per token, to keep a stored history within the model's context. */
+const CHARS_PER_TOKEN = 3;
 
 /** The deployment's model, or undefined when none is configured. */
 export function llmConfig(env: AgentLoopEnv): LlmConfig | undefined {
@@ -122,6 +142,7 @@ type Message = {
   role: string;
   content?: Content[] | string;
   toolName?: string;
+  toolCallId?: string;
   isError?: boolean;
   stopReason?: string;
   errorMessage?: string;
@@ -130,15 +151,43 @@ type Message = {
 const textOf = (m: Message | undefined) =>
   typeof m?.content === "string" ? m.content : (m?.content ?? []).map((c) => c.text ?? "").join("");
 
+// One run at a time per session (per Agent cell: a cell runs in one isolate).
+const sessionLocks = new Map<string, Promise<unknown>>();
+async function withSessionLock<T>(key: string | undefined, fn: () => Promise<T>): Promise<T> {
+  if (!key) return fn();
+  const prev = sessionLocks.get(key) ?? Promise.resolve();
+  const run = prev.catch(() => {}).then(fn);
+  const tail = run.catch(() => {});
+  sessionLocks.set(key, tail);
+  try {
+    return await run;
+  } finally {
+    if (sessionLocks.get(key) === tail) sessionLocks.delete(key);
+  }
+}
+
+async function touchSession(storage: Storage, key: string) {
+  const index = ((await storage.get<string[]>(SESSION_INDEX)) ?? []).filter((k) => k !== key);
+  index.push(key);
+  for (const old of index.splice(0, Math.max(0, index.length - SESSIONS_PER_CELL)))
+    await storage.delete(old);
+  await storage.put(SESSION_INDEX, index);
+}
+
 export async function runAgentLoop(
   cap: Cap,
   req: AgentLoopRequest,
   env: AgentLoopEnv,
   storage: Storage,
-  sandboxId: string,
+  { scope, sandboxId }: AgentLoopOptions,
 ) {
   if (typeof req.prompt !== "string" || !req.prompt)
     throw new Error("EINVAL: agent: prompt is required");
+  if (req.session !== undefined && String(req.session).length > 200)
+    throw new Error("EINVAL: agent: session name is too long");
+  if (req.prompt.length > INPUT_LIMIT) throw new Error("EINVAL: agent: prompt is too long");
+  if (req.instructions !== undefined && String(req.instructions).length > INPUT_LIMIT)
+    throw new Error("EINVAL: agent: instructions are too long");
   const config = llmConfig(env);
   if (!config) throw new Error("ENOSYS: no model configured for this deployment (LLM)");
   const cwd = req.cwd ?? "/";
@@ -154,91 +203,132 @@ export async function runAgentLoop(
     createBashTool,
   ].map((make) => make(sandbox));
 
-  const sessionKey = req.session
-    ? `agent-session:${await cap.revocationId()}:${String(req.session)}`
-    : undefined;
-  const history = (sessionKey ? await storage.get<Message[]>(sessionKey) : undefined) ?? [];
-  const agent = new LoopAgent({
-    streamFn: streamSimple as never,
-    getApiKey: () => env.LLM_API_KEY,
-    initialState: {
-      systemPrompt:
-        req.instructions ??
-        "You work on a file system through your tools. Paths are absolute; you see only what you are allowed to.",
-      model: modelOf(config) as never,
-      tools: tools as never,
-      messages: history as never,
-    },
-  } as never);
+  const sessionKey = req.session ? `agent-session:${scope}:${String(req.session)}` : undefined;
+  return withSessionLock(sessionKey, async () => {
+    const model = modelOf(config);
+    // What is sent back each turn stays within the context, leaving room for the reply.
+    const contextBytes = Math.max(
+      (model.contextWindow - model.maxTokens) * CHARS_PER_TOKEN,
+      16 * 1024,
+    );
+    const stored = (sessionKey ? await storage.get<Message[]>(sessionKey) : undefined) ?? [];
+    const history = trimHistory(stored, SESSION_MESSAGES, Math.min(SESSION_BYTES, contextBytes));
+    const agent = new LoopAgent({
+      streamFn: streamSimple as never,
+      getApiKey: () => env.LLM_API_KEY,
+      initialState: {
+        systemPrompt:
+          req.instructions ??
+          "You work on a file system through your tools. Paths are absolute; you see only what you are allowed to.",
+        model: model as never,
+        tools: tools as never,
+        messages: history as never,
+      },
+    } as never);
 
-  const maxTurns = Math.min(Math.max(Number(req.maxTurns) || 12, 1), 50);
-  const timeoutMs = Math.min(Math.max(Number(req.timeoutMs) || 120_000, 1000), 600_000);
-  let turns = 0;
-  let stopped: string | undefined;
-  agent.subscribe((e: { type: string }) => {
-    if (e.type !== "turn_end" || stopped) return; // the turn cut short by the abort does not count
-    turns += 1;
-    if (turns >= maxTurns) {
-      stopped = `stopped after ${maxTurns} turns`;
-      agent.abort();
+    const maxTurns = Math.min(Math.max(Number(req.maxTurns) || 12, 1), 50);
+    const timeoutMs = Math.min(Math.max(Number(req.timeoutMs) || 120_000, 1000), 600_000);
+    let turns = 0;
+    let stopped: string | undefined;
+    agent.subscribe((e: { type: string; message?: Message }) => {
+      if (e.type !== "turn_end" || stopped) return; // the turn cut short by the abort does not count
+      turns += 1;
+      // Only a turn that asked for tools leads to another one: a run that ends on its last
+      // allowed turn is not a limit stop.
+      if (turns >= maxTurns && e.message?.stopReason === "toolUse") {
+        stopped = `stopped after ${maxTurns} turns`;
+        agent.abort();
+      }
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let hard: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        stopped ??= `stopped after ${timeoutMs} ms`;
+        agent.abort();
+        // A tool that ignores the abort does not hold the run past the grace period.
+        hard = setTimeout(resolve, GRACE_MS);
+      }, timeoutMs);
+    });
+    try {
+      await Promise.race([
+        (async () => {
+          await agent.prompt(req.prompt);
+          await agent.waitForIdle();
+        })(),
+        deadline,
+      ]);
+    } finally {
+      clearTimeout(timer);
+      clearTimeout(hard);
     }
-  });
-  const timer = setTimeout(() => {
-    stopped ??= `stopped after ${timeoutMs} ms`;
-    agent.abort();
-  }, timeoutMs);
-  try {
-    await agent.prompt(req.prompt);
-    await agent.waitForIdle();
-  } finally {
-    clearTimeout(timer);
-  }
 
-  const messages = (agent.state.messages as unknown as Message[]).filter(
-    (m) => m.role !== "system",
-  );
-  const fresh = messages.slice(history.length);
-  const toolCalls: { tool: string; arguments: unknown; isError: boolean; result: string }[] = [];
-  for (const m of fresh) {
-    if (m.role === "assistant" && Array.isArray(m.content)) {
-      for (const c of m.content)
-        if (c.type === "toolCall")
-          toolCalls.push({
-            tool: String(c.name),
-            arguments: c.arguments,
-            isError: false,
-            result: "",
-          });
-    } else if (m.role === "toolResult") {
-      const call = [...toolCalls].reverse().find((t) => t.tool === m.toolName && t.result === "");
-      if (call) {
-        call.isError = !!m.isError;
-        call.result = clip(textOf(m));
+    const messages = (agent.state.messages as unknown as Message[]).filter(
+      (m) => m.role !== "system",
+    );
+    const fresh = messages.slice(history.length);
+    const toolCalls: {
+      tool: string;
+      arguments: unknown;
+      isError: boolean;
+      result: string;
+      id?: string;
+      done?: boolean;
+    }[] = [];
+    for (const m of fresh) {
+      if (m.role === "assistant" && Array.isArray(m.content)) {
+        for (const c of m.content)
+          if (c.type === "toolCall")
+            toolCalls.push({
+              tool: String(c.name),
+              arguments: c.arguments,
+              isError: false,
+              result: "",
+              id: c.id,
+            });
+      } else if (m.role === "toolResult") {
+        const call = toolCalls.find((t) => !t.done && t.id !== undefined && t.id === m.toolCallId);
+        if (call) {
+          call.done = true;
+          call.isError = !!m.isError;
+          call.result = clip(textOf(m));
+        }
       }
     }
-  }
-  const last = [...fresh].reverse().find((m) => m.role === "assistant");
-  const usage = fresh.reduce(
-    (u, m) => ({
-      input: u.input + (m.usage?.input ?? 0),
-      output: u.output + (m.usage?.output ?? 0),
-    }),
-    { input: 0, output: 0 },
-  );
+    const assistants = fresh.filter((m) => m.role === "assistant");
+    const last = assistants.at(-1);
+    // The reply is the last real answer: an abort appends an empty "aborted" message.
+    const answer = [...assistants]
+      .reverse()
+      .find((m) => m.stopReason !== "aborted" && m.stopReason !== "error");
+    const usage = fresh.reduce(
+      (u, m) => ({
+        input: u.input + (m.usage?.input ?? 0),
+        output: u.output + (m.usage?.output ?? 0),
+      }),
+      { input: 0, output: 0 },
+    );
+    const providerError =
+      last?.stopReason === "error"
+        ? clip(String(last.errorMessage ?? "error"), ERROR_LIMIT)
+        : undefined;
+    const errors = [stopped, providerError].filter(Boolean);
 
-  if (sessionKey) {
-    let keep = messages.slice(-SESSION_MESSAGES);
-    while (keep.length && JSON.stringify(keep).length > SESSION_BYTES)
-      keep = keep.slice(Math.ceil(keep.length / 4));
-    await storage.put(sessionKey, keep);
-  }
-  return {
-    reply: clip(textOf(last)),
-    stopReason: stopped ? "limit" : (last?.stopReason ?? "unknown"),
-    error: stopped ?? (last?.stopReason === "error" ? last.errorMessage : undefined),
-    turns,
-    toolCalls,
-    usage,
-    session: req.session ? { name: String(req.session), messages: messages.length } : undefined,
-  };
+    let kept = messages.length;
+    if (sessionKey) {
+      const keep = trimHistory(messages, SESSION_MESSAGES, SESSION_BYTES);
+      kept = keep.length;
+      await storage.put(sessionKey, keep);
+      await touchSession(storage, sessionKey);
+    }
+    return {
+      reply: clip(textOf(answer)),
+      stopReason: stopped ? "limit" : (last?.stopReason ?? "unknown"),
+      error: errors.length ? errors.join("; ") : undefined,
+      turns,
+      toolCalls: toolCalls.map(({ id: _id, done: _done, ...c }) => c),
+      usage,
+      session: req.session ? { name: String(req.session), messages: kept } : undefined,
+    };
+  });
 }

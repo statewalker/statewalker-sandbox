@@ -6,7 +6,7 @@
 // TRANSPORTS=token: celld does not pass RpcTargets between isolates ("RPC stubs cannot cross
 // isolate boundaries yet").
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -31,6 +31,9 @@ const state = mkdtempSync(join(tmpdir(), `flue-capfs-${env}-`));
 const fakeLlm = await startFakeLlm();
 const LLM = JSON.stringify(fakeLlm.config);
 const LLM_VARS = [`LLM=${LLM}`, "LLM_API_KEY=sk-fake"];
+
+const DEV_VARS_MARK = "# written by scripts/run-env.mjs for a test run (removed when it ends)";
+let ownDevVars = false;
 
 const commands = {
   wrangler: [
@@ -93,11 +96,20 @@ const commands = {
   // in Docker with host networking and the repository mounted at its own path (pnpm's links).
   // celld bundles with esbuild: the project's own native esbuild is passed as CELLD_ESBUILD.
   celld: () => {
-    // celld reads Worker vars from .dev.vars beside the config (removed when the run ends).
+    // celld reads Worker vars from .dev.vars beside the config. A developer's own file (it
+    // usually holds wrangler dev secrets) is never overwritten: only one this script wrote, which
+    // a killed run can leave behind. It is removed when the run ends.
+    const devVars = join(dir, ".dev.vars");
+    if (existsSync(devVars) && !readFileSync(devVars, "utf8").startsWith(DEV_VARS_MARK)) {
+      console.error(`celld: ${devVars} exists; move it away for the test run`);
+      process.exit(2);
+    }
+    if (LLM_VARS.some((v) => v.includes("'"))) throw new Error("a var contains a single quote");
     writeFileSync(
-      join(dir, ".dev.vars"),
-      `${LLM_VARS.map((v) => `${v.replace("=", "='")}'`).join("\n")}\n`,
+      devVars,
+      `${DEV_VARS_MARK}\n${LLM_VARS.map((v) => `${v.replace("=", "='")}'`).join("\n")}\n`,
     );
+    ownDevVars = true;
     const args = ["dev", dir, "--host", "127.0.0.1", "--port", String(port), "--no-watch"];
     if (process.env.CELLD_BIN) return [process.env.CELLD_BIN, args];
     if (process.platform !== "linux") {
@@ -153,7 +165,7 @@ if (!commands[env]) {
 }
 const [cmd, args] = typeof commands[env] === "function" ? await commands[env]() : commands[env];
 process.on("exit", () => {
-  if (env === "celld") rmSync(join(dir, ".dev.vars"), { force: true });
+  if (ownDevVars) rmSync(join(dir, ".dev.vars"), { force: true });
 });
 const cleanup = () => {
   if (env === "celld" && cmd === "docker")

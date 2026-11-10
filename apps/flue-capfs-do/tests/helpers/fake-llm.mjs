@@ -4,6 +4,10 @@
 //   READ <path> / WRITE <path> <text> / BASH <command>  → a tool call, then "RESULT: <tool output>"
 //   LOOP                                                 → a tool call every turn (never stops)
 //   HISTORY                                              → "MESSAGES: <n>" (messages it was sent)
+//   TWO <path> <path>                                    → two read calls in one turn, then
+//                                                          "RESULT: <outputs joined by |>"
+//   KEY                                                  → "KEY: <the Authorization header>"
+//   SLOW                                                 → answers after 3 s
 //   anything else                                        → "OK"
 // It answers browsers too (CORS), and records each request.
 import { createServer } from "node:http";
@@ -36,31 +40,35 @@ export function startFakeLlm(port = 0) {
     ).trim();
     const chunk = (delta, finish = null) =>
       `data: ${JSON.stringify({ id: "c", object: "chat.completion.chunk", created: 0, model: json.model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
-    const toolCall = (name, args) => [
+    const toolCalls = (...calls) => [
       chunk({
         role: "assistant",
-        tool_calls: [
-          {
-            index: 0,
-            id: `call_${requests.length}`,
-            type: "function",
-            function: { name, arguments: JSON.stringify(args) },
-          },
-        ],
+        tool_calls: calls.map(([name, args], index) => ({
+          index,
+          id: `call_${requests.length}_${index}`,
+          type: "function",
+          function: { name, arguments: JSON.stringify(args) },
+        })),
       }),
       chunk({}, "tool_calls"),
     ];
+    const toolCall = (name, args) => toolCalls([name, args]);
+    const partText = (c) => (typeof c === "string" ? c : c.map((p) => p.text ?? "").join(""));
     const say = (content) => [chunk({ role: "assistant", content }), chunk({}, "stop")];
     let out;
     const m = text.match(/^(READ|WRITE|BASH)\s+(\S+)(?:\s+([\s\S]*))?$/);
+    const two = text.match(/^TWO\s+(\S+)\s+(\S+)$/);
+    if (/^SLOW\b/.test(text)) await new Promise((r) => setTimeout(r, 3000));
     if (/^LOOP\b/.test(text)) out = toolCall("bash", { command: "echo again" });
     else if (last?.role === "tool") {
-      const result =
-        typeof last.content === "string"
-          ? last.content
-          : last.content.map((p) => p.text ?? "").join("");
-      out = say(`RESULT: ${result.trim()}`);
-    } else if (/^HISTORY\b/.test(text)) out = say(`MESSAGES: ${messages.length}`);
+      // Every tool result since the last assistant message, in order.
+      const results = [];
+      for (let i = messages.length - 1; i >= 0 && messages[i].role === "tool"; i--)
+        results.unshift(partText(messages[i].content).trim());
+      out = say(`RESULT: ${results.join(" | ")}`);
+    } else if (/^KEY\b/.test(text)) out = say(`KEY: ${req.headers.authorization}`);
+    else if (two) out = toolCalls(["read", { path: two[1] }], ["read", { path: two[2] }]);
+    else if (/^HISTORY\b/.test(text)) out = say(`MESSAGES: ${messages.length}`);
     else if (m?.[1] === "READ") out = toolCall("read", { path: m[2] });
     else if (m?.[1] === "WRITE") out = toolCall("write", { path: m[2], content: m[3] ?? "" });
     else if (m?.[1] === "BASH") out = toolCall("bash", { command: `${m[2]} ${m[3] ?? ""}`.trim() });
