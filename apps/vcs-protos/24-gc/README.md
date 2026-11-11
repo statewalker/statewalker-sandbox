@@ -1,6 +1,6 @@
 # 24 — Can a repository garbage-collect and repack safely — concurrent writers, resumable, on every backend?
 
-Plan id **X18** (safe GC). Status: **open**.
+Plan id **X18** (safe GC). Status: **answered — yes: native `gc --prune=now`'s object set at 0.84× its pack size; grace by a ledger (no mtimes); re-mark and leases keep concurrent writers safe; resumable phases; files and SQL.**
 
 ## Question
 
@@ -57,3 +57,62 @@ what native `git gc --prune` keeps.
   here such objects stay where they are (their pack is kept until all its unreachable objects
   expire). Bitmaps, commit-graph, multi-pack-index (R7 perf backlog). Index (worktree) roots:
   the stores are bare (X14).
+
+## Answer
+
+**Yes.** `gc(repo, { graceMs })` runs `gcStep` until done (or deferred by a lease); `gcStep(repo,
+{ units })` runs that many phases, each persisted under the store's `gc/` directory (on the pack
+FilesApi: `.git/gc/` for git files, SqliteFilesApi tables for SQL), so a fresh handle — a restarted
+Durable Object — resumes it. `withLease(repo, fn)` is what a writer that may reuse old objects
+holds (X8b's receive-pack between its connectivity check and its ref update is the case).
+
+| | |
+|---|---|
+| a messy bare repository (rewound branch, dropped branch, dangling loose objects) | object set = native `git gc --prune=now`'s; one pack; no loose objects; refs unchanged; `fsck --strict` clean; 13 259 B vs git's 15 718 B (0.84×) |
+| grace | first run: unreachable objects recorded and kept (loose and packed: a pack with a young unreachable object stays); past the grace: deleted, the old pack too; one made reachable meanwhile kept |
+| roots | `refs/peers/*`, a detached HEAD, a reflog entry, an annotated tag |
+| concurrent writers | pushes after every phase, a ref resurrecting an old unreachable commit after the mark: all kept, `fsck --strict` clean |
+| leases | a live lease → `deferred`, nothing deleted; a writer arriving during a sweep runs after it |
+| resumable | one phase per step with fresh handles = the one-shot result; a crash after each phase resumed to it |
+| SQL | two packs and loose rows → one pack, no loose rows, the dangling row removed, the log the same |
+
+- **Store additions**: X4's `GitObjects.remove`, X6r's `ObjectDatabase.readers()`, and X16a's
+  optional `ObjectStore.gc` (`GcAccess`: the gc directory, packs with their ids, loose ids,
+  `removeLoose`, `removePacks` — idx before pack, then the pack database reopened).
+- **Cost**: two walks (mark and re-mark) and one repack per run; memory holds the reachable set
+  and the ledger (an object id each).
+
+## Verified
+
+All 7 Node tests pass (`pnpm test 24-gc`); X4's, X6r's and X16a's suites pass with the additions
+(69 tests together). The tests were written first (red commit).
+
+### Mutation check
+
+| Mutation | Caught by |
+|---|---|
+| G1 no re-mark before the sweep | R4 (the resurrected commit) |
+| G2 packs written during the run swept too | — equivalent: an object written during gc is not in the ledger, so it can only go if the new pack holds it (the snapshot rule is defense in depth) |
+| G3 grace ignored | R2 |
+| G4 leases not checked | R5 |
+| G5 a writer does not wait for a running sweep | R5 |
+| G6 reflogs not roots | R3 |
+| G7 a pack removed although some of its objects may not go | R2 (a young unreachable packed commit) |
+
+## Promotion grades
+
+| File | Grade | Why |
+|---|---|---|
+| `src/gc.ts` | **Adopt** | git's gc/prune semantics, portable grace, safe with writers, resumable |
+| store additions (`GcAccess`, `remove`, `readers`) | **Adopt** | the minimum gc needs from every backend |
+
+## Open threads (ranked by how much later work they would invalidate)
+
+1. **Leases in the writers**: X8b's receive-pack and X16a's `commit` should hold `withLease` (only
+   the tests do now).
+2. **Cruft packs** (git's: unreachable-but-young objects in one pack with per-object times), so a
+   pack holding one young object is not kept whole.
+3. **A bounded repack** for very large repositories inside a Durable Object (the repack is one
+   step now): X6b2's resumable install fed by a resumable writer.
+4. Bitmaps, commit-graph, multi-pack-index (R7 perf backlog); concurrent gc runs (one state per
+   store: a second run resumes the first).
