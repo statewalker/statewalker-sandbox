@@ -28,6 +28,8 @@ export interface IndexEntry {
   skipWorktree: boolean;
   intentToAdd: boolean;
   path: string;
+  /** the name's bytes when they are not UTF-8 (`path` then holds a lossy decoding) */
+  pathBytes?: Uint8Array;
 }
 export interface IndexExtension {
   signature: string;
@@ -47,6 +49,15 @@ const CE_SKIP_WORKTREE = 0x4000;
 const CE_INTENT_TO_ADD = 0x2000;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
+const strict = new TextDecoder("utf-8", { fatal: true });
+
+/** a name's bytes, as stored in the index */
+export function nameBytes(e: Pick<IndexEntry, "path" | "pathBytes">): Uint8Array {
+  return e.pathBytes ?? enc.encode(e.path);
+}
+function hasExtendedFlags(e: IndexEntry): boolean {
+  return e.skipWorktree || e.intentToAdd;
+}
 
 export function parseIndex(bytes: Uint8Array): IndexFile {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -92,6 +103,14 @@ export function parseIndex(bytes: Uint8Array): IndexFile {
       at = start + ((at - start + name.length + 8) & ~7);
     }
     previous = name;
+    let path: string;
+    let pathBytes: Uint8Array | undefined;
+    try {
+      path = strict.decode(name);
+    } catch {
+      path = dec.decode(name);
+      pathBytes = name.slice();
+    }
     entries.push({
       ctimeSec: u32(0),
       ctimeNsec: u32(1),
@@ -108,12 +127,16 @@ export function parseIndex(bytes: Uint8Array): IndexFile {
       assumeValid: !!(flags & CE_VALID),
       skipWorktree: !!(flags2 & CE_SKIP_WORKTREE),
       intentToAdd: !!(flags2 & CE_INTENT_TO_ADD),
-      path: dec.decode(name),
+      path,
+      ...(pathBytes ? { pathBytes } : {}),
     });
   }
   const extensions: IndexExtension[] = [];
   while (at < end) {
     const signature = dec.decode(bytes.subarray(at, at + 4));
+    // read-cache.c: a signature not starting with A-Z is required to read the index right
+    if (!/^[A-Z]/.test(signature))
+      throw new Error(`index uses ${signature} extension, which we do not understand`);
     const size = view.getUint32(at + 4);
     extensions.push({ signature, data: bytes.slice(at + 8, at + 8 + size) });
     at += 8 + size;
@@ -134,17 +157,20 @@ function varint(value: number): number[] {
 }
 
 export function serializeIndex(index: IndexFile): Uint8Array {
+  // do_write_index: version 3 exactly when an entry has extended flags (4 stays 4)
+  const extendedAny = index.entries.some(hasExtendedFlags);
+  const version = index.version === 4 ? 4 : extendedAny ? 3 : 2;
   const parts: Uint8Array[] = [];
   const header = new Uint8Array(12);
   header.set(enc.encode("DIRC"));
   const hv = new DataView(header.buffer);
-  hv.setUint32(4, index.version);
+  hv.setUint32(4, version);
   hv.setUint32(8, index.entries.length);
   parts.push(header);
   let previous: Uint8Array = new Uint8Array(0);
   for (const e of index.entries) {
-    const name = enc.encode(e.path);
-    const extended = index.version >= 3 && (e.skipWorktree || e.intentToAdd);
+    const name = nameBytes(e);
+    const extended = hasExtendedFlags(e);
     const fixed = new Uint8Array(62 + (extended ? 2 : 0));
     const v = new DataView(fixed.buffer);
     [
@@ -175,7 +201,7 @@ export function serializeIndex(index: IndexFile): Uint8Array {
         (e.skipWorktree ? CE_SKIP_WORKTREE : 0) | (e.intentToAdd ? CE_INTENT_TO_ADD : 0),
       );
     parts.push(fixed);
-    if (index.version === 4) {
+    if (version === 4) {
       let common = 0;
       while (common < previous.length && common < name.length && previous[common] === name[common])
         common++;
@@ -215,8 +241,8 @@ function concat(parts: Uint8Array[]): Uint8Array {
 
 /** index order: names as bytes, then stage */
 export function compareEntries(a: IndexEntry, b: IndexEntry): number {
-  const x = enc.encode(a.path);
-  const y = enc.encode(b.path);
+  const x = nameBytes(a);
+  const y = nameBytes(b);
   for (let i = 0; i < x.length && i < y.length; i++)
     if (x[i] !== y[i]) return (x[i] as number) - (y[i] as number);
   return x.length - y.length || a.stage - b.stage;

@@ -506,7 +506,7 @@ describe("W8 review cases", () => {
 
   it("names that are not UTF-8 round-trip byte for byte", () => {
     const d = initRepo({ a: "a\n" });
-    writeFileSync(join(Buffer.from(d), Buffer.from([0x2f, 0x6c, 0xe9])), "latin1\n");
+    writeFileSync(Buffer.concat([Buffer.from(`${d}/`), Buffer.from([0x6c, 0xe9])]), "latin1\n");
     git(d, ["add", "-A"]);
     const bytes = readFileSync(join(d, ".git/index"));
     expect(Buffer.from(serializeIndex(parseIndex(bytes))).equals(bytes)).toBe(true);
@@ -521,10 +521,11 @@ describe("W8 review cases", () => {
   it("FilesApi only: a size change with the mtime restored", async () => {
     const d = initRepo({ a: "aaaa\n" });
     const wt: Worktree = { files: new NodeFilesApi({ rootDir: d }) };
-    await new Promise((r) => setTimeout(r, 5));
+    // a whole-millisecond mtime in the past, so the restored one matches it exactly
+    const t = new Date(Date.now() - 60_000);
+    utimesSync(join(d, "a"), t, t);
     const idx = await addAll(await openRepo(d), wt, undefined, Date.now());
     await writeIndex(d, idx);
-    const t = statSync(join(d, "a")).mtime;
     writeFileSync(join(d, "a"), "longer content\n");
     utimesSync(join(d, "a"), t, t);
     const r = await status(await openRepo(d), wt, idx, head(d), indexTime(d));

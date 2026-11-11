@@ -1,6 +1,6 @@
 /** X14 — the full lstat on Node, for the index's stat data */
 
-import { lstat } from "node:fs/promises";
+import { lstat, readlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { StatInfo } from "./worktree.js";
 
@@ -8,8 +8,10 @@ export function nodeStat(root: string): (path: string) => Promise<StatInfo | und
   return async (path) => {
     try {
       const st = await lstat(join(root, path), { bigint: true });
-      if (!st.isFile()) return undefined;
+      const symlink = st.isSymbolicLink();
+      if (!st.isFile() && !symlink) return undefined;
       return {
+        ...(symlink ? { symlink } : {}),
         size: Number(st.size),
         mtimeMs: Number(st.mtimeNs / 1_000_000n),
         mtimeNs: st.mtimeNs,
@@ -26,8 +28,6 @@ export function nodeStat(root: string): (path: string) => Promise<StatInfo | und
 }
 
 /** a symlink's target, for its blob */
-export function nodeReadLink(_root: string): (path: string) => Promise<string> {
-  return async () => {
-    throw new Error("not implemented");
-  };
+export function nodeReadLink(root: string): (path: string) => Promise<string> {
+  return (path) => readlink(join(root, path));
 }

@@ -19,6 +19,8 @@ import { compareEntries, type IndexEntry, type IndexFile } from "./index-file.js
 export interface StatInfo {
   size: number;
   mtimeMs: number;
+  /** a symlink (lstat), whose blob is its target */
+  symlink?: boolean;
   /** full lstat, where the platform has it */
   mtimeNs?: bigint;
   ctimeNs?: bigint;
@@ -35,27 +37,57 @@ export interface Worktree {
   readLink?: (path: string) => Promise<string>;
 }
 export interface StatusResult {
-  /** `git status --porcelain=v1 --untracked-files=all --no-renames` lines, sorted */
+  /** `git status --porcelain=v1 --untracked-files=all --no-renames` lines, in git's order */
   lines: string[];
   /** how many files were read and hashed */
   hashed: number;
-  /** the index with refreshed stat data */
+  /** the index with refreshed stat data (smudge it with `smudgeRacy` when writing it) */
   index: IndexFile;
 }
 
 const EMPTY_BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+const GITLINK = 0o160000;
+const SYMLINK = 0o120000;
 const enc = new TextEncoder();
 
-/** every regular file of the working tree (outside .git), with its stat */
-async function scan(wt: Worktree): Promise<Map<string, StatInfo>> {
-  const out = new Map<string, StatInfo>();
+interface Scan {
+  files: Map<string, StatInfo>;
+  /** directories holding a repository of their own (a `.git` inside) */
+  nested: Set<string>;
+}
+
+/** every file of the working tree outside .git, nested repositories and the index's gitlinks */
+async function scan(wt: Worktree, gitlinks: Set<string>, symlinks: string[]): Promise<Scan> {
+  const listed: { path: string; size: number; lastModified: number }[] = [];
+  const nested = new Set<string>();
   for await (const e of wt.files.list("/", { recursive: true })) {
     const path = e.path.replace(/^\//, "");
-    if (e.kind !== "file" || path === ".git" || path.startsWith(".git/")) continue;
-    const st = wt.stat ? await wt.stat(e.path) : { size: e.size, mtimeMs: e.lastModified };
-    if (st) out.set(path, st);
+    const parts = path.split("/");
+    const at = parts.indexOf(".git");
+    if (at > 0) nested.add(parts.slice(0, at).join("/"));
+    if (at >= 0 || e.kind !== "file") continue;
+    listed.push({ path, size: e.size ?? 0, lastModified: e.lastModified ?? 0 });
   }
-  return out;
+  const roots = new Set([...nested, ...gitlinks]);
+  const inside = (path: string) => {
+    for (let i = path.indexOf("/"); i >= 0; i = path.indexOf("/", i + 1))
+      if (roots.has(path.slice(0, i))) return true;
+    return false;
+  };
+  const files = new Map<string, StatInfo>();
+  for (const e of listed) {
+    if (inside(e.path)) continue;
+    const st = wt.stat ? await wt.stat(`/${e.path}`) : { size: e.size, mtimeMs: e.lastModified };
+    if (st) files.set(e.path, st);
+  }
+  // a dangling symlink is not listed (a FilesApi follows links): the index's symlinks are asked for
+  if (wt.stat && wt.readLink)
+    for (const path of symlinks)
+      if (!files.has(path)) {
+        const st = await wt.stat(`/${path}`);
+        if (st?.symlink) files.set(path, st);
+      }
+  return { files, nested };
 }
 
 async function readAll(files: FilesApi, path: string): Promise<Uint8Array> {
@@ -72,6 +104,12 @@ async function readAll(files: FilesApi, path: string): Promise<Uint8Array> {
     at += p.length;
   }
   return out;
+}
+
+/** what the blob of a working-tree file holds: its bytes, or a symlink's target */
+async function content(wt: Worktree, path: string, st: StatInfo): Promise<Uint8Array> {
+  if (st.symlink && wt.readLink) return enc.encode(await wt.readLink(`/${path}`));
+  return readAll(wt.files, path);
 }
 
 function blobId(data: Uint8Array): string {
@@ -142,6 +180,30 @@ function mustHash(e: IndexEntry, st: StatInfo, indexTimestampMs: number): boolea
   return e.size === 0 && e.oid !== EMPTY_BLOB; // smudged
 }
 
+/** ce_smudge_racily_clean_entry for every entry, against the time the index is written */
+export function smudgeRacy(index: IndexFile, writeTimestampMs: number): IndexFile {
+  return {
+    ...index,
+    entries: index.entries.map((e) =>
+      e.stage === 0 && e.size !== 0 && isRacy(e, writeTimestampMs) ? { ...e, size: 0 } : e,
+    ),
+  };
+}
+
+/** ce_mode_from_stat with core.fileMode=false: the index's mode for regular files */
+function modeOf(wt: Worktree, st: StatInfo, prev: IndexEntry | undefined): number {
+  if (st.symlink) return SYMLINK;
+  if (!prev) return 0o100644;
+  if (prev.mode === 0o100755 || prev.mode === 0o100644) return prev.mode;
+  if (prev.mode === SYMLINK && !wt.readLink) return SYMLINK; // core.symlinks=false
+  return 0o100644;
+}
+
+/** entries `git add -A` leaves as they are: skip-worktree, assume-unchanged, gitlinks */
+function keptAsIs(e: IndexEntry): boolean {
+  return e.stage === 0 && (e.skipWorktree || e.assumeValid || e.mode === GITLINK);
+}
+
 /** stages every file of the working tree (`git add -A`); racy entries are smudged (size 0) */
 export async function addAll(
   repo: Repository,
@@ -149,19 +211,25 @@ export async function addAll(
   index: IndexFile | undefined,
   indexTimestampMs: number,
 ): Promise<IndexFile> {
-  const files = await scan(wt);
-  const old = new Map<string, IndexEntry>();
-  for (const e of index?.entries ?? []) if (!old.has(e.path) || e.stage === 0) old.set(e.path, e);
-  const entries: IndexEntry[] = [];
+  const kept = (index?.entries ?? []).filter(keptAsIs);
+  const gitlinks = new Set(kept.filter((e) => e.mode === GITLINK).map((e) => e.path));
+  const symlinks = (index?.entries ?? []).filter((e) => e.mode === SYMLINK).map((e) => e.path);
+  const { files, nested } = await scan(wt, gitlinks, symlinks);
+  for (const n of nested)
+    if (!gitlinks.has(n)) throw new Error(`${n}: a nested repository (submodules are not handled)`);
+  const keptPaths = new Set(kept.map((e) => e.path));
+  const stage0 = new Map<string, IndexEntry>();
+  for (const e of index?.entries ?? []) if (e.stage === 0) stage0.set(e.path, e);
+  const entries: IndexEntry[] = [...kept];
   for (const [path, st] of files) {
-    const prev = old.get(path);
+    if (keptPaths.has(path)) continue;
+    const prev = stage0.get(path);
     let oid: string;
-    if (prev && prev.stage === 0 && !prev.intentToAdd && !mustHash(prev, st, indexTimestampMs))
-      oid = prev.oid;
-    else oid = await repo.objects.put("blob", await readAll(wt.files, path));
+    if (prev && !prev.intentToAdd && !mustHash(prev, st, indexTimestampMs)) oid = prev.oid;
+    else oid = await repo.objects.put("blob", await content(wt, path, st));
     const e: IndexEntry = {
       ...statFields(st),
-      mode: prev?.mode ?? 0o100644,
+      mode: modeOf(wt, st, prev),
       oid,
       stage: 0,
       assumeValid: false,
@@ -209,6 +277,42 @@ function unmergedCode(stages: Set<number>): string {
   )[key] as string;
 }
 
+/** quote_c_style with QUOTE_PATH_QUOTE_SP and core.quotePath=true */
+export function quotePath(path: string): string {
+  const bytes = enc.encode(path);
+  const esc: Record<number, string> = {
+    7: "\\a",
+    8: "\\b",
+    9: "\\t",
+    10: "\\n",
+    11: "\\v",
+    12: "\\f",
+    13: "\\r",
+    34: '\\"',
+    92: "\\\\",
+  };
+  let quoted = false;
+  let out = "";
+  for (const b of bytes) {
+    if (b < 0x20 || b === 0x22 || b === 0x5c || b >= 0x7f) {
+      quoted = true;
+      out += esc[b] ?? `\\${b.toString(8).padStart(3, "0")}`;
+    } else {
+      if (b === 0x20) quoted = true;
+      out += String.fromCharCode(b);
+    }
+  }
+  return quoted ? `"${out}"` : path;
+}
+
+function compareBytes(a: string, b: string): number {
+  const x = enc.encode(a);
+  const y = enc.encode(b);
+  for (let i = 0; i < x.length && i < y.length; i++)
+    if (x[i] !== y[i]) return (x[i] as number) - (y[i] as number);
+  return x.length - y.length;
+}
+
 /** `git status` of the working tree against the index and HEAD's tree */
 export async function status(
   repo: Repository,
@@ -217,9 +321,15 @@ export async function status(
   head: string | undefined,
   indexTimestampMs: number,
 ): Promise<StatusResult> {
-  const files = await scan(wt);
+  const gitlinks = new Set(
+    index.entries.filter((e) => e.stage === 0 && e.mode === GITLINK).map((e) => e.path),
+  );
+  const symlinks = index.entries.filter((e) => e.mode === SYMLINK).map((e) => e.path);
+  const { files, nested } = await scan(wt, gitlinks, symlinks);
   const headFiles = await flattenTree(repo, head);
-  const lines: string[] = [];
+  // tracked and unmerged paths in path order, then untracked ones (wt-status.c)
+  const changes = new Map<string, string>();
+  const untracked: string[] = [];
   let hashed = 0;
   const inIndex = new Set<string>();
   const unmerged = new Map<string, Set<number>>();
@@ -236,35 +346,36 @@ export async function status(
     // index against HEAD
     const inHead = headFiles.get(e.path);
     let x = " ";
-    if (e.intentToAdd) x = " ";
+    if (e.intentToAdd) x = inHead === undefined ? " " : "D";
     else if (inHead === undefined) x = "A";
     else if (inHead !== `${e.mode.toString(8)} ${e.oid}`) x = "M";
     // working tree against the index
     let y = " ";
     let entry = e;
     if (e.intentToAdd) y = files.has(e.path) ? "A" : "D";
+    else if (e.mode === GITLINK)
+      y = nested.has(e.path) ? " " : "D"; // the submodule's own state is not read
     else if (!e.skipWorktree && !e.assumeValid) {
       const st = files.get(e.path);
       if (!st) y = "D";
       else if (mustHash(e, st, indexTimestampMs)) {
         hashed++;
-        const oid = blobId(await readAll(wt.files, e.path));
+        const oid = blobId(await content(wt, e.path, st));
         if (oid !== e.oid) y = "M";
         else entry = { ...e, ...statFields(st) }; // refresh: the same content, new stat data
       }
     }
     refreshed.push(entry);
-    if (x !== " " || y !== " ") lines.push(`${x}${y} ${e.path}`);
+    if (x !== " " || y !== " ") changes.set(e.path, `${x}${y}`);
   }
-  for (const [path, stages] of unmerged) lines.push(`${unmergedCode(stages)} ${path}`);
+  for (const [path, stages] of unmerged) changes.set(path, unmergedCode(stages));
   // in HEAD, gone from the index
-  for (const path of headFiles.keys()) if (!inIndex.has(path)) lines.push(`D  ${path}`);
-  for (const path of files.keys()) if (!inIndex.has(path)) lines.push(`?? ${path}`);
-  lines.sort();
+  for (const path of headFiles.keys()) if (!inIndex.has(path)) changes.set(path, "D ");
+  for (const path of files.keys()) if (!inIndex.has(path)) untracked.push(path);
+  for (const n of nested) if (!gitlinks.has(n)) untracked.push(`${n}/`);
+  const lines = [...changes.keys()]
+    .sort(compareBytes)
+    .map((p) => `${changes.get(p)} ${quotePath(p)}`);
+  for (const p of untracked.sort(compareBytes)) lines.push(`?? ${quotePath(p)}`);
   return { lines, hashed, index: { ...index, entries: refreshed } };
-}
-
-/** smudges entries racily clean against the time the index is written (not implemented) */
-export function smudgeRacy(index: IndexFile, _writeTimestampMs: number): IndexFile {
-  return index;
 }
