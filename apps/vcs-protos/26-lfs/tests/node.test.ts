@@ -22,7 +22,7 @@ import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
 import { git, gitEnv, noise } from "../../12-index-pack/src/git-repo.js";
 import { sqlRepository } from "../../17-repository/src/repository.js";
 import { openRepository } from "../../25-repo-facade/src/vcs.js";
-import { lfsFetch, lfsPush } from "../src/client.js";
+import { lfsFetch, lfsPush, transferHeaders } from "../src/client.js";
 import { encodePointer, parsePointer } from "../src/pointer.js";
 import { isLfsRequest, lfsHandler, withLfs } from "../src/server.js";
 import { clean, type LfsStore, lfsStore, repoLfsStore, smudge } from "../src/store.js";
@@ -1019,5 +1019,16 @@ describe("review #89", () => {
     expect(r.objects[0]?.actions.download.href).toBe(
       `https://git.example.com/team/repo.git/info/lfs/objects/${p.oid}`,
     );
+  });
+});
+
+describe("found against Gitea (28)", () => {
+  it("an action's Authorization replaces the client's authorization: one header, not two joined", () => {
+    const h = transferHeaders(
+      { oid: "1".repeat(64), size: 1 },
+      { href: "http://x", header: { Authorization: "Basic action" } },
+      { headers: { authorization: "Basic client", "x-other": "kept" } },
+    );
+    expect(h).toEqual({ authorization: "Basic action", "x-other": "kept" });
   });
 });
