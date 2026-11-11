@@ -50,6 +50,125 @@ export const legacyHashChars = (() => {
   if (/R064/.test(out)) return false;
   throw new Error(`unexpected similarity probe: ${out}`);
 })();
+/**
+ * Whether this git's directory renames use 2.43's `path_in_way`: d/x added on one side while the
+ * other renames d to e, where e/x is in the base and kept by the renaming side. 2.43 moves d/x
+ * there ("file location"); newer git finds e/x in the way ("implicit dir rename").
+ */
+export const legacyPathInWay = (() => {
+  const d = mkdtempSync(join(tmpdir(), "x13e-probe-"));
+  dirs.push(d);
+  const git = (args: string[], input?: string) =>
+    execFileSync("git", args, { cwd: d, env: gitEnv, input }).toString().trim();
+  git(["init", "-q", "--bare"]);
+  const blob = (s: string) => git(["hash-object", "-w", "--stdin"], s);
+  const text = (t: string) => Array.from({ length: 20 }, (_, i) => `${t} line ${i}\n`).join("");
+  const [a, b, x, dx] = [blob(text("a")), blob(text("b")), blob(text("x")), blob(text("dx"))];
+  const tree = (entries: string[]) => git(["mktree"], `${entries.join("\n")}\n`);
+  const sub = (files: [string, string][]) => tree(files.map(([n, o]) => `100644 blob ${o}\t${n}`));
+  const top = (dirsOf: [string, string][]) =>
+    tree(dirsOf.map(([n, o]) => `040000 tree ${o}\t${n}`));
+  const commit = (t: string, parent?: string) =>
+    git(["commit-tree", t, "-m", "x", ...(parent ? ["-p", parent] : [])]);
+  const base = commit(
+    top([
+      [
+        "d",
+        sub([
+          ["a", a],
+          ["b", b],
+        ]),
+      ],
+      ["e", sub([["x", x]])],
+    ]),
+  );
+  const ours = commit(
+    top([
+      [
+        "e",
+        sub([
+          ["a", a],
+          ["b", b],
+          ["x", x],
+        ]),
+      ],
+    ]),
+    base,
+  );
+  const theirs = commit(
+    top([
+      [
+        "d",
+        sub([
+          ["a", a],
+          ["b", b],
+          ["x", dx],
+        ]),
+      ],
+    ]),
+    base,
+  );
+  let out = "";
+  try {
+    out = git(["merge-tree", "--write-tree", ours, theirs]);
+  } catch (e) {
+    out = String((e as { stdout?: Buffer }).stdout ?? "");
+  }
+  return !/in the way/.test(out);
+})();
+/** a nested tree from path → [mode, content], written with git's plumbing */
+function gitTreeOf(
+  git: (args: string[], input?: string) => string,
+  files: Record<string, [string, string]>,
+) {
+  const write = (prefix: string): string => {
+    const names = new Map<string, [string, string] | null>();
+    for (const [p, v] of Object.entries(files)) {
+      if (!p.startsWith(prefix)) continue;
+      const rest = p.slice(prefix.length);
+      const at = rest.indexOf("/");
+      names.set(at < 0 ? rest : rest.slice(0, at), at < 0 ? v : null);
+    }
+    const lines = [...names].map(([n, v]) =>
+      v
+        ? `${v[0]} blob ${git(["hash-object", "-w", "--stdin"], v[1])}\t${n}`
+        : `040000 tree ${write(`${prefix}${n}/`)}\t${n}`,
+    );
+    return git(["mktree"], `${lines.join("\n")}\n`);
+  };
+  return write("");
+}
+/**
+ * Whether this git processes a rename that a directory rename turns into a rename onto itself
+ * (2.43 does, newer git skips it): base a/f and a/b/c/d/b; ours edits a/b/c/d/b into a/d/b (so
+ * a/b/c → a); theirs renames a/f to a/b/c/f, which the directory rename maps back onto a/f.
+ * 2.43 drops a/f; newer git keeps it, conflicted.
+ */
+export const legacyRenameToSelf = (() => {
+  const d = mkdtempSync(join(tmpdir(), "x13e-probe-"));
+  dirs.push(d);
+  const git = (args: string[], input?: string) =>
+    execFileSync("git", args, { cwd: d, env: gitEnv, input }).toString().trim();
+  git(["init", "-q", "--bare"]);
+  const f = "L 0\nL 1\nL 2\n";
+  const b = "L 10\nL 11\nL 12\nL 13\nL 18";
+  const commit = (t: string, parent?: string) =>
+    git(["commit-tree", t, "-m", "x", ...(parent ? ["-p", parent] : [])]);
+  const base = commit(gitTreeOf(git, { "a/f": ["100644", f], "a/b/c/d/b": ["100755", b] }));
+  const ours = commit(
+    gitTreeOf(git, { "a/f": ["100644", f], "a/d/b": ["100755", `edited\n${b.slice(5)}`] }),
+    base,
+  );
+  const theirs = commit(gitTreeOf(git, { "a/b/c/f": ["100644", f] }), base);
+  let tree = "";
+  try {
+    tree = git(["merge-tree", "--write-tree", ours, theirs]).split("\n")[0] as string;
+  } catch (e) {
+    tree = String((e as { stdout?: Buffer }).stdout ?? "").split("\n")[0] as string;
+  }
+  if (!/^[0-9a-f]{40}$/.test(tree)) return true; // an assertion: an older ort
+  return !git(["ls-tree", "-r", "--name-only", tree]).split("\n").includes("a/f");
+})();
 export const ortHonorsNoRenames = (() => {
   const d = mkdtempSync(join(tmpdir(), "x13b-probe-"));
   dirs.push(d);
@@ -217,6 +336,8 @@ export async function compareTrees(
       legacyCompaction,
       detectRenames: !(noRenames && ortHonorsNoRenames),
       legacyHashChars,
+      legacyPathInWay,
+      legacyRenameToSelf,
     });
     const show = (x: {
       clean: boolean;
@@ -241,7 +362,11 @@ export async function compareTrees(
   return {
     wrong,
     kinds: results.flatMap((g) =>
-      g.messages.map((e) => /^CONFLICT \(([^)]+)\)/.exec(e.text)?.[1] ?? ""),
+      g.messages.map(
+        (e) =>
+          /^CONFLICT \(([^)]+)\)/.exec(e.text)?.[1] ??
+          (e.text.startsWith("WARNING:") ? "warning" : ""),
+      ),
     ),
   };
 }

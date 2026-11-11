@@ -308,8 +308,10 @@ describe("review cases (#87)", () => {
     const held = new Promise<void>((r) => {
       release = r;
     });
-    const lease = withLease(repo, () => held, { ttlMs: 300 });
-    await new Promise((r) => setTimeout(r, 900));
+    // TTLs short enough to expire several times over, long enough that a busy CI runner's timer
+    // delays (hundreds of ms) do not skip a renewal
+    const lease = withLease(repo, () => held, { ttlMs: 1500 });
+    await new Promise((r) => setTimeout(r, 4500));
     expect((await gc(await openBare(bare), { graceMs: 0 })).deferred).toBe(true);
     release();
     await lease;
@@ -318,12 +320,12 @@ describe("review cases (#87)", () => {
     let writer: Promise<void> | undefined;
     await gc(repo, {
       graceMs: 0,
-      sweepTtlMs: 300,
+      sweepTtlMs: 1500,
       duringSweep: async () => {
         writer = withLease(repo, async () => {
           events.push("writer");
         });
-        await new Promise((r) => setTimeout(r, 1000));
+        await new Promise((r) => setTimeout(r, 4500));
         events.push("sweep still running");
       },
     });

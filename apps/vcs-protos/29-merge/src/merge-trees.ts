@@ -47,6 +47,16 @@ export interface TreeMergeOptions extends XdOptions {
   detectRenames?: boolean;
   /** git 2.43's rename similarity (see X13c's `legacyHashChars`); used by merges that detect renames */
   legacyHashChars?: boolean;
+  /**
+   * git 2.43's `path_in_way` for directory renames: a path only the base has is not in the way
+   * (newer git, 2.56 checked, counts it unless it is the rename's own source)
+   */
+  legacyPathInWay?: boolean;
+  /**
+   * git 2.43's process_renames: a directory rename that turns a rename into a rename onto its own
+   * source is processed (newer git skips it; 2.43 often fails an assertion there instead)
+   */
+  legacyRenameToSelf?: boolean;
 }
 
 const isTree = (mode: string) => mode === "40000" || mode === "040000";
