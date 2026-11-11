@@ -29,6 +29,7 @@ identities.
 | S5 | **Rebase** (`git rebase <upstream>`, merge backend, linear branch). Clean: the same commits as git, unchanged picks fast-forwarded, commits that become empty dropped. Stopped: the same `rebase-merge/` files git reads (`head-name`, `onto`, `orig-head`, `git-rebase-todo`, `done`, `msgnum`, `end`, `author-script`, `message`, `stopped-sha`, `interactive`, `drop_redundant_commits`, `no-reschedule-failed-exec`), `REBASE_HEAD`, `MERGE_MSG`, index and files. Native `git rebase --continue` finishes ours, and our `continueOp` finishes native's, with the same final commits. `--abort` both ways restores the branch. |
 | S6 | **Resume.** The S5 flow on an in-memory FilesApi: each step runs on a freshly opened repository over the same files (a reload), with the same final commit ids as git. |
 | S7 | **Portable.** `src/` has no `node:` imports. |
+| S8 | Added after the mutation check: a rebased commit that becomes empty is dropped; a directory a merge empties is removed; files a merge does not change are not rewritten and keep their index stat data. (The corpus also got side commits with their own author and date.) |
 
 ## Scope
 
@@ -44,7 +45,7 @@ identities.
 
 Yes. `src/sequencer.ts` (about 620 lines) and `src/files-adapters.ts` (a FilesApi seen from a
 subdirectory, and X5's `RefFiles` over any FilesApi, about 100 lines) implement it on X13's merges
-and X14's index. All 9 tests pass:
+and X14's index. All 12 tests pass:
 
 - **S1, merge.** 120 random histories (clean merges and conflicts) and three hand-made cases
   (fast-forward, already up to date, a merge into another branch): every state file, index entry,
@@ -58,6 +59,7 @@ and X14's index. All 9 tests pass:
   every stop and every continue compared. `--abort` both ways.
 - **S6, resume.** Rebases on an in-memory FilesApi, each step on a freshly opened repository: the
   same final commits as git.
+- **S8.** Empty picks dropped, emptied directories removed, unchanged files left alone.
 
 **What git keeps, and we write the same way:**
 - **Merge** (builtin/merge.c): `ORIG_HEAD` always (also when already up to date); on a conflict
@@ -82,3 +84,40 @@ and X14's index. All 9 tests pass:
 **Resume.** No step keeps anything in memory: each reads HEAD, the index and the state files, so a
 page reload or a Durable Object's recreation continues where the files say. On a FilesApi, refs use
 `filesRefFiles` (one writer at a time; X2's adapters where several writers race).
+
+### Mutation check
+
+| # | Mutant | Result |
+|---|---|---|
+| Q1 | ` into <branch>` on every branch | killed (S1) |
+| Q2 | No conflict list in `MERGE_MSG` | killed (S1) |
+| Q3 | Conflict list with a line per stage | killed (S1); the first run's mutant did not compile and was redone |
+| Q4 | No `ORIG_HEAD` when already up to date | killed (S1) |
+| Q5 | No fast-forward merge | killed (S1) |
+| Q6 | Abort keeps files the index held beyond HEAD | killed (S3) |
+| Q7 | Cherry-pick committed with our author | survived (every commit had one author); killed once side's commits got their own (S4) |
+| Q8 | Comments kept on `rebase --continue` | killed (S5) |
+| Q9 | Rebase picks never fast-forward / empty picks kept | the fast-forward is unreachable in `git rebase <upstream>` and was removed; keeping empty picks is killed by S8 |
+| Q10 | `REBASE_HEAD` kept across picks | killed (S5) |
+| Q11 | `rebase-merge/message` without its blank line | killed (S5) |
+| Q12 | `msgnum` from the todo instead of `done` | killed (S5) |
+| Q13 | No `AUTO_MERGE` after a clean pick (git 2.43) | killed (S4) |
+| Q14 | Abort leaves HEAD detached | killed (S5) |
+| Q15 | Emptied directories left behind | survived (snapshots ignored empty directories); killed by S8 |
+| Q16 | Unchanged files rewritten, stat data lost | survived (invisible to git); killed by S8 |
+
+## Promotion grades
+
+| File | Grade | Why |
+|---|---|---|
+| `src/sequencer.ts` | **Adopt** (`--onto`, `--rebase-merges`, patch-id skipping to come) | git's op-state written and read, both ways |
+| `src/files-adapters.ts` | **Adopt** for one writer | a whole repository in one FilesApi |
+
+## Open threads
+
+1. `git rebase --onto`, `--rebase-merges`, interactive todo editing, and skipping commits already
+   upstream by patch id (`git rev-list --cherry-pick`).
+2. `cherry-pick` and `revert` of ranges (`.git/sequencer/`), and `revert`.
+3. Reflog messages as git writes them (`rebase (pick): …`, `merge side: Merge made by …`).
+4. Checking only the paths an operation touches for local changes (git's rule), instead of
+   refusing any change.
