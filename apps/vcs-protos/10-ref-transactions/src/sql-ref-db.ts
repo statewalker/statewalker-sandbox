@@ -32,7 +32,23 @@ function successor(p: string): string | undefined {
 }
 type Row = { oid: string | null; symref: string | null };
 
-export async function sqlRefDb(db: Db, prefix = "refdb_"): Promise<RefDb> {
+export interface SqlRefDbOptions {
+  /**
+   * Runs inside a successful batch's transaction, after its writes and before COMMIT, with the
+   * applied updates: whatever it writes through `tx` commits with the refs; if it throws, the batch
+   * rolls back and `batch` rejects. X9's indexes use it.
+   */
+  beforeCommit?(
+    tx: Db,
+    updates: { name: string; old?: string; new: string | null }[],
+  ): Promise<void>;
+}
+
+export async function sqlRefDb(
+  db: Db,
+  prefix = "refdb_",
+  options: SqlRefDbOptions = {},
+): Promise<RefDb> {
   if (!IDENT.test(prefix)) throw new Error(`invalid table prefix ${prefix}`);
   const refs = `${prefix}refs`;
   const logs = `${prefix}reflog`;
@@ -150,6 +166,10 @@ export async function sqlRefDb(db: Db, prefix = "refdb_"): Promise<RefDb> {
             );
           }
         }
+        await options.beforeCommit?.(
+          tx,
+          cmds.map((c) => ({ name: c.name, old: current.get(c.name), new: c.new })),
+        );
         return { ok: true, rejected: [] };
       });
     },
