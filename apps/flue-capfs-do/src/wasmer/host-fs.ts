@@ -11,7 +11,11 @@
 import { errorCode } from "@statewalker/webrun-files-rpc";
 import type { Cap } from "../caps.ts";
 import { capFiles, capFilesRpc } from "../files-rpc.ts";
-import { type DirEntryStat, MAX_WHOLE_FILE_BYTES } from "../sql-fs.ts";
+import {
+  type DirEntryStat,
+  MAX_WHOLE_FILE_BYTES,
+  MAX_FILE_BYTES as STORE_MAX_FILE_BYTES,
+} from "../sql-fs.ts";
 
 export type HostFsReply = { value: unknown } | { error: { code: string; message: string } };
 
@@ -39,8 +43,12 @@ interface OpenFile {
    */
   tail: Uint8Array[];
   tailSize: number;
+  /** Bytes of the tail being sent now (counted at the file's end and in memory until sent). */
+  flying: number;
   /** The tail flushes in progress, one after the other. */
   tailing?: Promise<void>;
+  /** Bumped by a truncation or a removal: a flush of an older generation stops retrying. */
+  gen: number;
 }
 
 /**
@@ -240,28 +248,36 @@ export function capHostFs(cap: Cap) {
    * block). One flush at a time per file. A file changed meanwhile by another writer (ESTALE) is
    * appended to again: the bytes are still here. On failure they stay pending.
    */
+  /**
+   * Sends `f`'s pending appends to the store (files-RPC append: the store rewrites only the last
+   * block). One flush at a time per file. An append the store refused because the file changed
+   * meanwhile (ESTALE: refused before anything was applied) is sent again, unless a truncation
+   * or a removal made those bytes moot. Any other failure drops the bytes (they may or may not
+   * have reached the store, so sending them again could write them twice) and is the error of
+   * the call that flushed: a write, a read, a stat or a close.
+   */
   const flushTail = (f: OpenFile): Promise<void> => {
     const run = async () => {
       while (f.tailSize) {
         const parts = f.tail;
         const size = f.tailSize;
+        const gen = f.gen;
         f.tail = [];
         f.tailSize = 0;
+        f.flying += size;
         try {
           for (let attempt = 1; ; attempt++) {
             try {
               await remote.append(f.path, parts);
               break;
             } catch (e) {
+              if (f.gen !== gen) return; // truncated or removed meanwhile: nothing to append to
               if (codeOf(e) !== "ESTALE" || attempt >= APPEND_ATTEMPTS) throw e;
             }
           }
-        } catch (e) {
-          f.tail = parts.concat(f.tail);
-          f.tailSize += size;
-          throw e;
         } finally {
           forget(f.path);
+          f.flying -= size;
           closeReaders(f); // they read the content as it was before the append
         }
       }
@@ -269,6 +285,13 @@ export function capHostFs(cap: Cap) {
     const p = (f.tailing ?? Promise.resolve()).then(run, run);
     f.tailing = p.catch(() => {});
     return p;
+  };
+  /** Drops `f`'s pending appends and waits for a flush in flight (before a truncation or a removal). */
+  const dropTail = async (f: OpenFile) => {
+    f.gen++;
+    f.tail = [];
+    f.tailSize = 0;
+    await f.tailing;
   };
   const save = async (f: OpenFile) => {
     await flushTail(f);
@@ -294,7 +317,7 @@ export function capHostFs(cap: Cap) {
   };
   const held = () => {
     let n = 0;
-    for (const f of files.values()) n += f.bytes?.length ?? 0;
+    for (const f of files.values()) n += (f.bytes?.length ?? 0) + f.tailSize + f.flying;
     return n;
   };
   /** Room for `length` bytes, growing the capacity by doubling. */
@@ -511,18 +534,29 @@ export function capHostFs(cap: Cap) {
       // A refused create or truncate fails here. WASIX opens files for writing even to read
       // them, so writing an existing file is checked at the first write instead.
       if (write && (!exists || truncate)) {
+        // Appends still pending or on their way land before the truncation, not after it.
+        const open = files.get(path);
+        if (open) await dropTail(open);
         await cap.call("writeFile", path, "");
         forget(path);
       }
       let f = files.get(path);
       if (!f) {
-        f = { path, bytes: undefined, size: 0, dirty: false, refs: 0, tail: [], tailSize: 0 };
+        f = {
+          path,
+          bytes: undefined,
+          size: 0,
+          dirty: false,
+          refs: 0,
+          tail: [],
+          tailSize: 0,
+          flying: 0,
+          gen: 0,
+        };
         files.set(path, f);
       }
       if (write && (!exists || truncate)) {
         closeReaders(f);
-        f.tail = []; // appends before the truncation are truncated away
-        f.tailSize = 0;
         f.bytes = new Uint8Array();
         f.size = 0;
         f.dirty = false;
@@ -557,15 +591,28 @@ export function capHostFs(cap: Cap) {
       // append, and the file is never loaded (whatever its size). An append is an O_APPEND handle's
       // write, or a write exactly at the file's end: WASIX opens for `>>` without the append flag
       // and writes at the end's offset itself.
-      if (
-        !f.bytes &&
-        !f.loading &&
-        (h.append || Number(offset) === ((await plainStat(f.path))?.size ?? 0) + f.tailSize)
-      ) {
-        f.tail.push(data.slice());
-        f.tailSize += data.length;
-        if (f.tailSize >= TAIL_FLUSH_BYTES) await flushTail(f);
-        return data.length;
+      if (!f.bytes && !f.loading) {
+        // The file's end: the store's size, plus bytes on their way and bytes pending.
+        const stored = (await plainStat(f.path))?.size ?? 0;
+        const end = stored + f.flying + f.tailSize;
+        if (h.append || Number(offset) === end) {
+          if (end + data.length > STORE_MAX_FILE_BYTES)
+            throw err("EFBIG", `${f.path}: files are at most ${STORE_MAX_FILE_BYTES} bytes`);
+          // Send what is pending first rather than hold more than a chunk (or the memory all
+          // open files may hold): a failure is this write's, and this write is not queued.
+          if (
+            f.tailSize &&
+            (f.tailSize + data.length > TAIL_FLUSH_BYTES || held() + data.length > MAX_OPEN_BYTES)
+          )
+            await flushTail(f);
+          // Nothing loaded the file meanwhile (another handle's write): else write it there.
+          if (!f.bytes && !f.loading) {
+            f.tail.push(data.slice());
+            f.tailSize += data.length;
+            if (f.tailSize >= TAIL_FLUSH_BYTES) await flushTail(f);
+            return data.length;
+          }
+        }
       }
       await load(f);
       const at = h.append ? f.size : Number(offset);
@@ -619,6 +666,9 @@ export function capHostFs(cap: Cap) {
       const path = abs(p);
       // The store removes a directory only recursively: an empty one is removed that way.
       const s = (await cap.call("stat", path)) as PlainStat;
+      // Appends still pending or on their way land before the removal, not after it.
+      const open = files.get(path);
+      if (open) await dropTail(open);
       try {
         if (s.isDirectory) {
           if ((await cap.readdir(path)).length) throw err("ENOTEMPTY", `${path} is not empty`);
@@ -628,11 +678,7 @@ export function capHostFs(cap: Cap) {
         forget(path, true);
       }
       const f = files.get(path);
-      if (f) {
-        f.dirty = false;
-        f.tail = []; // appends to a removed file are not written back to its path
-        f.tailSize = 0;
-      }
+      if (f) f.dirty = false;
       return null;
     },
     async rename(from, to) {

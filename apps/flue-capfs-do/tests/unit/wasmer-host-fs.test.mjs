@@ -709,3 +709,106 @@ test("real hub: a write exactly at the end of a file not loaded is an append (ho
   assert.equal((await fs.handle("write", [c, 0, enc("x")])).error?.code, "EFBIG");
   await fs.handle("close", [c]);
 });
+
+// ---- appends: failures and races (review of the pending tail) ----
+
+const held = () => {
+  let release;
+  const promise = new Promise((r) => {
+    release = r;
+  });
+  return { promise, release };
+};
+
+test("real hub: an append write whose flush fails leaves no trace; the retry writes once", async () => {
+  const cap = await realCap({ "/f.bin": new Uint8Array() });
+  const rpc = cap.rpc;
+  let fail = true;
+  cap.rpc = async (m, a) => {
+    if (m === "closeWrite" && fail) {
+      fail = false;
+      throw Object.assign(new Error("EIO: the cell went away"), { code: "EIO" });
+    }
+    return rpc(m, a);
+  };
+  const fs = capHostFs(cap);
+  const { value: id } = await fs.handle("open", ["f.bin", ...APPEND]);
+  const mib = new Uint8Array(1 << 20).fill(7);
+  assert.equal((await fs.handle("write", [id, 0, mib])).error?.code, "EIO");
+  assert.ok(!(await fs.handle("write", [id, 0, mib])).error); // the guest retries
+  await fs.handle("close", [id]);
+  assert.equal((await cap.store.stat("/f.bin")).size, 1 << 20, "written once, not twice");
+});
+
+test("real hub: a truncating open during a flush waits for it: the appended bytes do not come back", async () => {
+  const cap = await realCap({ "/f.txt": enc("abc") });
+  const rpc = cap.rpc;
+  const gate = held();
+  cap.rpc = async (m, a) => {
+    if (m === "closeWrite") await gate.promise;
+    return rpc(m, a);
+  };
+  const fs = capHostFs(cap);
+  const { value: a } = await fs.handle("open", ["f.txt", ...APPEND]);
+  await fs.handle("write", [a, 0, enc("OLD")]);
+  const stat = fs.handle("fileStat", [a]); // starts the flush, held at closeWrite
+  await new Promise((r) => setTimeout(r, 10));
+  const truncating = fs.handle("open", ["f.txt", false, true, false, false, true, false]);
+  await new Promise((r) => setTimeout(r, 10));
+  gate.release();
+  await stat;
+  const { value: t } = await truncating;
+  await fs.handle("close", [t]);
+  await fs.handle("close", [a]);
+  assert.equal(await cap.store.readFile("/f.txt"), "");
+});
+
+test("real hub: a remove during a flush waits for it: the file is not re-created", async () => {
+  const cap = await realCap({ "/f.txt": enc("abc") });
+  const rpc = cap.rpc;
+  const gate = held();
+  cap.rpc = async (m, a) => {
+    if (m === "closeWrite") await gate.promise;
+    return rpc(m, a);
+  };
+  const fs = capHostFs(cap);
+  const { value: a } = await fs.handle("open", ["f.txt", ...APPEND]);
+  await fs.handle("write", [a, 0, enc("OLD")]);
+  const stat = fs.handle("fileStat", [a]);
+  await new Promise((r) => setTimeout(r, 10));
+  const removing = fs.handle("remove", ["f.txt"]);
+  await new Promise((r) => setTimeout(r, 10));
+  gate.release();
+  await stat;
+  assert.ok(!(await removing).error);
+  await fs.handle("close", [a]);
+  assert.equal(await cap.store.exists("/f.txt"), false);
+});
+
+test("real hub: a write at the end racing another handle's load is not lost", async () => {
+  const cap = await realCap({ "/f.txt": enc("abc") });
+  const call = cap.call;
+  const gate = held();
+  let armed = false;
+  cap.call = async (m, p, ...a) => {
+    if (m === "stat" && p === "/f.txt" && armed) {
+      armed = false;
+      const r = call(m, p, ...a);
+      await gate.promise;
+      return r;
+    }
+    return call(m, p, ...a);
+  };
+  const fs = capHostFs(cap);
+  const { value: x } = await fs.handle("open", ["f.txt", ...RW]);
+  const { value: y } = await fs.handle("open", ["f.txt", ...RW]);
+  armed = true; // the next stat of the file (the end-of-file check) is held
+  const atEnd = fs.handle("write", [x, 3, enc("XYZ")]);
+  await new Promise((r) => setTimeout(r, 10));
+  await fs.handle("write", [y, 0, enc("Q")]); // loads the file meanwhile
+  gate.release();
+  assert.ok(!(await atEnd).error);
+  await fs.handle("close", [x]);
+  await fs.handle("close", [y]);
+  assert.equal(await cap.store.readFile("/f.txt"), "QbcXYZ");
+});

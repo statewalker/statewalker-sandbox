@@ -39,6 +39,7 @@ makes them a real deployment shape:
 
 ```sh
 git clone https://github.com/statewalker/webrun-files ../webrun-files   # beside statewalker-sandbox
+git -C ../webrun-files checkout --detach 71b538341c1e3707d402dd1c886efd84e78a2e84   # what CI builds
 (cd ../webrun-files && pnpm install --filter '@statewalker/webrun-files-rpc...' \
   && pnpm --filter '@statewalker/webrun-files-rpc...' run build)
 ```
@@ -552,7 +553,12 @@ streams too: an O_APPEND handle's writes, and a write exactly at the file's end 
 `>>` without the append flag and writes at the end's offset itself), are kept as a pending tail
 and sent with the files-RPC append (at 1 MiB, and before the file is read, measured, loaded,
 renamed or saved), so `>>` works on a file of any size. An append the store refuses because the
-file changed meanwhile (`ESTALE`) is sent again; a truncation or a removal drops what is pending.
+file changed meanwhile (`ESTALE`, refused before anything is applied) is sent again. Any other
+failure drops the pending bytes (they may have reached the store: sending them again could write
+them twice) and is the error of the call that flushed; a write that would overflow the tail
+flushes it first, so its own failure leaves no trace. A truncation or a removal waits for an
+append on its way and drops what is pending. Pending bytes count toward the 64 MiB open files
+hold, and an append past the store's 1 GiB limit fails at the write (`EFBIG`).
 Any other write loads the file whole (`readFileBuffer`) and saves it whole (`writeFileBuffer`).
 
 | Runtime | Engine | How file operations reach the Agent cell |

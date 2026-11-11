@@ -27,8 +27,11 @@ jobs:
       # repository (`link:../../../webrun-files/packages/webrun-files-rpc`) until the version it
       # needs (0.2.0, appends) is on npm: clone it there and build the package (and what it
       # builds against) first.
+      # Pinned (webrun-files main with appends, #22), so a later push there cannot change this CI.
       - name: webrun-files beside this repository
-        run: git clone --depth 1 https://github.com/statewalker/webrun-files ../webrun-files
+        run: |
+          git clone --filter=blob:none https://github.com/statewalker/webrun-files ../webrun-files
+          git -C ../webrun-files checkout --detach 71b538341c1e3707d402dd1c886efd84e78a2e84
       - name: Build webrun-files-rpc in it
         working-directory: ../webrun-files
         run: |
