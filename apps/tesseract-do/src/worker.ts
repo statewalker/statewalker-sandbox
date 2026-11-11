@@ -24,15 +24,25 @@ const json = (value: unknown, status = 200) =>
 const errorStatus = (message: string) =>
   /^EINVAL|^E2BIG/.test(message) ? 400 : /^EIO/.test(message) ? 502 : 500;
 
-/** Whether this runtime compiles WebAssembly from bytes (workerd does not). */
-async function canCompileWasmBytes(): Promise<boolean> {
+/**
+ * Whether this runtime compiles WebAssembly from bytes: workerd refuses, Node (cellb) allows,
+ * and on celld 0.6 the promise never settles, hence the timeout.
+ */
+async function canCompileWasmBytes(): Promise<boolean | "hangs"> {
+  // Not in the Workers types on purpose: workerd disallows it.
+  const wasm = WebAssembly as unknown as { compile(bytes: Uint8Array): Promise<unknown> };
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    // Not in the Workers types on purpose: workerd disallows it.
-    const wasm = WebAssembly as unknown as { compile(bytes: Uint8Array): Promise<unknown> };
-    await wasm.compile(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-    return true;
+    return await Promise.race([
+      wasm.compile(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])).then(() => true as const),
+      new Promise<"hangs">((resolve) => {
+        timer = setTimeout(() => resolve("hangs"), 1000);
+      }),
+    ]);
   } catch {
     return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 

@@ -1,0 +1,100 @@
+{
+  "runtime": {
+    "userAgent": "Cloudflare-Workers",
+    "compileWasmFromBytes": "hangs",
+    "workerLoader": true,
+    "imageApis": {
+      "OffscreenCanvas": "undefined",
+      "ImageData": "undefined",
+      "createImageBitmap": "undefined"
+    },
+    "sharedArrayBuffer": "function"
+  },
+  "baiona": {
+    "baiona.png": {
+      "size": "640×682",
+      "bands": 1,
+      "words": 19,
+      "meanConfidence": 0.582,
+      "wasmMemoryMiB": 27.8,
+      "decodedMiB": 1.2,
+      "seconds": 0.712,
+      "model": "fetch"
+    },
+    "baiona_gray.png": {
+      "size": "640×682",
+      "bands": 1,
+      "words": 19,
+      "meanConfidence": 0.512,
+      "wasmMemoryMiB": 27.8,
+      "decodedMiB": 0.4,
+      "seconds": 0.264,
+      "model": "memory"
+    },
+    "baiona_colormapped.png": {
+      "size": "640×682",
+      "bands": 1,
+      "words": 20,
+      "meanConfidence": 0.591,
+      "wasmMemoryMiB": 27.8,
+      "decodedMiB": 0.4,
+      "seconds": 0.195,
+      "model": "memory"
+    },
+    "baiona_alpha.png": {
+      "size": "640×682",
+      "bands": 1,
+      "words": 19,
+      "meanConfidence": 0.582,
+      "wasmMemoryMiB": 27.8,
+      "decodedMiB": 1.7,
+      "seconds": 0.208,
+      "model": "memory"
+    }
+  },
+  "c03-29.jpg": {
+    "size": "770×995",
+    "bands": 1,
+    "words": 292,
+    "meanConfidence": 0.935,
+    "wasmMemoryMiB": 27.8,
+    "decodedMiB": 2.2,
+    "seconds": 1.73,
+    "model": "memory"
+  },
+  "linn.png": {
+    "size": "2550×3300",
+    "bands": 3,
+    "words": 729,
+    "meanConfidence": 0.944,
+    "wasmMemoryMiB": 58.1,
+    "decodedMiB": 1,
+    "seconds": 7.633,
+    "model": "fetch",
+    "recall": 0.993
+  },
+  "typewriter.png": {
+    "size": "4000×2864",
+    "bands": 4,
+    "words": 100,
+    "meanConfidence": 0.905,
+    "wasmMemoryMiB": 68.4,
+    "decodedMiB": 1.4,
+    "seconds": 4.346,
+    "model": "fetch"
+  },
+  "engine reuse": {
+    "first": 1.534,
+    "second": 1.829
+  },
+  "model downloads (first run)": {
+    "eng.traineddata": 2,
+    "nld.traineddata": 1,
+    "fra.traineddata": 1
+  },
+  "after restart": {
+    "model": "sqlite",
+    "seconds": 4.584,
+    "wasmMemoryMiB": 68.4
+  }
+}

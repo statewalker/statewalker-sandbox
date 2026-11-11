@@ -16,7 +16,7 @@ test("runtime: what it allows", async () => {
   const runtime = await getJson("/api/runtime");
   recordMetric("runtime", runtime);
   // The wasm reaches tesseract as a module whether or not the runtime compiles bytes.
-  assert.equal(typeof runtime.compileWasmFromBytes, "boolean");
+  assert.ok([true, false, "hangs"].includes(runtime.compileWasmFromBytes));
   if (RUNTIME === "wrangler") assert.equal(runtime.compileWasmFromBytes, false);
 });
 

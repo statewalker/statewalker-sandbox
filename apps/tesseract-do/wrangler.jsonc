@@ -1,5 +1,6 @@
 {
   // One Worker project, unmodified across runtimes: wrangler (workerd), cellb, celld.
+  // Deploy with wrangler.production.jsonc, which adds the CPU limit (celld refuses `limits`).
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "tesseract-do",
   "main": "src/worker.ts",
@@ -9,9 +10,6 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["OcrCell"] }],
   "worker_loaders": [{ "binding": "LOADER" }],
-  // Recognition is CPU-bound: a large page takes seconds. The default is 30 s per request;
-  // Workers Paid allows up to 300 000 ms.
-  "limits": { "cpu_ms": 120000 },
   // tesseract-wasm's Emscripten glue computes `new URL("tesseract-core.wasm", import.meta.url)`
   // at load, which throws where a bundled Worker has no import.meta.url. The URL is never
   // fetched (the wasm comes as a module), so any absolute URL does.
