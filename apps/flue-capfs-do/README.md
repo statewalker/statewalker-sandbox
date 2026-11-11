@@ -529,8 +529,11 @@ with the run's id as the mount id; `src/wasmer/host-fs.ts` answers the protocol 
 capability. Open files are buffered (one buffer per path, shared by its handles) and saved on
 flush or close. WASIX drops what close returns, so nothing may fail there silently: creating or
 truncating a file is written through at open, the write right on an existing file is asked at the
-first write (WASIX opens files read-write even to read them). Files are read and saved as bytes
-(`readFileBuffer`, `writeFileBuffer`), so binary content is stored byte for byte.
+first write (WASIX opens files read-write even to read them). Binary content is stored byte for
+byte. A file that is only read streams: its reads go through one chunk stream
+([Streaming](#streaming-files-of-any-size)), holding one chunk (1 MiB) at a time, so `cat`, `rg`
+or `wc` read a file of any size; a read elsewhere reopens the stream there. A file that is written
+is loaded whole at its first write (`readFileBuffer`) and saved whole (`writeFileBuffer`).
 
 | Runtime | Engine | How file operations reach the Agent cell |
 |---|---|---|
@@ -559,8 +562,9 @@ first write (WASIX opens files read-write even to read them). Files are read and
   others); a command the engine fails to stop in time restarts the engine; sessions of a
   stopped engine fail at once. Sandboxes are built one at a time, each bound to its run's mount,
   and a sandbox whose open timed out is closed when it is built.
-- **Limits:** 60 s per command by default (at most 300 s), 1 MB of output, 256 open files and
-  16 MB per file read or written through an open file. Symlinks are not in the protocol. A directory listing is one
+- **Limits:** 60 s per command by default (at most 300 s), 1 MB of output, 256 open files.
+  Reads stream (any size); a file written is at most 16 MiB, and the files written by a sandbox
+  hold at most 64 MiB in memory together. Symlinks are not in the protocol. A directory listing is one
   capability call (`readdirStat`: the entries the token may list, each with its stat), and its
   reply must fit the SDK's 512 KiB bridge buffer (several thousand entries).
 - **Config:** `WASMER=off` disables it; `WASMER_ENGINE` is the engine's path (Node) or URL

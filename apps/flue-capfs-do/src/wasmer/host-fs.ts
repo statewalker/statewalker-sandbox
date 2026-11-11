@@ -30,6 +30,23 @@ interface OpenFile {
   refs: number;
   /** Whether the capability lets this file be written, asked at the first write. */
   writable?: Promise<void>;
+  /**
+   * Until the file is written (and `bytes` loaded), reads go through a chunk stream: only the
+   * current chunk is held, so a file of any size reads in a constant amount of memory.
+   */
+  reader?: Reader;
+  /** Reads of one file, one at a time (the stream has one position). */
+  reading?: Promise<unknown>;
+}
+
+interface Reader {
+  id: string;
+  /** The file's size when the stream was opened (what it reads). */
+  size: number;
+  /** Where the stream continues, and the chunk last read (bytes from `chunkAt`). */
+  pos: number;
+  chunk: Uint8Array;
+  chunkAt: number;
 }
 
 interface Handle {
@@ -42,6 +59,9 @@ const encoder = new TextEncoder();
 const MAX_HANDLES = 256;
 /** What all open files of a sandbox may hold in memory together. */
 const MAX_OPEN_BYTES = 64 * 1024 * 1024;
+/** Bytes per chunk of a read stream (one store block). */
+const STREAM_CHUNK = 1024 * 1024;
+const EMPTY_BYTES = new Uint8Array();
 /** What the store takes whole: a larger file would only fail at close, which WASIX does not report. */
 const MAX_FILE_BYTES = MAX_WHOLE_FILE_BYTES;
 /**
@@ -177,6 +197,7 @@ export function capHostFs(cap: Cap) {
         if (!f.bytes) {
           f.bytes = bytes;
           f.size = bytes.length;
+          closeReader(f); // the loaded bytes are read from now on
         }
       })().finally(() => {
         f.loading = undefined;
@@ -225,11 +246,72 @@ export function capHostFs(cap: Cap) {
     f.bytes = out;
     return out;
   };
+  const closeReader = (f: OpenFile) => {
+    const r = f.reader;
+    f.reader = undefined;
+    if (r) cap.call("closeRead", f.path, r.id).catch(() => {});
+  };
+  const openReader = async (f: OpenFile, at: number): Promise<Reader | undefined> => {
+    closeReader(f);
+    try {
+      const { id, size } = (await cap.call("openRead", f.path, { start: at })) as {
+        id: string;
+        size: number;
+      };
+      f.reader = { id, size, pos: Math.min(at, size), chunk: EMPTY_BYTES, chunkAt: at };
+      return f.reader;
+    } catch (e) {
+      const code =
+        (e as { code?: string })?.code ?? /^(E[A-Z]+):/.exec(String((e as Error)?.message))?.[1];
+      // No room for one more stream: read the file whole, as before streams.
+      if (code === "EMFILE") return undefined;
+      throw e;
+    }
+  };
+  /** `length` bytes at `offset` through the file's stream (reopened where a read jumps). */
+  const streamRead = async (f: OpenFile, offset: number, length: number): Promise<Uint8Array> => {
+    let r = f.reader;
+    if (r && offset >= r.size) return EMPTY_BYTES; // past the end: nothing to reopen for
+    const inChunk = (at: number) => !!r && at >= r.chunkAt && at < r.chunkAt + r.chunk.length;
+    if (!r || (!inChunk(offset) && offset !== r.pos)) r = await openReader(f, offset);
+    if (!r) {
+      const b = await load(f);
+      return b.slice(Math.min(offset, f.size), Math.min(f.size, offset + length));
+    }
+    const end = Math.min(offset + length, r.size);
+    const parts: Uint8Array[] = [];
+    let at = offset;
+    while (at < end) {
+      if (!inChunk(at)) {
+        if (at !== r.pos) break;
+        const chunk = asBytes(await cap.call("readChunk", f.path, r.id, STREAM_CHUNK));
+        if (!chunk.length) break;
+        r.chunk = chunk;
+        r.chunkAt = r.pos;
+        r.pos += chunk.length;
+      }
+      const from = at - r.chunkAt;
+      const take = r.chunk.subarray(from, Math.min(r.chunk.length, from + (end - at)));
+      parts.push(take);
+      at += take.length;
+    }
+    if (parts.length === 1) return parts[0].slice();
+    const out = new Uint8Array(at - offset);
+    let o = 0;
+    for (const p of parts) {
+      out.set(p, o);
+      o += p.length;
+    }
+    return out;
+  };
   const release = async (id: number) => {
     const h = handles.get(id);
     if (!h) return;
     handles.delete(id);
-    if (--h.file.refs === 0) files.delete(h.file.path);
+    if (--h.file.refs === 0) {
+      files.delete(h.file.path);
+      closeReader(h.file);
+    }
     await save(h.file);
   };
 
@@ -285,9 +367,14 @@ export function capHostFs(cap: Cap) {
     },
     async read(id, offset, length) {
       const f = handle(id).file;
-      const b = await load(f);
-      const at = Math.min(Number(offset), f.size);
-      return b.slice(at, Math.min(f.size, at + Number(length)));
+      const run = async () => {
+        if (!f.bytes) return streamRead(f, Number(offset), Number(length));
+        const at = Math.min(Number(offset), f.size);
+        return f.bytes.slice(at, Math.min(f.size, at + Number(length)));
+      };
+      const p = (f.reading ?? Promise.resolve()).then(run, run);
+      f.reading = p.catch(() => {});
+      return p;
     },
     async write(id, offset, bytes) {
       const h = handle(id);
@@ -398,6 +485,7 @@ export function capHostFs(cap: Cap) {
     },
     /** Open files of a sandbox that ends are dropped: what was not flushed is not written. */
     close() {
+      for (const f of files.values()) closeReader(f);
       handles.clear();
       files.clear();
       clear();

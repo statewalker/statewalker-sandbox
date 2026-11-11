@@ -3,6 +3,7 @@
 // (HTTP) and tests/browser.test.mjs. The guest's /workspace IS the capability: every file
 // operation it makes is authorized by the Workspace cell.
 import assert from "node:assert/strict";
+import { patternChunks } from "../src/stream-task.ts";
 
 const SEED = {
   "/proj/readme.md": "# proj\nTODO: write tests\n",
@@ -140,6 +141,29 @@ export function wasmerCases({ api, label = "", llm = false }) {
     const f = await files(ws);
     assert.equal(f["/proj/readme.md"], SEED["/proj/readme.md"]);
     assert.equal(f["/proj/b.bin"], undefined);
+  });
+
+  add("a file larger than a whole-file read streams into Wasmer (wc, tail)", async () => {
+    const { ws, token } = await setup();
+    const size = 20 * 1024 * 1024 + 3; // more than the 16 MiB a whole-file call moves
+    const w = await run(ws, token, {
+      kind: "stream",
+      op: "write",
+      path: "/proj/big.bin",
+      size,
+      seed: 5,
+    });
+    assert.equal(w.ok, true, w.error);
+    const r = await sh(
+      ws,
+      token,
+      "wc -c < /workspace/proj/big.bin; tail -c 4 /workspace/proj/big.bin | od -An -tu1",
+    );
+    assert.equal(r.exitCode, 0, r.stderr);
+    const [count, tail] = r.stdout.trim().split("\n");
+    assert.equal(count.trim(), String(size));
+    const last = Buffer.concat([...patternChunks(size, 5, 1 << 20)]).subarray(-4);
+    assert.deepEqual(tail.trim().split(/\s+/).map(Number), [...last]);
   });
 
   add("binary files are stored byte for byte from Wasmer", async () => {

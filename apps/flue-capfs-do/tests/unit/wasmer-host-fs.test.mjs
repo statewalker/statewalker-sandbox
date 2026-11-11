@@ -9,6 +9,10 @@ const E = (code, m) => Object.assign(new Error(`${code}: ${m}`), { code });
 function fakeCap(entries = {}) {
   const files = new Map([["/", null], ["/ro", null], ...Object.entries(entries)]);
   const calls = [];
+  // Read streams as the store keeps them: a snapshot of the bytes, a position, an owner-free id.
+  const streams = new Map();
+  let streamLimit = Number.POSITIVE_INFINITY;
+  const bytesOf = (v) => (typeof v === "string" ? Buffer.from(v, "utf8") : Buffer.from(v));
   const kids = (p) => {
     const pre = p === "/" ? "/" : `${p}/`;
     return [...files.keys()].filter((k) => k !== p && k.startsWith(pre));
@@ -16,6 +20,10 @@ function fakeCap(entries = {}) {
   return {
     files,
     calls,
+    streams,
+    limitStreams: (n) => {
+      streamLimit = n;
+    },
     async call(method, path, ...args) {
       calls.push(`${method} ${path}`);
       if (
@@ -52,6 +60,26 @@ function fakeCap(entries = {}) {
         case "readFile":
           if (!files.has(path)) throw E("ENOENT", path);
           return files.get(path);
+        case "openRead": {
+          if (!files.has(path)) throw E("ENOENT", path);
+          if (streams.size >= streamLimit) throw E("EMFILE", "too many open streams");
+          const b = bytesOf(files.get(path));
+          const id = `s${streams.size + 1}-${Math.random()}`;
+          const start = Math.min(Number(args[0]?.start ?? 0), b.length);
+          streams.set(id, { path, b, pos: start });
+          return { id, size: b.length };
+        }
+        case "readChunk": {
+          const st = streams.get(args[0]);
+          if (!st || st.path !== path) throw E("EBADF", String(args[0]));
+          const n = Math.min(Number(args[1] ?? 1 << 20), 1 << 20);
+          const out = new Uint8Array(st.b.subarray(st.pos, st.pos + n));
+          st.pos += out.length;
+          return out;
+        }
+        case "closeRead":
+          streams.delete(args[0]);
+          return;
         // The store keeps bytes: here UTF-8 content is kept as a string (easy to assert on),
         // anything else as a Buffer.
         case "readFileBuffer": {
@@ -359,4 +387,47 @@ test("metadata cache: a parallel writer's file is not truncated, a late answer i
   r();
   assert.equal((await late).error.code, "ENOENT");
   assert.equal((await fs.handle("stat", ["x"])).value.kind, "file");
+});
+
+test("reads of a file not written stream in chunks: any size, one chunk in memory", async () => {
+  const big = Buffer.alloc(5 * 1024 * 1024 + 7);
+  for (let i = 0; i < big.length; i++) big[i] = (i * 31) & 0xff;
+  const cap = fakeCap({ "/big": big });
+  const fs = capHostFs(cap);
+  const { value: id } = await fs.handle("open", ["big", ...RW]);
+  // Sequential reads of 64 KiB, as cat does: one readChunk per MiB.
+  const parts = [];
+  for (let at = 0; ; at += 65536) {
+    const r = (await fs.handle("read", [id, at, 65536])).value;
+    if (!r.length) break;
+    parts.push(Buffer.from(r));
+  }
+  assert.ok(Buffer.concat(parts).equals(big));
+  assert.equal(cap.calls.filter((c) => c.startsWith("readChunk")).length, 6);
+  assert.equal(
+    cap.calls.filter((c) => c.startsWith("readFileBuffer")).length,
+    0,
+    "never read whole",
+  );
+  // A read elsewhere reopens the stream there.
+  const r = (await fs.handle("read", [id, 3_000_000, 10])).value;
+  assert.ok(Buffer.from(r).equals(big.subarray(3_000_000, 3_000_010)));
+  assert.equal(cap.calls.filter((c) => c.startsWith("openRead")).length, 2);
+  await fs.handle("close", [id]);
+  assert.equal(cap.streams.size, 0, "closed with the file");
+});
+
+test("a written file reads its bytes; no room for a stream falls back to a whole read", async () => {
+  const cap = fakeCap({ "/a": "hello", "/b": "world" });
+  const fs = capHostFs(cap);
+  const { value: id } = await fs.handle("open", ["a", ...RW]);
+  assert.equal(dec((await fs.handle("read", [id, 0, 3])).value), "hel");
+  await fs.handle("write", [id, 5, enc("!")]);
+  assert.equal(cap.streams.size, 0, "the stream is closed once the file is loaded");
+  assert.equal(dec((await fs.handle("read", [id, 0, 10])).value), "hello!");
+  await fs.handle("close", [id]);
+  cap.limitStreams(0);
+  const { value: b } = await fs.handle("open", ["b", ...RW]);
+  assert.equal(dec((await fs.handle("read", [b, 1, 3])).value), "orl");
+  assert.ok(cap.calls.includes("readFileBuffer /b"));
 });
