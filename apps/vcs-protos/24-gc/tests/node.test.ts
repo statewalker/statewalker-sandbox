@@ -268,3 +268,179 @@ describe("R7 SQL backend", () => {
     expect(await log(repo, "HEAD")).toEqual(before);
   }, 120_000);
 });
+
+describe("review cases (#87)", () => {
+  it("a second sweep defers without removing the running sweep's flag; the waiting writer runs after", async () => {
+    const { bare } = messyBare();
+    const x = danglingCommit(bare, "old, reused by a writer");
+    const repoA = await openBare(bare);
+    const events: string[] = [];
+    let writer: Promise<void> | undefined;
+    let second: Awaited<ReturnType<typeof gc>> | undefined;
+    await gc(repoA, {
+      graceMs: 0,
+      duringSweep: async () => {
+        writer = withLease(repoA, async () => {
+          events.push("writer");
+          // a careful writer re-validates inside its lease: rewrite the object if it is gone
+          const repoW = await openBare(bare);
+          if (!(await repoW.objects.has(x))) events.push("rewrote");
+          git(bare, ["update-ref", "refs/heads/reused", "refs/heads/main"]);
+        });
+        await new Promise((r) => setTimeout(r, 100));
+        second = await gc(await openBare(bare), { graceMs: 0 });
+        await new Promise((r) => setTimeout(r, 200));
+        events.push("sweep A deleting");
+      },
+    });
+    events.push("sweep A done");
+    await writer;
+    expect(second?.deferred).toBe(true);
+    expect(events.indexOf("writer")).toBeGreaterThan(events.indexOf("sweep A done"));
+    git(bare, ["fsck", "--strict"]);
+  }, 120_000);
+  it("the sweep flag and a lease are renewed while held (short TTLs)", async () => {
+    const { bare } = messyBare();
+    const repo = await openBare(bare);
+    // a lease held longer than its TTL still defers a sweep
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const lease = withLease(repo, () => held, { ttlMs: 300 });
+    await new Promise((r) => setTimeout(r, 900));
+    expect((await gc(await openBare(bare), { graceMs: 0 })).deferred).toBe(true);
+    release();
+    await lease;
+    // a sweep longer than its flag's TTL still holds writers back
+    const events: string[] = [];
+    let writer: Promise<void> | undefined;
+    await gc(repo, {
+      graceMs: 0,
+      sweepTtlMs: 300,
+      duringSweep: async () => {
+        writer = withLease(repo, async () => {
+          events.push("writer");
+        });
+        await new Promise((r) => setTimeout(r, 1000));
+        events.push("sweep still running");
+      },
+    });
+    await writer;
+    expect(events).toEqual(["sweep still running", "writer"]);
+  }, 120_000);
+  it("what a young unreachable object reaches is kept (git's recent objects)", async () => {
+    const { bare } = messyBare();
+    const t0 = Date.now();
+    const oldBlob = hashBlob(bare, "an old dangling blob\n");
+    await gc(await openBare(bare), { graceMs: 10_000, now: () => t0 });
+    // a young commit whose tree holds the old blob
+    const tree = execFileSync("git", ["mktree"], {
+      cwd: bare,
+      input: `100644 blob ${oldBlob}\tf.txt\n`,
+    })
+      .toString()
+      .trim();
+    const young = execFileSync("git", ["commit-tree", tree, "-m", "young"], { cwd: bare })
+      .toString()
+      .trim();
+    await gc(await openBare(bare), { graceMs: 10_000, now: () => t0 + 11_000 });
+    expect(objectsOf(bare)).toContain(oldBlob);
+    git(bare, ["update-ref", "refs/heads/recovered", young]);
+    git(bare, ["fsck", "--strict"]);
+  }, 120_000);
+  it("an object written again is fresh again (git freshens), also after an earlier deletion", async () => {
+    const { bare } = messyBare();
+    const t0 = Date.now();
+    const content = new TextEncoder().encode("written, forgotten, written again\n");
+    const repo = await openBare(bare);
+    const id = await repo.objects.put("blob", content);
+    await gc(await openBare(bare), { graceMs: 10_000, now: () => t0 });
+    await (await openBare(bare)).objects.put("blob", content); // rewritten: fresh again
+    await gc(await openBare(bare), { graceMs: 10_000, now: () => t0 + 11_000 });
+    expect(objectsOf(bare)).toContain(id);
+    // deleted once its new grace passes, then written again: fresh, not deleted at once
+    await gc(await openBare(bare), { graceMs: 10_000, now: () => t0 + 30_000 });
+    expect(objectsOf(bare)).not.toContain(id);
+    await (await openBare(bare)).objects.put("blob", content);
+    await gc(await openBare(bare), { graceMs: 10_000, now: () => t0 + 30_001 });
+    expect(objectsOf(bare)).toContain(id);
+  }, 120_000);
+  it("linked worktrees: their HEAD and their index keep their objects", async () => {
+    const { bare } = messyBare();
+    const wt = join(tmp(), "wt");
+    git(bare, ["worktree", "add", "-q", "--detach", wt]);
+    writeFileSync(join(wt, "wt.txt"), "committed in the worktree\n");
+    git(wt, ["add", "-A"]);
+    git(wt, ["commit", "-q", "-m", "worktree commit"]);
+    const wtCommit = rev(wt, "HEAD");
+    writeFileSync(join(wt, "staged.txt"), "only in the index\n");
+    git(wt, ["add", "staged.txt"]);
+    const staged = git(wt, ["rev-parse", ":staged.txt"]).toString().trim();
+    await gc(await openBare(bare), { graceMs: 0 });
+    expect(objectsOf(bare)).toContain(wtCommit);
+    expect(objectsOf(bare)).toContain(staged);
+    git(bare, ["fsck", "--strict"]);
+  }, 120_000);
+  it("a .keep pack is kept; no orphan .rev, .bitmap or .keep files are left", async () => {
+    const { bare } = messyBare();
+    const kept = hashBlob(bare, "in a kept pack\n");
+    const name = execFileSync(
+      "git",
+      ["pack-objects", "-q", join(bare, "objects", "pack", "pack")],
+      {
+        cwd: bare,
+        input: `${kept}\n`,
+      },
+    )
+      .toString()
+      .trim();
+    writeFileSync(join(bare, "objects", "pack", `pack-${name}.keep`), "");
+    await gc(await openBare(bare), { graceMs: 0 });
+    expect(objectsOf(bare)).toContain(kept);
+    const files = readdirSync(join(bare, "objects", "pack"));
+    for (const f of files.filter((n) => /\.(rev|bitmap|keep)$/.test(n)))
+      expect(files, f).toContain(f.replace(/\.(rev|bitmap|keep)$/, ".pack"));
+  }, 120_000);
+  it("a handle opened before another handle's gc still reads every object", async () => {
+    const { bare } = messyBare();
+    const stale = await openBare(bare);
+    await gc(await openBare(bare), { graceMs: 0 });
+    for (const id of objectsOf(bare)) {
+      const o = await stale.objects.get(id);
+      expect(o, id).toBeDefined();
+      await o?.content[Symbol.asyncIterator]().return?.();
+    }
+    // and gc itself runs on a stale handle
+    const s = await gc(stale, { graceMs: 0 });
+    expect(s.done).toBe(true);
+  }, 120_000);
+  it("a shallow repository is collected", async () => {
+    const src = repoWithHistory(8);
+    const bare = join(tmp(), "shallow.git");
+    git(tmpdir(), ["clone", "-q", "--bare", "--depth", "2", `file://${src}`, bare]);
+    hashBlob(bare, "dangling in a shallow repo\n");
+    const s = await gc(await openBare(bare), { graceMs: 0 });
+    expect(s.done).toBe(true);
+    git(bare, ["fsck", "--strict"]);
+  }, 120_000);
+  it("a crash in the middle of the sweep is resumed to the one-shot result", async () => {
+    const { bare } = messyBare();
+    const oneShot = join(tmp(), "one.git");
+    cpSync(bare, oneShot, { recursive: true });
+    await gc(await openBare(oneShot), { graceMs: 0 });
+    let n = 0;
+    await expect(
+      gc(await openBare(bare), {
+        graceMs: 0,
+        afterDelete: async () => {
+          if (++n === 2) throw new Error("crash mid-sweep");
+        },
+      }),
+    ).rejects.toThrow(/crash/);
+    const s = await gc(await openBare(bare), { graceMs: 0 });
+    expect(s.done).toBe(true);
+    expect(objectsOf(bare)).toEqual(objectsOf(oneShot));
+    git(bare, ["fsck", "--strict"]);
+  }, 120_000);
+});

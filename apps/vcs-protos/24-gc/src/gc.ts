@@ -40,6 +40,10 @@ export interface GcOptions {
   afterPhase?: (phase: GcPhase) => Promise<void>;
   /** tests: called inside the sweep, after its flag is set and the leases checked, before deleting */
   duringSweep?: () => Promise<void>;
+  /** the sweep flag's lifetime between renewals. Default 10 minutes. */
+  sweepTtlMs?: number;
+  /** tests: called after each deletion in the sweep (a crash mid-sweep) */
+  afterDelete?: () => Promise<void>;
 }
 export interface GcStep {
   phase: GcPhase;
