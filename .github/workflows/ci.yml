@@ -23,6 +23,17 @@ jobs:
         with:
           node-version: "24"
           cache: pnpm
+      # flue-capfs-do links @statewalker/webrun-files-rpc from a webrun-files checkout beside this
+      # repository (`link:../../../webrun-files/packages/webrun-files-rpc`) until the version it
+      # needs (0.2.0, appends) is on npm: clone it there and build the package (and what it
+      # builds against) first.
+      - name: webrun-files beside this repository
+        run: git clone --depth 1 https://github.com/statewalker/webrun-files ../webrun-files
+      - name: Build webrun-files-rpc in it
+        working-directory: ../webrun-files
+        run: |
+          pnpm install --frozen-lockfile --filter '@statewalker/webrun-files-rpc...'
+          pnpm --filter '@statewalker/webrun-files-rpc...' run build
       - run: pnpm install --frozen-lockfile
       - uses: actions/cache@v4
         with:

@@ -143,28 +143,46 @@ export function wasmerCases({ api, label = "", llm = false }) {
     assert.equal(f["/proj/b.bin"], undefined);
   });
 
-  add("a file larger than a whole-file read streams into Wasmer (wc, tail)", async () => {
-    const { ws, token } = await setup();
-    const size = 20 * 1024 * 1024 + 3; // more than the 16 MiB a whole-file call moves
-    const w = await run(ws, token, {
-      kind: "stream",
-      op: "write",
-      path: "/proj/big.bin",
-      size,
-      seed: 5,
-    });
-    assert.equal(w.ok, true, w.error);
-    const r = await sh(
-      ws,
-      token,
-      "wc -c < /workspace/proj/big.bin; tail -c 4 /workspace/proj/big.bin | od -An -tu1",
-    );
-    assert.equal(r.exitCode, 0, r.stderr);
-    const [count, tail] = r.stdout.trim().split("\n");
-    assert.equal(count.trim(), String(size));
-    const last = Buffer.concat([...patternChunks(size, 5, 1 << 20)]).subarray(-4);
-    assert.deepEqual(tail.trim().split(/\s+/).map(Number), [...last]);
-  });
+  add(
+    "a file larger than a whole-file read streams into Wasmer (wc, tail), and appends (>>) to it",
+    async () => {
+      const { ws, token } = await setup();
+      const size = 20 * 1024 * 1024 + 3; // more than the 16 MiB a whole-file call moves
+      const w = await run(ws, token, {
+        kind: "stream",
+        op: "write",
+        path: "/proj/big.bin",
+        size,
+        seed: 5,
+      });
+      assert.equal(w.ok, true, w.error);
+      const r = await sh(
+        ws,
+        token,
+        "wc -c < /workspace/proj/big.bin; tail -c 4 /workspace/proj/big.bin | od -An -tu1",
+      );
+      assert.equal(r.exitCode, 0, r.stderr);
+      const [count, tail] = r.stdout.trim().split("\n");
+      assert.equal(count.trim(), String(size));
+      const last = Buffer.concat([...patternChunks(size, 5, 1 << 20)]).subarray(-4);
+      assert.deepEqual(tail.trim().split(/\s+/).map(Number), [...last]);
+      // Appending (>>) streams to the store: the file is not loaded, so its size is no limit.
+      const a = await sh(
+        ws,
+        token,
+        "printf ABC >> /workspace/proj/big.bin; printf DE >> /workspace/proj/big.bin; wc -c < /workspace/proj/big.bin; tail -c 7 /workspace/proj/big.bin | od -An -tu1",
+      );
+      assert.equal(a.exitCode, 0, a.stderr);
+      const [count2, tail2] = a.stdout.trim().split("\n");
+      assert.equal(count2.trim(), String(size + 5));
+      assert.deepEqual(
+        tail2.trim().split(/\s+/).map(Number),
+        [...last.subarray(-2), ..."ABCDE"].map((c) =>
+          typeof c === "string" ? c.charCodeAt(0) : c,
+        ),
+      );
+    },
+  );
 
   add("binary files are stored byte for byte from Wasmer", async () => {
     const { ws, token } = await setup();

@@ -12,6 +12,7 @@ function fakeCap(entries = {}) {
   // Files-RPC read streams (webrun-files-rpc): a snapshot of the bytes from `start`, read as
   // chunks of 1 MiB keyed by their number.
   const streams = new Map();
+  const writes = new Map();
   let streamLimit = Number.POSITIVE_INFINITY;
   const bytesOf = (v) => (typeof v === "string" ? Buffer.from(v, "utf8") : Buffer.from(v));
   const kids = (p) => {
@@ -116,6 +117,36 @@ function fakeCap(entries = {}) {
         }
         case "closeRead":
           streams.delete(args[0]);
+          return;
+        // Write streams (also appends): chunks kept by number, the file set at closeWrite.
+        case "openWrite": {
+          if (args[0].startsWith("/ro")) throw E("EACCES", `permission denied, write '${args[0]}'`);
+          const id = args[1]?.streamId ?? `w${Math.random()}`.replace(".", "");
+          writes.set(id, { path: args[0], append: !!args[1]?.append, chunks: [] });
+          return { streamId: id };
+        }
+        case "writeChunk": {
+          const w = writes.get(args[0]);
+          if (!w) throw E("UNKNOWN_STREAM", String(args[0]));
+          w.chunks[args[1]] = Buffer.from(args[2]);
+          return;
+        }
+        case "closeWrite": {
+          const w = writes.get(args[0]);
+          if (!w) throw E("UNKNOWN_STREAM", String(args[0]));
+          writes.delete(args[0]);
+          const old =
+            w.append && files.has(w.path) ? bytesOf(files.get(w.path) ?? "") : Buffer.alloc(0);
+          const b = Buffer.concat([old, ...w.chunks.slice(0, args[1])]);
+          let text;
+          try {
+            text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(b);
+          } catch {}
+          files.set(w.path, text ?? b);
+          return;
+        }
+        case "abortWrite":
+          writes.delete(args[0]);
           return;
       }
       throw E("ENOSYS", method);
@@ -588,4 +619,93 @@ test("a stream the store dropped (EBADF) reopens where it was", async () => {
   assert.ok(!r.error, r.error?.message);
   assert.ok(Buffer.from(r.value).equals(Buffer.from(big.subarray(1 << 20, (1 << 20) + 100))));
   await fs.handle("close", [id]);
+});
+
+// ---- appends (O_APPEND): streamed to the store, the file is not loaded ----
+
+test("real hub: an O_APPEND handle streams its writes to the store; the file is never loaded", async () => {
+  const { capFiles } = await import("../../src/files-rpc.ts");
+  const { MAX_WHOLE_FILE_BYTES } = await import("../../src/sql-fs.ts");
+  const cap = await realCap({});
+  // Larger than a whole-file read or write: only appends (and streamed reads) can reach it.
+  const big = filled(MAX_WHOLE_FILE_BYTES + 100, 3);
+  await capFiles(cap).write("/log.bin", [big]);
+  const fs = capHostFs(cap);
+  const { value: id } = await fs.handle("open", ["log.bin", ...APPEND]);
+  for (const s of ["one\n", "two\n", "three\n"])
+    assert.ok(!(await fs.handle("write", [id, 0, enc(s)])).error);
+  assert.equal(
+    (await fs.handle("fileStat", [id])).value.size,
+    big.length + 14,
+    "fstat counts the appends",
+  );
+  await fs.handle("close", [id]);
+  const all = [];
+  for await (const c of capFiles(cap).read("/log.bin", { start: big.length - 3 })) all.push(c);
+  assert.equal(Buffer.concat(all).toString("latin1").slice(3), "one\ntwo\nthree\n");
+  assert.equal((await cap.store.stat("/log.bin")).size, big.length + 14);
+  assert.ok(
+    !cap.calls.some((c) => /^(readFileBuffer|writeFileBuffer) /.test(c)),
+    cap.calls.join(", "),
+  );
+});
+
+test("real hub: appended bytes are seen by another handle's read; a write elsewhere loads as before", async () => {
+  const cap = await realCap({ "/f.txt": enc("abc") });
+  const fs = capHostFs(cap);
+  const { value: a } = await fs.handle("open", ["f.txt", ...APPEND]);
+  await fs.handle("write", [a, 0, enc("def")]);
+  const { value: r } = await fs.handle("open", ["f.txt", ...RW]);
+  assert.equal(dec((await fs.handle("read", [r, 0, 100])).value), "abcdef");
+  await fs.handle("write", [a, 0, enc("g")]);
+  // A positional write through another handle loads the file (whole-file path), appends included.
+  await fs.handle("write", [r, 0, enc("X")]);
+  await fs.handle("close", [r]);
+  await fs.handle("close", [a]);
+  assert.equal(await cap.store.readFile("/f.txt"), "Xbcdefg");
+});
+
+test("real hub: a pending append retries when another writer changed the file (ESTALE)", async () => {
+  const cap = await realCap({ "/f.txt": enc("abc") });
+  const rpc = cap.rpc;
+  let raced = false;
+  cap.rpc = async (m, a) => {
+    // Another writer appends between this append's open and its close.
+    if (m === "closeWrite" && !raced) {
+      raced = true;
+      await cap.store.appendFile("/f.txt", "+");
+    }
+    return rpc(m, a);
+  };
+  const fs = capHostFs(cap);
+  const { value: id } = await fs.handle("open", ["f.txt", ...APPEND]);
+  await fs.handle("write", [id, 0, enc("def")]);
+  await fs.handle("close", [id]);
+  assert.equal(await cap.store.readFile("/f.txt"), "abc+def");
+});
+
+test("real hub: a write exactly at the end of a file not loaded is an append (how WASIX does >>)", async () => {
+  const { capFiles } = await import("../../src/files-rpc.ts");
+  const { MAX_WHOLE_FILE_BYTES } = await import("../../src/sql-fs.ts");
+  const cap = await realCap({});
+  const size = MAX_WHOLE_FILE_BYTES + 3;
+  await capFiles(cap).write("/big.bin", [filled(size, 7)]);
+  const fs = capHostFs(cap);
+  // WASIX opens for >> without the append flag and writes at the offset of the end itself.
+  const { value: a } = await fs.handle("open", ["big.bin", true, true, true, false, false, false]);
+  assert.ok(!(await fs.handle("write", [a, size, enc("ABC")])).error);
+  await fs.handle("close", [a]);
+  const { value: b } = await fs.handle("open", ["big.bin", true, true, true, false, false, false]);
+  assert.ok(!(await fs.handle("write", [b, size + 3, enc("DE")])).error);
+  assert.equal((await fs.handle("fileStat", [b])).value.size, size + 5);
+  await fs.handle("close", [b]);
+  assert.equal((await cap.store.stat("/big.bin")).size, size + 5);
+  const tail = [];
+  for await (const c of capFiles(cap).read("/big.bin", { start: size })) tail.push(c);
+  assert.equal(Buffer.concat(tail).toString(), "ABCDE");
+  assert.ok(!cap.calls.some((c) => /^(readFileBuffer|writeFileBuffer) /.test(c)));
+  // A write anywhere else in a file that large still needs it whole (and says so).
+  const { value: c } = await fs.handle("open", ["big.bin", true, true, false, false, false, false]);
+  assert.equal((await fs.handle("write", [c, 0, enc("x")])).error?.code, "EFBIG");
+  await fs.handle("close", [c]);
 });

@@ -33,6 +33,18 @@ makes them a real deployment shape:
 
 ## How to run it
 
+`@statewalker/webrun-files-rpc` with appends (0.2.0) is not on npm yet: it is linked from a
+[webrun-files](https://github.com/statewalker/webrun-files) checkout beside this repository
+(`link:../../../webrun-files/packages/webrun-files-rpc`), built before installing here:
+
+```sh
+git clone https://github.com/statewalker/webrun-files ../webrun-files   # beside statewalker-sandbox
+(cd ../webrun-files && pnpm install --filter '@statewalker/webrun-files-rpc...' \
+  && pnpm --filter '@statewalker/webrun-files-rpc...' run build)
+```
+
+Then:
+
 ```sh
 pnpm install                                        # at the repository root
 pnpm --filter @statewalker/flue-capfs-do test       # unit + cellb + cellb(celld bucket) + wrangler
@@ -535,8 +547,13 @@ its own ([Streaming](#streaming-files-of-any-size)), holding one chunk (1 MiB) a
 or `wc` read a file of any size; a read elsewhere reopens the stream there, and so does a stream
 the Workspace cell dropped (idle, or restarted). A rename or a truncation closes the file's streams;
 with no room for one more stream the least recently used one not reading at that moment is closed
-to make room (a few tries, then the file is read whole). A file that is written
-is loaded whole at its first write (`readFileBuffer`) and saved whole (`writeFileBuffer`).
+to make room (a few tries, then the file is read whole). Appending to a file that is not loaded
+streams too: an O_APPEND handle's writes, and a write exactly at the file's end (WASIX opens for
+`>>` without the append flag and writes at the end's offset itself), are kept as a pending tail
+and sent with the files-RPC append (at 1 MiB, and before the file is read, measured, loaded,
+renamed or saved), so `>>` works on a file of any size. An append the store refuses because the
+file changed meanwhile (`ESTALE`) is sent again; a truncation or a removal drops what is pending.
+Any other write loads the file whole (`readFileBuffer`) and saves it whole (`writeFileBuffer`).
 
 | Runtime | Engine | How file operations reach the Agent cell |
 |---|---|---|
@@ -566,7 +583,8 @@ is loaded whole at its first write (`readFileBuffer`) and saved whole (`writeFil
   stopped engine fail at once. Sandboxes are built one at a time, each bound to its run's mount,
   and a sandbox whose open timed out is closed when it is built.
 - **Limits:** 60 s per command by default (at most 300 s), 1 MB of output, 256 open files.
-  Reads stream (any size); a file written is at most 16 MiB, and the files written by a sandbox
+  Reads and appends stream (any size); a file written elsewhere is at most 16 MiB, and the files
+  written by a sandbox
   hold at most 64 MiB in memory together. Symlinks are not in the protocol. A directory listing is one
   capability call (`readdirStat`: the entries the token may list, each with its stat), and its
   reply must fit the SDK's 512 KiB bridge buffer (several thousand entries).
@@ -689,13 +707,16 @@ capFiles(cap) = newFilesRpcClient ──► cap.rpc(method, args) ──► File
 
 - **The calls** are the package's: `stats`, `exists`, `mkdir`, `remove`, `move`, `copy`, `list`
   (paged), `openRead`/`readChunk(streamId, chunkId)`/`closeRead`,
-  `openWrite`/`writeChunk(streamId, chunkId, bytes)`/`closeWrite(streamId, chunks)`/`abortWrite`.
+  `openWrite(path, {append?})`/`writeChunk(streamId, chunkId, bytes)`/`closeWrite(streamId, chunks)`/`abortWrite`.
   Nothing else of the server (`sweep`, `close`) is reachable (`ENOSYS`). Chunks are 1 MiB (one
   store block); the client keeps two requests in flight each way.
 - **`GuardedFilesApi`** (`src/guarded-files-api.ts`) is the FilesApi the server serves: the store
   as one token may use it. Every operation goes through `FsGate`; a read or write stream is
   authorized again on every block, so a revocation or a mode switch stops it between two blocks.
-  A write shows at its end, all at once; a write that fails or is aborted changes nothing.
+  A write shows at its end, all at once; a write that fails or is aborted changes nothing. It is an
+  `AppendableFilesApi`: an append (`capFiles(cap).append(path, chunks)`) goes through the store's
+  append stream, whose commit rewrites only the file's last block (in place when the file alone
+  owns its content) and fails with `ESTALE` if the file changed since the append began.
 - **A stream belongs to the capability that opened it.** The Workspace keeps one files-RPC server
   per token (`src/files-rpc-hub.ts`), made only for a live token of this workspace (not forged,
   not revoked), so a stream id (which the client chooses) means nothing to another capability's
@@ -714,9 +735,8 @@ capFiles(cap) = newFilesRpcClient ──► cap.rpc(method, args) ──► File
   holder sees `UNKNOWN_STREAM` and reopens (Wasmer's reader does; it also reopens on the store's
   `EBADF`). A write waiting only for the holder's chunks expires too. A file is at most 1 GiB; a
   missing or short block is `EIO`, never zeros.
-- **Not in the protocol:** appends (the store's append streams remain for the owner cell;
-  holders append with `appendFile`/`appendFileBuffer`). The store's stream methods are not on the
-  capability's `call` any more (`ENOSYS`); `FsGate.stream` calls them in the owner cell.
+- The store's stream methods are not on the capability's `call` (`ENOSYS`); `FsGate.stream` calls
+  them in the owner cell.
 
 **Storage.** A file's content is BLOB blocks of at most 1 MiB in `fs_blocks`, each one row under
 the Durable Object row limit, under an immutable content id the entry points at. A rename or a copy
