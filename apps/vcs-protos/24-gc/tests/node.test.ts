@@ -6,12 +6,15 @@ import { newNodeSqliteDb } from "@statewalker/db-sqlite-node";
 import { afterAll, describe, expect, it } from "vitest";
 import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-files.js";
 import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
-import { git, repoWithHistory } from "../../12-index-pack/src/git-repo.js";
+import { git, gitEnv, repoWithHistory } from "../../12-index-pack/src/git-repo.js";
 import { commit, log, writeFiles } from "../../17-repository/src/commands.js";
 import type { Repository } from "../../17-repository/src/object-store.js";
 import { filesRepository, sqlRepository } from "../../17-repository/src/repository.js";
 import { gc, gcStep, withLease } from "../src/gc.js";
 
+/** git with the test identity (CI has no global one), as 12's git() helper */
+const execGit = (args: string[], opts: { cwd: string; input?: string }) =>
+  execFileSync("git", args, { ...opts, env: gitEnv });
 const dirs: string[] = [];
 afterAll(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
@@ -36,13 +39,11 @@ const packsOf = (d: string) =>
 const looseCount = (d: string) =>
   Number(/count: (\d+)/.exec(git(d, ["count-objects", "-v"]).toString())?.[1]);
 const hashBlob = (d: string, text: string) =>
-  execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: d, input: text }).toString().trim();
+  execGit(["hash-object", "-w", "--stdin"], { cwd: d, input: text }).toString().trim();
 /** a commit no ref reaches */
 const danglingCommit = (d: string, msg: string) => {
   const tree = rev(d, "HEAD^{tree}");
-  return execFileSync("git", ["commit-tree", tree, "-p", "HEAD", "-m", msg], { cwd: d })
-    .toString()
-    .trim();
+  return execGit(["commit-tree", tree, "-p", "HEAD", "-m", msg], { cwd: d }).toString().trim();
 };
 
 /** A bare repository with history, a rewritten branch (unreachable commits, packed and loose) and dangling blobs. */
@@ -335,15 +336,13 @@ describe("review cases (#87)", () => {
     const oldBlob = hashBlob(bare, "an old dangling blob\n");
     await gc(await openBare(bare), { graceMs: 10_000, now: () => t0 });
     // a young commit whose tree holds the old blob
-    const tree = execFileSync("git", ["mktree"], {
+    const tree = execGit(["mktree"], {
       cwd: bare,
       input: `100644 blob ${oldBlob}\tf.txt\n`,
     })
       .toString()
       .trim();
-    const young = execFileSync("git", ["commit-tree", tree, "-m", "young"], { cwd: bare })
-      .toString()
-      .trim();
+    const young = execGit(["commit-tree", tree, "-m", "young"], { cwd: bare }).toString().trim();
     await gc(await openBare(bare), { graceMs: 10_000, now: () => t0 + 11_000 });
     expect(objectsOf(bare)).toContain(oldBlob);
     git(bare, ["update-ref", "refs/heads/recovered", young]);
