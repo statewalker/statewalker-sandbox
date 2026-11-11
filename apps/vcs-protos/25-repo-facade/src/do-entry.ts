@@ -16,10 +16,11 @@ export class FacadeDo {
       );
       for (let i = 0; i < 3; i++)
         await v.commit({ files: { "n.txt": enc.encode(`version ${i}\n`) }, message: `c${i}\n` });
-      await v.gc({ graceMs: 0 });
+      const step = await v.gc({ graceMs: 0 });
       return Response.json({
         log: await v.log("HEAD"),
-        gc: "done",
+        gc: step.deferred ? "deferred" : "done",
+        reachable: step.stats.reachable,
         head: await v.repo.refs.read("HEAD"),
       });
     } catch (e) {
