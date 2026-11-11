@@ -33,18 +33,6 @@ makes them a real deployment shape:
 
 ## How to run it
 
-`@statewalker/webrun-files-rpc` is not on npm yet: it is linked from a
-[webrun-files](https://github.com/statewalker/webrun-files) checkout beside this repository
-(`link:../../../webrun-files/packages/webrun-files-rpc`), built before installing here:
-
-```sh
-git clone https://github.com/statewalker/webrun-files ../webrun-files   # beside statewalker-sandbox
-(cd ../webrun-files && pnpm install --filter '@statewalker/webrun-files-rpc...' \
-  && pnpm --filter '@statewalker/webrun-files-rpc...' run build)
-```
-
-Then:
-
 ```sh
 pnpm install                                        # at the repository root
 pnpm --filter @statewalker/flue-capfs-do test       # unit + cellb + cellb(celld bucket) + wrangler
