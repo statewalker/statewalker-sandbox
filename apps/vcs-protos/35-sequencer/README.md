@@ -1,6 +1,6 @@
 # 35 — Can git and webrun-vcs finish each other's merges, cherry-picks and rebases?
 
-Plan id **X15** (sequencer & git op-state). Status: **open**.
+Plan id **X15** (sequencer & git op-state). Status: **answered — yes: on 120 random histories our merge, cherry-pick and rebase leave the same state files, index and working tree as git; native git finishes ours and we finish git's, with the same commit ids; and a rebase resumes from files alone after a reload**.
 
 ## Question
 
@@ -34,5 +34,51 @@ identities.
 
 - The working tree must be clean before an operation starts (git refuses local changes that a
   merge would overwrite; we refuse any).
+- Matching git 2.43 and newer: X13's merge probes, plus one new one (`legacyAutoMerge`): git 2.43's
+  merge-ort writes `AUTO_MERGE` after every merge that updates the worktree, so a clean cherry-pick
+  or rebase leaves it behind.
 - Out of scope: `--rebase-merges`, interactive todo editing, `--onto`, autostash, dropping commits
   already upstream by patch id (the corpus has none), octopus merges, `rerere`, hooks, signing.
+
+## Answer
+
+Yes. `src/sequencer.ts` (about 620 lines) and `src/files-adapters.ts` (a FilesApi seen from a
+subdirectory, and X5's `RefFiles` over any FilesApi, about 100 lines) implement it on X13's merges
+and X14's index. All 9 tests pass:
+
+- **S1, merge.** 120 random histories (clean merges and conflicts) and three hand-made cases
+  (fast-forward, already up to date, a merge into another branch): every state file, index entry,
+  working-tree file, ref and `git status` line equals git's.
+- **S2 and S3, merge both ways.** Native `git commit --no-edit` finishes our conflicted merges, and
+  our `commitOp` finishes git's (after git's add or ours), with the same commit ids. Our
+  `abortOp` and `git merge --abort` give the same result from either side's state.
+- **S4, cherry-pick.** The same, on 120 histories: `CHERRY_PICK_HEAD`, `MERGE_MSG`, the original
+  author on commit, finished by either side.
+- **S5, rebase.** 120 histories, each started by git or by us and continued by git or by us in turn;
+  every stop and every continue compared. `--abort` both ways.
+- **S6, resume.** Rebases on an in-memory FilesApi, each step on a freshly opened repository: the
+  same final commits as git.
+
+**What git keeps, and we write the same way:**
+- **Merge** (builtin/merge.c): `ORIG_HEAD` always (also when already up to date); on a conflict
+  `MERGE_HEAD`, `MERGE_MODE` (empty), `MERGE_MSG` (`Merge branch 'x'`, with ` into y` unless y is
+  main or master, then `# Conflicts:` and each conflicted path once) and `AUTO_MERGE` (the merged
+  tree with markers). The index has the conflict stages, the working tree the merged files.
+- **Cherry-pick** (sequencer.c `do_pick_commit`): `CHERRY_PICK_HEAD`, `MERGE_MSG` (the commit's
+  message and the conflict list), `AUTO_MERGE`; markers labelled `HEAD` and `<abbrev> (<subject>)`.
+  No `ORIG_HEAD`.
+- **Committing** (`git commit --no-edit`): the message is `MERGE_MSG` with whitespace cleaned and
+  comments kept; a merge has both parents, a cherry-pick keeps the picked commit's author and
+  refuses an empty result. `rebase --continue` runs the editor, so its cleanup strips comments.
+- **Rebase** (merge backend): `rebase-merge/` holds `head-name`, `onto`, `orig-head`, the todo list
+  and `done` (`pick <id> <subject>`), `msgnum`, `end`, and three empty marker files. A stop adds
+  `author-script` (shell-quoted, `@<seconds> <tz>` date), `message` (the message and a blank line),
+  `stopped-sha`, `REBASE_HEAD`, `MERGE_MSG` and `AUTO_MERGE`. A pick whose parent is HEAD is
+  fast-forwarded; a pick that becomes empty is dropped. `REBASE_HEAD` goes with the next pick, so a
+  rebase that stopped on its last pick leaves it behind, as git does.
+- **Abort**: a reset to HEAD (merge) or to `orig-head` with HEAD reattached (rebase); files the
+  index held beyond the target are removed.
+
+**Resume.** No step keeps anything in memory: each reads HEAD, the index and the state files, so a
+page reload or a Durable Object's recreation continues where the files say. On a FilesApi, refs use
+`filesRefFiles` (one writer at a time; X2's adapters where several writers race).
