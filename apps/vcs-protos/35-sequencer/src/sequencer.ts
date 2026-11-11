@@ -372,21 +372,21 @@ export async function merge(s: Session, ref: string): Promise<OpResult> {
 // ---------------------------------------------------------------- cherry-pick
 
 interface Picked {
-  status: "committed" | "fast-forward" | "dropped" | "conflict";
+  status: "committed" | "dropped" | "conflict";
   conflicts?: ConflictEntry[];
   tree?: string;
 }
 
-/** do_pick_commit: a three-way merge of the commit onto HEAD, with its parent as the base */
-async function pickOnto(s: Session, pick: string, allowFastForward: boolean): Promise<Picked> {
+/**
+ * do_pick_commit: a three-way merge of the commit onto HEAD, with its parent as the base. A rebase
+ * drops a pick that becomes empty (`--empty=drop`). git also fast-forwards a pick whose parent is
+ * HEAD; `git rebase <upstream>` never meets one (its first pick's parent is the fork point, not
+ * `onto`), so that path (needed with `--onto`) is not here.
+ */
+async function pickOnto(s: Session, pick: string, rebasing: boolean): Promise<Picked> {
   const h = await head(s);
   const c = await readCommit(s.repo, pick);
   const headTree = await treeOf(s, h.oid);
-  if (allowFastForward && c.parents[0] === h.oid) {
-    await checkout(s, headTree, c.tree);
-    await moveHead(s, h.oid, pick, true);
-    return { status: "fast-forward" };
-  }
   const parent = c.parents[0];
   const baseTree = parent ? await treeOf(s, parent) : undefined;
   const r = await mergeOrt(
@@ -399,7 +399,7 @@ async function pickOnto(s: Session, pick: string, allowFastForward: boolean): Pr
   await checkout(s, headTree, r.tree, r.clean ? [] : r.conflicts);
   if (!r.clean) return { status: "conflict", conflicts: r.conflicts, tree: r.tree };
   if (s.legacyAutoMerge) await writeText(s.git, "/AUTO_MERGE", `${r.tree}\n`);
-  if (allowFastForward && r.tree === headTree && c.tree !== baseTree) return { status: "dropped" };
+  if (rebasing && r.tree === headTree && c.tree !== baseTree) return { status: "dropped" };
   await newCommit(s, r.tree, [h.oid], c.message, c.author);
   return { status: "committed" };
 }

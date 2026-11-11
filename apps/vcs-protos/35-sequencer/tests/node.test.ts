@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -103,7 +104,10 @@ function history(seed: number): string {
       } else if (r < 0.88) write(d, `${f}.${branch}${n++}`, `new ${n}\n`);
       else rmSync(full);
       git(d, ["add", "-A"]);
-      git(d, ["commit", "-qm", `${branch} ${i}\n\nbody ${n}`]);
+      // side's commits have their own author and date: a pick must keep them
+      const by =
+        branch === "side" ? ["--author=S Ide <s@example.com>", "--date=1600000000 +0200"] : [];
+      git(d, ["commit", "-qm", `${branch} ${i}\n\nbody ${n}`, ...by]);
     }
   };
   git(d, ["checkout", "-qb", "side"]);
@@ -196,8 +200,11 @@ function worktreeFiles(d: string, at = d, out: Record<string, string> = {}) {
   for (const e of readdirSync(at, { withFileTypes: true })) {
     if (e.name === ".git") continue;
     const p = join(at, e.name);
-    if (e.isDirectory()) worktreeFiles(d, p, out);
-    else out[relative(d, p)] = readFileSync(p, "utf8");
+    if (e.isDirectory()) {
+      // git removes directories it empties: an empty one is a difference
+      if (!readdirSync(p).length) out[`${relative(d, p)}/`] = "";
+      worktreeFiles(d, p, out);
+    } else out[relative(d, p)] = readFileSync(p, "utf8");
   }
   return out;
 }
@@ -448,6 +455,71 @@ describe("S5 rebase, both ways", () => {
     expect(wrong.slice(0, 2)).toEqual([]);
     expect(aborted).toBeGreaterThan(5);
   }, 600_000);
+});
+
+describe("S8 hand-made cases for mutants the corpora missed", () => {
+  const repo = (base: Record<string, string>) => {
+    const d = tmp("x15h-");
+    git(d, ["init", "-q", "-b", "main"]);
+    git(d, ["config", "core.fileMode", "false"]);
+    for (const [p, c] of Object.entries(base)) write(d, p, c);
+    git(d, ["add", "-A"]);
+    git(d, ["commit", "-qm", "base"]);
+    return d;
+  };
+  const commitAll = (d: string, msg: string) => {
+    git(d, ["add", "-A"]);
+    git(d, ["commit", "-qm", msg]);
+  };
+
+  it("a rebased commit that becomes empty is dropped", async () => {
+    const a = repo({ a: "a1\na2\n", b: "b1\nb2\n" });
+    git(a, ["checkout", "-qb", "side"]);
+    write(a, "a", "X\na2\n");
+    commitAll(a, "side: a1 to X");
+    write(a, "b", "b1\nside\n");
+    commitAll(a, "side: b2");
+    git(a, ["checkout", "-q", "main"]);
+    write(a, "a", "X\na2\n");
+    write(a, "c", "new\n"); // not the same patch: git does not skip side's commit up front
+    commitAll(a, "main: a1 to X, and c");
+    git(a, ["checkout", "-q", "side"]);
+    const b = twin(a);
+    git(a, ["rebase", "main"]);
+    expect((await rebase(await session(b), "refs/heads/main")).status).toBe("done");
+    expect(snapshot(b)).toEqual(snapshot(a));
+    expect(git(a, ["rev-list", "--count", "main..side"]).trim()).toBe("1");
+  });
+
+  it("a directory emptied by a merge is removed", async () => {
+    const a = repo({ "d/x": "x\n", "d/y": "y\n", k: "k\n" });
+    git(a, ["checkout", "-qb", "side"]);
+    rmSync(join(a, "d"), { recursive: true });
+    commitAll(a, "side: no d");
+    git(a, ["checkout", "-q", "main"]);
+    write(a, "k", "k2\n");
+    commitAll(a, "main: k");
+    const b = twin(a);
+    git(a, ["merge", "side"]);
+    await merge(await session(b), "refs/heads/side");
+    expect(existsSync(join(b, "d"))).toBe(false);
+    expect(snapshot(b)).toEqual(snapshot(a));
+  });
+
+  it("files a merge does not change are not rewritten, and keep their stat data", async () => {
+    const a = repo({ keep: "keep\n", a: "a\n", b: "b\n" });
+    git(a, ["checkout", "-qb", "side"]);
+    write(a, "a", "a2\n");
+    commitAll(a, "side: a");
+    git(a, ["checkout", "-q", "main"]);
+    write(a, "b", "b2\n");
+    commitAll(a, "main: b");
+    const before = statSync(join(a, "keep"), { bigint: true }).mtimeNs;
+    const debug = git(a, ["ls-files", "--debug", "keep"]);
+    await merge(await session(a), "refs/heads/side");
+    expect(statSync(join(a, "keep"), { bigint: true }).mtimeNs).toBe(before);
+    expect(git(a, ["ls-files", "--debug", "keep"])).toBe(debug);
+  });
 });
 
 /** copies a directory into a FilesApi */
