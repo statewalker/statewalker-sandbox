@@ -1,7 +1,9 @@
 # 29 — Can one diff and merge engine produce git merge-tree's trees, conflicts and markers?
 
-Plan id **X13** (single diff and merge engine), slice **X13a: git's content merge, byte for
-byte**. Status: **answered — yes: a port of git's xdiff matches `git merge-tree` byte for byte on every case**.
+Plan id **X13** (single diff and merge engine), slices **X13a: git's content merge, byte for
+byte** (answered — yes: a port of git's xdiff matches `git merge-tree` byte for byte on every case)
+and **X13b: the tree merge without renames** (answered — yes: identical trees, conflicted entries
+and messages to `git merge-tree -Xno-renames` on 2,307 cases).
 
 ## Question
 
@@ -155,22 +157,168 @@ It measured a recursion depth of at most 168, so there is no stack risk. Patholo
 100,000 lines take 2–4 times git's time. Histogram's own quadratic case (an LCS of 5 lines each
 time) is 5 times slower than C, from allocations; that is an open thread.
 
+## X13b — the tree merge (without renames)
+
+### Question
+
+Given the merged blobs from X13a, can the tree merge around them produce what
+`git merge-tree --write-tree` writes when no renames are involved? That means the same tree id; the
+same conflicted entries (mode, blob, stage, path); and the same conflict messages, with the paths
+they name. merge-ort decides path by path (`process_entry`), and its conflict kinds are:
+- content and add/add;
+- modify/delete;
+- distinct types (a file against a symlink or submodule);
+- file/directory, where the file moves to `path~<branch>`.
+
+It also takes shortcuts that change what gets reported, such as resolving a directory one side left
+untouched without looking inside it.
+
+### Reject condition
+
+Rejected if, on any case of the corpus, the tree id, a conflicted entry or a message differs from
+`git merge-tree --write-tree -Xno-renames`, or a merge is clean here and conflicted there.
+
+### Acceptance criteria (fixed before code)
+
+| # | Requirement |
+|---|---|
+| T1 | 400 random tree merges (paths up to 3 deep over 4 names; regular, executable and symlink entries; edits, deletions, mode flips, files becoming directories and back): the tree id, the conflicted entries and the messages are equal to git's. |
+| T1b | 1000 more random merges from another seed, compared the same way. |
+| T2 | The corpus reaches every conflict kind in scope: git reports content, add/add, modify/delete, distinct types and file/directory conflicts in it. |
+| T3 | Portable: `src/merge-trees.ts` has no `node:` imports. Objects are read and written through the `Repository` of 17. |
+| T4 | Hand-made cases the random corpus rarely reaches: a symlink that both sides turn into regular files, with three different modes and a two-way content merge. Added after the mutation check, see below. |
+| T1c–e, T5 | Added after the review (see below), with branches as refs (`o<i>`, `t/<i>`) so paths can collide with `path~<branch>` names. T1c: 400 merges with such collisions. T1d: 300 merges where a file becomes a directory of up to 12 files. T1e: 200 merges of unrelated histories. T5: the review's 4 reproducers. |
+
+### Scope
+
+- Renames are X13c. git 2.43's merge-tree ignores `-Xno-renames`, so the corpus gives every new file
+  content of its own and git finds no renames.
+- Submodules (gitlinks) are out: there is no submodule merge. Only one merge base is handled.
+
+### Answer
+
+Yes. `src/merge-trees.ts` (about 400 lines, no `node:` imports) gives the same tree id, conflicted
+entries and messages as `git merge-tree --write-tree -Xno-renames` on all 2,307 cases: T1's 400,
+T1b's 1,000, T1c's 400, T1d's 300, T1e's 200, T4's 3 and T5's 4. The random corpora reach every
+conflict kind in scope. In T1 and T1b, git reported:
+
+| Conflict kind | Count |
+|---|---|
+| modify/delete | 367 |
+| file/directory | 310 |
+| content | 77 |
+| add/add | 27 |
+| distinct types | 12 |
+
+A separate run of 3,000 cases from two other seeds also matched.
+
+The merge follows merge-ort's `process_entry` path by path:
+- **One side changed the path, or both changed it alike:** that version is taken, deletions included.
+- **Both sides changed it:** `handle_content_merge` runs.
+  - Modes: a mode differing from the base wins. Two different changed modes conflict, keeping ours.
+  - Content: regular files go through X13a, two-way when the base has another type. A symlink keeps
+    ours and conflicts.
+- **modify/delete:** the surviving version stays in the tree. The message has git's two spaces
+  before "Version".
+- **Distinct types:** the regular file moves to `path~<branch>`; when neither side is a regular file,
+  both move. Stage 1 is kept only for the side whose type matches the base.
+- **File/directory:** a file that lands where the merged tree keeps a directory moves to
+  `path~<branch of the file>`, made unique as `unique_path` does (`_0`, `_1`, …). This happens
+  before its own merge. A moved file that merges to a deletion is clean, but git still prints the
+  message.
+- **Messages:** each is rendered with the path it ends at. They are sorted by that path, and a
+  stable sort keeps a path's own messages in git's order (file/directory first).
+
+Five behaviours were found only by differential testing against git:
+1. **Trivial directory merges.** `collect_merge_info_callback` defers a directory that one side left
+   exactly as in the base, or that only one side has. `handle_deferred_entries` then takes the other
+   side's directory whole, without looking inside, so a file at that path is dropped with no
+   file/directory message. It does this only when rename detection cannot need a source deleted on
+   that side.
+   - A deletion is a relevant source when the other side changed the file too, or deleted it as well.
+   - A deletion is also relevant inside a directory that one side removed and the other side added a
+     file to (`dir_rename_mask` = 0x07).
+   - Without this rule, git cleanly drops a file our merge would move.
+2. **A moved file that merges to a deletion is clean.** `is_null` in the `match_mask` branch.
+3. **git 2.43's merge-tree ignores `-Xno-renames`.** The corpus therefore never reuses a deleted
+   file's content.
+4. **ort redoes the collection after renames** (found by the review). When walking the deferred
+   directories at least triples the paths ort holds, it runs rename detection, caches every answer
+   and collects again. Every relevant deletion is then known, so every directory deferred in the
+   first walk is resolved whole, with no file/directory message. Four new files under a former file
+   are enough to trigger it. git cancels the redo past the rename limit (7,000² candidate pairs),
+   which these tests cannot reach. Newer git's ort (2.56 here, on CI) also skips the redo under
+   `-Xno-renames`, which 2.43's ort ignores. The option `detectRenames: false` does the same, and
+   the tests probe which behaviour the installed git has.
+5. **`unique_path` avoids every path ort holds** (found by the review). That includes directories
+   any side has at that level, even ones the merge deletes. It does not avoid only the paths of the
+   result.
+
+### Review (#95)
+
+A separate review compared the port with merge-ort.c and ran about 7,900 differential merges from
+its own generators:
+- trees up to 6 deep;
+- wide directories and directories of 3–17 files;
+- many file/directory flips;
+- executables and symlinks;
+- binary contents;
+- identical changes on both sides;
+- unrelated histories;
+- branch names with `/`;
+- names colliding with `path~<branch>`.
+
+| Finding | Fix |
+|---|---|
+| A moved file's name ignored directories only the base or a dropped side has (`x~O/` deleted by the merge; git moves to `x~O_0`) | The check covers every file and directory of all three sides and the names made so far; T5 and T1c |
+| ort's redo after renames (more paths after the deferred directories than 3 times before) resolves every deferred directory whole; we reported file/directory moves git never prints | The redo rule above; T5 and T1d |
+| Conflicts and messages sorted by UTF-16 units; git compares bytes (characters past U+FFFF) | Byte order; T5 |
+| Legacy modes (`100664`) kept; git's `canon_mode` writes `100644` | `canon_mode`; T5 |
+| Comparing directories built a signature by scanning every path for each directory (quadratic: 24.8 s for 20k files in 4k directories, against git's 0.45 s) | Tree ids recorded while reading the trees, compared as ort compares them. The same merge now takes 13.6 s in all; the rest is rewriting every tree and reading all three sides in full (an open thread) |
+| `path~<branch>` naming was never exercised: branch names were commit ids and paths came from a–d | Branches are refs (`o<i>`, `t/<i>`, so `/` becomes `_`), and T1c's paths collide with those names |
+| Trees too small for the redo; no unrelated histories | T1d; T1e |
+
+### Mutation check (X13b)
+
+| # | Mutant | Result |
+|---|---|---|
+| K1 | Ours' mode ignored when ours kept the base's mode | killed (T1, T1b) |
+| K2 | A conflict of three modes counted clean | survived the random corpora; T4 added, now killed |
+| K3 | Two-way content merge only without a base (not when the base has another type) | survived the random corpora; killed by T4 |
+| K4 | Conflicting symlinks counted clean | killed (T1, T1b) |
+| K5 | Distinct types: theirs renamed even when ours is the regular file | equivalent: in that branch the types differ, so both conditions agree |
+| K6 | Distinct types: the base always kept at stage 1 | killed (T1, T1b) |
+| K7 | File/directory: the other branch's name | killed (T1, T1b) |
+| K8 | No trivial directory merges | killed (T1, T1b) |
+| K9 | Trivial directory merges even when a deletion on that side is a relevant source | killed (T1, T1b) |
+| K10 | No directory-rename relevance (0x07) | killed (T1b only) |
+| K11 | A moved file the merge deletes counted as a conflict | killed (T1, T1b) |
+| K12 | Messages left in processing order | killed (T1, T1b) |
+| K13 | A cleanly merged moved file keeping both sides' stages | unreachable: a moved file is on one side only, so the branch was removed |
+| K14 | No redo after renames | killed (T1d, T5) |
+| K15 | `unique_path` ignores directories the merge drops | killed (T1c, T5) |
+| K16 | UTF-16 order for conflicts and messages | killed (T5) |
+| K17 | Modes not made canonical | killed (T5) |
+| K18 | The redo without the condition that rename detection runs | equivalent: walking a deferred directory needs a relevant source on its side, so the condition was redundant; removed |
+
 ## Promotion grades
 
 | File | Grade | Why |
 |---|---|---|
 | `src/xdiff.ts` | **Adopt** | git's diff, exactly: the base of merge (X13), blame and status later |
 | `src/xmerge.ts` | **Adopt** | git's content merge, exactly |
+| `src/merge-trees.ts` | **Adopt** (renames still to come, X13d) | ort's tree merge without renames, exactly; the base for X13d |
 
 ## Open threads
 
-1. **X13b, the tree merge**: ort's conflict kinds (modify/delete, add/add, directory/file, modes,
-   submodules), the merged tree with its conflicted blobs, and the conflict messages of
-   `merge-tree`.
-2. **X13c**: renames (`diffcore-rename`'s exact and similarity detection), directory renames, and
-   criss-cross merges (ort's recursive virtual base).
-3. **Styles and options**: diff3 and zdiff3, `-Xours`/`-Xtheirs`/union, whitespace flags, the
+1. **Submodules** in the tree merge (gitlinks: `merge_submodule`'s fast-forward rules).
+2. **X13c and later**: rename detection (`diffcore-rename`'s exact and similarity detection),
+   ort's rename conflicts, directory renames, and criss-cross merges (ort's recursive virtual base).
+3. **Large trees**: the tree merge reads all three trees in full and writes every tree of the
+   result, so 20k files take seconds where git takes milliseconds. git keeps the ids of subtrees it
+   resolved whole; doing the same would make the cost follow the size of the change.
+4. **Styles and options**: diff3 and zdiff3, `-Xours`/`-Xtheirs`/union, whitespace flags, the
    patience diff, the indent heuristic (for `diff` output).
-4. **Performance**: classes are keyed by latin-1 strings, where a hash with byte comparison (as git
+5. **Performance**: classes are keyed by latin-1 strings, where a hash with byte comparison (as git
    does) would avoid the copies; histogram allocates its tables on every call (typed arrays, reused,
    would close most of its 5× gap to C on its quadratic case).
