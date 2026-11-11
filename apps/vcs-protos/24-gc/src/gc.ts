@@ -50,6 +50,8 @@ export interface GcOptions {
   sweepTtlMs?: number;
   /** tests: called after each deletion in the sweep (a crash mid-sweep) */
   afterDelete?: () => Promise<void>;
+  /** aborts between objects (the walk, the repack, the sweep); the state stays resumable */
+  signal?: AbortSignal;
 }
 export interface GcStep {
   phase: GcPhase;
@@ -205,10 +207,10 @@ async function shallowOf(a: GcAccess): Promise<string[]> {
   return (text ?? "").split("\n").filter((l) => OID.test(l));
 }
 
-async function mark(repo: Repository, a: GcAccess): Promise<ToSend[]> {
+async function mark(repo: Repository, a: GcAccess, signal?: AbortSignal): Promise<ToSend[]> {
   const r = await roots(repo, a);
   if (!r.length) return [];
-  return (await listObjectsWithEdges(repo, r, [], { shallow: await shallowOf(a) })).objects;
+  return (await listObjectsWithEdges(repo, r, [], { shallow: await shallowOf(a), signal })).objects;
 }
 
 /** Everything `starts` reach, tolerating missing objects (git's recent-objects traversal). */
@@ -312,6 +314,7 @@ export async function gcStep(repo: Repository, opts: GcOptions = {}): Promise<Gc
   };
 
   while (units-- > 0) {
+    opts.signal?.throwIfAborted();
     if (!state) {
       // --- snapshot (the ledger exists from now: the store starts leaving freshen markers)
       if (!(await a.files.exists(p.ledger))) await writeText(a.files, p.ledger, "{}");
@@ -325,7 +328,7 @@ export async function gcStep(repo: Repository, opts: GcOptions = {}): Promise<Gc
     }
     const s: GcState = state;
     if (s.phase === "mark") {
-      const objects = await mark(repo, a);
+      const objects = await mark(repo, a, opts.signal);
       await writeText(a.files, p.reachable, objects.map((o) => JSON.stringify(o)).join("\n"));
       await save({ ...s, phase: "repack", stats: { ...s.stats, reachable: objects.length } });
       await after("mark");
@@ -335,7 +338,9 @@ export async function gcStep(repo: Repository, opts: GcOptions = {}): Promise<Gc
       let newPack: string | undefined;
       let packed = 0;
       if (objects.length) {
-        const r = await repo.objects.installPack(writePackSearching(repo, objects));
+        const r = await repo.objects.installPack(
+          writePackSearching(repo, objects, { signal: opts.signal }),
+        );
         newPack = r.packId;
         packed = r.count;
       }
@@ -380,7 +385,7 @@ export async function gcStep(repo: Repository, opts: GcOptions = {}): Promise<Gc
           (await readText(a.files, p.ledger)) ?? "{}",
         );
         // walked again: a ref moved during gc keeps what it now reaches
-        const reachableNow = new Set((await mark(repo, a)).map((o) => o.oid));
+        const reachableNow = new Set((await mark(repo, a, opts.signal)).map((o) => o.oid));
         const inNewPack = new Set<string>();
         if (s.newPack)
           for (const r of a.packs())
@@ -404,6 +409,7 @@ export async function gcStep(repo: Repository, opts: GcOptions = {}): Promise<Gc
         const kept = new Set<string>();
         const loose = ((await readText(a.files, p.loose)) ?? "").split("\n").filter(Boolean);
         for (const id of loose) {
+          opts.signal?.throwIfAborted();
           if (deletable(id)) {
             await a.removeLoose(id).catch(() => {});
             stats.removedLoose++;
@@ -470,6 +476,43 @@ export async function gc(repo: Repository, opts: GcOptions = {}): Promise<GcStep
 }
 
 /**
+ * Takes a lease (renewed until released): waits while a sweep runs; a sweep starting meanwhile
+ * defers. For a writer whose work outlives a call (a streamed response), `withLease` otherwise.
+ */
+export async function acquireLease(
+  repo: Repository,
+  opts: { ttlMs?: number; signal?: AbortSignal } = {},
+): Promise<{ release(): Promise<void> }> {
+  const a = access(repo);
+  const p = paths(a.dir);
+  const ttl = opts.ttlMs ?? DEFAULT_TTL_MS;
+  const lease = `${p.leases}/${randomId()}.json`;
+  const write = () => writeText(a.files, lease, JSON.stringify({ expires: Date.now() + ttl }));
+  await write();
+  const renew = setInterval(() => void write().catch(() => {}), Math.max(10, ttl / 3));
+  let released = false;
+  const release = async () => {
+    if (released) return;
+    released = true;
+    clearInterval(renew);
+    await a.files.remove(lease).catch(() => false);
+  };
+  try {
+    // the lease first, then the flag: a sweep running now has not seen this lease
+    while (
+      flagOf(await readText(a.files, p.sweeping).catch(() => undefined)).expires > Date.now()
+    ) {
+      opts.signal?.throwIfAborted();
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  } catch (e) {
+    await release();
+    throw e;
+  }
+  return { release };
+}
+
+/**
  * Runs `fn` holding a lease (renewed while held): a running sweep is waited for; a sweep starting
  * meanwhile defers.
  */
@@ -478,20 +521,10 @@ export async function withLease<T>(
   fn: () => Promise<T>,
   opts: { ttlMs?: number } = {},
 ): Promise<T> {
-  const a = access(repo);
-  const p = paths(a.dir);
-  const ttl = opts.ttlMs ?? DEFAULT_TTL_MS;
-  const lease = `${p.leases}/${randomId()}.json`;
-  const write = () => writeText(a.files, lease, JSON.stringify({ expires: Date.now() + ttl }));
-  await write();
-  const renew = setInterval(() => void write().catch(() => {}), Math.max(10, ttl / 3));
+  const lease = await acquireLease(repo, opts);
   try {
-    // the lease first, then the flag: a sweep running now has not seen this lease
-    while (flagOf(await readText(a.files, p.sweeping).catch(() => undefined)).expires > Date.now())
-      await new Promise((r) => setTimeout(r, 25));
     return await fn();
   } finally {
-    clearInterval(renew);
-    await a.files.remove(lease).catch(() => false);
+    await lease.release();
   }
 }
