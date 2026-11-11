@@ -153,7 +153,7 @@ describe("R1 LFS on the mesh", () => {
     const c = await freshRepo();
     const member = await m.client("C", "B", ["member"]);
     await clone(URL_, c.repo, { fetch: member });
-    expect(await log(c.repo, "refs/remotes/origin/main")).toEqual(await log(a.repo, "HEAD"));
+    expect(await log(c.repo, "HEAD")).toEqual(await log(a.repo, "HEAD"));
     const sc = repoLfsStore(c.repo);
     await lfsFetch(URL_, sc, [p], { fetch: member });
     expect(sha(await collect(sc.read(p.oid)))).toBe(p.oid);

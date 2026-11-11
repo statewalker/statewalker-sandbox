@@ -176,6 +176,64 @@ export function lfsHandler(
   };
   const tooLarge = (size: number) => opts.maxObjectSize !== undefined && size > opts.maxObjectSize;
 
+  /**
+   * ranged: one part of an upload (`Content-Range: bytes a-b/size`), stored as an incomplete part;
+   * the part that completes the object verifies it and makes it visible (`x-lfs-complete`).
+   */
+  const putPart = async (req: Request, oid: string, contentRange: string): Promise<Response> => {
+    const m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange.trim());
+    const start = Number(m?.[1]);
+    const end = Number(m?.[2]);
+    const size = Number(m?.[3]);
+    if (!m || !isSize(start) || !isSize(end) || !isSize(size) || end < start || end >= size) {
+      await req.body?.cancel();
+      return json(400, { message: `invalid Content-Range ${JSON.stringify(contentRange)}` });
+    }
+    if (tooLarge(size)) {
+      await req.body?.cancel();
+      return json(413, { message: `over the limit of ${opts.maxObjectSize} bytes` });
+    }
+    if ((await store.size(oid)) === size) {
+      await req.body?.cancel();
+      return new Response(null, { status: 200, headers: { "x-lfs-complete": "true" } });
+    }
+    const length = end - start + 1;
+    let extra = false;
+    async function* exactly() {
+      let left = length;
+      for await (const c of body(req)) {
+        if (c.length > left) {
+          extra = true;
+          if (left > 0) yield c.subarray(0, left);
+          return;
+        }
+        left -= c.length;
+        yield c;
+      }
+    }
+    const n = await store.incomplete.write(oid, start, exactly());
+    if (extra || n !== length)
+      return json(400, {
+        message: `the part has ${extra ? "more" : n} bytes, its range ${length}`,
+      });
+    const held = await store.incomplete.ranges(oid);
+    if (held.length !== 1 || held[0]?.[0] !== 0 || held[0]?.[1] !== size)
+      return new Response(null, {
+        status: 200,
+        headers: { "x-lfs-held": held.map(([a, b]) => `${a}-${b - 1}`).join(",") },
+      });
+    try {
+      await store.incomplete.exclusive(oid, async () => {
+        if ((await store.size(oid)) !== size) await store.incomplete.complete({ oid, size });
+      });
+    } catch (e) {
+      if ((e as Error).name === "ObjectIdMismatchError")
+        return json(422, { message: (e as Error).message });
+      throw e;
+    }
+    return new Response(null, { status: 200, headers: { "x-lfs-complete": "true" } });
+  };
+
   return async (req) => {
     const url = new URL(req.url);
     const m = LFS_PATH.exec(url.pathname);
@@ -189,7 +247,9 @@ export function lfsHandler(
         const text = await boundedText(req, maxBatchBytes);
         if (text === undefined)
           return json(413, { message: `a batch request is limited to ${maxBatchBytes} bytes` });
-        let input: { operation?: unknown; objects?: unknown; hash_algo?: unknown } | undefined;
+        let input:
+          | { operation?: unknown; objects?: unknown; hash_algo?: unknown; transfers?: unknown }
+          | undefined;
         try {
           const parsed = JSON.parse(text) as unknown;
           if (parsed && typeof parsed === "object") input = parsed as typeof input;
@@ -263,15 +323,26 @@ export function lfsHandler(
               },
             });
         }
-        return json(200, { transfer: "basic", objects, hash_algo: "sha256" });
+        const transfer =
+          opts.ranged && Array.isArray(input.transfers) && input.transfers.includes("ranged")
+            ? "ranged"
+            : "basic";
+        return json(200, { transfer, objects, hash_algo: "sha256" });
       }
       const obj = /^\/objects\/([0-9a-f]{64})$/.exec(path);
       if (obj && (req.method === "GET" || req.method === "HEAD")) {
         const oid = obj[1] as string;
-        const ok = await allowTransfer(req, "download", oid);
+        let ok = await allowTransfer(req, "download", oid);
+        // ranged: an uploader asks with HEAD what is held
+        if (ok !== true && opts.ranged && req.method === "HEAD")
+          ok = await allowTransfer(req, "upload", oid);
         if (ok !== true) return refusal(ok);
         const size = await store.size(oid);
-        if (size === undefined) return json(404, { message: "object does not exist" });
+        if (size === undefined) {
+          if (!opts.ranged) return json(404, { message: "object does not exist" });
+          const held = (await store.incomplete.ranges(oid)).map(([a, b]) => `${a}-${b - 1}`);
+          return json(404, { message: "object does not exist" }, { "x-lfs-held": held.join(",") });
+        }
         // content-addressed: the oid is a strong validator
         const etag = `"${oid}"`;
         const ifRange = req.headers.get("if-range");
@@ -305,6 +376,8 @@ export function lfsHandler(
         const oid = obj[1] as string;
         const ok = await allowTransfer(req, "upload", oid);
         if (ok !== true) return refusal(ok);
+        const contentRange = req.headers.get("content-range");
+        if (opts.ranged && contentRange !== null) return putPart(req, oid, contentRange);
         const length = req.headers.get("content-length");
         if (length !== null && !/^\d+$/.test(length))
           return json(400, { message: `invalid Content-Length ${JSON.stringify(length)}` });

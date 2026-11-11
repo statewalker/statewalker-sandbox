@@ -5,8 +5,10 @@
  * and counted on the way, and renamed into place only when it matches what was expected — no
  * object becomes visible unverified, and a rename that fails is a failure. An interrupted download
  * keeps its bytes as parts under `lfs/incomplete/<oid>/`, each named by its offset and written so
- * that a failing source still leaves what arrived, on every backend. What counts as held is the
- * chain of parts from offset 0 without a gap or an overlap; parts outside it are dropped. One
+ * that a failing source still leaves what arrived, on every backend. Parts may arrive in any order
+ * (X12's chunked transfers): the held ranges are those of parts that overlap no earlier part; a
+ * sequential download resumes from the run held from offset 0; completion needs the whole object
+ * covered. One
  * download per object at a time within a process (`exclusive`); a failed verification drops the
  * parts, any other failure keeps them for the next attempt.
  */
@@ -77,18 +79,47 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
     }
     return out.sort((a, b) => a.offset - b.offset);
   };
-  /** the parts chained from offset 0, and the others (after a gap, or overlapping) */
+  /**
+   * The parts that overlap no earlier one (empty ones aside), merged into the held ranges; the
+   * contiguous run from offset 0 (`end`: what a sequential download resumes from); the others.
+   */
   const parts = async (oid: string) => {
-    const chain: { path: string; offset: number; size: number }[] = [];
+    const kept: { path: string; offset: number; size: number }[] = [];
     const stray: string[] = [];
-    let end = 0;
+    let last = 0;
     for (const p of await allParts(oid)) {
-      if (p.offset === end && (p.size > 0 || chain.length === 0)) {
-        chain.push(p);
-        end += p.size;
+      if (p.size > 0 && p.offset >= last) {
+        kept.push(p);
+        last = p.offset + p.size;
       } else stray.push(p.path);
     }
-    return { chain, stray, end };
+    const ranges: [number, number][] = [];
+    for (const p of kept) {
+      const r = ranges.at(-1);
+      if (r && r[1] === p.offset) r[1] = p.offset + p.size;
+      else ranges.push([p.offset, p.offset + p.size]);
+    }
+    const end = ranges[0]?.[0] === 0 ? ranges[0][1] : 0;
+    const chain = kept.filter((p) => p.offset < end);
+    return { kept, chain, stray, ranges, end };
+  };
+  /** a part at `offset`; a failing source ends the write normally (what arrived stays) */
+  const writePart = async (oid: string, offset: number, source: AsyncIterable<Uint8Array>) => {
+    let failure: unknown;
+    let n = 0;
+    async function* upTo() {
+      try {
+        for await (const c of source) {
+          n += c.length;
+          yield c;
+        }
+      } catch (e) {
+        failure = e;
+      }
+    }
+    await files.write(`${partsDir(oid)}/${String(offset).padStart(16, "0")}`, upTo());
+    if (failure) throw failure;
+    return n;
   };
   const size = async (oid: string) => {
     const st = await files.stats(objectPath(oid));
@@ -138,27 +169,17 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
     incomplete: {
       size: held,
       async append(oid, source) {
-        const { end: offset, stray } = await parts(oid);
-        for (const p of stray) await files.remove(p).catch(() => false);
-        let failure: unknown;
-        let n = 0;
-        // the source's failure ends the write normally: what arrived stays on every backend
-        async function* upTo() {
-          try {
-            for await (const c of source) {
-              n += c.length;
-              yield c;
-            }
-          } catch (e) {
-            failure = e;
-          }
-        }
-        await files.write(`${partsDir(oid)}/${String(offset).padStart(16, "0")}`, upTo());
-        if (failure) throw failure;
-        return n;
+        // a sequential download: what lies past the run from 0 would overlap it, and goes
+        const { end: offset, chain } = await parts(oid);
+        const keep = new Set(chain.map((p) => p.path));
+        for (const p of await allParts(oid))
+          if (!keep.has(p.path)) await files.remove(p.path).catch(() => false);
+        return writePart(oid, offset, source);
       },
       async complete(expect) {
-        const { chain } = await parts(expect.oid);
+        const { chain, end } = await parts(expect.oid);
+        if (end < expect.size)
+          throw new Error(`lfs object ${expect.oid}: ${end} of ${expect.size} bytes held`);
         async function* all() {
           for (const p of chain) yield* files.read(p.path);
         }
@@ -175,11 +196,11 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
       async remove(oid) {
         await files.remove(partsDir(oid)).catch(() => false);
       },
-      async ranges(_oid) {
-        throw new Error("not implemented");
-      },
-      async write(_oid, _offset, _source) {
-        throw new Error("not implemented");
+      ranges: async (oid) => (await parts(oid)).ranges,
+      write: (oid, offset, source) => {
+        if (!Number.isSafeInteger(offset) || offset < 0)
+          throw new Error(`invalid part offset ${offset}`);
+        return writePart(oid, offset, source);
       },
       async exclusive(oid, fn) {
         const byOid = queues.get(files) ?? new Map<string, Promise<unknown>>();
