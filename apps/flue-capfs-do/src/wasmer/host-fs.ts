@@ -32,7 +32,30 @@ interface OpenFile {
   writable?: Promise<void>;
 }
 
+/**
+ * Until a file is written (and its `bytes` loaded), each handle reads it through a chunk stream
+ * of its own: only the current chunk is held, so a file of any size reads in a constant amount of
+ * memory, and two handles reading at different places do not disturb each other.
+ */
+interface Reader {
+  id: string;
+  /** The path the stream was opened on (a rename closes it). */
+  path: string;
+  /** When it was last used (on EMFILE the least recently used one makes room). */
+  used: number;
+  /** The file's size when the stream was opened (what it reads). */
+  size: number;
+  /** Where the stream continues, and the chunk last read (bytes from `chunkAt`). */
+  pos: number;
+  chunk: Uint8Array;
+  chunkAt: number;
+}
+
 interface Handle {
+  id: number;
+  reader?: Reader;
+  /** Reads of one handle, one at a time (its stream has one position). */
+  reading?: Promise<unknown>;
   file: OpenFile;
   append: boolean;
 }
@@ -42,6 +65,9 @@ const encoder = new TextEncoder();
 const MAX_HANDLES = 256;
 /** What all open files of a sandbox may hold in memory together. */
 const MAX_OPEN_BYTES = 64 * 1024 * 1024;
+/** Bytes per chunk of a read stream (one store block). */
+const STREAM_CHUNK = 1024 * 1024;
+const EMPTY_BYTES = new Uint8Array();
 /** What the store takes whole: a larger file would only fail at close, which WASIX does not report. */
 const MAX_FILE_BYTES = MAX_WHOLE_FILE_BYTES;
 /**
@@ -177,6 +203,7 @@ export function capHostFs(cap: Cap) {
         if (!f.bytes) {
           f.bytes = bytes;
           f.size = bytes.length;
+          closeReaders(f); // the loaded bytes are read from now on
         }
       })().finally(() => {
         f.loading = undefined;
@@ -225,10 +252,109 @@ export function capHostFs(cap: Cap) {
     f.bytes = out;
     return out;
   };
+  const codeOf = (e: unknown) =>
+    (e as { code?: string })?.code ?? /^(E[A-Z]+):/.exec(String((e as Error)?.message))?.[1];
+  const closeReader = (h: Handle) => {
+    const r = h.reader;
+    h.reader = undefined;
+    if (r) cap.call("closeRead", r.path, r.id).catch(() => {});
+  };
+  /** The file's readers are of no use once it is loaded, truncated or renamed. */
+  const closeReaders = (f: OpenFile) => {
+    for (const h of handles.values()) if (h.file === f) closeReader(h);
+  };
+  const live = (h: Handle) => handles.get(h.id) === h && !h.file.bytes;
+  /** Opens `h`'s stream at `at`; undefined: read the file whole instead (no stream to be had). */
+  const openReader = async (h: Handle, at: number): Promise<Reader | undefined> => {
+    closeReader(h);
+    const path = h.file.path;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const { id, size } = (await cap.call("openRead", path, { start: at })) as {
+          id: string;
+          size: number;
+        };
+        // Closed, loaded or renamed while the stream was opening: give it back.
+        if (!live(h) || h.file.path !== path) {
+          cap.call("closeRead", path, id).catch(() => {});
+          return undefined;
+        }
+        h.reader = {
+          id,
+          path,
+          used: Date.now(),
+          size,
+          pos: Math.min(at, size),
+          chunk: EMPTY_BYTES,
+          chunkAt: at,
+        };
+        return h.reader;
+      } catch (e) {
+        if (codeOf(e) !== "EMFILE") throw e;
+        // No room: the least recently used reader of another handle makes room (it reopens
+        // where it was on its next read), once; else the file is read whole, as before streams.
+        let lru: Handle | undefined;
+        for (const o of handles.values())
+          if (o !== h && o.reader && (!lru || o.reader.used < (lru.reader as Reader).used)) lru = o;
+        if (attempt > 0 || !lru) return undefined;
+        closeReader(lru);
+      }
+    }
+  };
+  /** `length` bytes at `offset` through `h`'s stream (reopened where a read jumps). */
+  const streamRead = async (h: Handle, offset: number, length: number): Promise<Uint8Array> => {
+    if (length <= 0) return EMPTY_BYTES;
+    let r = h.reader;
+    if (r && offset >= r.size) return EMPTY_BYTES; // past the end: nothing to reopen for
+    const inChunk = (at: number) => !!r && at >= r.chunkAt && at < r.chunkAt + r.chunk.length;
+    if (!r || (!inChunk(offset) && offset !== r.pos)) r = await openReader(h, offset);
+    if (!r) {
+      const f = h.file;
+      const b = await load(f);
+      return b.slice(Math.min(offset, f.size), Math.min(f.size, offset + length));
+    }
+    const end = Math.min(offset + length, r.size);
+    const parts: Uint8Array[] = [];
+    let at = offset;
+    while (at < end) {
+      if (!inChunk(at)) {
+        if (at !== r.pos) break;
+        let chunk: Uint8Array;
+        try {
+          chunk = asBytes(await cap.call("readChunk", r.path, r.id, STREAM_CHUNK));
+        } catch (e) {
+          // The stream expired (idle 2 min) or the Workspace cell restarted: reopen where it was.
+          if (codeOf(e) !== "EBADF") throw e;
+          const again = await openReader(h, r.pos);
+          if (!again) break;
+          r = again;
+          chunk = asBytes(await cap.call("readChunk", r.path, r.id, STREAM_CHUNK));
+        }
+        if (!chunk.length) break;
+        r.chunk = chunk;
+        r.chunkAt = r.pos;
+        r.pos += chunk.length;
+      }
+      r.used = Date.now();
+      const from = at - r.chunkAt;
+      const take = r.chunk.subarray(from, Math.min(r.chunk.length, from + (end - at)));
+      parts.push(take);
+      at += take.length;
+    }
+    if (parts.length === 1) return parts[0].slice();
+    const out = new Uint8Array(at - offset);
+    let o = 0;
+    for (const p of parts) {
+      out.set(p, o);
+      o += p.length;
+    }
+    return out;
+  };
   const release = async (id: number) => {
     const h = handles.get(id);
     if (!h) return;
     handles.delete(id);
+    closeReader(h);
     if (--h.file.refs === 0) files.delete(h.file.path);
     await save(h.file);
   };
@@ -273,6 +399,7 @@ export function capHostFs(cap: Cap) {
         files.set(path, f);
       }
       if (write && (!exists || truncate)) {
+        closeReaders(f);
         f.bytes = new Uint8Array();
         f.size = 0;
         f.dirty = false;
@@ -280,14 +407,20 @@ export function capHostFs(cap: Cap) {
       }
       f.refs++;
       const id = next++;
-      handles.set(id, { file: f, append: !!append });
+      handles.set(id, { id, file: f, append: !!append });
       return id;
     },
     async read(id, offset, length) {
-      const f = handle(id).file;
-      const b = await load(f);
-      const at = Math.min(Number(offset), f.size);
-      return b.slice(at, Math.min(f.size, at + Number(length)));
+      const h = handle(id);
+      const run = async () => {
+        const f = h.file;
+        if (!f.bytes) return streamRead(h, Number(offset), Number(length));
+        const at = Math.min(Number(offset), f.size);
+        return f.bytes.slice(at, Math.min(f.size, at + Number(length)));
+      };
+      const p = (h.reading ?? Promise.resolve()).then(run, run);
+      h.reading = p.catch(() => {});
+      return p;
     },
     async write(id, offset, bytes) {
       const h = handle(id);
@@ -316,11 +449,13 @@ export function capHostFs(cap: Cap) {
       return null;
     },
     async fileStat(id) {
-      const f = handle(id).file;
+      const h = handle(id);
+      const f = h.file;
       const s = (await exists(f.path))
         ? await stat(f.path)
         : { kind: "file", size: 0, modified: "0", accessed: "0", created: "0" };
-      return { ...s, size: f.bytes ? f.size : s.size };
+      // The size this handle reads: its buffer, else its stream's snapshot.
+      return { ...s, size: f.bytes ? f.size : h.reader ? h.reader.size : s.size };
     },
     async flush(id) {
       await save(handle(id).file);
@@ -367,6 +502,7 @@ export function capHostFs(cap: Cap) {
         forget(dst, true);
       }
       if (f) {
+        closeReaders(f); // streams name the old path; reads reopen on the new one
         files.delete(src);
         f.path = dst;
         f.writable = undefined;
@@ -398,6 +534,7 @@ export function capHostFs(cap: Cap) {
     },
     /** Open files of a sandbox that ends are dropped: what was not flushed is not written. */
     close() {
+      for (const h of handles.values()) closeReader(h);
       handles.clear();
       files.clear();
       clear();

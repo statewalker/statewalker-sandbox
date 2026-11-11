@@ -1,7 +1,8 @@
 // The `stream` task: a holder streams a file through CapFilesApi over its capability. It makes
 // the chunked transfer observable end to end (and shows how a holder uses it): `write` streams
 // `size` deterministic bytes from `seed` in `chunk`-byte pieces, `read` streams a range back;
-// both answer with the byte count, the chunk count and the SHA-256 of what passed.
+// both answer with the byte count, the chunk count and the SHA-256 of what passed (up to
+// 16 MiB; null beyond).
 
 import { CapFilesApi } from "./cap-files-api.ts";
 import type { Cap } from "./caps.ts";
@@ -11,7 +12,9 @@ export type StreamTask =
   | { op: "read"; path: string; start?: number; length?: number };
 
 /** At most this many bytes per task (a demonstration, not a bulk copy). */
-const MAX_TASK_BYTES = 16 * 1024 * 1024;
+const MAX_TASK_BYTES = 24 * 1024 * 1024;
+/** The SHA-256 is computed up to this many bytes (it needs them in memory); null beyond. */
+const DIGEST_BYTES = 16 * 1024 * 1024;
 
 /** The bytes a `write` produces: the same generator the tests use. */
 export function* patternChunks(size: number, seed: number, chunk: number): Generator<Uint8Array> {
@@ -45,20 +48,34 @@ export async function runStreamTask(cap: Cap, task: StreamTask) {
     if (!(size >= 0 && size <= MAX_TASK_BYTES))
       throw new Error(`EINVAL: stream: size is 0..${MAX_TASK_BYTES}`);
     const chunk = Math.min(Math.max(Math.floor(Number(task.chunk) || 300_007), 1), 4 * 1024 * 1024);
-    const parts = [...patternChunks(size, Number(task.seed) || 1, chunk)];
-    await files.write(task.path, parts);
-    return { bytes: size, chunks: parts.length, sha256: await digest(parts) };
+    // Generated as the chunks are sent (not all at once: a long synchronous stretch can starve
+    // the cell); kept for the digest only up to DIGEST_BYTES.
+    const kept: Uint8Array[] = [];
+    const seed = Number(task.seed) || 1;
+    let chunks = 0;
+    async function* produce() {
+      for (const c of patternChunks(size, seed, chunk)) {
+        chunks++;
+        if (size <= DIGEST_BYTES) kept.push(c);
+        yield c;
+      }
+    }
+    await files.write(task.path, produce());
+    return { bytes: size, chunks, sha256: size <= DIGEST_BYTES ? await digest(kept) : null };
   }
   if (task.op === "read") {
     const parts: Uint8Array[] = [];
     let bytes = 0;
+    let chunks = 0;
     for await (const c of files.read(task.path, { start: task.start, length: task.length })) {
       bytes += c.length;
+      chunks++;
       if (bytes > MAX_TASK_BYTES)
         throw new Error(`EFBIG: stream: more than ${MAX_TASK_BYTES} bytes`);
-      parts.push(c);
+      if (bytes <= DIGEST_BYTES) parts.push(c);
+      else parts.length = 0;
     }
-    return { bytes, chunks: parts.length, sha256: await digest(parts) };
+    return { bytes, chunks, sha256: bytes <= DIGEST_BYTES ? await digest(parts) : null };
   }
   throw new Error("EINVAL: stream: op is write or read");
 }
