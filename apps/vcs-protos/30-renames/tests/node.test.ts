@@ -352,6 +352,76 @@ describe("R2/R3 random diffs", () => {
   }, 300_000);
 });
 
+describe("R5 cases for mutants the corpora missed", () => {
+  const T = lines(40, "shared");
+  const variant = (k: number, n = 3) => `${T}${lines(n, `own${k}`)}`;
+  const cases: Case[] = [
+    {
+      // C6: a chunk the destination repeats counts once per copy in the source
+      name: "repeated lines in the destination",
+      a: f([["src", "100644", `${lines(6)}${"rep\n".repeat(4)}`]]),
+      b: f([["dst", "100644", `${lines(6)}${"rep\n".repeat(12)}`]]),
+    },
+    {
+      // C10: a basename two sources share is not paired in the basename pass; the matrix takes
+      // the better source
+      name: "a shared source basename: the better source wins in the matrix",
+      a: f([
+        ["a/x.txt", "100644", `${T}${lines(9, "a")}`],
+        ["b/x.txt", "100644", `${T}${lines(2, "b")}`],
+      ]),
+      b: f([["c/x.txt", "100644", `${T}${lines(2, "b")}${lines(1, "new")}`]]),
+    },
+    {
+      // C11: each destination keeps 4 candidates; when the 4 go to better destinations, the
+      // fifth source is not considered
+      name: "a fifth candidate is not kept",
+      a: f([1, 2, 3, 4, 5].map((k) => [`s${k}`, "100644", variant(k)] as [string, string, string])),
+      b: f([
+        ["d0", "100644", `${T}${lines(3, "zero")}`],
+        ...[1, 2, 3, 4].map(
+          (k) => [`d${k}`, "100644", `${variant(k)}tail\n`] as [string, string, string],
+        ),
+      ]),
+    },
+    {
+      // C12: equal scores, the source with the destination's basename first
+      name: "a tie broken by the basename",
+      a: f([
+        ["a/z", "100644", `${T}p1\n`],
+        ["b/y", "100644", `${T}q1\n`],
+        ["c/y", "100644", lines(30, "unrelated")],
+      ]),
+      b: f([["d/y", "100644", `${T}r1\n`]]),
+    },
+    {
+      // C15: binary content keeps its CRs; text drops a CR before LF
+      name: "binary files with CRLF inside",
+      a: f([
+        [
+          "b1",
+          "100644",
+          new Uint8Array([
+            0,
+            ...Array.from({ length: 30 }, (_, i) => [65 + (i % 26), 13, 10]).flat(),
+          ]),
+        ],
+      ]),
+      b: f([
+        [
+          "b2",
+          "100644",
+          new Uint8Array([0, ...Array.from({ length: 30 }, (_, i) => [65 + (i % 26), 10]).flat()]),
+        ],
+      ]),
+    },
+  ];
+  it("each case equal to git", async () => {
+    const r = await compare(cases);
+    expect(r.wrong).toEqual([]);
+  });
+});
+
 describe("R4 portable", () => {
   it("src/ has no node: imports", () => {
     const src = join(dirname(fileURLToPath(import.meta.url)), "../src");
