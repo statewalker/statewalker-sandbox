@@ -43,8 +43,6 @@ import {
   type Paragraph,
   paragraphToBlock,
   roundBox,
-  type Table,
-  type TextRun,
   tableToBlock,
 } from "./text-layout.ts";
 
@@ -122,11 +120,69 @@ class LanguageTally {
   }
 }
 
+/** Events of a streamed conversion, in order: `start`, one `page` per page, `end`. */
+export type ConvertEvent =
+  | { type: "start"; title: string; pageCount: number; source: PdfPortableTextDocument["source"] }
+  | {
+      type: "page";
+      page: PageInfo;
+      /** The page's blocks in reading order. */
+      blocks: PortableTextBlock[];
+      /** Assets first used on this page (an image drawn again later is not repeated). */
+      assets: StoredAsset[];
+    }
+  | { type: "end"; language?: string };
+
+/**
+ * Converts a PDF and returns the whole document. For long documents prefer
+ * `convertPdfStream`, which hands out each page as soon as it is done.
+ */
 export async function convertPdf(
   file: File,
   ocr: OcrPool,
   options: ConvertOptions,
 ): Promise<ConvertResult> {
+  const pages: PageInfo[] = [];
+  const blocks: PortableTextBlock[] = [];
+  const assets = new Map<string, StoredAsset>();
+  let source: PdfPortableTextDocument["source"] | undefined;
+  let language: string | undefined;
+  for await (const event of convertPdfStream(file, ocr, options)) {
+    if (event.type === "start") source = event.source;
+    else if (event.type === "page") {
+      pages.push(event.page);
+      blocks.push(...event.blocks);
+      for (const a of event.assets) assets.set(a.meta._id, a);
+    } else language = event.language;
+  }
+  const document: PdfPortableTextDocument = {
+    _type: "pdfDocument",
+    version: 1,
+    title: file.name.replace(/\.pdf$/i, ""),
+    ...(language ? { language } : {}),
+    source: source ?? { fileName: file.name, size: file.size, pageCount: pages.length },
+    createdAt: new Date().toISOString(),
+    pages,
+    blocks,
+    assets: Object.fromEntries([...assets].map(([id, a]) => [id, a.meta])),
+  };
+  return { document, blobs: new Map([...assets].map(([id, a]) => [id, a.blob])) };
+}
+
+/** Pages and characters of the text layer sampled to guess the document language. */
+const LANGUAGE_SAMPLE_PAGES = 20;
+const LANGUAGE_SAMPLE_CHARS = 20_000;
+
+/**
+ * Converts a PDF page by page. Each page is extracted, OCR'd and released
+ * before the next one starts, so memory stays bounded by one page (plus the
+ * assets the consumer keeps); stopping the iteration stops the conversion.
+ */
+export async function* convertPdfStream(
+  file: File,
+  ocr: OcrPool,
+  options: ConvertOptions,
+): AsyncGenerator<ConvertEvent> {
   const log = options.onLog ?? (() => {});
   const auto = options.language === "auto";
   const fixedLanguage = auto ? undefined : languageByTesseract(options.language);
@@ -139,9 +195,8 @@ export async function convertPdf(
     options.imageFormat === "original" ? await findOriginalJpegs(data.slice(0)) : undefined;
   const pdf = await openPdf(data);
   const pageCount = Math.min(pdf.numPages, options.maxPages ?? Number.POSITIVE_INFINITY);
-  const pages: PageInfo[] = [];
-  const blocks: PortableTextBlock[] = [];
-  const assets = new Map<string, StoredAsset>();
+  const seenAssets = new Set<string>();
+  const allLanguages = new LanguageTally();
   // OCR results are reused when the same asset appears again.
   const ocrCache = new Map<string, Promise<OcrOutcome>>();
   const ocrTally = new LanguageTally();
@@ -201,48 +256,47 @@ export async function convertPdf(
   }
 
   try {
-    // Pass 1: text layer of every page. Its language is the starting point for OCR.
-    const invisibleMode = options.invisibleText ?? "replace";
-    const paragraphsByPage: Paragraph[][] = [];
-    const tablesByPage: Table[][] = [];
-    const invisibleRunsByPage: TextRun[][] = [];
-    let invisibleCount = 0;
-    for (let n = 1; n <= pageCount; n++) {
-      const page = await pdf.getPage(n);
-      const runs = await extractTextRuns(page);
-      const invisible = invisibleMode === "keep" ? [] : runs.filter((r) => r.invisible);
-      invisibleCount += invisible.length;
-      invisibleRunsByPage.push(invisible);
-      const shown = invisibleMode === "keep" ? runs : runs.filter((r) => !r.invisible);
-      const layout = layoutText(shown);
-      paragraphsByPage.push(layout.paragraphs);
-      tablesByPage.push(layout.tables);
-    }
-    if (invisibleCount > 0) {
-      log(
-        `invisible text layer found (${invisibleCount} runs): ${invisibleMode === "reuse" ? "reusing it as OCR" : "replaced by OCR"}`,
-      );
+    yield {
+      type: "start",
+      title: file.name.replace(/\.pdf$/i, ""),
+      pageCount,
+      source: { fileName: file.name, size: file.size, pageCount },
+    };
+
+    // Language of the text layer, from a sample of the first pages (text only:
+    // no operator lists, so no image is decoded here). It is where OCR starts.
+    let sample = "";
+    for (let n = 1; n <= Math.min(pageCount, LANGUAGE_SAMPLE_PAGES); n++) {
+      const content = await (await pdf.getPage(n)).getTextContent();
+      for (const item of content.items) if ("str" in item) sample += `${item.str} `;
+      if (sample.length >= LANGUAGE_SAMPLE_CHARS) break;
     }
     // A few stray characters (e.g. an invisible OCR layer of a chart) must not
     // decide the language of a scanned document.
-    const allText = paragraphsByPage
-      .flat()
-      .map((p) => p.text)
-      .join(" ")
-      .slice(0, 20_000);
-    if (letterCount(allText) >= MIN_TEXT_LAYER_LETTERS) textLanguage = detectLanguage(allText);
+    sample = sample.slice(0, LANGUAGE_SAMPLE_CHARS);
+    if (letterCount(sample) >= MIN_TEXT_LAYER_LETTERS) textLanguage = detectLanguage(sample);
     if (textLanguage) log(`text layer language: ${textLanguage.name}`);
+    const invisibleMode = options.invisibleText ?? "replace";
 
-    // Pass 2: blocks, images and OCR, page by page.
+    // Blocks, images and OCR, page by page.
     for (let n = 1; n <= pageCount; n++) {
       options.signal?.throwIfAborted();
       const page = await pdf.getPage(n);
       const size = pageSize(page);
-      pages.push({ number: n, width: round2(size.width), height: round2(size.height) });
+      const pageInfo = { number: n, width: round2(size.width), height: round2(size.height) };
+      const pageAssets: StoredAsset[] = [];
       const keyGen = createKeyGen(`p${n}-`);
       const items: PageItem[] = [];
 
-      const paragraphs = paragraphsByPage[n - 1];
+      const runs = await extractTextRuns(page);
+      const invisibleRuns = invisibleMode === "keep" ? [] : runs.filter((r) => r.invisible);
+      if (invisibleRuns.length > 0) {
+        log(
+          `page ${n}: invisible text layer (${invisibleRuns.length} runs) ${invisibleMode === "reuse" ? "reused as OCR" : "replaced by OCR"}`,
+        );
+      }
+      const layout = layoutText(invisibleMode === "keep" ? runs : runs.filter((r) => !r.invisible));
+      const paragraphs = layout.paragraphs;
       const pageLanguage = detectLanguage(paragraphs.map((p) => p.text).join(" ")) ?? textLanguage;
       const bodySize = bodyFontSize(paragraphs);
       for (const p of paragraphs) {
@@ -251,7 +305,7 @@ export async function convertPdf(
         if (language) block.language = language.bcp47;
         items.push({ box: p.bbox, blocks: [block] });
       }
-      for (const t of tablesByPage[n - 1]) {
+      for (const t of layout.tables) {
         items.push({ box: t.bbox, blocks: [tableToBlock(t, { keyGen, page: n })] });
       }
 
@@ -289,7 +343,10 @@ export async function convertPdf(
               options.imageFormat === "original" ? "png" : options.imageFormat,
             );
         const assetId = stored.meta._id;
-        if (!assets.has(assetId)) assets.set(assetId, stored);
+        if (!seenAssets.has(assetId)) {
+          seenAssets.add(assetId);
+          pageAssets.push(stored);
+        }
         const asset = { _type: "reference" as const, _ref: assetId };
         const imageBlock: ImageBlock = {
           _type: "image",
@@ -315,7 +372,7 @@ export async function convertPdf(
 
         let outcome = ocrCache.get(assetId);
         if (!outcome && invisibleMode === "reuse" && !img.transform) {
-          const words = runsToImageWords(invisibleRunsByPage[n - 1], img);
+          const words = runsToImageWords(invisibleRuns, img);
           if (words.length >= 3) {
             log(`page ${n}: reusing ${words.length} words of the invisible text layer`);
             outcome = Promise.resolve(
@@ -377,34 +434,20 @@ export async function convertPdf(
       // Reading order: XY-cut over the page's paragraphs and images (columns
       // left to right, rows top to bottom); OCR text stays after its image.
       const ordered = readingOrder(items.map((item) => item.box));
-      for (const index of ordered) blocks.push(...items[index].blocks);
+      const pageBlocks = ordered.flatMap((index) => items[index].blocks);
+      for (const b of pageBlocks) {
+        if (b._type !== "block" || !b.language) continue;
+        const chars = b.children.reduce((sum, c) => sum + c.text.length, 0);
+        allLanguages.add(languageByBcp47(b.language), chars);
+      }
+      // Release the page's decoded images and fonts before the next one.
       page.cleanup();
+      yield { type: "page", page: pageInfo, blocks: pageBlocks, assets: pageAssets };
     }
+    yield { type: "end", language: allLanguages.dominant()?.bcp47 };
   } finally {
     await pdf.loadingTask.destroy();
   }
-
-  const all = new LanguageTally();
-  for (const b of blocks) {
-    if (b._type !== "block" || !b.language) continue;
-    all.add(
-      languageByBcp47(b.language),
-      b.children.reduce((s, c) => s + c.text.length, 0),
-    );
-  }
-
-  const document: PdfPortableTextDocument = {
-    _type: "pdfDocument",
-    version: 1,
-    title: file.name.replace(/\.pdf$/i, ""),
-    ...(all.dominant() ? { language: all.dominant()?.bcp47 } : {}),
-    source: { fileName: file.name, size: file.size, pageCount: pages.length },
-    createdAt: new Date().toISOString(),
-    pages,
-    blocks,
-    assets: Object.fromEntries([...assets].map(([id, a]) => [id, a.meta])),
-  };
-  return { document, blobs: new Map([...assets].map(([id, a]) => [id, a.blob])) };
 }
 
 /** OCR outcome built from an existing (invisible) text layer instead of tesseract. */

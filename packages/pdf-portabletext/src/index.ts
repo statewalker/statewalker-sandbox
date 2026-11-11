@@ -1,6 +1,12 @@
-export { encodeImageAsset, type ImageFormat } from "./assets.ts";
+export { encodeImageAsset, type ImageFormat, type StoredAsset } from "./assets.ts";
 export { createBundle, download } from "./bundle.ts";
-export { type ConvertOptions, type ConvertResult, convertPdf } from "./convert.ts";
+export {
+  type ConvertEvent,
+  type ConvertOptions,
+  type ConvertResult,
+  convertPdf,
+  convertPdfStream,
+} from "./convert.ts";
 export {
   DEFAULT_LANGUAGE,
   detectLanguage,

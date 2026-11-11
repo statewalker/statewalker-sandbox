@@ -131,7 +131,12 @@ function checkFormatting(
   }
 }
 
-function check(doc: PdfPortableTextDocument, entry: CorpusEntry, stats: ImageStat[]): Check[] {
+function check(
+  doc: PdfPortableTextDocument,
+  entry: CorpusEntry,
+  stats: ImageStat[],
+  heapMB?: number,
+): Check[] {
   const checks: Check[] = [];
   const add = (name: string, ok: boolean, detail = "") => checks.push({ name, ok, detail });
   const { expect } = entry;
@@ -209,6 +214,12 @@ function check(doc: PdfPortableTextDocument, entry: CorpusEntry, stats: ImageSta
       engines.length > 0 && engines.every((e) => e === expect.ocrEngine),
       engines.join("/"),
     );
+  }
+  if (expect.pages !== undefined) {
+    add("pages", doc.pages.length === expect.pages, `${doc.pages.length}`);
+  }
+  if (expect.maxHeapMB !== undefined && heapMB !== undefined) {
+    add("heap", heapMB <= expect.maxHeapMB, `${heapMB.toFixed(0)} MB`);
   }
   if (expect.imageChecks) {
     const actual = images.map((img) => {
@@ -340,7 +351,10 @@ try {
       .locator("#preview")
       .screenshot({ path: `${base}.png` })
       .catch(() => {});
-    const checks = check(doc, entry, stats);
+    const heapMB = (await page.evaluate(
+      "performance.memory ? performance.memory.usedJSHeapSize / 1048576 : undefined",
+    )) as number | undefined;
+    const checks = check(doc, entry, stats, heapMB);
     rows.push({ entry, seconds, checks, doc });
     const failed = checks.filter((c) => !c.ok);
     console.log(

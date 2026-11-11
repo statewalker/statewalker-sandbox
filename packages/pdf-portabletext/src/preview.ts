@@ -12,7 +12,10 @@ import type {
  * with the bbox of every word recognised in them; OCR words are wrapped in
  * spans that carry their bbox so the page can highlight it on hover.
  */
-export function renderPreview(doc: PdfPortableTextDocument, urls: Map<string, string>): string {
+export function renderPreview(
+  doc: Pick<PdfPortableTextDocument, "blocks">,
+  urls: Map<string, string>,
+): string {
   const wordsByImage = new Map<string, OcrBoxMark[]>();
   for (const block of doc.blocks) {
     if (block._type !== "block") continue;

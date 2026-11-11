@@ -32,7 +32,8 @@ export type CorpusEntry = {
     | { kind: "rotate"; rotations: number[] }
     | { kind: "columns" }
     | { kind: "formatting" }
-    | { kind: "images" };
+    | { kind: "images" }
+    | { kind: "longscan"; pages: number };
   expect: {
     /** Expected `document.language` (BCP 47). */
     language?: string;
@@ -64,6 +65,10 @@ export type CorpusEntry = {
     maxOccurrences?: Record<string, number>;
     /** Engine that must have produced the text of every image with words. */
     ocrEngine?: string;
+    /** Exact number of pages converted. */
+    pages?: number;
+    /** Upper bound for the page's JS heap after the conversion (Chromium only). */
+    maxHeapMB?: number;
     /** Per image, in document order: stored type, transparency, stencil mask. */
     imageChecks?: { mimeType?: string; alpha?: boolean; stencil?: boolean }[];
     /** Text formatting: phrases that must carry a decorator, list items, tables. */
@@ -346,6 +351,32 @@ export const CORPUS: CorpusEntry[] = [
     purpose: "German LaTeX lecture notes: language detected from the text layer",
     maxPages: 6,
     expect: { language: "de", contains: ["Topologie"], formatting: { minStrong: 3 } },
+  },
+  {
+    id: "GeoTopo-full",
+    file: "GeoTopo.pdf",
+    url: `${PYPDF}/009-pdflatex-geotopo/GeoTopo.pdf`,
+    license: "CC-BY-SA-4.0",
+    attribution: "Martin Thoma, py-pdf/sample-files",
+    purpose: "all 117 pages, streamed page by page",
+    maxPages: 1000,
+    expect: { language: "de", pages: 117, maxHeapMB: 400, formatting: { minStrong: 50 } },
+  },
+  {
+    file: "linn-24-pages.pdf",
+    url: `${OCRMYPDF}/linn.png`,
+    license: "GFDL-1.2-or-later OR CC-BY-SA-3.0",
+    attribution: "(C) 1985 Forat Electronics; page numbers stamped by scripts/fetch-corpus.ts",
+    purpose: "24-page scan (a distinct image per page): streaming keeps memory flat",
+    derive: { kind: "longscan", pages: 24 },
+    maxPages: 1000,
+    expect: {
+      language: "en",
+      pages: 24,
+      minImages: 24,
+      maxHeapMB: 400,
+      groundTruth: { ...linnTruth, minRecall: 0.9, perPage: true },
+    },
   },
   {
     file: "crazyones-pdfa.pdf",
