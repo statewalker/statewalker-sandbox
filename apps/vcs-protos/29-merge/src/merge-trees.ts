@@ -133,8 +133,8 @@ function trivialDirectoryMerges(sides: Map<string, Entry>[], dirsOf: Set<string>
       const parts = path.split("/");
       for (let i = 0; i < parts.length; i++) {
         const dir = parts.slice(0, i).join("/");
-        let set = children.get(dir);
-        if (!set) children.set(dir, (set = new Set()));
+        const set = children.get(dir) ?? new Set<string>();
+        children.set(dir, set);
         set.add(parts.slice(0, i + 1).join("/"));
       }
     }
