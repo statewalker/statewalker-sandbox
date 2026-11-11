@@ -152,7 +152,6 @@ describe("R1 pointers and filters", () => {
       `${v}\noid sha256:${oid}\nsize +8\n`,
       `${v}\noid sha256:${oid}\nsize 08\n`,
       `${v}\noid sha256:${oid}\nsize 8 \n`,
-      `${v}\next-0-foo sha256:${"a".repeat(64)}\noid sha256:${oid}\nsize 8\n`,
       `${v}\noid sha256:${oid}\nsize 8\nzzz extra\n`,
       `${v}\noid sha256:${oid}\nsize 8\n${"x".repeat(1100)}\n`,
       `version https://hawser.github.com/spec/v1\noid sha256:${oid}\nsize 8\n`,
@@ -163,6 +162,36 @@ describe("R1 pointers and filters", () => {
       "",
       "plain text\n",
     ];
+    // extension lines (git-lfs runs the named extension, so smudge cannot be the oracle here):
+    // the spec's example
+    const e1 = "1".repeat(64);
+    const e2 = "2".repeat(64);
+    expect(
+      parsePointer(
+        enc.encode(
+          `${v}\next-0-foo sha256:${e1}\next-1-bar sha256:${e2}\noid sha256:${oid}\nsize 8\n`,
+        ),
+      ),
+    ).toEqual({
+      oid,
+      size: 8,
+      extensions: [
+        { priority: 0, name: "foo", oid: e1 },
+        { priority: 1, name: "bar", oid: e2 },
+      ],
+    });
+    expect(
+      dec.decode(
+        encodePointer({
+          oid,
+          size: 8,
+          extensions: [
+            { priority: 1, name: "bar", oid: e2 },
+            { priority: 0, name: "foo", oid: e1 },
+          ],
+        }),
+      ),
+    ).toBe(`${v}\next-0-foo sha256:${e1}\next-1-bar sha256:${e2}\noid sha256:${oid}\nsize 8\n`);
     const store = lfsStore(new StreamingNodeFilesApi(join(w, ".git")), "");
     for (const c of cases) {
       const r = spawnSync("git", [...LFS, "lfs", "smudge"], { cwd: w, env: gitEnv, input: c });
@@ -517,6 +546,7 @@ describe("R6 bounded memory", () => {
     } finally {
       clearInterval(timer);
     }
+    console.log(`R6 heap growth ${((peak - base) / (1 << 20)).toFixed(1)} MiB`);
     expect((peak - base) / (1 << 20)).toBeLessThan(32);
   }, 300_000);
 });
