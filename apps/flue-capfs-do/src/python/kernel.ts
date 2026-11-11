@@ -56,9 +56,10 @@ type EngineMessage =
       changes: Changes;
     };
 
+/** A file's content between the kernel and the engine: UTF-8 text, or other bytes as base64. */
+type Content = string | { $b64: string };
 type Changes = {
-  written: Record<string, string>;
-  binary: string[];
+  written: Record<string, Content>;
   deleted: string[];
   dirs: string[];
   /** The topmost directory of each removed tree. */
@@ -236,7 +237,7 @@ export class PythonKernel {
 
 /** The readable files under `root`, as the capability shows them (denied entries are absent). */
 async function syncIn(cap: Cap, root: string) {
-  const files: Record<string, string> = {};
+  const files: Record<string, Content> = {};
   let bytes = 0;
   let truncated = false;
   const walk = async (dir: string): Promise<void> => {
@@ -262,24 +263,54 @@ async function syncIn(cap: Cap, root: string) {
           return;
         }
         try {
-          const text = (await cap.call("readFile", p)) as string;
-          files[p] = text;
-          bytes += utf8Length(text);
+          const b = toBytes(await cap.call("readFileBuffer", p));
+          files[p] = toContent(b);
+          bytes += b.length;
         } catch {}
       }
     }
   };
   try {
     const st = (await cap.call("stat", root)) as { isFile?: boolean };
-    if (st.isFile) files[root] = (await cap.call("readFile", root)) as string;
-    else await walk(root);
+    if (st.isFile) {
+      const b = toBytes(await cap.call("readFileBuffer", root));
+      if (b.length > LIMITS.bytes) truncated = true;
+      else {
+        files[root] = toContent(b);
+        bytes = b.length;
+      }
+    } else await walk(root);
   } catch {
     await walk(root); // an ancestor of the rights may be listable without being stat-able
   }
   return { files, synced: { files: Object.keys(files).length, bytes, truncated } };
 }
 
-const utf8Length = (s: string) => new TextEncoder().encode(s).length;
+const toBytes = (v: unknown) => (v instanceof Uint8Array ? v : new Uint8Array(v as ArrayBuffer));
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+/** UTF-8 files travel as text, others as base64 (the Node engine's IPC is JSON). */
+function toContent(b: Uint8Array): Content {
+  try {
+    return strictUtf8.decode(b);
+  } catch {
+    let s = "";
+    for (let i = 0; i < b.length; i += 0x8000)
+      s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+    return { $b64: btoa(s) };
+  }
+}
+/** The bytes a Content stands for; undefined if it is neither form. */
+function fromContent(c: unknown): Uint8Array | undefined {
+  if (typeof c === "string") return new TextEncoder().encode(c);
+  if (c && typeof c === "object" && typeof (c as { $b64?: unknown }).$b64 === "string") {
+    try {
+      return Uint8Array.from(atob((c as { $b64: string }).$b64), (ch) => ch.charCodeAt(0));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
 
 /**
  * Applies a run's changes through the capability; each refused change is reported, not fatal.
@@ -309,22 +340,21 @@ async function writeBack(cap: Cap, changes: Changes) {
     await attempt("mkdir", d, () => cap.call("mkdir", d, { recursive: true }));
   let files = 0;
   let bytes = 0;
-  for (const [p, text] of Object.entries(changes?.written ?? {})) {
-    if (typeof text !== "string") continue;
+  for (const [p, content] of Object.entries(changes?.written ?? {})) {
+    const b = fromContent(content);
+    if (!b) continue;
     files += 1;
-    bytes += utf8Length(text);
+    bytes += b.length;
     if (files > LIMITS.files || bytes > LIMITS.bytes) {
       truncated = true;
       break;
     }
-    if (await attempt("write", p, () => cap.call("writeFile", p, text))) written.push(p);
-  }
-  for (const p of list(changes?.binary)) {
-    denied.push({
-      path: p,
-      op: "write",
-      error: "EINVAL: binary data that is not UTF-8 cannot be stored",
-    });
+    // Text as text, binary content byte for byte.
+    const write =
+      typeof content === "string"
+        ? () => cap.call("writeFile", p, content)
+        : () => cap.call("writeFileBuffer", p, b);
+    if (await attempt("write", p, write)) written.push(p);
   }
   // Removed trees: one recursive rm each; then the single files outside them.
   const goneDirs = list(changes?.deletedDirs);

@@ -4,9 +4,11 @@
 // scripts/run-env.mjs starts a runtime (wrangler | cellb | celld) and runs this file.
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import { Biscuit, generateKeypair } from "@statewalker/webrun-biscuit";
+import { patternChunks } from "../src/stream-task.ts";
 import { bundleTodoTool } from "./fixtures/bundle-fixture.mjs";
 
 const TODO_TOOL = new URL("./fixtures/todo-tool.ts", import.meta.url);
@@ -110,8 +112,81 @@ test("file text keeps NUL bytes and non-ASCII characters (the store keeps bytes)
   assert.equal((await files(ws))["/n/written"], "x\u0000y");
 });
 
+test("binary files are stored byte for byte (seed, just-bash, a tool over RPC)", async () => {
+  const ws = freshWs();
+  const all = Buffer.from(Array.from({ length: 256 }, (_, i) => i)).toString("base64");
+  await seed(ws, { "/b/seed.bin": { $b64: all } });
+  const b64 = () => admin(`/api/w/${ws}/files?encoding=base64`);
+  const bad = await http(`/api/w/${ws}/seed`, { files: { "/b/n": 5 } }, { admin: true });
+  assert.equal(bad.status, 400, "a seed value is a string or { $b64 }");
+  assert.equal((await b64())["/b/seed.bin"], all);
+  const { token } = await session(ws, "alice", ["/b"]);
+  const r = await sh(
+    `bin-${ws}`,
+    ws,
+    token,
+    "token",
+    "wc -c < /b/seed.bin; cp /b/seed.bin /b/copy.bin; cat /b/seed.bin > /b/cat.bin; cat /b/seed.bin >> /b/cat.bin",
+  );
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.equal(r.stdout.trim(), "256");
+  // just-bash's cat writes bytes ("binary" encoding), cp copies them in the store. (Its printf
+  // writes text: '\377' becomes U+00FF as UTF-8, as on just-bash's own in-memory file system.)
+  const after = await b64();
+  assert.equal(after["/b/copy.bin"], all);
+  const twice = Buffer.concat([Buffer.from(all, "base64"), Buffer.from(all, "base64")]);
+  assert.equal(after["/b/cat.bin"], twice.toString("base64"));
+  // A tool writes and reads bytes through its capability (structured clone over RPC).
+  const code = `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class extends WorkerEntrypoint {
+  async run(files, input) {
+    files ??= this.env.FILES;
+    await files.call("writeFileBuffer", "/b/tool.bin", new Uint8Array([0, 255, 128, 10]));
+    const back = await files.call("readFileBuffer", "/b/tool.bin");
+    return Array.from(new Uint8Array(back));
+  }
+}`;
+  const rt = (await http("/api/runtime")).value;
+  if (rt.toolIsolates !== "isolated") return; // raw tool code runs only in isolates
+  const t = await run(`bt-${ws}`, ws, token, "token", { kind: "tool", code });
+  assert.equal(t.ok, true, t.error);
+  assert.deepEqual(t.value.result, [0, 255, 128, 10]);
+  assert.equal((await b64())["/b/tool.bin"], Buffer.from([0, 255, 128, 10]).toString("base64"));
+});
+
 for (const transport of TRANSPORTS) {
   describe(`transport=${transport}`, () => {
+    test("files of any size stream in chunks over the capability (CapFilesApi)", async () => {
+      const ws = freshWs();
+      await seed(ws, SEED);
+      const { token } = await session(ws, "alice", ["/proj"]);
+      const size = 5 * 1024 * 1024 + 123; // more than one row (2 MB) and five store blocks
+      const sha = (b) => createHash("sha256").update(b).digest("hex");
+      const all = Buffer.concat([...patternChunks(size, 7, 1 << 20)]);
+      const stream = (task, chain) =>
+        run(`st-${ws}`, ws, token, transport, { kind: "stream", ...task }, chain);
+      const w = await stream({ op: "write", path: "/proj/big.bin", size, seed: 7 });
+      assert.equal(w.ok, true, w.error);
+      assert.equal(w.value.result.sha256, sha(all));
+      const r = await stream({ op: "read", path: "/proj/big.bin" });
+      assert.equal(r.ok, true, r.error);
+      assert.equal(r.value.result.bytes, size);
+      assert.equal(r.value.result.sha256, sha(all));
+      assert.ok(r.value.result.chunks >= 6, "read in chunks");
+      const start = 3 * 1024 * 1024 - 5;
+      const range = await stream({ op: "read", path: "/proj/big.bin", start, length: 1_500_000 });
+      assert.equal(range.value.result.sha256, sha(all.subarray(start, start + 1_500_000)));
+      // Rights hold for streams: outside them, and a read-only chain, cannot write.
+      const out = await stream({ op: "write", path: "/p1/x.bin", size: 10 });
+      assert.equal(out.ok, false);
+      assert.equal(out.code, "EACCES");
+      const ro = await stream({ op: "write", path: "/proj/ro.bin", size: 10 }, [
+        { readOnly: true },
+      ]);
+      assert.equal(ro.ok, false);
+      assert.equal(ro.code, "EACCES");
+    });
+
     test("rights: only allowed branches exist for the agent; exact prefixes; '..' cannot escape", async () => {
       const ws = freshWs();
       await seed(ws, SEED);

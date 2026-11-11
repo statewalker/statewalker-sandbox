@@ -9,7 +9,7 @@
 // EISDIR, ENOTEMPTY, ENOTSUP).
 
 import type { Cap } from "../caps.ts";
-import type { DirEntryStat } from "../sql-fs.ts";
+import { type DirEntryStat, MAX_WHOLE_FILE_BYTES } from "../sql-fs.ts";
 
 export type HostFsReply = { value: unknown } | { error: { code: string; message: string } };
 
@@ -37,34 +37,30 @@ interface Handle {
   append: boolean;
 }
 
-/** The store keeps UTF-8 text, so a file's bytes must decode. */
 const encoder = new TextEncoder();
-const strict = () => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 /** At most this many open files per sandbox; at most this many bytes per file in memory. */
 const MAX_HANDLES = 256;
-const MAX_FILE_BYTES = 16 * 1024 * 1024;
+/** What all open files of a sandbox may hold in memory together. */
+const MAX_OPEN_BYTES = 64 * 1024 * 1024;
+/** What the store takes whole: a larger file would only fail at close, which WASIX does not report. */
+const MAX_FILE_BYTES = MAX_WHOLE_FILE_BYTES;
+/**
+ * Metadata (stat, "no such file", listings) is cached per sandbox for one command at most:
+ * the kernel clears it before each command, so a write made between commands (a Flue tool, an
+ * other agent) is seen by the next one. Within a command, entries live this long, and this
+ * run's own writes forget what they change. Other writers' changes during a command (a Flue
+ * tool call running in parallel, another agent), and a revocation, may be seen this late in
+ * names and sizes; contents are read and written through the capability every time, and an
+ * open that may create a file always asks it (a cached "no such file" must not truncate one).
+ */
+const META_TTL_MS = 2000;
+/** Stats plus listed entries held; past it, the cache starts over. */
+const MAX_META_ENTRIES = 20_000;
 
 const err = (code: string, message: string) => Object.assign(new Error(message), { code });
 const nanos = (iso: string) => String(BigInt(Date.parse(iso) || 0) * 1_000_000n);
-const isContinuation = (b: number | undefined) => b !== undefined && (b & 0xc0) === 0x80;
-
-/**
- * Refuses a write that makes the file something other than UTF-8 text, at the write itself
- * (WASIX drops the result of close, so a refusal at close would be silent). Only the bytes
- * around the written range are decoded; a character still incomplete at its end is allowed
- * (the next write may finish it) and is caught by the full check when the file is saved.
- */
-function checkText(b: Uint8Array, from: number, to: number, path: string) {
-  let start = from;
-  for (let i = 0; i < 3 && isContinuation(b[start]); i++) start--;
-  let end = to;
-  for (let i = 0; i < 3 && isContinuation(b[end]); i++) end++;
-  try {
-    strict().decode(b.subarray(Math.max(0, start), end), { stream: true });
-  } catch {
-    throw err("ENOTSUP", `${path}: the store keeps UTF-8 text, not binary content`);
-  }
-}
+const asBytes = (v: unknown) =>
+  v instanceof Uint8Array ? v : new Uint8Array(v as ArrayBuffer | ArrayLike<number>);
 
 /** A protocol handler for one sandbox, over `cap`. */
 export function capHostFs(cap: Cap) {
@@ -79,8 +75,80 @@ export function capHostFs(cap: Cap) {
   const files = new Map<string, OpenFile>();
   let next = 1;
 
+  // ---- metadata cache (see META_TTL_MS) ----
+  /** A path's stat, or null: no such file. Refusals (EACCES) are not cached. */
+  const meta = new Map<string, { at: number; stat: PlainStat | null }>();
+  const listings = new Map<string, { at: number; entries: DirEntryStat[] }>();
+  let listed = 0;
+  /**
+   * Bumped by every forget and reset: an answer that arrives after one (a call the kernel gave
+   * up on, a write made meanwhile) is used but not cached.
+   */
+  let epoch = 0;
+  const clear = () => {
+    meta.clear();
+    listings.clear();
+    listed = 0;
+    epoch++;
+  };
+  const fresh = (e: { at: number } | undefined) => !!e && Date.now() - e.at < META_TTL_MS;
+  const parentOf = (path: string) => path.slice(0, path.lastIndexOf("/")) || "/";
+  const childOf = (dir: string, name: string) => (dir === "/" ? `/${name}` : `${dir}/${name}`);
+  const remember = (path: string, stat: PlainStat | null) => {
+    if (meta.size + listed >= MAX_META_ENTRIES) clear();
+    meta.set(path, { at: Date.now(), stat });
+  };
+  const unlist = (dir: string) => {
+    const old = listings.get(dir);
+    if (!old) return;
+    listed -= old.entries.length;
+    listings.delete(dir);
+  };
+  /** What this run changed at `path` (and under it, for a directory) is forgotten. */
+  const forget = (path: string, tree = false) => {
+    epoch++;
+    meta.delete(path);
+    unlist(path);
+    unlist(parentOf(path));
+    if (!tree) return;
+    const under = `${path}/`;
+    for (const k of meta.keys()) if (k.startsWith(under)) meta.delete(k);
+    for (const k of listings.keys()) if (k.startsWith(under)) unlist(k);
+  };
+  const plainStat = async (path: string): Promise<PlainStat | null> => {
+    const cached = meta.get(path);
+    if (fresh(cached)) return (cached as { stat: PlainStat | null }).stat;
+    const at = epoch;
+    try {
+      const s = (await cap.call("stat", path)) as PlainStat;
+      if (at === epoch) remember(path, s);
+      return s;
+    } catch (e) {
+      if ((e as { code?: string })?.code !== "ENOENT") throw e;
+      if (at === epoch) remember(path, null);
+      return null;
+    }
+  };
+  const exists = async (path: string) => (await plainStat(path)) !== null;
+  const listing = async (dir: string): Promise<DirEntryStat[]> => {
+    const cached = listings.get(dir);
+    if (fresh(cached)) return (cached as { entries: DirEntryStat[] }).entries;
+    const at = epoch;
+    const entries = (await cap.call("readdirStat", dir)) as DirEntryStat[];
+    if (at !== epoch) return entries;
+    if (meta.size + listed + entries.length >= MAX_META_ENTRIES) clear();
+    const old = listings.get(dir);
+    if (old) listed -= old.entries.length;
+    listings.set(dir, { at: Date.now(), entries });
+    listed += entries.length;
+    // A listing answers the stat of each entry it shows (what it hides is asked as before).
+    for (const e of entries) remember(childOf(dir, e.name), e as unknown as PlainStat);
+    return entries;
+  };
+
   const stat = async (path: string) => {
-    const s = (await cap.call("stat", path)) as PlainStat;
+    const s = await plainStat(path);
+    if (!s) throw err("ENOENT", `${path}: no such file or directory`);
     const t = nanos(s.mtime);
     return {
       kind: s.isDirectory ? "directory" : "file",
@@ -99,11 +167,13 @@ export function capHostFs(cap: Cap) {
   const load = async (f: OpenFile) => {
     if (!f.bytes) {
       f.loading ??= (async () => {
-        const bytes = (await cap.call("exists", f.path))
-          ? encoder.encode((await cap.call("readFile", f.path)) as string)
+        const bytes = (await exists(f.path))
+          ? asBytes(await cap.call("readFileBuffer", f.path))
           : new Uint8Array();
         if (bytes.length > MAX_FILE_BYTES)
           throw err("EFBIG", `${f.path}: files are at most ${MAX_FILE_BYTES} bytes here`);
+        if (held() + bytes.length > MAX_OPEN_BYTES)
+          throw err("ENOMEM", `open files hold at most ${MAX_OPEN_BYTES} bytes together`);
         if (!f.bytes) {
           f.bytes = bytes;
           f.size = bytes.length;
@@ -117,15 +187,11 @@ export function capHostFs(cap: Cap) {
   };
   const save = async (f: OpenFile) => {
     if (!f.dirty || !f.bytes) return;
-    let text: string;
-    try {
-      text = strict().decode(f.bytes.subarray(0, f.size));
-    } catch {
-      throw err("ENOTSUP", `${f.path}: the store keeps UTF-8 text, not binary content`);
-    }
     f.dirty = false;
     try {
-      await cap.call("writeFile", f.path, text);
+      // The bytes as they are: the store keeps binary content byte for byte.
+      await cap.call("writeFileBuffer", f.path, f.bytes.slice(0, f.size));
+      forget(f.path);
     } catch (e) {
       f.dirty = true;
       throw e;
@@ -136,9 +202,14 @@ export function capHostFs(cap: Cap) {
    * fails at the first write instead (an empty append asks for the right without changing text).
    */
   const mayWrite = (f: OpenFile) => {
-    f.writable ??= cap.call("appendFile", f.path, "").then(() => {});
+    f.writable ??= cap.call("appendFile", f.path, "").then(() => forget(f.path));
     f.writable.catch(() => (f.writable = undefined));
     return f.writable;
+  };
+  const held = () => {
+    let n = 0;
+    for (const f of files.values()) n += f.bytes?.length ?? 0;
+    return n;
   };
   /** Room for `length` bytes, growing the capacity by doubling. */
   const reserve = (f: OpenFile, length: number) => {
@@ -146,7 +217,10 @@ export function capHostFs(cap: Cap) {
       throw err("EFBIG", `${f.path}: files are at most ${MAX_FILE_BYTES} bytes here`);
     const b = f.bytes as Uint8Array;
     if (length <= b.length) return b;
-    const out = new Uint8Array(Math.min(MAX_FILE_BYTES, Math.max(length, b.length * 2, 4096)));
+    const capacity = Math.min(MAX_FILE_BYTES, Math.max(length, b.length * 2, 4096));
+    if (held() - b.length + capacity > MAX_OPEN_BYTES)
+      throw err("ENOMEM", `open files hold at most ${MAX_OPEN_BYTES} bytes together`);
+    const out = new Uint8Array(capacity);
     out.set(b.subarray(0, f.size));
     f.bytes = out;
     return out;
@@ -163,7 +237,7 @@ export function capHostFs(cap: Cap) {
     stat: (p) => stat(abs(p)),
     async readDir(p) {
       // One capability call for the whole listing (entries the token may not list are left out).
-      const entries = (await cap.call("readdirStat", abs(p))) as DirEntryStat[];
+      const entries = await listing(abs(p));
       return entries.map((e) => {
         const t = nanos(e.mtime);
         return {
@@ -179,14 +253,20 @@ export function capHostFs(cap: Cap) {
     async open(p, _read, write, create, createNew, truncate, append) {
       const path = abs(p);
       if (handles.size >= MAX_HANDLES) throw err("EMFILE", "too many open files");
-      const exists = (await cap.call("exists", path)) as boolean;
+      // An open that may create the file asks the capability, not the cache: a "no such file"
+      // seen earlier must not truncate a file a parallel writer has made since.
+      if (write && create) forget(path);
+      const found = await plainStat(path);
+      const exists = found !== null;
       if (createNew && exists) throw err("EEXIST", `${path} exists`);
       if (!exists && !create) throw err("ENOENT", `${path}: no such file`);
-      if (exists && ((await cap.call("stat", path)) as PlainStat).isDirectory)
-        throw err("EISDIR", `${path} is a directory`);
+      if (found?.isDirectory) throw err("EISDIR", `${path} is a directory`);
       // A refused create or truncate fails here. WASIX opens files for writing even to read
       // them, so writing an existing file is checked at the first write instead.
-      if (write && (!exists || truncate)) await cap.call("writeFile", path, "");
+      if (write && (!exists || truncate)) {
+        await cap.call("writeFile", path, "");
+        forget(path);
+      }
       let f = files.get(path);
       if (!f) {
         f = { path, bytes: undefined, size: 0, dirty: false, refs: 0 };
@@ -218,18 +298,9 @@ export function capHostFs(cap: Cap) {
       const at = h.append ? f.size : Number(offset);
       const end = at + data.length;
       const b = reserve(f, Math.max(f.size, end));
-      const before = b.slice(at, end);
-      const size = f.size;
       if (at > f.size) b.fill(0, f.size, at);
       b.set(data, at);
       f.size = Math.max(f.size, end);
-      try {
-        checkText(b, at, end, f.path);
-      } catch (e) {
-        b.set(before, at);
-        f.size = size;
-        throw e;
-      }
       f.dirty = true;
       return data.length;
     },
@@ -238,9 +309,6 @@ export function capHostFs(cap: Cap) {
       await mayWrite(f);
       await load(f);
       const n = Number(length);
-      // Cutting a character in two would make the file unstorable, and only at close.
-      if (n < f.size && isContinuation((f.bytes as Uint8Array)[n]))
-        throw err("ENOTSUP", `${f.path}: the length would cut a UTF-8 character`);
       const b = reserve(f, n);
       if (n > f.size) b.fill(0, f.size, n);
       f.size = n;
@@ -249,7 +317,7 @@ export function capHostFs(cap: Cap) {
     },
     async fileStat(id) {
       const f = handle(id).file;
-      const s = (await cap.call("exists", f.path))
+      const s = (await exists(f.path))
         ? await stat(f.path)
         : { kind: "file", size: 0, modified: "0", accessed: "0", created: "0" };
       return { ...s, size: f.bytes ? f.size : s.size };
@@ -263,17 +331,26 @@ export function capHostFs(cap: Cap) {
       return null;
     },
     async mkdir(p) {
-      await cap.call("mkdir", abs(p));
+      const path = abs(p);
+      try {
+        await cap.call("mkdir", path);
+      } finally {
+        forget(path);
+      }
       return null;
     },
     async remove(p) {
       const path = abs(p);
       // The store removes a directory only recursively: an empty one is removed that way.
       const s = (await cap.call("stat", path)) as PlainStat;
-      if (s.isDirectory) {
-        if ((await cap.readdir(path)).length) throw err("ENOTEMPTY", `${path} is not empty`);
-        await cap.call("rm", path, { recursive: true });
-      } else await cap.call("rm", path);
+      try {
+        if (s.isDirectory) {
+          if ((await cap.readdir(path)).length) throw err("ENOTEMPTY", `${path} is not empty`);
+          await cap.call("rm", path, { recursive: true });
+        } else await cap.call("rm", path);
+      } finally {
+        forget(path, true);
+      }
       const f = files.get(path);
       if (f) f.dirty = false;
       return null;
@@ -283,7 +360,12 @@ export function capHostFs(cap: Cap) {
       const dst = abs(to);
       const f = files.get(src);
       if (f) await save(f);
-      await cap.move("mv", src, dst);
+      try {
+        await cap.move("mv", src, dst);
+      } finally {
+        forget(src, true);
+        forget(dst, true);
+      }
       if (f) {
         files.delete(src);
         f.path = dst;
@@ -310,10 +392,15 @@ export function capHostFs(cap: Cap) {
         return { error: { code, message } };
       }
     },
+    /** Before each command: what others changed since the last one is seen (see META_TTL_MS). */
+    resetCache() {
+      clear();
+    },
     /** Open files of a sandbox that ends are dropped: what was not flushed is not written. */
     close() {
       handles.clear();
       files.clear();
+      clear();
     },
   };
 }

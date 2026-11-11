@@ -382,6 +382,17 @@ export type FsRequest =
   | { op: "readdir"; path: string }
   | { op: "move"; kind: "cp" | "mv"; path: string; dst: string; opts?: unknown };
 
+/** Stream methods, and how many arguments each takes after the path (the owner comes last). */
+const STREAM_METHODS: Record<string, number> = {
+  openRead: 1,
+  readChunk: 2,
+  closeRead: 1,
+  openWrite: 1,
+  writeChunk: 2,
+  commitWrite: 1,
+  abortWrite: 1,
+};
+
 /**
  * The guarded file API for one token. Every entry an operation touches is authorized here, in
  * the owner cell, before the store is called: the path itself, each missing parent directory a
@@ -418,14 +429,33 @@ export class FsGate {
     if (!op) throw fsError("ENOSYS", `method not available '${method}'`);
     if (method === "readdir") return this.readdir(p);
     if (method === "readdirStat") return this.readdirStat(p);
+    // Releasing a stream needs no right: it only gives back what its owner holds (a revoked or
+    // read-only capability can still close what it opened). Owner and path still have to match.
+    if (method === "closeRead" || method === "abortWrite") {
+      // biome-ignore lint/suspicious/noExplicitAny: dispatch over the store's stream methods
+      const fn = (this.#store as any)[method] as (...a: unknown[]) => Promise<unknown>;
+      return fn.call(this.#store, normalise(p), args[0], this.#token);
+    }
     const path = await this.#authorize(op, p);
     const opts = (args[0] ?? {}) as { recursive?: boolean };
     if (
       method === "writeFile" ||
+      method === "writeFileBuffer" ||
       method === "appendFile" ||
+      method === "appendFileBuffer" ||
+      method === "openWrite" ||
+      method === "commitWrite" ||
       (method === "mkdir" && opts.recursive)
     ) {
       await this.#requireParents(path);
+    }
+    // Streams: every chunk is authorized again (above), and a stream belongs to the token that
+    // opened it, so its id is useless to any other capability.
+    if (Object.hasOwn(STREAM_METHODS, method)) {
+      // biome-ignore lint/suspicious/noExplicitAny: dispatch over the store's stream methods
+      const fn = (this.#store as any)[method] as (...a: unknown[]) => Promise<unknown>;
+      const n = STREAM_METHODS[method] as number;
+      return fn.call(this.#store, path, ...args.slice(0, n), this.#token);
     }
     if (method === "rm" && opts.recursive && (await this.#store.exists(path))) {
       for (const e of await this.#store.entries(path)) await this.#require("write", e.path);

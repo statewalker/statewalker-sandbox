@@ -288,6 +288,8 @@ export class WasmerKernel {
           throw new Error("EIO: wasmer: the engine stopped; open a new session");
         const timeoutMs = Math.min(Math.max(Number(opts.timeoutMs) || 60_000, 1000), 300_000);
         const n = ++req;
+        // What changed between commands (a Flue tool's write, another agent's) is seen now.
+        this.#mounts.get(run)?.resetCache();
         const answer = this.#wait(`exec:${run}:${n}`, timeoutMs + 10_000).catch((e: Error) => {
           // The engine did not stop the command in time: it is stuck, start over.
           if (e.message.startsWith("ETIMEDOUT") && generation === this.#generation) {

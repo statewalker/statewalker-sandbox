@@ -3,6 +3,7 @@
 // capability directly. Flue's tools (read, write, edit, grep, glob, bash) then work as they do on
 // just-bash, with the same rights. Paths are guest paths: /workspace/x is the capability's /x.
 
+import { ownBytes } from "../bytes.ts";
 import type { Cap } from "../caps.ts";
 import type { WasmerSession } from "./kernel.ts";
 
@@ -26,16 +27,6 @@ export function flueSandboxOnWasmer(session: WasmerSession, cap: Cap) {
       throw Object.assign(new Error(`ENOENT: '${p}' is outside ${WORKSPACE}`), { code: "ENOENT" });
     return abs.slice(WORKSPACE.length) || "/";
   };
-  const text = (c: string | Uint8Array) => {
-    if (typeof c === "string") return c;
-    try {
-      return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(c);
-    } catch {
-      throw Object.assign(new Error("ENOTSUP: the store keeps UTF-8 text, not binary content"), {
-        code: "ENOTSUP",
-      });
-    }
-  };
   return {
     cwd: WORKSPACE,
     resolvePath: resolveGuestPath,
@@ -51,10 +42,14 @@ export function flueSandboxOnWasmer(session: WasmerSession, cap: Cap) {
       return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode };
     },
     readFile: async (p: string) => (await cap.call("readFile", capPath(p))) as string,
-    readFileBuffer: async (p: string) =>
-      new TextEncoder().encode((await cap.call("readFile", capPath(p))) as string),
+    readFileBuffer: async (p: string) => {
+      const b = await cap.call("readFileBuffer", capPath(p));
+      return b instanceof Uint8Array ? b : new Uint8Array(b as ArrayBuffer);
+    },
+    // Text as UTF-8, bytes byte for byte.
     writeFile: async (p: string, c: string | Uint8Array) => {
-      await cap.call("writeFile", capPath(p), text(c));
+      if (typeof c === "string") await cap.call("writeFile", capPath(p), c);
+      else await cap.call("writeFileBuffer", capPath(p), ownBytes(c));
     },
     stat: async (p: string) => {
       const s = (await cap.call("stat", capPath(p))) as {

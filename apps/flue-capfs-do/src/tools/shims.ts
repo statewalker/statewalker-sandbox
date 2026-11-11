@@ -11,14 +11,14 @@ export const PROCESS_ID = "@capfs/process";
 export const PROCESS_GLOBAL = "__capfs_process";
 
 /**
- * node:fs over the capability. The store holds UTF-8 text: reads return a Buffer-like
- * Uint8Array (`toString(encoding)`), any encoding can be read, and writes of bytes that are not
- * valid UTF-8 are refused (EINVAL) instead of being corrupted.
+ * node:fs over the capability. The store keeps bytes: reads return a Buffer-like Uint8Array of
+ * the stored bytes (`toString(encoding)`), strings are written as UTF-8 or in the encoding
+ * given (latin1/binary, ascii, base64, hex), and binary data is stored byte for byte.
  */
 export const FS_SHIM = String.raw`
 let files;
 export function __bindFiles(f) { files = f; }
-const ERRNO = { EACCES: -13, ENOENT: -2, EEXIST: -17, EISDIR: -21, ENOTDIR: -20, ENOTEMPTY: -39, EINVAL: -22, ENOSYS: -38, EPERM: -1, EIO: -5 };
+const ERRNO = { EFBIG: -27, EACCES: -13, ENOENT: -2, EEXIST: -17, EISDIR: -21, ENOTDIR: -20, ENOTEMPTY: -39, EINVAL: -22, ENOSYS: -38, EPERM: -1, EIO: -5 };
 const err = (e, syscall, path) => {
   const m = String((e && e.message) || e);
   const x = new Error(m);
@@ -34,9 +34,8 @@ const cap = async (method, path, ...a) => {
 };
 const p = (x) => String(x instanceof URL ? x.pathname : x);
 
-// ---- bytes and encodings (UTF-8 store) ----
+// ---- bytes and encodings ----
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-const utf8 = new TextDecoder("utf-8", { fatal: true });
 const norm = (e) => String(e || "utf8").toLowerCase().replace("-", "");
 function encode(bytes, enc) {
   switch (norm(enc)) {
@@ -52,6 +51,7 @@ function encode(bytes, enc) {
       }
       return s;
     }
+    case "base64url": return encode(bytes, "base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     default: throw err("EINVAL: unsupported encoding '" + enc + "'");
   }
 }
@@ -60,18 +60,29 @@ class ToolBuffer extends Uint8Array {
   toJSON() { return { type: "Buffer", data: Array.from(this) }; }
   equals(o) { return o.length === this.length && this.every((b, i) => b === o[i]); }
 }
-const toBuffer = (text) => { const u = new TextEncoder().encode(text); return new ToolBuffer(u.buffer, u.byteOffset, u.length); };
-/** What can be stored: strings as is; bytes only if they are valid UTF-8. */
-function toText(d, enc) {
-  if (typeof d === "string") {
-    if (norm(enc) === "utf8") return d;
-    throw err("EINVAL: only utf8 strings can be written (store is UTF-8 text)");
+const toBuffer = (u) => new ToolBuffer(u.buffer, u.byteOffset, u.length);
+/** A string in a byte encoding as the bytes it stands for. */
+function decode(s, enc) {
+  switch (norm(enc)) {
+    case "latin1": case "binary": case "ascii": return Uint8Array.from(s, (c) => c.charCodeAt(0) & 255);
+    case "hex": { const out = []; for (let i = 0; i + 1 < s.length; i += 2) { const pair = s.slice(i, i + 2); if (!/^[0-9a-fA-F]{2}$/.test(pair)) break; out.push(parseInt(pair, 16)); } return Uint8Array.from(out); }
+    case "base64": case "base64url": {
+      let c = s.replace(/-/g, "+").replace(/_/g, "/").replace(/[^A-Za-z0-9+/]/g, "");
+      if (c.length % 4 === 1) c = c.slice(0, -1);
+      return Uint8Array.from(atob(c + "=".repeat((4 - (c.length % 4)) % 4)), (x) => x.charCodeAt(0));
+    }
+    default: throw err("EINVAL: unsupported encoding '" + enc + "'");
   }
-  if (ArrayBuffer.isView(d)) d = new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
-  else if (d instanceof ArrayBuffer) d = new Uint8Array(d);
-  else throw err("EINVAL: data must be a string, a TypedArray or an ArrayBuffer");
-  try { return utf8.decode(d); } catch { throw err("EINVAL: binary data that is not UTF-8 cannot be stored"); }
 }
+/** What is stored: a UTF-8 string as text; bytes (or a string in a byte encoding) byte for byte. */
+function content(d, enc) {
+  if (typeof d === "string") return norm(enc) === "utf8" ? { text: d } : { bytes: decode(d, enc) };
+  // Exactly the view's bytes: RPC would otherwise copy its whole buffer (a wasm heap, a pool).
+  if (ArrayBuffer.isView(d)) return { bytes: new Uint8Array(d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength)) };
+  if (d instanceof ArrayBuffer) return { bytes: new Uint8Array(d) };
+  throw err("EINVAL: data must be a string, a TypedArray or an ArrayBuffer");
+}
+const put = (method, path, c) => (c.bytes ? cap(method + "Buffer", path, c.bytes) : cap(method, path, c.text));
 const encodingOf = (o) => (typeof o === "string" ? o : o && o.encoding) || null;
 const stats = (s) => {
   const t = new Date(s.mtime);
@@ -80,12 +91,15 @@ const stats = (s) => {
 };
 
 async function readFile(path, o) {
-  const s = await cap("readFile", p(path));
   const enc = encodingOf(o);
-  return enc ? (norm(enc) === "utf8" ? s : encode(toBuffer(s), enc)) : toBuffer(s);
+  if (enc && norm(enc) === "utf8") return cap("readFile", p(path));
+  let raw;
+  try { raw = await need().call("readFileBuffer", p(path)); } catch (e) { throw err(e, "readFile", p(path)); }
+  const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+  return enc ? encode(bytes, enc) : toBuffer(bytes);
 }
-async function writeFile(path, data, o) { await cap("writeFile", p(path), toText(data, encodingOf(o))); }
-async function appendFile(path, data, o) { await cap("appendFile", p(path), toText(data, encodingOf(o))); }
+async function writeFile(path, data, o) { await put("writeFile", p(path), content(data, encodingOf(o))); }
+async function appendFile(path, data, o) { await put("appendFile", p(path), content(data, encodingOf(o))); }
 async function readdir(path, o) {
   let names;
   try { names = await need().readdir(p(path)); } catch (e) { throw err(e, "scandir", p(path)); }

@@ -18,7 +18,10 @@ function fakeCap(entries = {}) {
     calls,
     async call(method, path, ...args) {
       calls.push(`${method} ${path}`);
-      if (["writeFile", "appendFile", "mkdir", "rm"].includes(method) && path.startsWith("/ro"))
+      if (
+        ["writeFile", "writeFileBuffer", "appendFile", "mkdir", "rm"].includes(method) &&
+        path.startsWith("/ro")
+      )
         throw E("EACCES", `permission denied, write '${path}'`);
       switch (method) {
         case "exists":
@@ -49,6 +52,22 @@ function fakeCap(entries = {}) {
         case "readFile":
           if (!files.has(path)) throw E("ENOENT", path);
           return files.get(path);
+        // The store keeps bytes: here UTF-8 content is kept as a string (easy to assert on),
+        // anything else as a Buffer.
+        case "readFileBuffer": {
+          if (!files.has(path)) throw E("ENOENT", path);
+          const v = files.get(path);
+          return new Uint8Array(typeof v === "string" ? Buffer.from(v, "utf8") : v);
+        }
+        case "writeFileBuffer": {
+          const b = Buffer.from(args[0]);
+          let text;
+          try {
+            text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(b);
+          } catch {}
+          files.set(path, text ?? b);
+          return;
+        }
         case "writeFile":
           files.set(path, args[0]);
           return;
@@ -125,14 +144,21 @@ test("append mode writes at the end", async () => {
   assert.equal(cap.files.get("/log"), "a\nb\n");
 });
 
-test("binary content is refused at the write; a character split across writes is not", async () => {
+test("binary content is stored byte for byte; a character split across writes is too", async () => {
   const cap = fakeCap();
   const fs = capHostFs(cap);
-  const { value: id } = await fs.handle("open", ["b", ...CREATE]);
-  assert.equal(
-    (await fs.handle("write", [id, 0, Uint8Array.of(0xff, 0xfe)])).error.code,
-    "ENOTSUP",
+  const { value: bin } = await fs.handle("open", ["bin", ...CREATE]);
+  const all = Uint8Array.from({ length: 256 }, (_, i) => i);
+  assert.deepEqual(await fs.handle("write", [bin, 0, all]), { value: 256 });
+  await fs.handle("close", [bin]);
+  assert.deepEqual([...cap.files.get("/bin")], [...all]);
+  const { value: r } = await fs.handle("open", ["bin", ...RW]);
+  assert.deepEqual(
+    [...(await fs.handle("read", [r, 250, 10])).value],
+    [250, 251, 252, 253, 254, 255],
   );
+  await fs.handle("close", [r]);
+  const { value: id } = await fs.handle("open", ["b", ...CREATE]);
   const e = enc("é"); // two bytes
   assert.deepEqual(await fs.handle("write", [id, 0, e.subarray(0, 1)]), { value: 1 });
   assert.deepEqual(await fs.handle("write", [id, 1, e.subarray(1)]), { value: 1 });
@@ -200,14 +226,13 @@ test("Flue's guest paths resolve '..' before they reach the capability", () => {
   assert.equal(resolveGuestPath("/workspace"), "/workspace");
 });
 
-test("a length that cuts a character is refused", async () => {
+test("any length is kept, even one inside a character (the store keeps bytes)", async () => {
   const cap = fakeCap({ "/e": "éX" });
   const fs = capHostFs(cap);
   const { value: id } = await fs.handle("open", ["e", ...RW]);
-  assert.equal((await fs.handle("setLen", [id, 1])).error.code, "ENOTSUP");
-  assert.deepEqual(await fs.handle("setLen", [id, 2]), { value: null });
+  assert.deepEqual(await fs.handle("setLen", [id, 1]), { value: null });
   await fs.handle("close", [id]);
-  assert.equal(cap.files.get("/e"), "é");
+  assert.deepEqual([...cap.files.get("/e")], [0xc3]);
 });
 
 test("readDir is one capability call with sizes and times; NUL bytes and gaps are kept", async () => {
@@ -227,4 +252,111 @@ test("readDir is one capability call with sizes and times; NUL bytes and gaps ar
   assert.deepEqual(await fs.handle("setLen", [id, 8]), { value: null });
   await fs.handle("close", [id]);
   assert.equal(cap.files.get("/n"), "a\0b\0\0c\0\0");
+});
+
+test("metadata cache: listings answer stats, misses are remembered, this run's writes are seen", async () => {
+  const cap = fakeCap({ "/d": null, "/d/a": "1", "/d/b": "22", "/ro/x": "x" });
+  const fs = capHostFs(cap);
+  const count = (from, method) =>
+    cap.calls.slice(from).filter((c) => c.startsWith(`${method} `)).length;
+
+  let at = cap.calls.length;
+  await fs.handle("readDir", ["d"]);
+  await fs.handle("readDir", ["d"]);
+  for (const n of ["a", "b"])
+    assert.equal((await fs.handle("stat", [`d/${n}`])).value.kind, "file");
+  assert.equal(count(at, "readdirStat"), 1, "the listing is reused");
+  assert.equal(count(at, "stat"), 0, "a listing answers its entries' stats");
+
+  at = cap.calls.length;
+  for (let i = 0; i < 3; i++)
+    assert.equal((await fs.handle("stat", ["d/nope"])).error.code, "ENOENT");
+  assert.equal(count(at, "stat"), 1, "no such file is remembered");
+
+  // This run creates it: the next lookup sees it, and the listing shows it.
+  const { value: id } = await fs.handle("open", ["d/nope", ...CREATE]);
+  await fs.handle("write", [id, 0, enc("abc")]);
+  await fs.handle("close", [id]);
+  assert.equal((await fs.handle("stat", ["d/nope"])).value.size, 3);
+  assert.ok((await fs.handle("readDir", ["d"])).value.some((e) => e.name === "nope"));
+
+  // Renames and removals forget the whole tree.
+  await fs.handle("mkdir", ["d/t"]);
+  const { value: t } = await fs.handle("open", ["d/t/f", ...CREATE]);
+  await fs.handle("close", [t]);
+  assert.equal((await fs.handle("stat", ["d/t/f"])).value.kind, "file");
+  await fs.handle("rename", ["d/t", "d/u"]);
+  assert.equal((await fs.handle("stat", ["d/t/f"])).error.code, "ENOENT");
+  assert.equal((await fs.handle("stat", ["d/u/f"])).value.kind, "file");
+  await fs.handle("remove", ["d/u/f"]);
+  assert.equal((await fs.handle("stat", ["d/u/f"])).error.code, "ENOENT");
+
+  // Refusals are not cached.
+  cap.files.set("/secret", "s");
+  const denyStat = cap.call;
+  let refuse = true;
+  cap.call = async (m, p, ...a) => {
+    if (refuse && m === "stat" && p === "/secret")
+      throw Object.assign(new Error("EACCES: no"), { code: "EACCES" });
+    return denyStat.call(cap, m, p, ...a);
+  };
+  assert.equal((await fs.handle("stat", ["secret"])).error.code, "EACCES");
+  refuse = false;
+  assert.equal((await fs.handle("stat", ["secret"])).value.kind, "file");
+});
+
+test("metadata cache: cleared before each command, and kept only briefly within one", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const cap = fakeCap({ "/a": "1" });
+  const fs = capHostFs(cap);
+  const stats = () => cap.calls.filter((c) => c === "stat /a").length;
+  await fs.handle("stat", ["a"]);
+  await fs.handle("stat", ["a"]);
+  assert.equal(stats(), 1);
+  // Another writer changes the file: the next command sees it.
+  cap.files.set("/a", "1234");
+  fs.resetCache();
+  assert.equal((await fs.handle("stat", ["a"])).value.size, 4);
+  assert.equal(stats(), 2);
+  // Within a command, an entry expires.
+  cap.files.set("/a", "12");
+  t.mock.timers.tick(1000);
+  assert.equal((await fs.handle("stat", ["a"])).value.size, 4, "still cached");
+  t.mock.timers.tick(1500);
+  assert.equal((await fs.handle("stat", ["a"])).value.size, 2, "expired");
+});
+
+test("metadata cache: a parallel writer's file is not truncated, a late answer is not cached", async () => {
+  const cap = fakeCap();
+  const fs = capHostFs(cap);
+  // The guest looked for `log` (no such file, cached); a Flue tool call then wrote it.
+  assert.equal((await fs.handle("stat", ["log"])).error.code, "ENOENT");
+  cap.files.set("/log", "from a tool\n");
+  const { value: id } = await fs.handle("open", ["log", ...APPEND]);
+  await fs.handle("write", [id, 0, enc("guest\n")]);
+  await fs.handle("close", [id]);
+  assert.equal(cap.files.get("/log"), "from a tool\nguest\n");
+
+  // A stat the kernel gave up on answers after the run created the file: not cached.
+  let release;
+  const slow = new Promise((r) => (release = r));
+  const call = cap.call;
+  cap.call = async (m, p, ...a) => {
+    if (m === "stat" && p === "/x" && release) {
+      const r = call.call(cap, m, p, ...a).catch((e) => e);
+      await slow;
+      const v = await r;
+      if (v instanceof Error) throw v;
+      return v;
+    }
+    return call.call(cap, m, p, ...a);
+  };
+  const late = fs.handle("stat", ["x"]);
+  const r = release;
+  release = undefined;
+  const { value: x } = await fs.handle("open", ["x", ...CREATE]);
+  await fs.handle("close", [x]);
+  r();
+  assert.equal((await late).error.code, "ENOENT");
+  assert.equal((await fs.handle("stat", ["x"])).value.kind, "file");
 });

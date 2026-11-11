@@ -27,6 +27,13 @@ function fakeFiles(initial = {}) {
         if (!data.has(p)) throw new Error(`ENOENT: no such file '${p}'`);
         return data.get(p);
       }
+      // Text is kept as a string, bytes as a Uint8Array (as the store keeps them in its BLOB).
+      if (method === "readFileBuffer") {
+        if (!data.has(p)) throw new Error(`ENOENT: no such file '${p}'`);
+        const v = data.get(p);
+        return typeof v === "string" ? new TextEncoder().encode(v) : v.slice();
+      }
+      if (method === "writeFileBuffer") return void data.set(p, new Uint8Array(a[0]));
       if (method === "writeFile") return void data.set(p, a[0]);
       if (method === "appendFile") return void data.set(p, (data.get(p) ?? "") + a[0]);
       if (method === "exists") return data.has(p);
@@ -270,7 +277,7 @@ export async function run() {
     hex: "7b226b223a22c3a9227d",
     latin1: '{"k":"Ã©"}',
     b64: "eyJrIjoiw6kifQ==",
-    bin: "EINVAL",
+    bin: "stored",
     promises: true,
     F_OK: 0,
     mtimeMs: "number",
@@ -278,8 +285,8 @@ export async function run() {
     err: ["EACCES", -13, "readFile", "/secret"],
     realpath: "function",
   });
-  assert.equal(files.data.get("/allowed/u16.txt"), "hi");
-  assert.equal(files.data.has("/allowed/bin"), false);
+  assert.deepEqual([...files.data.get("/allowed/u16.txt")], [104, 105]);
+  assert.deepEqual([...files.data.get("/allowed/bin")], [0xff, 0xfe]);
 });
 
 test("fs shim without a bound capability fails with EACCES; path shim parses and formats", async () => {
