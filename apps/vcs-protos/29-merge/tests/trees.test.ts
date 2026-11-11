@@ -64,6 +64,12 @@ interface Case {
   ours: Files;
   theirs: Files;
 }
+/** `{O}` and `{T}` in paths stand for the case's branch names as `path~<branch>` spells them */
+const branchesOf = (i: number) => ({ ours: `o${i}`, theirs: `t/${i}` });
+const withBranches = (files: Files, i: number): Files =>
+  new Map(
+    [...files].map(([p, v]) => [p.replaceAll("{O}", `o${i}`).replaceAll("{T}", `t_${i}`), v]),
+  );
 interface GitTreeResult {
   clean: boolean;
   tree: string;
@@ -71,7 +77,8 @@ interface GitTreeResult {
   messages: MergeMessage[];
 }
 
-async function compareTrees(cases: Case[]) {
+/** merges each case with `git merge-tree` (branches `o<i>` and `t/<i>`) and with mergeTrees */
+async function compareTrees(cases: Case[], { unrelated = false } = {}) {
   const d = mkdtempSync(join(tmpdir(), "x13b-"));
   dirs.push(d);
   execFileSync("git", ["init", "-q", "--bare", d], { env: gitEnv });
@@ -79,21 +86,26 @@ async function compareTrees(cases: Case[]) {
   const lines: string[] = [];
   const meta: { base: string; ours: string; theirs: string; oc: string; tc: string }[] = [];
   for (const [i, c] of cases.entries()) {
-    const base = await writeFilesWithModes(repo, c.base);
-    const ours = await writeFilesWithModes(repo, c.ours);
-    const theirs = await writeFilesWithModes(repo, c.theirs);
+    const base = await writeFilesWithModes(repo, withBranches(c.base, i));
+    const ours = await writeFilesWithModes(repo, withBranches(c.ours, i));
+    const theirs = await writeFilesWithModes(repo, withBranches(c.theirs, i));
     const commit = (tree: string, parents: string[], m: string) =>
       repo.objects.put(
         "commit",
         encodeCommit({ tree, parents, author: who, committer: who, message: m }),
       );
     const bc = await commit(base, [], `base ${i}\n`);
-    const oc = await commit(ours, [bc], `ours ${i}\n`);
-    const tc = await commit(theirs, [bc], `theirs ${i}\n`);
-    lines.push(`${oc} ${tc}`);
+    const oc = await commit(ours, unrelated ? [] : [bc], `ours ${i}\n`);
+    const tc = await commit(theirs, unrelated ? [] : [bc], `theirs ${i}\n`);
+    const b = branchesOf(i);
+    execFileSync("git", ["update-ref", `refs/heads/${b.ours}`, oc], { cwd: d, env: gitEnv });
+    execFileSync("git", ["update-ref", `refs/heads/${b.theirs}`, tc], { cwd: d, env: gitEnv });
+    lines.push(`${b.ours} ${b.theirs}`);
     meta.push({ base, ours, theirs, oc, tc });
   }
-  const out = execFileSync("git", ["merge-tree", "--write-tree", "-Xno-renames", "--stdin"], {
+  const args = ["merge-tree", "--write-tree", "-Xno-renames", "--stdin"];
+  if (unrelated) args.push("--allow-unrelated-histories");
+  const out = execFileSync("git", args, {
     cwd: d,
     env: gitEnv,
     input: `${lines.join("\n")}\n`,
@@ -137,9 +149,8 @@ async function compareTrees(cases: Case[]) {
   for (const [i, c] of cases.entries()) {
     const m = meta[i] as (typeof meta)[number];
     const g = results[i] as GitTreeResult;
-    const r = await mergeTrees(repo, m.base, m.ours, m.theirs, {
-      ours: m.oc,
-      theirs: m.tc,
+    const r = await mergeTrees(repo, unrelated ? undefined : m.base, m.ours, m.theirs, {
+      ...branchesOf(i),
       legacyCompaction,
     });
     const show = (x: {
@@ -153,10 +164,7 @@ async function compareTrees(cases: Case[]) {
         tree: x.tree,
         conflicts: x.conflicts.map((e) => `${e.mode} ${e.oid.slice(0, 7)} ${e.stage} ${e.path}`),
         // merge-tree prints no messages for a clean merge
-        messages: (x.clean ? [] : x.messages).map(
-          (e) =>
-            `[${e.paths.join(",")}] ${e.text.replaceAll(m.oc, "OURS").replaceAll(m.tc, "THEIRS").trim()}`,
-        ),
+        messages: (x.clean ? [] : x.messages).map((e) => `[${e.paths.join(",")}] ${e.text.trim()}`),
       });
     const gs = show(g);
     const rs = show(r);
@@ -184,10 +192,13 @@ function rng(seed: number) {
 }
 
 /** random trees over a small universe of paths: files, executables, symlinks; dirs replaced by files and back */
-function corpus(n: number, seed: number): Case[] {
+function corpus(
+  n: number,
+  seed: number,
+  { names = ["a", "b", "c", "d"], fanout = 1 }: { names?: string[]; fanout?: number } = {},
+): Case[] {
   const rand = rng(seed);
   const pick = <T>(xs: T[]) => xs[Math.floor(rand() * xs.length)] as T;
-  const names = ["a", "b", "c", "d"];
   const randomPath = () => {
     const depth = 1 + Math.floor(rand() * 3);
     return Array.from({ length: depth }, () => pick(names)).join("/");
@@ -230,7 +241,9 @@ function corpus(n: number, seed: number): Case[] {
         // a file becomes a directory, or the reverse
         const p = pick(keys);
         f.delete(p);
-        put(f, `${p}/${pick(names)}`, [mode(), content()]);
+        const k = 1 + Math.floor(rand() * fanout);
+        for (let j = 0; j < k; j++)
+          put(f, `${p}/${pick(names)}${fanout > 1 ? j : ""}`, [mode(), content()]);
       } else if (r < 0.8 && keys.length) {
         const p = pick(keys);
         const parent = p.split("/").slice(0, -1).join("/");
@@ -277,6 +290,68 @@ const handMade: Case[] = [
   },
 ];
 
+/** cases from the review of #95 (see README) */
+const reviewCases: Case[] = [
+  {
+    // unique_path checks every path any side has: a directory x~O only the base and theirs have
+    name: "a moved file's name skips a directory the merge deletes",
+    base: f([
+      ["x", "100644", "x base\n"],
+      ["x~{O}/f", "100644", "xo f\n"],
+      ["z", "100644", "z\n"],
+    ]),
+    ours: f([
+      ["x", "100644", "x base\nours\n"],
+      ["z", "100644", "z\n"],
+    ]),
+    theirs: f([
+      ["x/g", "100644", "xg new\n"],
+      ["x~{O}/f", "100644", "xo f\n"],
+      ["z", "100644", "z\n"],
+    ]),
+  },
+  {
+    // the deferred directory P triples the paths: ort redoes the collection with the deletions
+    // known, and resolves P whole (no file/directory message)
+    name: "ort's redo after renames",
+    base: f([
+      ["P", "100644", "p base\n"],
+      ["M", "100644", "m base\n"],
+    ]),
+    ours: f([
+      ["P", "100644", "p base\n"],
+      ["M", "100644", "m base\nours\n"],
+    ]),
+    theirs: f(
+      [0, 1, 2, 3].map((k) => [`P/f${k}`, "100644", `p new ${k}\n`] as [string, string, string]),
+    ),
+  },
+  {
+    name: "conflicts and messages in byte order (a character past U+FFFF)",
+    base: f([
+      ["\uff5e", "100644", "one\n"],
+      ["\u{1f600}", "100644", "two\n"],
+    ]),
+    ours: f([["\uff5e", "100644", "one\nours\n"]]),
+    theirs: f([["\u{1f600}", "100644", "two\ntheirs\n"]]),
+  },
+  {
+    name: "a legacy mode (100664) is written as 100644",
+    base: f([
+      ["a", "100664", "a\n"],
+      ["b", "100644", "b\n"],
+    ]),
+    ours: f([
+      ["a", "100664", "a\n"],
+      ["b", "100644", "b ours\n"],
+    ]),
+    theirs: f([
+      ["a", "100664", "a\n"],
+      ["b", "100644", "b theirs\n"],
+    ]),
+  },
+];
+
 describe("T1 tree merges without renames, as git merge-tree -Xno-renames", () => {
   let kinds: string[] = [];
   it("T1: 400 random tree merges: tree ids, conflicted entries and messages", async () => {
@@ -293,6 +368,29 @@ describe("T1 tree merges without renames, as git merge-tree -Xno-renames", () =>
     expect(r.wrong.length).toBe(0);
   }, 600_000);
 
+  it("T1c: 400 merges whose paths collide with path~branch names", async () => {
+    const r = await compareTrees(
+      corpus(400, 202, { names: ["a", "b", "a~{O}", "a~{O}_0", "a~{T}", "b~{T}"] }),
+    );
+    kinds.push(...r.kinds);
+    expect(r.wrong.slice(0, 2)).toEqual([]);
+    expect(r.wrong.length).toBe(0);
+  }, 300_000);
+
+  it("T1d: 300 merges where files become directories of up to 12 files (ort's redo)", async () => {
+    const r = await compareTrees(corpus(300, 303, { fanout: 12 }));
+    kinds.push(...r.kinds);
+    expect(r.wrong.slice(0, 2)).toEqual([]);
+    expect(r.wrong.length).toBe(0);
+  }, 300_000);
+
+  it("T1e: 200 merges of unrelated histories (no merge base)", async () => {
+    const r = await compareTrees(corpus(200, 404), { unrelated: true });
+    kinds.push(...r.kinds);
+    expect(r.wrong.slice(0, 2)).toEqual([]);
+    expect(r.wrong.length).toBe(0);
+  }, 300_000);
+
   it("T2: the corpus reaches every conflict kind in scope", () => {
     const count = (k: string) => kinds.filter((x) => x === k).length;
     for (const k of ["content", "add/add", "modify/delete", "distinct types", "file/directory"])
@@ -303,6 +401,13 @@ describe("T1 tree merges without renames, as git merge-tree -Xno-renames", () =>
 describe("T4 hand-made cases the random corpus rarely reaches", () => {
   it("a symlink both sides turn into regular files: three modes, a two-way content merge", async () => {
     const r = await compareTrees(handMade);
+    expect(r.wrong).toEqual([]);
+  });
+});
+
+describe("T5 cases from the review", () => {
+  it("each equal to git merge-tree", async () => {
+    const r = await compareTrees(reviewCases);
     expect(r.wrong).toEqual([]);
   });
 });
