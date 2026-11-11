@@ -21,6 +21,12 @@ const edited = (path: string, tag = path): [string, string, string] => [
   text(tag).replace("line 3", "line 3 edited"),
 ];
 
+const changed = (s: string, lines: number[]) =>
+  s
+    .split("\n")
+    .map((l, i) => (lines.includes(i) ? `${l} changed` : l))
+    .join("\n");
+
 const handMade: Case[] = [
   {
     name: "a directory renamed on ours, a file added to it on theirs (file location)",
@@ -95,6 +101,43 @@ const handMade: Case[] = [
       edited("o/x.txt", "o/x.txt t"),
       file("d/new"),
     ]),
+  },
+  {
+    // added after the mutation check: the basename guess pairs d/x.txt with e/x.txt (where d went),
+    // though p/x.txt is more similar
+    name: "a basename guess against a closer candidate",
+    base: f([
+      keep,
+      file("d/k1", "k1", 20),
+      file("d/k2", "k2", 20),
+      file("d/x.txt", "s", 20),
+      file("o/x.txt", "o", 20),
+      ["o/keep", "100644", "k\n"],
+    ]),
+    ours: f([
+      keep,
+      file("e/k1", "k1", 20),
+      file("e/k2", "k2", 20),
+      ["e/x.txt", "100644", changed(text("s", 20), [1, 5, 9])],
+      ["p/x.txt", "100644", changed(text("s", 20), [2])],
+      ["o/keep", "100644", "k\n"],
+    ]),
+    theirs: f([
+      keep,
+      file("d/k1", "k1", 20),
+      file("d/k2", "k2", 20),
+      ["d/x.txt", "100644", changed(text("s", 20), [15])],
+      file("o/x.txt", "o", 20),
+      ["o/keep", "100644", "k\n"],
+      ["d/new", "100644", "new\n"],
+    ]),
+  },
+  {
+    // added after the mutation check: a base file at the target is in the way in newer git
+    name: "a base file where a directory rename would put a path",
+    base: f([keep, file("d/a", "a", 20), file("d/b", "b", 20), file("e/x", "x", 20)]),
+    ours: f([keep, file("e/a", "a", 20), file("e/b", "b", 20), file("e/x", "x", 20)]),
+    theirs: f([keep, file("d/a", "a", 20), file("d/b", "b", 20), file("d/x", "dx", 20)]),
   },
 ];
 

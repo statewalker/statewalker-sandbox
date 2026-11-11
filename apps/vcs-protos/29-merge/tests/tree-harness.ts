@@ -50,6 +50,72 @@ export const legacyHashChars = (() => {
   if (/R064/.test(out)) return false;
   throw new Error(`unexpected similarity probe: ${out}`);
 })();
+/**
+ * Whether this git's directory renames use 2.43's `path_in_way`: d/x added on one side while the
+ * other renames d to e, where e/x is in the base and kept by the renaming side. 2.43 moves d/x
+ * there ("file location"); newer git finds e/x in the way ("implicit dir rename").
+ */
+export const legacyPathInWay = (() => {
+  const d = mkdtempSync(join(tmpdir(), "x13e-probe-"));
+  dirs.push(d);
+  const git = (args: string[], input?: string) =>
+    execFileSync("git", args, { cwd: d, env: gitEnv, input }).toString().trim();
+  git(["init", "-q", "--bare"]);
+  const blob = (s: string) => git(["hash-object", "-w", "--stdin"], s);
+  const text = (t: string) => Array.from({ length: 20 }, (_, i) => `${t} line ${i}\n`).join("");
+  const [a, b, x, dx] = [blob(text("a")), blob(text("b")), blob(text("x")), blob(text("dx"))];
+  const tree = (entries: string[]) => git(["mktree"], `${entries.join("\n")}\n`);
+  const sub = (files: [string, string][]) => tree(files.map(([n, o]) => `100644 blob ${o}\t${n}`));
+  const top = (dirsOf: [string, string][]) =>
+    tree(dirsOf.map(([n, o]) => `040000 tree ${o}\t${n}`));
+  const commit = (t: string, parent?: string) =>
+    git(["commit-tree", t, "-m", "x", ...(parent ? ["-p", parent] : [])]);
+  const base = commit(
+    top([
+      [
+        "d",
+        sub([
+          ["a", a],
+          ["b", b],
+        ]),
+      ],
+      ["e", sub([["x", x]])],
+    ]),
+  );
+  const ours = commit(
+    top([
+      [
+        "e",
+        sub([
+          ["a", a],
+          ["b", b],
+          ["x", x],
+        ]),
+      ],
+    ]),
+    base,
+  );
+  const theirs = commit(
+    top([
+      [
+        "d",
+        sub([
+          ["a", a],
+          ["b", b],
+          ["x", dx],
+        ]),
+      ],
+    ]),
+    base,
+  );
+  let out = "";
+  try {
+    out = git(["merge-tree", "--write-tree", ours, theirs]);
+  } catch (e) {
+    out = String((e as { stdout?: Buffer }).stdout ?? "");
+  }
+  return !/in the way/.test(out);
+})();
 export const ortHonorsNoRenames = (() => {
   const d = mkdtempSync(join(tmpdir(), "x13b-probe-"));
   dirs.push(d);
@@ -217,6 +283,7 @@ export async function compareTrees(
       legacyCompaction,
       detectRenames: !(noRenames && ortHonorsNoRenames),
       legacyHashChars,
+      legacyPathInWay,
     });
     const show = (x: {
       clean: boolean;

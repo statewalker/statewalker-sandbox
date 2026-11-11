@@ -687,9 +687,8 @@ class OrtMerge {
     if (!mi) return false;
     if (mi.clean) return true;
     const ci = mi as Conflict;
-    return (
-      (sideMask & (ci.filemask | ci.dirmask)) !== 0 || (!!(ci.filemask & 1) && onePath(p) !== path)
-    );
+    if ((sideMask & (ci.filemask | ci.dirmask)) !== 0) return true;
+    return !this.opts.legacyPathInWay && !!(ci.filemask & 1) && onePath(p) !== path;
   }
 
   /** apply_directory_rename_modifications: the path moves into the renamed directory */
