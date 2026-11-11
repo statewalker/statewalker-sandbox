@@ -293,6 +293,62 @@ const handMade: Dag[] = [
     },
     () => 1800000000,
   ),
+  // added after the mutation check
+  crissCross("distinct types in the ancestors", {
+    R: f([keep, ["a", "100644", A]]),
+    A1: f([keep, ["a", "120000", "target"]]),
+    B1: f([keep, ["a", "100644", editLine(A, 3, "B1")]]),
+    A2: f([keep, ["a", "120000", "target"]]),
+    B2: f([keep, ["a", "100644", editLine(A, 3, "B1")]]),
+    A3: f([keep, ["a", "120000", "target2"]]),
+    B3: f([keep, ["a", "100644", editLine(A, 3, "B3")]]),
+  }),
+  crissCross("a directory rename in the ancestors (none in the inner merge)", {
+    R: f([keep, ["d/a", "100644", text("da")], ["d/b", "100644", text("db")]]),
+    A1: f([keep, ["e/a", "100644", text("da")], ["e/b", "100644", text("db")]]),
+    B1: f([
+      keep,
+      ["d/a", "100644", text("da")],
+      ["d/b", "100644", text("db")],
+      ["d/new", "100644", text("new")],
+    ]),
+    A2: f([
+      keep,
+      ["e/a", "100644", text("da")],
+      ["e/b", "100644", text("db")],
+      ["e/new", "100644", text("new")],
+    ]),
+    B2: f([
+      keep,
+      ["d/a", "100644", text("da")],
+      ["d/b", "100644", text("db")],
+      ["d/new", "100644", text("new")],
+      ["x", "100644", text("x")],
+    ]),
+    A3: f([
+      keep,
+      ["e/a", "100644", text("da")],
+      ["e/b", "100644", text("db")],
+      ["e/new", "100644", text("new")],
+      ["y", "100644", text("y")],
+    ]),
+    B3: f([
+      keep,
+      ["d/a", "100644", text("da")],
+      ["d/b", "100644", text("db")],
+      ["d/new", "100644", text("new")],
+      ["x", "100644", text("x")],
+    ]),
+  }),
+  crissCross("rename/rename (1to2) with a conflict in the ancestors", {
+    R: f([keep, ["a", "100644", A]]),
+    A1: f([keep, ["b", "100644", editLine(A, 5, "A1")]]),
+    B1: f([keep, ["c", "100644", editLine(A, 5, "B1")]]),
+    A2: f([keep, ["b", "100644", editLine(A, 5, "A1")]]),
+    B2: f([keep, ["c", "100644", editLine(A, 5, "B1")]]),
+    A3: f([keep, ["b", "100644", editLine(editLine(A, 5, "A1"), 0, "A3")]]),
+    B3: f([keep, ["c", "100644", editLine(editLine(A, 5, "B1"), 9, "B3")]]),
+  }),
 ];
 
 /** three lines crossing: three merge bases, two levels of virtual commits */
