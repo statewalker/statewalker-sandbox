@@ -367,18 +367,9 @@ export async function mergeTrees(
       if (!sl.clean) uncleanDropped = true;
       continue;
     }
-    // a clean result that has to move is a conflict; ort keeps the moved side's stages
-    let stages = sl.stages;
-    if (sl.clean) {
-      const [, sa, sb] = sl.stages;
-      if (sa && sb)
-        stages = same(sa, sb)
-          ? [undefined, sa, sb]
-          : side === 1
-            ? [undefined, sl.result, undefined]
-            : [undefined, undefined, sl.result];
-      else stages = [undefined, sa, sb];
-    }
+    // a moved file is a conflict; it is on one side only (the other has the directory), and a clean
+    // result keeps that side's stage without the base
+    const stages = sl.clean ? [undefined, sl.stages[1], sl.stages[2]] : sl.stages;
     slots.set(moved, { stages, result: sl.result, clean: false });
   }
   for (const m of pending) {

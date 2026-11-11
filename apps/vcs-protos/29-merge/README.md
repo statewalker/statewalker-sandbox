@@ -2,7 +2,8 @@
 
 Plan id **X13** (single diff and merge engine), slices **X13a: git's content merge, byte for
 byte** (answered — yes: a port of git's xdiff matches `git merge-tree` byte for byte on every case)
-and **X13b: the tree merge without renames** (in progress).
+and **X13b: the tree merge without renames** (answered — yes: identical trees, conflicted entries
+and messages to `git merge-tree -Xno-renames` on 1,403 cases).
 
 ## Question
 
@@ -185,6 +186,7 @@ Rejected if, on any case of the corpus, the tree id, a conflicted entry or a mes
 | T1b | 1000 more random merges from another seed, compared the same way. |
 | T2 | The corpus reaches every conflict kind in scope: git reports content, add/add, modify/delete, distinct types and file/directory conflicts in it. |
 | T3 | Portable: `src/merge-trees.ts` has no `node:` imports. Objects are read and written through the `Repository` of 17. |
+| T4 | Hand-made cases the random corpus rarely reaches: a symlink that both sides turn into regular files, with three different modes and a two-way content merge. Added after the mutation check, see below. |
 
 ### Scope
 
@@ -192,18 +194,82 @@ Rejected if, on any case of the corpus, the tree id, a conflicted entry or a mes
   content of its own and git finds no renames.
 - Submodules (gitlinks) are out: there is no submodule merge. Only one merge base is handled.
 
+### Answer
+
+Yes. `src/merge-trees.ts` (about 400 lines, no `node:` imports) gives the same tree id, conflicted
+entries and messages as `git merge-tree --write-tree -Xno-renames` on all 1,403 cases: T1's 400,
+T1b's 1,000 and T4's 3. The random corpora reach every conflict kind in scope. git reported:
+
+| Conflict kind | Count |
+|---|---|
+| modify/delete | 367 |
+| file/directory | 310 |
+| content | 77 |
+| add/add | 27 |
+| distinct types | 12 |
+
+A separate run of 3,000 cases from two other seeds also matched.
+
+The merge follows merge-ort's `process_entry` path by path:
+- **One side changed the path, or both changed it alike:** that version is taken, deletions included.
+- **Both sides changed it:** `handle_content_merge` runs.
+  - Modes: a mode differing from the base wins. Two different changed modes conflict, keeping ours.
+  - Content: regular files go through X13a, two-way when the base has another type. A symlink keeps
+    ours and conflicts.
+- **modify/delete:** the surviving version stays in the tree. The message has git's two spaces
+  before "Version".
+- **Distinct types:** the regular file moves to `path~<branch>`; when neither side is a regular file,
+  both move. Stage 1 is kept only for the side whose type matches the base.
+- **File/directory:** a file that lands where the merged tree keeps a directory moves to
+  `path~<branch of the file>`, made unique as `unique_path` does (`_0`, `_1`, …). This happens
+  before its own merge. A moved file that merges to a deletion is clean, but git still prints the
+  message.
+- **Messages:** each is rendered with the path it ends at. They are sorted by that path, and a
+  stable sort keeps a path's own messages in git's order (file/directory first).
+
+Three behaviours were found only by differential testing against git:
+1. **Trivial directory merges.** `collect_merge_info_callback` defers a directory that one side left
+   exactly as in the base, or that only one side has. `handle_deferred_entries` then takes the other
+   side's directory whole, without looking inside, so a file at that path is dropped with no
+   file/directory message. It does this only when rename detection cannot need a source deleted on
+   that side.
+   - A deletion is a relevant source when the other side changed the file too, or deleted it as well.
+   - A deletion is also relevant inside a directory that one side removed and the other side added a
+     file to (`dir_rename_mask` = 0x07).
+   - Without this rule, git cleanly drops a file our merge would move.
+2. **A moved file that merges to a deletion is clean.** `is_null` in the `match_mask` branch.
+3. **git 2.43's merge-tree ignores `-Xno-renames`.** The corpus therefore never reuses a deleted
+   file's content.
+
+### Mutation check (X13b)
+
+| # | Mutant | Result |
+|---|---|---|
+| K1 | Ours' mode ignored when ours kept the base's mode | killed (T1, T1b) |
+| K2 | A conflict of three modes counted clean | survived the random corpora; T4 added, now killed |
+| K3 | Two-way content merge only without a base (not when the base has another type) | survived the random corpora; killed by T4 |
+| K4 | Conflicting symlinks counted clean | killed (T1, T1b) |
+| K5 | Distinct types: theirs renamed even when ours is the regular file | equivalent: in that branch the types differ, so both conditions agree |
+| K6 | Distinct types: the base always kept at stage 1 | killed (T1, T1b) |
+| K7 | File/directory: the other branch's name | killed (T1, T1b) |
+| K8 | No trivial directory merges | killed (T1, T1b) |
+| K9 | Trivial directory merges even when a deletion on that side is a relevant source | killed (T1, T1b) |
+| K10 | No directory-rename relevance (0x07) | killed (T1b only) |
+| K11 | A moved file the merge deletes counted as a conflict | killed (T1, T1b) |
+| K12 | Messages left in processing order | killed (T1, T1b) |
+| K13 | A cleanly merged moved file keeping both sides' stages | unreachable: a moved file is on one side only, so the branch was removed |
+
 ## Promotion grades
 
 | File | Grade | Why |
 |---|---|---|
 | `src/xdiff.ts` | **Adopt** | git's diff, exactly: the base of merge (X13), blame and status later |
 | `src/xmerge.ts` | **Adopt** | git's content merge, exactly |
+| `src/merge-trees.ts` | **Adopt** (renames still to come, X13c) | ort's tree merge without renames, exactly; the base for X13c |
 
 ## Open threads
 
-1. **X13b, the tree merge**: ort's conflict kinds (modify/delete, add/add, directory/file, modes,
-   submodules), the merged tree with its conflicted blobs, and the conflict messages of
-   `merge-tree`.
+1. **Submodules** in the tree merge (gitlinks: `merge_submodule`'s fast-forward rules).
 2. **X13c**: renames (`diffcore-rename`'s exact and similarity detection), directory renames, and
    criss-cross merges (ort's recursive virtual base).
 3. **Styles and options**: diff3 and zdiff3, `-Xours`/`-Xtheirs`/union, whitespace flags, the

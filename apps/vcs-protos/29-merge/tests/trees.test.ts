@@ -252,6 +252,31 @@ function corpus(n: number, seed: number): Case[] {
   return cases;
 }
 
+/** a symlink in the base that both sides turn into regular files */
+const f = (entries: [string, string, string][]): Files =>
+  new Map(entries.map(([p, m, c]) => [p, [m, c]] as [string, [string, string]]));
+const handMade: Case[] = [
+  {
+    // K2: three modes; K3: base of another type, so a two-way content merge
+    name: "symlink → 100644 / 100755, different content",
+    base: f([["x", "120000", "target\n"]]),
+    ours: f([["x", "100644", "one\ntwo\nours\n"]]),
+    theirs: f([["x", "100755", "one\ntwo\ntheirs\n"]]),
+  },
+  {
+    name: "symlink → regular files, both 100644, mergeable content",
+    base: f([["x", "120000", "one\ntwo\nthree\n"]]),
+    ours: f([["x", "100644", "one\ntwo\nthree\nfour\n"]]),
+    theirs: f([["x", "100644", "zero\none\ntwo\nthree\n"]]),
+  },
+  {
+    name: "symlink → 100644 / 100755, same content",
+    base: f([["x", "120000", "target\n"]]),
+    ours: f([["x", "100644", "same\n"]]),
+    theirs: f([["x", "100755", "same\n"]]),
+  },
+];
+
 describe("T1 tree merges without renames, as git merge-tree -Xno-renames", () => {
   let kinds: string[] = [];
   it("T1: 400 random tree merges: tree ids, conflicted entries and messages", async () => {
@@ -272,6 +297,13 @@ describe("T1 tree merges without renames, as git merge-tree -Xno-renames", () =>
     const count = (k: string) => kinds.filter((x) => x === k).length;
     for (const k of ["content", "add/add", "modify/delete", "distinct types", "file/directory"])
       expect(count(k), k).toBeGreaterThan(0);
+  });
+});
+
+describe("T4 hand-made cases the random corpus rarely reaches", () => {
+  it("a symlink both sides turn into regular files: three modes, a two-way content merge", async () => {
+    const r = await compareTrees(handMade);
+    expect(r.wrong).toEqual([]);
   });
 });
 
