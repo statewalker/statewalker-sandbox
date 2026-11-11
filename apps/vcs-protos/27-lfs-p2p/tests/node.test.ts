@@ -296,7 +296,7 @@ describe("R3 the bridge's bound on a response head", () => {
     const stats = { bytes: 0, requests: 0 };
     await lfsPush(URL_, local, [p], { fetch: slow(admin), chunkSize: 1 << 20, stats });
     expect(sha(await collect(sb.read(p.oid)))).toBe(p.oid);
-    expect(stats.requests).toBeGreaterThanOrEqual(6);
+    expect(stats.requests).toBe(8); // HEAD, six PUTs, the verify action
   }, 120_000);
 });
 
@@ -667,4 +667,189 @@ describe("mutation cases", () => {
     ).toEqual({ downloaded: [p.oid], bad: [] });
     expect((s2.B ?? 0) + (s2.C ?? 0)).toBe(p.size);
   }, 120_000);
+});
+
+// ---- review of #90: each test reproduces one finding ----
+/** a request body sent in two steps: `first` bytes, then the rest once `gate` resolves */
+function gated(bytes: Uint8Array, first: number, gate: Promise<void>) {
+  return new ReadableStream<Uint8Array>({
+    async start(c) {
+      c.enqueue(bytes.subarray(0, first));
+      await gate;
+      c.enqueue(bytes.subarray(first));
+      c.close();
+    },
+  });
+}
+const putRange = (
+  href: string,
+  s: number,
+  e: number,
+  size: number,
+  body: BodyInit | ReadableStream<Uint8Array>,
+) =>
+  fetch(href, {
+    method: "PUT",
+    headers: { "content-range": `bytes ${s}-${e - 1}/${size}` },
+    body: body as BodyInit,
+    duplex: "half",
+  } as RequestInit);
+async function rangedServer(opts: Parameters<typeof lfsHandler>[1] = {}) {
+  const v = await freshRepo();
+  const store = repoLfsStore(v.repo);
+  const url = await serve(withLfs(v.serve(), lfsHandler(store, { ranged: true, ...opts })), stops);
+  return { store, url, dir: v };
+}
+
+describe("review #90", () => {
+  it("F1 a holder failing after the others went idle: the healthy holder still serves the rest", async () => {
+    const content = noise(2000, 31);
+    const p = { oid: sha(content), size: content.length };
+    const { B, C } = await twoHolders(content);
+    const late = onTransfers(C, async (req) => {
+      const res = await C(req);
+      await sleep(100);
+      const head = new Uint8Array(await res.arrayBuffer()).subarray(0, 10);
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(head);
+            c.error(new Error("link lost"));
+          },
+        }),
+        { status: res.status, headers: res.headers },
+      );
+    });
+    const stats: Record<string, number> = {};
+    const d = diskStore();
+    await lfsFetchFrom(
+      [
+        { name: "B", url: URL_, fetch: B },
+        { name: "C", url: URL_, fetch: late },
+      ],
+      d,
+      [p],
+      { chunkSize: 1000, stats },
+    );
+    expect((stats.B ?? 0) + (stats.C ?? 0)).toBe(p.size);
+    expect(sha(await collect(d.read(p.oid)))).toBe(p.oid);
+  }, 60_000);
+
+  it("F2 F6 parts declared for another size, or with extra bytes, do not block an honest upload", async () => {
+    const { store, url } = await rangedServer();
+    const a = noise(2000, 32);
+    const href = `${url}/info/lfs/objects/${sha(a)}`;
+    expect((await putRange(href, 0, 2000, 3000, noise(2000, 33) as BodyInit)).status).toBe(200);
+    // a part with more bytes than its range: refused, nothing kept
+    expect((await putRange(href, 1000, 2000, 2000, noise(1001, 34) as BodyInit)).status).toBe(400);
+    const local = diskStore();
+    const p = await local.put([a]);
+    await lfsPush(url, local, [p], { chunkSize: 1000 });
+    expect(await store.has(p.oid)).toBe(true);
+  });
+
+  it("F3 two uploaders of one object at once: no part is seen before it is whole; both end well", async () => {
+    const { store, url } = await rangedServer();
+    const a = noise(2000, 35);
+    const href = `${url}/info/lfs/objects/${sha(a)}`;
+    let open = () => {};
+    const gate = new Promise<void>((r) => {
+      open = r;
+    });
+    const A = putRange(href, 0, 1000, 2000, gated(a.subarray(0, 1000), 600, gate));
+    await sleep(200);
+    const head = await fetch(href, { method: "HEAD", headers: { "x-lfs-size": "2000" } });
+    expect(head.headers.get("x-lfs-held")).toBe(""); // A's part is not whole yet
+    const B = await putRange(href, 0, 1000, 2000, a.subarray(0, 1000) as BodyInit);
+    expect(B.status).toBe(200);
+    open();
+    expect([200, 409]).toContain((await A).status);
+    const last = await putRange(href, 1000, 2000, 2000, a.subarray(1000) as BodyInit);
+    expect(last.status).toBe(200);
+    expect(last.headers.get("x-lfs-complete")).toBe("true");
+    expect(sha(await collect(store.read(sha(a))))).toBe(sha(a));
+  }, 60_000);
+
+  it("F4 overlapping parts are refused, not stored", async () => {
+    const { url, store } = await rangedServer({ maxObjectSize: 10_000 });
+    const oid = sha(noise(10_000, 36));
+    const href = `${url}/info/lfs/objects/${oid}`;
+    const statuses: number[] = [];
+    for (let off = 0; off < 50; off++)
+      statuses.push(
+        (await putRange(href, off, off + 5000, 10_000, noise(5000, off) as BodyInit)).status,
+      );
+    expect(statuses[0]).toBe(200);
+    expect(statuses.slice(1).every((x) => x === 409)).toBe(true);
+    void store;
+  });
+
+  it("F5 a source cutting its altered chunks short is still found", async () => {
+    const content = noise(4000, 37);
+    const p = { oid: sha(content), size: content.length };
+    const { B, C } = await twoHolders(content);
+    const slowB = onTransfers(B, async (req) => {
+      await sleep(150);
+      return req;
+    });
+    const lyingCut = onTransfers(C, async (req) => {
+      const res = await C(req);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      bytes[0] = (bytes[0] as number) ^ 0xff;
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(bytes.subarray(0, bytes.length - 1));
+            c.error(new Error("cut"));
+          },
+        }),
+        { status: res.status, headers: res.headers },
+      );
+    });
+    const d = diskStore();
+    const r = await lfsFetchFrom(
+      [
+        { name: "B", url: URL_, fetch: slowB },
+        { name: "C", url: URL_, fetch: lyingCut },
+      ],
+      d,
+      [p],
+      { chunkSize: 1000 },
+    );
+    expect(r).toEqual({ downloaded: [p.oid], bad: ["C"] });
+    expect(sha(await collect(d.read(p.oid)))).toBe(p.oid);
+  }, 60_000);
+
+  it("F7 F8 an empty object goes with ranged; a chunk size of 0 is refused", async () => {
+    const { store, url } = await rangedServer();
+    const local = diskStore();
+    const p = await local.put([new Uint8Array(0)]);
+    await lfsPush(url, local, [p]);
+    expect(await store.has(p.oid)).toBe(true);
+    const q = await local.put([noise(100, 38)]);
+    await expect(lfsPush(url, local, [q], { chunkSize: 0 })).rejects.toThrow(/chunk/);
+    await expect(
+      lfsFetchFrom([{ name: "B", url }], diskStore(), [q], { chunkSize: 0 }),
+    ).rejects.toThrow(/chunk/);
+  });
+
+  it("F9 F10 a holder answering 200 to ranges still serves; failed batches are reported", async () => {
+    const content = noise(3000, 39);
+    const p = { oid: sha(content), size: content.length };
+    const { m, B } = await twoHolders(content);
+    const noRanges = onTransfers(B, (req) => {
+      const h = new Headers(req.headers);
+      h.delete("range");
+      return new Request(req.url, { headers: h });
+    });
+    const d = diskStore();
+    await lfsFetchFrom([{ name: "B", url: URL_, fetch: noRanges }], d, [p], { chunkSize: 1000 });
+    expect(sha(await collect(d.read(p.oid)))).toBe(p.oid);
+    const anon = await m.connect("Z", "B");
+    const noToken = ((input: RequestInfo | URL, init?: RequestInit) =>
+      anon("B", new Request(input, { ...init, duplex: "half" } as RequestInit))) as typeof fetch;
+    await expect(
+      lfsFetchFrom([{ name: "B", url: URL_, fetch: noToken }], diskStore(), [p]),
+    ).rejects.toThrow(/401/);
+  }, 60_000);
 });
