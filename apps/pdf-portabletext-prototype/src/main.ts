@@ -1,9 +1,15 @@
-import type { ImageFormat } from "./assets.ts";
-import { createBundle, download } from "./bundle.ts";
-import { type ConvertResult, convertPdf } from "./convert.ts";
-import { DEFAULT_LANGUAGE, LANGUAGES } from "./languages.ts";
-import { createOcrPool, type OcrPool } from "./ocr-client.ts";
-import { renderPreview } from "./preview.ts";
+import {
+  type ConvertResult,
+  convertPdf,
+  createBundle,
+  createOcrPool,
+  DEFAULT_LANGUAGE,
+  download,
+  type ImageFormat,
+  LANGUAGES,
+  type OcrPool,
+} from "@statewalker/pdf-portabletext";
+import { renderPreview } from "@statewalker/pdf-portabletext/preview";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 

@@ -14,8 +14,19 @@ import type { TextRun } from "./text-layout.ts";
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-/** Directory with pdf.js binary resources, copied there by `vite.config.ts`. */
-const resourceUrl = (dir: string) => new URL(`pdfjs/${dir}/`, document.baseURI).href;
+/**
+ * Directory URL holding pdf.js binary resources (`wasm/`, `cmaps/`,
+ * `standard_fonts/`, `iccs/`). The Vite plugin (`@statewalker/pdf-portabletext/vite`)
+ * serves and emits them under `<base>pdfjs/`, the default.
+ */
+let resourceBaseUrl: string | undefined;
+
+export function configurePdfjs(options: { resourceBaseUrl?: string }): void {
+  resourceBaseUrl = options.resourceBaseUrl;
+}
+
+const resourceUrl = (dir: string) =>
+  new URL(`${dir}/`, resourceBaseUrl ?? new URL("pdfjs/", document.baseURI)).href;
 
 export function openPdf(data: ArrayBuffer): Promise<PDFDocumentProxy> {
   return getDocument({

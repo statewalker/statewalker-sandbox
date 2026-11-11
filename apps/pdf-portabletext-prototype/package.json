@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "PROTOTYPE \u2014 in-browser PDF to PortableText conversion with worker-based OCR of embedded images.",
+  "description": "PROTOTYPE \u2014 demo UI and test harness for @statewalker/pdf-portabletext (in-browser PDF to PortableText).",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
@@ -25,14 +25,9 @@
     "corpus": "tsx scripts/corpus.ts"
   },
   "dependencies": {
-    "@portabletext/to-html": "^6.0.0",
-    "fflate": "^0.8.3",
-    "franc-all": "^7.2.0",
-    "pdfjs-dist": "^6.4.299",
-    "tesseract-wasm": "^0.11.0"
+    "@statewalker/pdf-portabletext": "workspace:*"
   },
   "devDependencies": {
-    "@portabletext/types": "^4.0.2",
     "@types/node": "catalog:",
     "pdf-lib": "^1.17.1",
     "playwright": "catalog:",

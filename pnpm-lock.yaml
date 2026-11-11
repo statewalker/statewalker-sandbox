@@ -1117,25 +1117,10 @@ importers:
 
   apps/pdf-portabletext-prototype:
     dependencies:
-      '@portabletext/to-html':
-        specifier: ^6.0.0
-        version: 6.0.0
-      fflate:
-        specifier: ^0.8.3
-        version: 0.8.3
-      franc-all:
-        specifier: ^7.2.0
-        version: 7.2.0
-      pdfjs-dist:
-        specifier: ^6.4.299
-        version: 6.4.299
-      tesseract-wasm:
-        specifier: ^0.11.0
-        version: 0.11.0
+      '@statewalker/pdf-portabletext':
+        specifier: workspace:*
+        version: link:../../packages/pdf-portabletext
     devDependencies:
-      '@portabletext/types':
-        specifier: ^4.0.2
-        version: 4.0.2
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.4
@@ -1253,6 +1238,40 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.3(@types/node@26.6.4)(@vitest/browser-playwright@5.0.3)(@vitest/ui@5.0.3)(happy-dom@20.14.5)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+
+  packages/pdf-portabletext:
+    dependencies:
+      '@portabletext/to-html':
+        specifier: ^6.0.0
+        version: 6.0.0
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
+      franc-all:
+        specifier: ^7.2.0
+        version: 7.2.0
+      pdfjs-dist:
+        specifier: ^6.4.299
+        version: 6.4.299
+      tesseract-wasm:
+        specifier: ^0.11.0
+        version: 0.11.0
+    devDependencies:
+      '@portabletext/types':
+        specifier: ^4.0.2
+        version: 4.0.2
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.4
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)
       vitest:
         specifier: 'catalog:'
         version: 5.0.3(@types/node@26.6.4)(@vitest/browser-playwright@5.0.3)(@vitest/ui@5.0.3)(happy-dom@20.14.5)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
