@@ -88,10 +88,21 @@ function unique(objects: Pointer[]): Pointer[] {
   for (const o of objects) if (!seen.has(o.oid)) seen.set(o.oid, o);
   return [...seen.values()];
 }
-export const transferHeaders = (o: BatchObject, action: Action, opts: LfsClientOptions) => ({
-  ...(o.authenticated ? {} : opts.headers),
-  ...action.header,
-});
+/**
+ * A transfer's headers: the client's own (unless the server marked the object `authenticated`),
+ * then the action's, which win. Header names are case-insensitive: Gitea's actions carry
+ * `Authorization`, the client's `authorization` — merged by name, not as object keys (two keys
+ * would be sent as one header joined by a comma, which no server accepts).
+ */
+export const transferHeaders = (
+  o: BatchObject,
+  action: Action,
+  opts: LfsClientOptions,
+): Record<string, string> => {
+  const h = new Headers(o.authenticated ? undefined : opts.headers);
+  for (const [k, v] of Object.entries(action.header ?? {})) h.set(k, v);
+  return Object.fromEntries(h);
+};
 function objectError(o: BatchObject): Error {
   const code = o.error?.code;
   return new Error(
