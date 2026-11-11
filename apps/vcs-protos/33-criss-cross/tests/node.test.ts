@@ -351,7 +351,29 @@ const handMade: Dag[] = [
     A3: f([keep, ["b", "100644", editLine(editLine(A, 5, "A1"), 0, "A3")]]),
     B3: f([keep, ["c", "100644", editLine(editLine(A, 5, "B1"), 9, "B3")]]),
   }),
+  // added after the review: an empty file against a binary one (binary is checked first)
+  crissCross("an empty file against a binary file in the ancestors", {
+    R: f([keep]),
+    A1: f([keep, ["x", "100644", ""]]),
+    B1: f([keep, ["x", "100644", "\u0000binary\n"]]),
+    A2: f([keep, ["x", "100644", ""]]),
+    B2: f([keep, ["x", "100644", "\u0000binary\n"]]),
+    A3: f([keep, ["x", "100644", ""]]),
+    B3: f([keep, ["x", "100644", "\u0000binary\n2"]]),
+  }),
 ];
+
+/** one merge base: an empty file added against a binary one (a two-way merge) */
+const twoWayBinary: Dag = {
+  name: "an empty file against a binary file (one merge base)",
+  nodes: [
+    { parents: [], files: f([keep]), when: 1800000000 },
+    { parents: [0], files: f([keep, ["x", "100644", ""]]), when: 1800000060 },
+    { parents: [0], files: f([keep, ["x", "100644", "\u0000binary\n"]]), when: 1800000120 },
+  ],
+  ours: 1,
+  theirs: 2,
+};
 
 /** three lines crossing: three merge bases, two levels of virtual commits */
 handMade.push({
@@ -488,8 +510,17 @@ describe("C1 merge bases", () => {
 
 describe("C2–C3 recursive merges", () => {
   it("C2: hand-made criss-cross merges", async () => {
-    const r = await compareMerges(handMade);
+    const r = await compareMerges([...handMade, twoWayBinary]);
     expect(r.wrong).toEqual([]);
+  });
+
+  it("C2b: every hand-made criss-cross has two or more merge bases", async () => {
+    const { repo } = await freshRepo();
+    for (const dag of handMade) {
+      const ids = await writeDag(repo, dag);
+      const bases = await mergeBases(repo, ids[dag.ours] as string, ids[dag.theirs] as string);
+      expect(bases.length, dag.name).toBeGreaterThan(1);
+    }
   });
 
   it("C3: 500 random histories", async () => {
