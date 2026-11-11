@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ruleSet } from "@statewalker/httpeers-access";
 import { generateSigner, mintToken } from "@statewalker/httpeers-access/issuer";
 import { createRemoteOverLink, serveFetchOverLink } from "@statewalker/httpeers-bridge";
 import { pairedLinks } from "@statewalker/httpeers-bridge/ports";
@@ -16,7 +17,7 @@ import { clone } from "../../21-smart-http/src/client.js";
 import { push } from "../../22-receive-pack/src/client.js";
 import { gitRules, meshFetch } from "../../23-git-httpeers/src/mesh-git.js";
 import { openRepository } from "../../25-repo-facade/src/vcs.js";
-import { lfsFetch, lfsPush } from "../../26-lfs/src/client.js";
+import { lfsFetch, lfsPush, missingChunks } from "../../26-lfs/src/client.js";
 import { lfsHandler, withLfs } from "../../26-lfs/src/server.js";
 import { clean, type LfsStore, lfsStore, repoLfsStore } from "../../26-lfs/src/store.js";
 import { serve } from "../../26-lfs/tests/serve.js";
@@ -506,4 +507,164 @@ describe("R7 bounded memory over the bridge", () => {
     expect(await dest.size(p.oid)).toBe(size);
     expect((peak - base) / (1 << 20)).toBeLessThan(32);
   }, 300_000);
+});
+
+describe("mutation cases", () => {
+  it("parts: overlaps dropped, gaps never completed; missing chunks around held ranges", async () => {
+    const a = noise(3000, 21);
+    const oid = sha(a);
+    const st = lfsStore(new MemFilesApi(), "r");
+    const once = (b: Uint8Array) =>
+      (async function* () {
+        yield b;
+      })();
+    await st.incomplete.write(oid, 0, once(a.subarray(0, 1000)));
+    await st.incomplete.write(oid, 500, once(noise(1000, 22))); // overlaps: not held
+    await st.incomplete.write(oid, 2000, once(a.subarray(2000)));
+    expect(await st.incomplete.ranges(oid)).toEqual([
+      [0, 1000],
+      [2000, 3000],
+    ]);
+    await expect(st.incomplete.complete({ oid, size: a.length })).rejects.toThrow(/held/);
+    expect(await st.has(oid)).toBe(false);
+    expect(missingChunks(10, [[3, 5]], 2)).toEqual([
+      [0, 2],
+      [2, 3],
+      [5, 7],
+      [7, 9],
+      [9, 10],
+    ]);
+  });
+
+  it("ranged uploads: per-operation tokens on HEAD; held ranges in the middle; an object that appeared meanwhile", async () => {
+    const tokens = new Map<string, string>();
+    const v = await freshRepo();
+    const store = repoLfsStore(v.repo);
+    const url = await serve(
+      withLfs(
+        v.serve(),
+        lfsHandler(store, {
+          ranged: true,
+          transferAuth: {
+            headers: async (op, oid) => {
+              const t = String(Math.random());
+              tokens.set(t, `${op}:${oid}`);
+              return { authorization: `Bearer ${t}` };
+            },
+            check: async (req, op, oid) =>
+              tokens.get(req.headers.get("authorization")?.replace("Bearer ", "") ?? "") ===
+              `${op}:${oid}`,
+          },
+        }),
+      ),
+      stops,
+    );
+    const local = diskStore();
+    const a = noise(4 << 20, 23);
+    const p = await local.put([a]);
+    // the server holds [1 MiB, 2 MiB) already: only the other three chunks go
+    await store.incomplete.write(
+      p.oid,
+      1 << 20,
+      (async function* () {
+        yield a.subarray(1 << 20, 2 << 20);
+      })(),
+    );
+    const stats = { bytes: 0, requests: 0 };
+    await lfsPush(url, local, [p], { chunkSize: 1 << 20, stats });
+    expect(stats.bytes).toBe(3 << 20);
+    expect(await store.has(p.oid)).toBe(true);
+    // another object stored on the server between the batch and the HEAD: nothing is sent
+    const b = noise(1 << 20, 24);
+    const q = await local.put([b]);
+    const meanwhile = onTransfers(fetch, async (req) => {
+      if (req.method === "HEAD") await store.put([b]);
+      return req;
+    });
+    const s2 = { bytes: 0, requests: 0 };
+    expect(await lfsPush(url, local, [q], { fetch: meanwhile, stats: s2 })).toEqual({
+      uploaded: [q.oid],
+      skipped: [],
+    });
+    expect(s2.bytes).toBe(0);
+  }, 60_000);
+
+  it("a role that may upload but not read cannot download", async () => {
+    const m = await mesh();
+    const b = await freshRepo();
+    const sb = repoLfsStore(b.repo);
+    const p = await sb.put([noise(1000, 25)]);
+    m.serving.set(
+      "B",
+      meshLfsHandler(sb, {
+        issuer: m.signer.mesh,
+        rules: ruleSet({
+          version: 1,
+          rules: ['capability("git:write-own") <- role("uploader");'],
+          policies: ['allow if capability("git:write-own");'],
+        }),
+      }),
+    );
+    const uploader = await m.client("U", "B", ["uploader"]);
+    await expect(
+      lfsFetch(URL_, lfsStore(new MemFilesApi(), "r"), [p], { fetch: uploader }),
+    ).rejects.toThrow(/403/);
+  });
+
+  it("many sources: a holder cut mid-chunk, or answering another range, leaves the rest to the other", async () => {
+    const content = noise(8 << 20, 26);
+    const p = { oid: sha(content), size: content.length };
+    const { B, C } = await twoHolders(content);
+    const midCut = onTransfers(C, async (req, n) => {
+      if (n < 1) return req;
+      const res = await C(req);
+      const r = res.body?.getReader();
+      let sent = 0;
+      return new Response(
+        new ReadableStream({
+          async pull(c) {
+            const x = await r?.read();
+            if (!x || x.done) return c.close();
+            if (sent > 200_000) return c.error(new Error("link lost"));
+            sent += x.value.length;
+            c.enqueue(x.value);
+          },
+        }),
+        { status: res.status, headers: res.headers },
+      );
+    });
+    const stats: Record<string, number> = {};
+    const d = diskStore();
+    await lfsFetchFrom(
+      [
+        { name: "B", url: URL_, fetch: B },
+        { name: "C", url: URL_, fetch: midCut },
+      ],
+      d,
+      [p],
+      { chunkSize: 1 << 20, stats },
+    );
+    expect((stats.B ?? 0) + (stats.C ?? 0)).toBe(p.size);
+    expect(sha(await collect(d.read(p.oid)))).toBe(p.oid);
+    // C answers 206 for another range than asked: dropped, not written
+    const shifted = onTransfers(C, (req) => {
+      const h = new Headers(req.headers);
+      h.set("range", "bytes=100-199");
+      return new Request(req.url, { headers: h });
+    });
+    const s2: Record<string, number> = {};
+    const d2 = diskStore();
+    expect(
+      await lfsFetchFrom(
+        [
+          { name: "C", url: URL_, fetch: shifted },
+          { name: "B", url: URL_, fetch: B },
+        ],
+        d2,
+        [p],
+        { chunkSize: 1 << 20, stats: s2 },
+      ),
+    ).toEqual({ downloaded: [p.oid], bad: [] });
+    expect((s2.B ?? 0) + (s2.C ?? 0)).toBe(p.size);
+  }, 120_000);
 });

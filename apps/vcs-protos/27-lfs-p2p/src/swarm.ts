@@ -190,8 +190,7 @@ export async function lfsFetchFrom(
     const holders: Holder[] = [];
     for (const a of answers) {
       const answer = a.objects.find((x) => x.oid === o.oid);
-      if (answer?.actions?.download && answer.size === o.size)
-        holders.push({ source: a.source, answer });
+      if (answer?.actions?.download) holders.push({ source: a.source, answer });
     }
     if (!holders.length) throw new Error(`lfs object ${o.oid} not found on any source`);
     await store.incomplete.exclusive(o.oid, async () => {
