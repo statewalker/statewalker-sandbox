@@ -30,11 +30,17 @@ export interface GcAccess {
   /** a FilesApi and a directory for gc's own files (ledger, leases, state) */
   files: import("@statewalker/webrun-files").FilesApi;
   dir: string;
+  /** the repository's root on `files` (git files: the .git directory: worktrees, index, shallow) */
+  root: string;
   /** the installed packs: id and object ids */
   packs(): { packId: string; ids(): Iterable<string> }[];
+  /** packs protected by a `.keep` file (git's: never repacked away) */
+  keptPacks(): Promise<Set<string>>;
   /** loose object ids */
   loose(): AsyncIterable<string>;
   removeLoose(oid: string): Promise<void>;
+  /** re-reads the pack directory (another handle may have changed it) */
+  refresh(): Promise<void>;
   /** deletes the packs (idx first, then pack) and reopens the pack database */
   removePacks(packIds: string[]): Promise<void>;
 }
