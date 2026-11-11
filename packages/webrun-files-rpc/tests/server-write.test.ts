@@ -98,10 +98,10 @@ describe("server: writing by (streamId, chunkId)", () => {
 
   it("abortWrite cancels: the file keeps what it had, later calls fail, pending calls fail", async () => {
     const fs = new MemFilesApi({ initialFiles: { "/a.txt": "old" } });
-    const server = newFilesRpcServer({ fs, writeWindow: 1 });
+    const server = newFilesRpcServer({ fs, writeWindow: 3 });
     const { streamId } = await server.openWrite("/a.txt");
     await server.writeChunk(streamId, 0, text("new"));
-    const waiting = server.writeChunk(streamId, 5, text("x")); // beyond the window
+    const waiting = server.writeChunk(streamId, 5, text("x")); // beyond the window: waits
     await server.abortWrite(streamId, "changed my mind");
     await expect(waiting).rejects.toMatchObject({ code: "ABORTED" });
     await expect(server.writeChunk(streamId, 1, text("y"))).rejects.toMatchObject({

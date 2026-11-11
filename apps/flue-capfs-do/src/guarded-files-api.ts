@@ -14,6 +14,7 @@
 import type { FilesApi, ListOptions, ReadOptions } from "@statewalker/webrun-files";
 import { type FileInfo, type FileStats, listInPathOrder } from "@statewalker/webrun-files";
 import type { FsGate } from "./authority.ts";
+import { normalise } from "./path.ts";
 import { BLOCK_BYTES, type DirEntryStat } from "./sql-fs.ts";
 
 const codeOf = (e: unknown) =>
@@ -24,7 +25,8 @@ const toBytes = (v: unknown) =>
     : ArrayBuffer.isView(v)
       ? new Uint8Array(v.buffer, v.byteOffset, v.byteLength)
       : new Uint8Array(v as ArrayBuffer);
-const norm = (p: string) => `/${String(p).split("/").filter(Boolean).join("/")}`;
+/** The store's normal form ("." and ".." resolved): the one FsGate authorizes. */
+const norm = (p: string) => normalise(p);
 const join = (dir: string, name: string) => (dir === "/" ? `/${name}` : `${dir}/${name}`);
 
 export class GuardedFilesApi implements FilesApi {

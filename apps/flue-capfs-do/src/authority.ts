@@ -340,10 +340,15 @@ export class Authority {
     return (await this.verify(token)).revocationIds;
   }
 
-  /** Datalog decision for one (op, path). Session state is read fresh: mode and revocation apply on the next call. */
-  async check(token: string, op: Op, path: string): Promise<boolean> {
-    this.stats.authorizations++;
-    const v = await this.verify(token);
+  /**
+   * A token of this workspace that is not revoked: its session and mode (EACCES otherwise).
+   * Session state is read fresh.
+   */
+  async live(token: string): Promise<{ session: string; mode: string }> {
+    const { sid, row } = await this.#live(token, await this.verify(token));
+    return { session: sid, mode: String(row.mode) };
+  }
+  async #live(token: string, v: VerifiedBiscuit) {
     const sid = await this.sessionOf(token);
     const row = this.#sql
       .exec("SELECT mode, revoked_all FROM cap_sessions WHERE session = ?", sid)
@@ -362,6 +367,14 @@ export class Authority {
         .toArray();
       if (hit.length > 0) throw fsError("EACCES", "capability revoked");
     }
+    return { sid, row };
+  }
+
+  /** Datalog decision for one (op, path). Session state is read fresh: mode and revocation apply on the next call. */
+  async check(token: string, op: Op, path: string): Promise<boolean> {
+    this.stats.authorizations++;
+    const v = await this.verify(token);
+    const { sid, row } = await this.#live(token, v);
     const policy = MODES[String(row.mode)];
     if (!policy) throw fsError("EACCES", `unknown mode '${String(row.mode)}'`);
     const r = v.authorize(

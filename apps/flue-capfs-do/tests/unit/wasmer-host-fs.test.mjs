@@ -498,4 +498,94 @@ test("streamed reads: a full stream table frees the least recently used reader; 
   await fs.handle("close", [id]);
   await pending;
   assert.equal(cap.streams.size, 0);
+  assert.ok(!cap.calls.includes("readFileBuffer /x"), "a closed handle loads nothing");
+});
+
+// ---- on the real Workspace side: Authority, FsGate, SqlFs and the files-RPC hub ----
+
+async function realCap(files, hubOptions) {
+  const { Authority, FsGate } = await import("../../src/authority.ts");
+  const { FilesRpcHub } = await import("../../src/files-rpc-hub.ts");
+  const { rebuildError } = await import("../../src/path.ts");
+  const { SqlFs } = await import("../../src/sql-fs.ts");
+  const { sql } = await import("../helpers/sql.mjs");
+  const db = sql();
+  const store = new SqlFs(db);
+  const auth = new Authority(db);
+  for (const [p, c] of Object.entries(files)) await store.writeFileBuffer(p, c);
+  const { token } = auth.startSession("alice", ["/"]);
+  const hub = new FilesRpcHub(store, auth, hubOptions);
+  const gate = new FsGate(store, auth, token);
+  const over = (p) =>
+    p.then(structuredClone, (e) => {
+      throw rebuildError(structuredClone(e));
+    });
+  const calls = [];
+  return {
+    hub,
+    store,
+    calls,
+    call: (m, p, ...a) => (calls.push(`${m} ${p}`), over(gate.call(m, p, ...a))),
+    readdir: (p) => over(gate.readdir(p)),
+    move: (k, a, b, o) => over(gate.move(k, a, b, o)),
+    rpc: (m, a) => (calls.push(`${m} ${a[0]}`), over(hub.call(token, m, structuredClone(a)))),
+  };
+}
+const filled = (n, seed) => {
+  const b = new Uint8Array(n);
+  for (let i = 0; i < n; i++) b[i] = (i * seed) & 0xff;
+  return b;
+};
+
+test("real hub: more handles than streams read at once, every read correct", async () => {
+  const files = {};
+  for (let i = 0; i < 24; i++) files[`/f${i}`] = filled((1 << 20) + 1000, i + 3);
+  const cap = await realCap(files, { maxStreams: 16, maxStreamsPerSession: 8 });
+  const fs = capHostFs(cap);
+  const ids = [];
+  for (let i = 0; i < 24; i++) ids.push((await fs.handle("open", [`f${i}`, ...RW])).value);
+  for (const at of [0, 4096, (1 << 20) - 10]) {
+    const replies = await Promise.all(ids.map((id) => fs.handle("read", [id, at, 4096])));
+    replies.forEach((r, i) => {
+      assert.ok(!r.error, `f${i} at ${at}: ${r.error?.code} ${r.error?.message}`);
+      const want = files[`/f${i}`].subarray(at, at + 4096);
+      assert.ok(Buffer.from(r.value).equals(Buffer.from(want)), `f${i} at ${at}`);
+    });
+  }
+  for (const id of ids) await fs.handle("close", [id]);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(cap.hub.openStreams(), 0);
+});
+
+test("real hub: fstat after a read past the end is the file's size", async () => {
+  const cap = await realCap({ "/five": new TextEncoder().encode("12345") });
+  const fs = capHostFs(cap);
+  const { value: id } = await fs.handle("open", ["five", ...RW]);
+  assert.equal((await fs.handle("read", [id, 100, 10])).value.length, 0);
+  assert.equal((await fs.handle("fileStat", [id])).value.size, 5);
+  assert.equal(dec((await fs.handle("read", [id, 1, 10])).value), "2345");
+  assert.equal((await fs.handle("fileStat", [id])).value.size, 5);
+  await fs.handle("close", [id]);
+});
+
+test("a stream the store dropped (EBADF) reopens where it was", async () => {
+  const big = filled(3 << 20, 5);
+  const cap = fakeCap({ "/f": big });
+  const rpc = cap.rpc.bind(cap);
+  let fail = false;
+  cap.rpc = async (m, a) => {
+    if (m === "readChunk" && fail) {
+      fail = false;
+      throw Object.assign(new Error("EBADF: no open read stream"), { code: "EBADF" });
+    }
+    return rpc(m, a);
+  };
+  const fs = capHostFs(cap);
+  const { value: id } = await fs.handle("open", ["f", ...RW]);
+  await fs.handle("read", [id, 0, 1 << 20]);
+  fail = true;
+  const r = await fs.handle("read", [id, 1 << 20, 100]);
+  assert.ok(!r.error, r.error?.message);
+  assert.ok(Buffer.from(r.value).equals(Buffer.from(big.subarray(1 << 20, (1 << 20) + 100))));
+  await fs.handle("close", [id]);
 });

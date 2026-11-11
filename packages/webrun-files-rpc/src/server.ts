@@ -17,7 +17,10 @@ export interface FilesRpcServerOptions {
    * (INVALID beyond). Bounds what one stream makes the server pull and hold. Default 64.
    */
   window?: number;
-  /** Chunks of a write kept ahead of the next one to write. Default 16. */
+  /**
+   * Chunks of a write kept ahead of the next one to write. Default 16. One window more may wait
+   * for room; a chunk beyond is refused (INVALID).
+   */
   writeWindow?: number;
   /** Largest chunk a write takes. Default 4 MiB. */
   maxChunkSize?: number;
@@ -287,6 +290,7 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
   /** The chunks of a write stream in order, as they arrive: what the FilesApi's write consumes. */
   async function* ordered(s: WriteStream): AsyncGenerator<Uint8Array> {
     for (;;) {
+      s.touched = now(); // the file system took the last chunk: the stream is in use
       if (s.failure !== undefined) throw s.failure;
       const chunk = s.chunks.get(s.next);
       if (chunk) {
@@ -467,6 +471,12 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
         );
       // Delivered twice: already written, or already kept.
       if (chunkId < s.next || s.chunks.has(chunkId)) return;
+      // At most one window kept and one waiting for room: what a writer can make the server hold.
+      if (chunkId >= s.next + 2 * writeWindow)
+        throw new FilesRpcError(
+          "INVALID",
+          `chunk ${chunkId} is more than ${2 * writeWindow} chunks past the next to write (${s.next})`,
+        );
       if (chunkId >= s.next + writeWindow) {
         await busy(
           s,
@@ -531,8 +541,15 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
       const t = now();
       let dropped = 0;
       for (const [id, s] of [...streams]) {
-        if (t - s.touched <= idleTimeout || s.busy > 0) continue;
-        if (s.kind === "write" && s.total !== undefined && s.next >= s.total) continue;
+        if (t - s.touched <= idleTimeout) continue;
+        // Busy: the file system is working for it. A write whose calls only wait for the holder's
+        // next chunk (waiting for room, or closeWrite waiting for a missing chunk) is idle.
+        if (s.kind === "read" && s.busy > 0) continue;
+        if (
+          s.kind === "write" &&
+          (s.chunks.has(s.next) || (s.total !== undefined && s.next >= s.total))
+        )
+          continue;
         dropped++;
         const error = new FilesRpcError("ABORTED", "the stream was idle too long");
         finish(id, error);

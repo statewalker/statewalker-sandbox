@@ -46,6 +46,8 @@ interface Reader {
   next: number;
   /** The stream has given its last chunk: nothing lies past `pos`. */
   done: boolean;
+  /** A chunk request is in flight: never closed to make room for another reader. */
+  busy: boolean;
   /** The path the stream was opened on (a rename closes it). */
   path: string;
   /** When it was last used (with no room for a stream, the least recently used one makes room). */
@@ -298,6 +300,7 @@ export function capHostFs(cap: Cap) {
         id: streamId,
         next: 0,
         done: false,
+        busy: false,
         path,
         used: Date.now(),
         size,
@@ -318,37 +321,52 @@ export function capHostFs(cap: Cap) {
   const makeRoom = (h: Handle, at: number, evicted: boolean) => {
     let lru: Handle | undefined;
     for (const o of handles.values())
-      if (o !== h && o.reader && (!lru || o.reader.used < (lru.reader as Reader).used)) lru = o;
+      if (
+        o !== h &&
+        o.reader &&
+        !o.reader.busy &&
+        (!lru || o.reader.used < (lru.reader as Reader).used)
+      )
+        lru = o;
     if (evicted || !lru) return undefined;
     closeReader(lru);
     return openReader(h, at, true);
   };
-  /** The next chunk of `h`'s stream (reopened where it was if the stream is gone). */
+  /**
+   * The next chunk of `h`'s stream. A stream that is gone (expired, the Workspace cell restarted,
+   * the store dropped it) is reopened where it was, and with no room for its source another
+   * reader makes room; a few times, then undefined (the caller reads the file whole).
+   */
   const nextChunk = async (h: Handle, r: Reader): Promise<Reader | undefined> => {
-    let res: { data: Uint8Array; done: boolean };
-    try {
-      res = await rpc.readChunk(r.id, r.next);
-    } catch (e) {
-      // The stream expired (idle 2 min), the Workspace cell restarted, or the store had no room
-      // for the stream's source: reopen where it was (making room once).
-      const gone = errorCode(e) === "UNKNOWN_STREAM";
-      if (!gone && !noRoom(e)) throw e;
-      const again = gone ? await openReader(h, r.pos) : await makeRoom(h, r.pos, false);
-      if (!again) return undefined;
-      r = again;
-      res = await rpc.readChunk(r.id, r.next);
+    for (let attempt = 0; ; attempt++) {
+      let res: { data: Uint8Array; done: boolean };
+      r.busy = true;
+      try {
+        res = await rpc.readChunk(r.id, r.next);
+      } catch (e) {
+        const gone = errorCode(e) === "UNKNOWN_STREAM" || codeOf(e) === "EBADF";
+        if (!gone && !noRoom(e)) throw e;
+        if (attempt >= 2) return undefined;
+        const again = gone ? await openReader(h, r.pos) : await makeRoom(h, r.pos, false);
+        if (!again) return undefined;
+        r = again;
+        continue;
+      } finally {
+        r.busy = false;
+      }
+      r.next++;
+      r.done = res.done;
+      r.chunk = asBytes(res.data);
+      r.chunkAt = r.pos;
+      r.pos += r.chunk.length;
+      if (res.done) {
+        // Exact now: the end, where data was read; past the end, at most where reading started.
+        r.size = r.chunk.length || r.next > 1 ? r.pos : Math.min(r.size, r.chunkAt);
+        // The last chunk: the server has ended the stream's source; give the stream back now.
+        rpc.closeRead(r.id).catch(() => {});
+      }
+      return r;
     }
-    r.next++;
-    r.done = res.done;
-    r.chunk = asBytes(res.data);
-    r.chunkAt = r.pos;
-    r.pos += r.chunk.length;
-    if (res.done) {
-      r.size = r.pos;
-      // The last chunk: the server has ended the stream's source; give the stream back now.
-      rpc.closeRead(r.id).catch(() => {});
-    }
-    return r;
   };
   /** `length` bytes at `offset` through `h`'s stream (reopened where a read jumps). */
   const streamRead = async (h: Handle, offset: number, length: number): Promise<Uint8Array> => {
@@ -362,7 +380,11 @@ export function capHostFs(cap: Cap) {
       const b = await load(f);
       return b.slice(Math.min(offset, f.size), Math.min(f.size, offset + length));
     };
-    if (!r) return whole();
+    if (!r) {
+      // Closed while its stream was opening: nothing to read (and nothing to load).
+      if (handles.get(h.id) !== h) throw err("EBADF", `no open file ${h.id}`);
+      return whole();
+    }
     const end = offset + length;
     const parts: Uint8Array[] = [];
     let at = offset;

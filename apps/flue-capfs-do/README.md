@@ -534,7 +534,8 @@ byte. A file that is only read streams: each handle reads it through a files-RPC
 its own ([Streaming](#streaming-files-of-any-size)), holding one chunk (1 MiB) at a time, so `cat`, `rg`
 or `wc` read a file of any size; a read elsewhere reopens the stream there, and so does a stream
 the Workspace cell dropped (idle, or restarted). A rename or a truncation closes the file's streams;
-with no room for one more stream the least recently used one is closed to make room. A file that is written
+with no room for one more stream the least recently used one not reading at that moment is closed
+to make room (a few tries, then the file is read whole). A file that is written
 is loaded whole at its first write (`readFileBuffer`) and saved whole (`writeFileBuffer`).
 
 | Runtime | Engine | How file operations reach the Agent cell |
@@ -696,14 +697,22 @@ capFiles(cap) = newFilesRpcClient ──► cap.rpc(method, args) ──► File
   authorized again on every block, so a revocation or a mode switch stops it between two blocks.
   A write shows at its end, all at once; a write that fails or is aborted changes nothing.
 - **A stream belongs to the capability that opened it.** The Workspace keeps one files-RPC server
-  per token (`src/files-rpc-hub.ts`), made only for a token of this workspace, so a stream id (which
-  the client chooses) means nothing to another capability's server (`UNKNOWN_STREAM`). Closing or
-  aborting needs no right, so a revoked capability can still release what it holds.
-- **Bounds:** 16 open streams per capability (`TOO_MANY_STREAMS`), 64 servers per Workspace cell
-  (the least recently used, idle ones first, are closed); the store allows 32 streams per owner and
-  256 in all (`EMFILE`). A read stream holds the chunk asked, two ahead and two behind; a write at
-  most four chunks not yet written. A stream unused for 2 minutes is closed and an unfinished write
-  dropped (looked for on files-RPC calls, at most every 5 seconds). A file is at most 1 GiB; a
+  per token (`src/files-rpc-hub.ts`), made only for a live token of this workspace (not forged,
+  not revoked), so a stream id (which the client chooses) means nothing to another capability's
+  server (`UNKNOWN_STREAM`). Closing or aborting needs no right, so a revoked capability can still
+  release what it holds.
+- **Bounds** are counted in streams, not tokens (attenuation makes new tokens freely): at most 16
+  open streams in the Workspace cell and 8 for one session, all its tokens together (`EMFILE`).
+  A read stream holds about five chunks (the one asked, two more a reader may ask ahead — a request
+  further ahead is `INVALID` — one read ahead and one kept behind); a write at most four (the
+  server refuses a chunk more than two windows of two ahead). Servers are kept for 64 tokens; only
+  idle ones (no open stream) are closed to make room, so one capability's calls never cut another's
+  streams. When every kept server has streams, a new capability's opens are refused and its other
+  calls are answered by a server used once.
+- **Expiry:** a stream unused for 1 min 45 s is closed and an unfinished write dropped (looked for on
+  files-RPC calls, at most every 5 seconds), a little before the store's own 2 minutes, so a
+  holder sees `UNKNOWN_STREAM` and reopens (Wasmer's reader does; it also reopens on the store's
+  `EBADF`). A write waiting only for the holder's chunks expires too. A file is at most 1 GiB; a
   missing or short block is `EIO`, never zeros.
 - **Not in the protocol:** appends (the store's append streams remain for the owner cell;
   holders append with `appendFile`/`appendFileBuffer`). The store's stream methods are not on the

@@ -58,8 +58,9 @@ test("a file of several blocks goes through the files RPC both ways, in 1 MiB ch
   assert.ok(range.equals(Buffer.from(data.subarray(BLOCK_BYTES - 3, BLOCK_BYTES + 7))));
   // By hand: chunk k is the k-th MiB.
   const { streamId } = await rpc().openRead("/p1/big.bin");
-  const c2 = await rpc().readChunk(streamId, 2);
-  assert.equal(c2.data.length, BLOCK_BYTES);
+  const sizes = [];
+  for (let k = 0; k < 4; k++) sizes.push((await rpc().readChunk(streamId, k)).data.length);
+  assert.deepEqual(sizes, [BLOCK_BYTES, BLOCK_BYTES, BLOCK_BYTES, 77]);
   assert.equal((await rpc().readChunk(streamId, 3)).done, true);
   await rpc().closeRead(streamId);
   assert.equal(hub.openStreams(), 0);
@@ -162,20 +163,89 @@ test("a write that fails or is cut off changes nothing and leaves no blocks", as
   assert.equal(blocks(), before);
 });
 
-test("streams per capability are bounded; another capability still has room", async () => {
-  const { files, rpc, auth } = await setup();
-  await files().write("/p1/big", [pattern(4 * BLOCK_BYTES)]);
-  const ids = [];
-  for (let i = 0; i < 16; i++) ids.push((await rpc().openRead("/p1/big")).streamId);
-  await assert.rejects(rpc().openRead("/p1/big"), code("TOO_MANY_STREAMS"));
+test("streams are bounded per session (all its tokens together) and per workspace", async () => {
+  const { s: db, auth, token } = await setup();
+  const store = new SqlFs(db);
+  const hub = new FilesRpcHub(store, auth, { maxStreams: 5, maxStreamsPerSession: 3 });
+  await store.writeFile("/p1/f", "x".repeat(10));
+  const narrow = Biscuit.fromBase64(token)
+    .attenuate(attenuationBlock({ readOnly: true }))
+    .toBase64();
+  const open = (t) => hub.call(t, "openRead", ["/p1/f"]);
+  const a = await open(token);
+  await open(token);
+  await open(narrow); // an attenuated token counts for its session
+  await assert.rejects(open(narrow), code("EMFILE"));
+  await assert.rejects(open(token), code("EMFILE"));
   const bob = auth.startSession("bob", ["/p1"]).token;
-  const b = await rpc(bob).openRead("/p1/big");
-  await rpc(bob).closeRead(b.streamId);
-  for (const id of ids) await rpc().closeRead(id);
-  assert.ok(await rpc().openRead("/p1/big"));
+  await open(bob);
+  await open(bob);
+  await assert.rejects(
+    open(auth.startSession("carol", ["/p1"]).token),
+    code("EMFILE"),
+    "workspace",
+  );
+  // Closing gives the room back.
+  await hub.call(token, "closeRead", [a.streamId]);
+  await open(narrow);
 });
 
-test("servers per workspace are bounded (least recently used, idle first, go)", async () => {
+test("a server with open streams is never evicted: a new capability cannot stream, its other calls work", async () => {
+  const { s: db, auth, token } = await setup();
+  const store = new SqlFs(db);
+  const hub = new FilesRpcHub(store, auth, { maxServers: 2 });
+  await store.writeFile("/p1/f", "abc");
+  const bob = auth.startSession("bob", ["/p1"]).token;
+  const carol = auth.startSession("carol", ["/p1"]).token;
+  const a = await hub.call(token, "openRead", ["/p1/f"]);
+  const b = await hub.call(bob, "openRead", ["/p1/f"]);
+  await assert.rejects(hub.call(carol, "openRead", ["/p1/f"]), code("EMFILE"));
+  await assert.rejects(hub.call(carol, "openWrite", ["/p1/g"]), code("EMFILE"));
+  assert.equal(await hub.call(carol, "exists", ["/p1/f"]), true);
+  assert.equal(hub.servers, 2);
+  for (const [t, r] of [
+    [token, a],
+    [bob, b],
+  ])
+    assert.equal(
+      new TextDecoder().decode((await hub.call(t, "readChunk", [r.streamId, 0])).data),
+      "abc",
+    );
+  // An idle server makes room.
+  await hub.call(bob, "closeRead", [b.streamId]);
+  const c = await hub.call(carol, "openRead", ["/p1/f"]);
+  assert.equal((await hub.call(carol, "readChunk", [c.streamId, 0])).done, true);
+  assert.equal(hub.servers, 2);
+  assert.equal(await store.exists("/p1/g"), false, "the refused write staged nothing");
+});
+
+test("a revoked capability gets no server", async () => {
+  const { hub, auth, session, token } = await setup();
+  const narrow = Biscuit.fromBase64(token)
+    .attenuate(attenuationBlock({ readOnly: true }))
+    .toBase64();
+  auth.revoke(session, (await auth.revocationIds(narrow)).at(-1));
+  await assert.rejects(hub.call(narrow, "exists", ["/p1/a"]), code("EACCES"));
+  assert.equal(hub.servers, 0);
+  assert.equal(await hub.call(token, "exists", ["/p1/a"]), true);
+});
+
+test("a read stream holds a few chunks: a request far ahead is refused", async () => {
+  const { files, rpc } = await setup();
+  await files().write("/p1/big", [pattern(10 * BLOCK_BYTES)]);
+  const { streamId } = await rpc().openRead("/p1/big");
+  await assert.rejects(rpc().readChunk(streamId, 7), code("INVALID"));
+  assert.equal((await rpc().readChunk(streamId, 2)).data.length, BLOCK_BYTES);
+});
+
+test("a write cannot make the workspace hold more than a few chunks", async () => {
+  const { rpc } = await setup();
+  const { streamId } = await rpc().openWrite("/p1/w");
+  await assert.rejects(rpc().writeChunk(streamId, 9, pattern(10)), code("INVALID"));
+  await rpc().abortWrite(streamId);
+});
+
+test("servers per workspace are bounded (least recently used idle ones go)", async () => {
   const { hub, auth, token } = await setup();
   const { streamId } = await hub.call(token, "openRead", ["/p1/a"]);
   for (let i = 0; i < 70; i++)
@@ -211,4 +281,13 @@ test("idle streams are dropped (reads let go of their content, writes of their b
     .then((o) => rpc().closeRead(o.streamId));
   assert.equal(blocks(), n - 3);
   assert.equal(await files().exists("/p1/new"), false);
+});
+
+test("move and copy onto another spelling of the same path keep the file", async () => {
+  const { files } = await setup();
+  for (const other of ["/p1/./a", "/p1/x/../a", "p1//a/"]) {
+    assert.equal(await files().copy("/p1/a", other), true, other);
+    assert.equal(await files().move("/p1/a", other), true, other);
+    assert.equal((await collect(files().read("/p1/a"))).toString(), "1", other);
+  }
 });
