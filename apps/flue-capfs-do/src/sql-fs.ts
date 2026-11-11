@@ -3,8 +3,9 @@
 // owner cell, and it is the only thing that touches file data. It knows nothing about
 // rights: FsGate authorizes every entry an operation touches before calling it.
 //
-// Paths given to it are already normalised by the caller. Contents are stored as UTF-8 text
-// (binary data written through CapFs is decoded as UTF-8 first: not binary-safe).
+// Paths given to it are already normalised by the caller. Contents are text: stored as the
+// BLOB of their UTF-8 bytes (a TEXT value would end at the first NUL on node:sqlite), read
+// back as text. Binary data written through CapFs is decoded as UTF-8 first: not binary-safe.
 
 import { dirname, fsError, join } from "./path.ts";
 
@@ -40,7 +41,8 @@ type Row = {
   id: number;
   path: string;
   kind: "file" | "dir";
-  data: string | null;
+  /** A BLOB (ArrayBuffer on workerd and cellb), or TEXT in rows written before BLOBs. */
+  data: ArrayBuffer | Uint8Array | string | null;
   mode: number;
   mtime: number;
 };
@@ -51,6 +53,17 @@ const SUBTREE = "(path = ? OR substr(path, 1, ?) = ?)";
 const subtreeArgs = (path: string) => [path, path.length + 1, `${path}/`];
 
 const enc = new TextEncoder();
+const dec = new TextDecoder();
+/** A file's text as the value stored: its UTF-8 bytes, as the ArrayBuffer SQL bindings take. */
+const toBlob = (text: string): ArrayBuffer => enc.encode(text).buffer as ArrayBuffer;
+const textOf = (data: Row["data"]): string =>
+  data == null ? "" : typeof data === "string" ? data : dec.decode(data);
+const sizeOf = (data: Row["data"]): number =>
+  data == null
+    ? 0
+    : typeof data === "string"
+      ? enc.encode(data).length
+      : (data as ArrayBuffer | Uint8Array).byteLength;
 
 export class SqlFs {
   #sql: SqlLike;
@@ -76,14 +89,14 @@ export class SqlFs {
     if (!row) throw fsError("ENOENT", `no such file or directory '${path}'`);
     return row;
   }
-  #put(path: string, kind: "file" | "dir", data: string | null, mode?: number) {
+  #put(path: string, kind: "file" | "dir", text: string | null, mode?: number) {
     this.#sql.exec(
       `INSERT INTO fs_entries (path, parent, kind, data, mode, mtime) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET kind = excluded.kind, data = excluded.data, mtime = excluded.mtime`,
       path,
       dirname(path),
       kind,
-      data,
+      text === null ? null : toBlob(text),
       mode ?? (kind === "dir" ? 0o755 : 0o644),
       Date.now(),
     );
@@ -116,7 +129,7 @@ export class SqlFs {
     const row = this.#must(path);
     if (row.kind === "dir")
       throw fsError("EISDIR", `illegal operation on a directory, read '${path}'`);
-    return row.data ?? "";
+    return textOf(row.data);
   }
   async readFileBuffer(path: string): Promise<Uint8Array> {
     return enc.encode(await this.readFile(path));
@@ -132,7 +145,7 @@ export class SqlFs {
     if (row?.kind === "dir")
       throw fsError("EISDIR", `illegal operation on a directory, append '${path}'`);
     this.#ensureParents(path);
-    this.#put(path, "file", (row?.data ?? "") + String(data ?? ""));
+    this.#put(path, "file", textOf(row?.data ?? null) + String(data ?? ""));
   }
   async exists(path: string): Promise<boolean> {
     return this.#get(path) !== undefined;
@@ -145,7 +158,7 @@ export class SqlFs {
       isFile: row.kind === "file",
       isDirectory: row.kind === "dir",
       isSymbolicLink: false,
-      size: row.kind === "file" ? enc.encode(row.data ?? "").length : 0,
+      size: row.kind === "file" ? sizeOf(row.data) : 0,
       mode: row.mode,
       mtime: new Date(row.mtime).toISOString(),
     };
@@ -252,7 +265,7 @@ export class SqlFs {
     for (const e of list) {
       const target = dst + e.path.slice(src.length);
       if (e.kind === "dir") await this.mkdir(target, { recursive: true });
-      else await this.writeFile(target, this.#get(e.path)?.data ?? "");
+      else await this.writeFile(target, textOf(this.#get(e.path)?.data ?? null));
     }
   }
 

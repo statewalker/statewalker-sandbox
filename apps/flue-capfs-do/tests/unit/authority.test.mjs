@@ -9,14 +9,20 @@ import { Authority, FsGate } from "../../src/authority.ts";
 import { attenuationBlock } from "../../src/policy.ts";
 import { SqlFs } from "../../src/sql-fs.ts";
 
-// ctx.storage.sql's exec(query, ...bindings) over node:sqlite.
+// ctx.storage.sql's exec(query, ...bindings) over node:sqlite. Like workerd (and cellb's
+// adapter), BLOBs are bound and returned as ArrayBuffer.
 function sql() {
   const db = new DatabaseSync(":memory:");
+  const out = (v) =>
+    v instanceof Uint8Array ? v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength) : v;
   return {
-    exec(q, ...b) {
+    exec(q, ...bindings) {
+      const b = bindings.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
       const st = db.prepare(q);
       if (/^\s*(SELECT|WITH)/i.test(q)) {
-        const rows = st.all(...b);
+        const rows = st
+          .all(...b)
+          .map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, out(v)])));
         return { toArray: () => rows };
       }
       st.run(...b);
@@ -372,4 +378,28 @@ test("readdirStat lists what readdir lists, with each entry's stat, in one call"
   assert.equal(e.size, 2, "sizes are UTF-8 bytes");
   await denied(gate(scoped).call("readdirStat", "/p1"));
   await assert.rejects(gate().call("readdirStat", "/p1/a"), (err) => err.code === "ENOTDIR");
+});
+
+test("file text is kept as UTF-8 bytes: NUL, non-ASCII and old TEXT rows read back whole", async () => {
+  const { s, store, gate } = await setup();
+  const text = "a\u0000b\u00e9\u{1F600}\u0000";
+  await gate().call("writeFile", "/p1/nul", text);
+  assert.equal(await gate().call("readFile", "/p1/nul"), text);
+  assert.equal((await gate().call("stat", "/p1/nul")).size, Buffer.byteLength(text));
+  await gate().call("appendFile", "/p1/nul", "\u0000z");
+  assert.equal(await gate().call("readFile", "/p1/nul"), `${text}\u0000z`);
+  const listed = (await gate().call("readdirStat", "/p1")).find((e) => e.name === "nul");
+  assert.equal(listed.size, Buffer.byteLength(`${text}\u0000z`));
+  await store.cp("/p1/nul", "/p1/copy");
+  assert.equal(await store.readFile("/p1/copy"), `${text}\u0000z`);
+  assert.equal(
+    s.exec("SELECT typeof(data) AS t FROM fs_entries WHERE path = '/p1/nul'").toArray()[0].t,
+    "blob",
+  );
+  // A row written as TEXT (before BLOBs) still reads, and is rewritten as a BLOB.
+  s.exec("UPDATE fs_entries SET data = ? WHERE path = '/p1/a'", "old é");
+  assert.equal(await store.readFile("/p1/a"), "old é");
+  assert.equal((await store.stat("/p1/a")).size, 6);
+  await store.appendFile("/p1/a", "!");
+  assert.equal(await store.readFile("/p1/a"), "old é!");
 });

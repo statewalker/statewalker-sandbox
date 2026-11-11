@@ -87,6 +87,29 @@ test("admin routes need the admin key", async () => {
   assert.equal(res.status, 401, "a wrong key is refused");
 });
 
+test("file text keeps NUL bytes and non-ASCII characters (the store keeps bytes)", async () => {
+  const ws = freshWs();
+  const text = "a\u0000b\u00e9\u{1F600}\u0000\n";
+  await seed(ws, { "/n/seeded": text });
+  assert.equal((await files(ws))["/n/seeded"], text);
+  const { token } = await session(ws, "alice", ["/n"]);
+  const r = await sh(
+    `nul-${ws}`,
+    ws,
+    token,
+    "token",
+    "printf 'x\\0y' > /n/written; wc -c < /n/written; wc -c < /n/seeded; od -c /n/written | head -1",
+  );
+  assert.equal(r.exitCode, 0, r.stderr);
+  const [written, seeded] = r.stdout
+    .trim()
+    .split("\n")
+    .map((l) => l.trim());
+  assert.equal(written, "3");
+  assert.equal(seeded, String(Buffer.byteLength(text)));
+  assert.equal((await files(ws))["/n/written"], "x\u0000y");
+});
+
 for (const transport of TRANSPORTS) {
   describe(`transport=${transport}`, () => {
     test("rights: only allowed branches exist for the agent; exact prefixes; '..' cannot escape", async () => {

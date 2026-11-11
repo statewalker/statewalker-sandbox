@@ -110,6 +110,18 @@ export function wasmerCases({ api, label = "", llm = false }) {
     assert.match(made.stdout, / 4 .*f300\.txt/);
   });
 
+  add("NUL bytes written in Wasmer are kept by the store", async () => {
+    const { ws, token } = await setup();
+    const r = await sh(
+      ws,
+      token,
+      "printf 'a\\0b' > /workspace/proj/nul; wc -c < /workspace/proj/nul",
+    );
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(r.stdout.trim(), "3");
+    assert.equal((await files(ws))["/proj/nul"], "a\u0000b");
+  });
+
   add("the guest's own `wasmer` command cannot fetch packages", async () => {
     const { ws, token } = await setup();
     const r = await sh(ws, token, "wasmer run syrusakbary/cowsay moo 2>&1; echo rc=$?");
