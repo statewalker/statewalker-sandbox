@@ -431,3 +431,62 @@ test("a written file reads its bytes; no room for a stream falls back to a whole
   assert.equal(dec((await fs.handle("read", [b, 1, 3])).value), "orl");
   assert.ok(cap.calls.includes("readFileBuffer /b"));
 });
+
+test("streamed reads recover: an expired stream reopens, a rename closes it, handles read apart", async () => {
+  const big = Buffer.alloc(3 * 1024 * 1024);
+  for (let i = 0; i < big.length; i++) big[i] = (i * 7) & 0xff;
+  const cap = fakeCap({ "/f": big });
+  const fs = capHostFs(cap);
+  const opens = () => cap.calls.filter((c) => c.startsWith("openRead")).length;
+  const read = async (id, at, n) => Buffer.from((await fs.handle("read", [id, at, n])).value);
+
+  // The store dropped the stream (idle, or the cell restarted): the next read reopens there.
+  const { value: a } = await fs.handle("open", ["f", ...RW]);
+  assert.ok((await read(a, 0, 1 << 20)).equals(big.subarray(0, 1 << 20)));
+  cap.streams.clear();
+  assert.ok((await read(a, 1 << 20, 100)).equals(big.subarray(1 << 20, (1 << 20) + 100)));
+
+  // A rename closes the stream (it names the old path); reads go on under the new name.
+  await fs.handle("rename", ["f", "g"]);
+  assert.equal(cap.streams.size, 0);
+  assert.ok((await read(a, 2 << 20, 10)).equals(big.subarray(2 << 20, (2 << 20) + 10)));
+
+  // Two handles reading at places far apart do not reopen each other's streams.
+  const { value: b } = await fs.handle("open", ["g", ...RW]);
+  const before = opens();
+  for (let i = 0; i < 8; i++) {
+    await read(a, (2 << 20) + 10 + i * 1000, 1000);
+    await read(b, i * 1000, 1000);
+  }
+  assert.equal(opens() - before, 1, "only b's first read opens a stream");
+  // fstat reports the size the handle reads.
+  assert.equal((await fs.handle("fileStat", [b])).value.size, big.length);
+  // Truncating through another open closes the readers.
+  const { value: t } = await fs.handle("open", ["g", false, true, false, false, true, false]);
+  assert.equal(cap.streams.size, 0);
+  assert.equal((await read(b, 0, 10)).length, 0);
+  for (const id of [a, b, t]) await fs.handle("close", [id]);
+});
+
+test("streamed reads: a full stream table frees the least recently used reader; closing mid-open leaks nothing", async () => {
+  const cap = fakeCap({ "/x": "x".repeat(100), "/y": "y".repeat(100), "/z": "z".repeat(100) });
+  const fs = capHostFs(cap);
+  cap.limitStreams(2);
+  const ids = [];
+  for (const n of ["x", "y", "z"]) {
+    const { value } = await fs.handle("open", [n, ...RW]);
+    ids.push(value);
+    assert.equal(dec((await fs.handle("read", [value, 0, 3])).value), n.repeat(3));
+  }
+  assert.equal(cap.streams.size, 2, "x's reader made room for z's");
+  assert.ok(!cap.calls.includes("readFileBuffer /z"), "z still streams");
+  for (const id of ids) await fs.handle("close", [id]);
+  assert.equal(cap.streams.size, 0);
+  // The handle closes while its stream is opening: the new stream is given back.
+  cap.limitStreams(Number.POSITIVE_INFINITY);
+  const { value: id } = await fs.handle("open", ["x", ...RW]);
+  const pending = fs.handle("read", [id, 0, 1]);
+  await fs.handle("close", [id]);
+  await pending;
+  assert.equal(cap.streams.size, 0);
+});

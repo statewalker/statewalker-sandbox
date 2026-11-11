@@ -530,9 +530,11 @@ capability. Open files are buffered (one buffer per path, shared by its handles)
 flush or close. WASIX drops what close returns, so nothing may fail there silently: creating or
 truncating a file is written through at open, the write right on an existing file is asked at the
 first write (WASIX opens files read-write even to read them). Binary content is stored byte for
-byte. A file that is only read streams: its reads go through one chunk stream
+byte. A file that is only read streams: each handle reads it through a chunk stream of its own
 ([Streaming](#streaming-files-of-any-size)), holding one chunk (1 MiB) at a time, so `cat`, `rg`
-or `wc` read a file of any size; a read elsewhere reopens the stream there. A file that is written
+or `wc` read a file of any size; a read elsewhere reopens the stream there, and so does a stream
+the Workspace cell dropped (idle, or restarted). A rename or a truncation closes the file's streams;
+with no room for one more stream the least recently used one is closed to make room. A file that is written
 is loaded whole at its first write (`readFileBuffer`) and saved whole (`writeFileBuffer`).
 
 | Runtime | Engine | How file operations reach the Agent cell |

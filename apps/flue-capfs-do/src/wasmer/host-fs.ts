@@ -30,17 +30,19 @@ interface OpenFile {
   refs: number;
   /** Whether the capability lets this file be written, asked at the first write. */
   writable?: Promise<void>;
-  /**
-   * Until the file is written (and `bytes` loaded), reads go through a chunk stream: only the
-   * current chunk is held, so a file of any size reads in a constant amount of memory.
-   */
-  reader?: Reader;
-  /** Reads of one file, one at a time (the stream has one position). */
-  reading?: Promise<unknown>;
 }
 
+/**
+ * Until a file is written (and its `bytes` loaded), each handle reads it through a chunk stream
+ * of its own: only the current chunk is held, so a file of any size reads in a constant amount of
+ * memory, and two handles reading at different places do not disturb each other.
+ */
 interface Reader {
   id: string;
+  /** The path the stream was opened on (a rename closes it). */
+  path: string;
+  /** When it was last used (on EMFILE the least recently used one makes room). */
+  used: number;
   /** The file's size when the stream was opened (what it reads). */
   size: number;
   /** Where the stream continues, and the chunk last read (bytes from `chunkAt`). */
@@ -50,6 +52,10 @@ interface Reader {
 }
 
 interface Handle {
+  id: number;
+  reader?: Reader;
+  /** Reads of one handle, one at a time (its stream has one position). */
+  reading?: Promise<unknown>;
   file: OpenFile;
   append: boolean;
 }
@@ -197,7 +203,7 @@ export function capHostFs(cap: Cap) {
         if (!f.bytes) {
           f.bytes = bytes;
           f.size = bytes.length;
-          closeReader(f); // the loaded bytes are read from now on
+          closeReaders(f); // the loaded bytes are read from now on
         }
       })().finally(() => {
         f.loading = undefined;
@@ -246,35 +252,64 @@ export function capHostFs(cap: Cap) {
     f.bytes = out;
     return out;
   };
-  const closeReader = (f: OpenFile) => {
-    const r = f.reader;
-    f.reader = undefined;
-    if (r) cap.call("closeRead", f.path, r.id).catch(() => {});
+  const codeOf = (e: unknown) =>
+    (e as { code?: string })?.code ?? /^(E[A-Z]+):/.exec(String((e as Error)?.message))?.[1];
+  const closeReader = (h: Handle) => {
+    const r = h.reader;
+    h.reader = undefined;
+    if (r) cap.call("closeRead", r.path, r.id).catch(() => {});
   };
-  const openReader = async (f: OpenFile, at: number): Promise<Reader | undefined> => {
-    closeReader(f);
-    try {
-      const { id, size } = (await cap.call("openRead", f.path, { start: at })) as {
-        id: string;
-        size: number;
-      };
-      f.reader = { id, size, pos: Math.min(at, size), chunk: EMPTY_BYTES, chunkAt: at };
-      return f.reader;
-    } catch (e) {
-      const code =
-        (e as { code?: string })?.code ?? /^(E[A-Z]+):/.exec(String((e as Error)?.message))?.[1];
-      // No room for one more stream: read the file whole, as before streams.
-      if (code === "EMFILE") return undefined;
-      throw e;
+  /** The file's readers are of no use once it is loaded, truncated or renamed. */
+  const closeReaders = (f: OpenFile) => {
+    for (const h of handles.values()) if (h.file === f) closeReader(h);
+  };
+  const live = (h: Handle) => handles.get(h.id) === h && !h.file.bytes;
+  /** Opens `h`'s stream at `at`; undefined: read the file whole instead (no stream to be had). */
+  const openReader = async (h: Handle, at: number): Promise<Reader | undefined> => {
+    closeReader(h);
+    const path = h.file.path;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const { id, size } = (await cap.call("openRead", path, { start: at })) as {
+          id: string;
+          size: number;
+        };
+        // Closed, loaded or renamed while the stream was opening: give it back.
+        if (!live(h) || h.file.path !== path) {
+          cap.call("closeRead", path, id).catch(() => {});
+          return undefined;
+        }
+        h.reader = {
+          id,
+          path,
+          used: Date.now(),
+          size,
+          pos: Math.min(at, size),
+          chunk: EMPTY_BYTES,
+          chunkAt: at,
+        };
+        return h.reader;
+      } catch (e) {
+        if (codeOf(e) !== "EMFILE") throw e;
+        // No room: the least recently used reader of another handle makes room (it reopens
+        // where it was on its next read), once; else the file is read whole, as before streams.
+        let lru: Handle | undefined;
+        for (const o of handles.values())
+          if (o !== h && o.reader && (!lru || o.reader.used < (lru.reader as Reader).used)) lru = o;
+        if (attempt > 0 || !lru) return undefined;
+        closeReader(lru);
+      }
     }
   };
-  /** `length` bytes at `offset` through the file's stream (reopened where a read jumps). */
-  const streamRead = async (f: OpenFile, offset: number, length: number): Promise<Uint8Array> => {
-    let r = f.reader;
+  /** `length` bytes at `offset` through `h`'s stream (reopened where a read jumps). */
+  const streamRead = async (h: Handle, offset: number, length: number): Promise<Uint8Array> => {
+    if (length <= 0) return EMPTY_BYTES;
+    let r = h.reader;
     if (r && offset >= r.size) return EMPTY_BYTES; // past the end: nothing to reopen for
     const inChunk = (at: number) => !!r && at >= r.chunkAt && at < r.chunkAt + r.chunk.length;
-    if (!r || (!inChunk(offset) && offset !== r.pos)) r = await openReader(f, offset);
+    if (!r || (!inChunk(offset) && offset !== r.pos)) r = await openReader(h, offset);
     if (!r) {
+      const f = h.file;
       const b = await load(f);
       return b.slice(Math.min(offset, f.size), Math.min(f.size, offset + length));
     }
@@ -284,12 +319,23 @@ export function capHostFs(cap: Cap) {
     while (at < end) {
       if (!inChunk(at)) {
         if (at !== r.pos) break;
-        const chunk = asBytes(await cap.call("readChunk", f.path, r.id, STREAM_CHUNK));
+        let chunk: Uint8Array;
+        try {
+          chunk = asBytes(await cap.call("readChunk", r.path, r.id, STREAM_CHUNK));
+        } catch (e) {
+          // The stream expired (idle 2 min) or the Workspace cell restarted: reopen where it was.
+          if (codeOf(e) !== "EBADF") throw e;
+          const again = await openReader(h, r.pos);
+          if (!again) break;
+          r = again;
+          chunk = asBytes(await cap.call("readChunk", r.path, r.id, STREAM_CHUNK));
+        }
         if (!chunk.length) break;
         r.chunk = chunk;
         r.chunkAt = r.pos;
         r.pos += chunk.length;
       }
+      r.used = Date.now();
       const from = at - r.chunkAt;
       const take = r.chunk.subarray(from, Math.min(r.chunk.length, from + (end - at)));
       parts.push(take);
@@ -308,10 +354,8 @@ export function capHostFs(cap: Cap) {
     const h = handles.get(id);
     if (!h) return;
     handles.delete(id);
-    if (--h.file.refs === 0) {
-      files.delete(h.file.path);
-      closeReader(h.file);
-    }
+    closeReader(h);
+    if (--h.file.refs === 0) files.delete(h.file.path);
     await save(h.file);
   };
 
@@ -355,6 +399,7 @@ export function capHostFs(cap: Cap) {
         files.set(path, f);
       }
       if (write && (!exists || truncate)) {
+        closeReaders(f);
         f.bytes = new Uint8Array();
         f.size = 0;
         f.dirty = false;
@@ -362,18 +407,19 @@ export function capHostFs(cap: Cap) {
       }
       f.refs++;
       const id = next++;
-      handles.set(id, { file: f, append: !!append });
+      handles.set(id, { id, file: f, append: !!append });
       return id;
     },
     async read(id, offset, length) {
-      const f = handle(id).file;
+      const h = handle(id);
       const run = async () => {
-        if (!f.bytes) return streamRead(f, Number(offset), Number(length));
+        const f = h.file;
+        if (!f.bytes) return streamRead(h, Number(offset), Number(length));
         const at = Math.min(Number(offset), f.size);
         return f.bytes.slice(at, Math.min(f.size, at + Number(length)));
       };
-      const p = (f.reading ?? Promise.resolve()).then(run, run);
-      f.reading = p.catch(() => {});
+      const p = (h.reading ?? Promise.resolve()).then(run, run);
+      h.reading = p.catch(() => {});
       return p;
     },
     async write(id, offset, bytes) {
@@ -403,11 +449,13 @@ export function capHostFs(cap: Cap) {
       return null;
     },
     async fileStat(id) {
-      const f = handle(id).file;
+      const h = handle(id);
+      const f = h.file;
       const s = (await exists(f.path))
         ? await stat(f.path)
         : { kind: "file", size: 0, modified: "0", accessed: "0", created: "0" };
-      return { ...s, size: f.bytes ? f.size : s.size };
+      // The size this handle reads: its buffer, else its stream's snapshot.
+      return { ...s, size: f.bytes ? f.size : h.reader ? h.reader.size : s.size };
     },
     async flush(id) {
       await save(handle(id).file);
@@ -454,6 +502,7 @@ export function capHostFs(cap: Cap) {
         forget(dst, true);
       }
       if (f) {
+        closeReaders(f); // streams name the old path; reads reopen on the new one
         files.delete(src);
         f.path = dst;
         f.writable = undefined;
@@ -485,7 +534,7 @@ export function capHostFs(cap: Cap) {
     },
     /** Open files of a sandbox that ends are dropped: what was not flushed is not written. */
     close() {
-      for (const f of files.values()) closeReader(f);
+      for (const h of handles.values()) closeReader(h);
       handles.clear();
       files.clear();
       clear();
