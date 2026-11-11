@@ -10,6 +10,7 @@ import { readTree, writeFiles } from "../../17-repository/src/commands.js";
 import { encodeCommit } from "../../17-repository/src/git-format.js";
 import type { Repository } from "../../17-repository/src/object-store.js";
 import { filesRepository } from "../../17-repository/src/repository.js";
+import { XdiffLimitError } from "../src/xdiff.js";
 import { mergeContent } from "../src/xmerge.js";
 
 const dirs: string[] = [];
@@ -85,14 +86,23 @@ async function gitMerges(cases: Case[]) {
   };
   const results: GitResult[] = [];
   for (let k = 0; k < cases.length; k++) {
-    const clean = next() === "1";
+    const status = next();
+    if (status !== "0" && status !== "1")
+      throw new Error(`merge-tree: status ${JSON.stringify(status)}`);
+    const clean = status === "1";
     const tree = next();
+    if (!/^[0-9a-f]{40}$/.test(tree)) throw new Error(`merge-tree: tree ${JSON.stringify(tree)}`);
     if (!clean) {
       while (next() !== "");
-      for (let t = next(); t !== ""; t = next()) at += Number(t) + 2;
+      for (let t = next(); t !== ""; t = next()) {
+        if (!/^\d+$/.test(t)) throw new Error(`merge-tree: message count ${JSON.stringify(t)}`);
+        at += Number(t) + 2;
+      }
     } else if (next() !== "") throw new Error("merge-tree: a clean merge with more output");
     results.push({ clean, tree });
   }
+  // everything consumed (the output ends with a NUL: one empty token is left)
+  if (at !== tok.length - 1 || tok[at] !== "") throw new Error("merge-tree: output left over");
   return { repo, results, pairs };
 }
 
@@ -197,6 +207,25 @@ describe("M1 content merge, byte-identical to git merge-tree", () => {
         base: enc.encode("a\0b"),
         ours: enc.encode("a\0c"),
         theirs: enc.encode("a\0d"),
+      },
+      // merge-ort's trivial merges come before the binary check
+      {
+        name: "binary, ours unchanged",
+        base: enc.encode("x\0\n"),
+        ours: enc.encode("x\0\n"),
+        theirs: enc.encode("y\0\n"),
+      },
+      {
+        name: "binary, both the same",
+        base: enc.encode("a\n"),
+        ours: enc.encode("b\0\n"),
+        theirs: enc.encode("b\0\n"),
+      },
+      {
+        name: "binary, theirs unchanged",
+        base: enc.encode("a\n"),
+        ours: enc.encode("b\0\n"),
+        theirs: enc.encode("a\n"),
       },
       {
         name: "repeated lines (histogram's fallback)",
@@ -381,4 +410,34 @@ describe("M6d the classic algorithm's discards (lines that cannot match amid lin
     const wrong = await compare(cases);
     expect(wrong.map((w) => w.split("\n")[0])).toEqual([]);
   }, 900_000);
+});
+
+describe("review #93", () => {
+  it("histogram's chain limit: git fails the merge; ours throws a typed error", () => {
+    const X = Array.from({ length: 8400 }, (_, i) => `u${i}\n`);
+    const Y: string[] = [];
+    for (let k = 0; k <= 64; k++) Y.push(X[128 * k + ((128 - k) % 128)] as string);
+    const Z = Array.from({ length: 65 }, (_, i) => `z${i}\n`);
+    const b = (ls: string[]) => enc.encode(ls.join(""));
+    expect(() =>
+      mergeContent(b([...X, ...Y]), b([...X, ...Z]), b([...X, ...Y, "tail\n"]), {
+        ours: "o",
+        theirs: "t",
+      }),
+    ).toThrow(XdiffLimitError);
+  });
+
+  it("joining many refined conflicts is linear (git's is a list walk)", () => {
+    const n = 200_000;
+    const lines = (f: (i: number) => string) =>
+      enc.encode(Array.from({ length: n }, (_, i) => `${f(i)}\n`).join(""));
+    const base = lines((i) => `b${i}`);
+    const ours = lines((i) => (i % 2 ? "c" : `o${i}`));
+    const theirs = lines((i) => (i % 2 ? "c" : `t${i}`));
+    const t0 = performance.now();
+    const r = mergeContent(base, ours, theirs, { ours: "o", theirs: "t" });
+    const ms = performance.now() - t0;
+    expect(r.conflicts).toBe(1);
+    expect(ms).toBeLessThan(3000); // 5.2 s with the quadratic join
+  }, 60_000);
 });
