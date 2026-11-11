@@ -121,7 +121,14 @@ describe("R1 pointers and filters", () => {
     ];
     for (const [i, content] of corpus.entries()) {
       writeFileSync(join(w, `f${i}`), content);
-      const native = lfsGit(w, ["lfs", "pointer", `--file=f${i}`]).toString();
+      // an empty file has no pointer: git-lfs 3.4 prints nothing, newer ones exit 1
+      // ("pointer error"); either way the file stays its own, empty, pointer
+      const r = spawnSync("git", [...LFS, "lfs", "pointer", `--file=f${i}`], {
+        cwd: w,
+        env: gitEnv,
+      });
+      if (r.status !== 0 && content.length) throw new Error(r.stderr.toString());
+      const native = r.status === 0 ? r.stdout.toString() : "";
       const nativeClean = lfsGit(w, ["lfs", "clean", "--", `f${i}`], content).toString();
       const ours = await clean(store, [content]);
       expect(dec.decode(ours.pointer), `#${i}`).toBe(native);
