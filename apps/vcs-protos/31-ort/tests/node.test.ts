@@ -115,6 +115,21 @@ export const renameCases: Case[] = (() => {
       theirs: f([keep, ["a", "120000", "target"]]),
     },
     {
+      // only relevant sources (changed on the other side) are paired past the exact pass: z goes to
+      // y, which theirs edited, though x is closer
+      name: "an irrelevant source does not take a destination from a relevant one",
+      base: f([keep, ["x", "100644", `${A}x1\n`], ["y", "100644", `${A}y1\ny2\ny3\n`]]),
+      ours: f([keep, ["z", "100644", `${A}x1\nz\n`]]),
+      theirs: f([keep, ["x", "100644", `${A}x1\n`], ["y", "100644", `${A}y1\ny2\ny3 edited\n`]]),
+    },
+    {
+      // a binary rename/rename (1to2): each target keeps its own side's bytes
+      name: "rename/rename (1to2) of a binary file",
+      base: f([keep, ["a.bin", "100644", `\u0000${A}`]]),
+      ours: f([keep, ["b.bin", "100644", `\u0000${A}ours\n`]]),
+      theirs: f([keep, ["c.bin", "100644", `\u0000${A}theirs\n`]]),
+    },
+    {
       name: "a rename with a mode change against an edit",
       base: f([keep, ["a", "100644", A]]),
       ours: f([keep, ["b", "100755", A]]),

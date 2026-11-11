@@ -1,8 +1,8 @@
 # 31 — Can merge-ort's renames be reproduced exactly?
 
 Plan id **X13** (single diff and merge engine), slice **X13d: ort's rename conflicts**. Status:
-**answered — yes: a port that follows merge-ort's own structure matches `git merge-tree` on 3,319
-merges, 1,012 of them with renames**.
+**answered — yes: a port that follows merge-ort's own structure matches `git merge-tree` on 3,321
+merges, 1,014 of them with renames**.
 
 ## Question
 
@@ -35,7 +35,7 @@ Rejected if, on any case of the corpus, the tree id, a conflicted entry or a mes
 |---|---|
 | O1 | All of X13b's corpora pass on the port: T1–T1e, T4 and T5, 2,307 merges. |
 | O2 | 1,000 random merges with renames on one or both sides. The renames may be exact, edited, or to a new directory. They are mixed with edits, deletions, additions at the old or new path, renames of the same file by both sides, and type changes. Directories never disappear, since each has a file neither side touches. The tree id, conflicted entries and messages are equal to git's. |
-| O3 | Hand-made cases, one per rename case above, equal to git's, including the conflicted blobs with their `branch:path` labels and marker lengths. |
+| O3 | Hand-made cases, one per rename case above, equal to git's, including the conflicted blobs with their `branch:path` labels and marker lengths. Two cases were added after the mutation check: an irrelevant source that must not take a destination from a relevant one, and a binary rename/rename (1to2). |
 | O4 | The corpus reaches every rename case: git reports rename/delete, rename/rename, rename involved in collision, content conflicts at a renamed path, and clean renames. |
 | O5 | Portable: `src/` has no `node:` imports. |
 
@@ -53,7 +53,7 @@ It gives the same tree id, conflicted entries and messages as `git merge-tree --
 case:
 - O1: all 2,307 of X13b's merges, now run with rename detection on;
 - O2: 1,000 random merges with renames;
-- O3: 12 hand-made cases, one per rename case.
+- O3: 14 hand-made cases: one per rename case, plus two added after the mutation check.
 
 In O2, git reported:
 
@@ -108,7 +108,27 @@ and a path-conflict flag, which only ort's structure carries. This port supersed
 
 ### Mutation check
 
-MUTATION_TABLE
+Each mutant ran against the test groups that bear on it: the rename groups (O2, O3, T4) or the
+collection groups (T1b, T1c, T1d, T4/T5).
+
+| # | Mutant | Result |
+|---|---|---|
+| D1 | Rename detection over every source, not only relevant ones | survived the corpora; killed by an O3 case added afterwards |
+| D2 | rename/rename(1to1) handled as 1to2 | killed (O2, O3) |
+| D3 | 7-character markers for rename/rename and collisions | killed (O2, O3) |
+| D4 | Markers without `branch:path` | killed (O2, O3) |
+| D5 | No path conflict on rename/delete | killed (O2, O3) |
+| D6 | A rename against a type change counted as a collision | killed (O2) |
+| D7 | The rename source kept | killed (O2, O3) |
+| D8 | A modify/delete message for an unmodified rename/delete | killed (O2, O3) |
+| D9 | Renames in side order instead of by source path | killed (O2) |
+| D10 | No redo after renames | killed (T1d, T5) |
+| D11 | No trivial directory merges | killed (T1b, T1d, T5) |
+| D12 | No `dir_rename_mask` 0x07 | killed (T1b) |
+| D13 | A moved file that merges cleanly counts as clean | equivalent: a moved file is on one side only, so it never reaches the content merge |
+| D14 | `unique_path` suffixes counted from 1 | killed (T1c, T5) |
+| D15 | rename/rename(1to2) leaves the source unconflicted | killed (O2, O3) |
+| D16 | Binary rename/rename: both targets get ours' bytes | survived the corpora; killed by an O3 case added afterwards |
 
 ## Promotion grades
 
