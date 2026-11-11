@@ -20,7 +20,12 @@ import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
 import { gitEnv } from "../../12-index-pack/src/git-repo.js";
 import type { Person } from "../../17-repository/src/git-format.js";
 import { filesRepository } from "../../17-repository/src/repository.js";
-import { rng } from "../../29-merge/tests/tree-harness.js";
+import {
+  legacyHashChars,
+  legacyPathInWay,
+  legacyRenameToSelf,
+  rng,
+} from "../../29-merge/tests/tree-harness.js";
 import { nodeStat } from "../../34-index/src/node-stat.js";
 import { filesRefFiles, subFiles } from "../src/files-adapters.js";
 import {
@@ -104,15 +109,50 @@ function history(seed: number): string {
   git(d, ["checkout", "-qb", "side"]);
   work("side", 1 + Math.floor(rand() * 3));
   git(d, ["checkout", "-q", "main"]);
-  work("main", Math.floor(rand() * 3));
+  work("main", 1 + Math.floor(rand() * 3));
   return d;
 }
+/** a resolution that is never the HEAD tree: every unmerged path gets new content */
+const resolve = (d: string) => {
+  const paths = new Set(
+    git(d, ["ls-files", "-u"])
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => l.split("\t")[1] as string),
+  );
+  for (const p of paths) write(d, p, `resolved ${p}\n`);
+  git(d, ["add", "-A"]);
+};
+/** does this git leave AUTO_MERGE after a clean cherry-pick (2.43 does)? */
+const legacyAutoMerge = (() => {
+  const d = tmp("x15p-");
+  git(d, ["init", "-q", "-b", "main"]);
+  write(d, "a", "1\n");
+  git(d, ["add", "a"]);
+  git(d, ["commit", "-qm", "a"]);
+  git(d, ["checkout", "-qb", "side"]);
+  write(d, "b", "2\n");
+  git(d, ["add", "b"]);
+  git(d, ["commit", "-qm", "b"]);
+  git(d, ["checkout", "-q", "main"]);
+  write(d, "c", "3\n");
+  git(d, ["add", "c"]);
+  git(d, ["commit", "-qm", "c"]);
+  git(d, ["cherry-pick", "side"]);
+  return existsSync(join(d, ".git/AUTO_MERGE"));
+})();
 const twin = (d: string) => {
   const t = tmp("x15t-");
   cpSync(d, t, { recursive: true });
   return t;
 };
 
+const mergeOptions = {
+  legacyHashChars,
+  legacyPathInWay,
+  legacyRenameToSelf,
+  detectRenames: true,
+};
 async function session(d: string): Promise<Session> {
   return {
     repo: await filesRepository(
@@ -123,6 +163,8 @@ async function session(d: string): Promise<Session> {
     wt: { files: new NodeFilesApi({ rootDir: d }), stat: nodeStat(d) },
     author,
     committer,
+    mergeOptions,
+    legacyAutoMerge,
   };
 }
 
@@ -313,7 +355,7 @@ describe("S4 cherry-pick, both ways", () => {
       conflicts++;
       // native finishes ours (b), we finish native's (c)
       const c = twin(a);
-      for (const d of [a, b, c]) git(d, ["add", "-A"]);
+      for (const d of [a, b, c]) resolve(d);
       git(a, ["commit", "-q", "--no-edit"]);
       git(b, ["commit", "-q", "--no-edit"]);
       await commitOp(await session(c));
@@ -324,7 +366,7 @@ describe("S4 cherry-pick, both ways", () => {
           `${seed} our commit of native's\n git:  ${JSON.stringify(snapshot(a))}\n ours: ${JSON.stringify(snapshot(c))}`,
         );
     }
-    expect(wrong.slice(0, 2)).toEqual([]);
+    expect(wrong.map((w) => w.slice(0, 300)).slice(0, 8)).toEqual([]);
     expect(conflicts).toBeGreaterThan(10);
   }, 600_000);
 });
@@ -341,9 +383,12 @@ async function rebaseFlow(
   const b = twin(a);
   const wrong: string[] = [];
   const check = (what: string) => {
-    if (JSON.stringify(snapshot(a)) !== JSON.stringify(snapshot(b)))
+    const x = snapshot(a) as Record<string, unknown>;
+    const y = snapshot(b) as Record<string, unknown>;
+    const keys = Object.keys(x).filter((k) => JSON.stringify(x[k]) !== JSON.stringify(y[k]));
+    if (keys.length)
       wrong.push(
-        `${seed} ${what}\n git:  ${JSON.stringify(snapshot(a))}\n ours: ${JSON.stringify(snapshot(b))}`,
+        `${seed} ${what}: ${keys.map((k) => `${k}\n git:  ${JSON.stringify(x[k])}\n ours: ${JSON.stringify(y[k])}`).join("\n")}`,
       );
   };
   let stopped = !gitMay(a, ["rebase", "main"]);
@@ -386,7 +431,7 @@ describe("S5 rebase, both ways", () => {
       stops += r.stops;
       wrong.push(...r.wrong);
     }
-    expect(wrong.slice(0, 2)).toEqual([]);
+    expect(wrong.map((w) => w.slice(0, 300)).slice(0, 6)).toEqual([]);
     expect(stops).toBeGreaterThan(15);
   }, 900_000);
 
@@ -421,6 +466,8 @@ async function memSession(files: MemFilesApi): Promise<Session> {
     wt: { files },
     author,
     committer,
+    mergeOptions,
+    legacyAutoMerge,
   };
 }
 
