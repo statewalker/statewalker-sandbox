@@ -450,6 +450,28 @@ Data flow:
    later: a static export of themed sites, and a Portable Text page model (milestone 3).
 9. Optional: `static-bundled` export (E2) and a PT-editor-based notebook editor.
 
+### Status (2026-11-11)
+
+On cellb.dev's platform (`packages/notebooks`, merged in cellb.dev#98 and on the follow-up branch):
+
+- **Milestone 1** (fence attributes, inline expressions): done for themed pages. `echo`,
+  `run=false`, `sql database=… output=…` and `${…}` in prose work; plain notebook-build pages still
+  ignore them.
+- **Milestone 2** (no CDN for notebook-kit's built-ins): done. The site's module server serves
+  them through lazy `~esm/` redirects, and exports carry the ones the cells use.
+- **Milestone 3** (Portable Text): done for page models. Markdown and Notebook Kit documents
+  become Portable Text with `cell` and `expr` objects and deterministic keys; the model keeps it
+  as `content`. A PT → Markdown round trip and an editor on it are not done.
+- **Milestone 4** (theme contract, site model): done as the page/site models and the default
+  Astro theme. A search index is not done.
+- **Milestone 8** (Astro theme on cellb): done on Wrangler, celld, cellb in Node and in a tab,
+  including the static export.
+- Open: milestone 5 (`webrun-cells` orchestration), 6 (a notebook DO of its own; the platform's
+  `NotebookSite` covers most of it), 7 (data loaders, SQL precompute), and a search index.
+
+The Astro builder's fence-info question (Section 11) is settled: `@portabletext/markdown` keeps the
+whole info string in a code block's `language`.
+
 ## 11. Open questions
 
 - Where does the Astro builder live once extracted: cellb.dev (it depends on cellb's host
