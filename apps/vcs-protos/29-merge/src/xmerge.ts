@@ -67,8 +67,8 @@ function appendMerge(
 
 const recBytes = (x: XdFile, i: number) => x.data.subarray(x.start[i], x.end[i]);
 function recEqual(a: XdFile, i: number, b: XdFile, j: number): boolean {
-  const s1 = a.end[i]! - a.start[i]!;
-  if (s1 !== b.end[j]! - b.start[j]!) return false;
+  const s1 = (a.end[i] as number) - (a.start[i] as number);
+  if (s1 !== (b.end[j] as number) - (b.start[j] as number)) return false;
   const p = a.start[i] as number;
   const q = b.start[j] as number;
   for (let k = 0; k < s1; k++) if (a.data[p + k] !== b.data[q + k]) return false;
@@ -83,8 +83,8 @@ function cmpLines(xe1: XdEnv, i1: number, xe2: XdEnv, i2: number, count: number)
 
 /** is_eol_crlf: 1 CRLF, 0 LF, -1 undetermined */
 function isEolCrlf(x: XdFile, i: number): number {
-  const size = (k: number) => x.end[k]! - x.start[k]!;
-  const at = (k: number, back: number) => x.data[x.end[k]! - back];
+  const size = (k: number) => (x.end[k] as number) - (x.start[k] as number);
+  const at = (k: number, back: number) => x.data[(x.end[k] as number) - back];
   if (i < x.nrec - 1) return size(i) > 1 && at(i, 2) === 13 ? 1 : 0;
   if (!x.nrec) return -1;
   if (size(i) && at(i, 1) === 10) return size(i) > 1 && at(i, 2) === 13 ? 1 : 0;
