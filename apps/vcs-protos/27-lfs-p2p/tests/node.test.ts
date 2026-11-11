@@ -9,6 +9,7 @@ import { createRemoteOverLink, serveFetchOverLink } from "@statewalker/httpeers-
 import { pairedLinks } from "@statewalker/httpeers-bridge/ports";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { afterAll, describe, expect, it } from "vitest";
+import { createSha256, toHex } from "../../03-sha256-blake3/src/hashes.js";
 import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-files.js";
 import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
 import { git, gitEnv, noise } from "../../12-index-pack/src/git-repo.js";
@@ -222,7 +223,7 @@ describe("R2 the ranged adapter, negotiated", () => {
       });
     expect((await part(2 << 20, 3 << 20)).status).toBe(200);
     expect((await part(0, 1 << 20)).status).toBe(200);
-    const head = await fetch(href, { method: "HEAD" });
+    const head = await fetch(href, { method: "HEAD", headers: { "x-lfs-size": String(a.length) } });
     expect(head.status).toBe(404);
     expect(head.headers.get("x-lfs-held")).toBe(`0-${(1 << 20) - 1},${2 << 20}-${(3 << 20) - 1}`);
     expect(await store.has(sha(a))).toBe(false);
@@ -562,14 +563,26 @@ describe("mutation cases", () => {
     const local = diskStore();
     const a = noise(4 << 20, 23);
     const p = await local.put([a]);
-    // the server holds [1 MiB, 2 MiB) already: only the other three chunks go
-    await store.incomplete.write(
-      p.oid,
-      1 << 20,
-      (async function* () {
-        yield a.subarray(1 << 20, 2 << 20);
-      })(),
-    );
+    // the server holds [1 MiB, 2 MiB) of this uploader already: only the other three chunks go
+    const up = (await (
+      await fetch(`${url}/info/lfs/objects/batch`, {
+        method: "POST",
+        headers: { "content-type": "application/vnd.git-lfs+json" },
+        body: JSON.stringify({ operation: "upload", transfers: ["ranged"], objects: [p] }),
+      })
+    ).json()) as {
+      objects: { actions: { upload: { href: string; header: Record<string, string> } } }[];
+    };
+    const action = up.objects[0]?.actions.upload;
+    const pre = await fetch(action?.href as string, {
+      method: "PUT",
+      headers: {
+        ...action?.header,
+        "content-range": `bytes ${1 << 20}-${(2 << 20) - 1}/${a.length}`,
+      },
+      body: a.subarray(1 << 20, 2 << 20) as BodyInit,
+    });
+    expect(pre.status).toBe(200);
     const stats = { bytes: 0, requests: 0 };
     await lfsPush(url, local, [p], { chunkSize: 1 << 20, stats });
     expect(stats.bytes).toBe(3 << 20);
@@ -710,11 +723,12 @@ describe("review #90", () => {
       const res = await C(req);
       await sleep(100);
       const head = new Uint8Array(await res.arrayBuffer()).subarray(0, 10);
+      let pulls = 0;
       return new Response(
         new ReadableStream({
-          start(c) {
-            c.enqueue(head);
-            c.error(new Error("link lost"));
+          pull(c) {
+            if (pulls++ === 0) c.enqueue(head);
+            else c.error(new Error("link lost"));
           },
         }),
         { status: res.status, headers: res.headers },
@@ -796,11 +810,14 @@ describe("review #90", () => {
       const res = await C(req);
       const bytes = new Uint8Array(await res.arrayBuffer());
       bytes[0] = (bytes[0] as number) ^ 0xff;
+      // the bytes are read, then the stream fails (an error right after an enqueue would
+      // discard the queued bytes)
+      let pulls = 0;
       return new Response(
         new ReadableStream({
-          start(c) {
-            c.enqueue(bytes.subarray(0, bytes.length - 1));
-            c.error(new Error("cut"));
+          pull(c) {
+            if (pulls++ === 0) c.enqueue(bytes.subarray(0, bytes.length - 1));
+            else c.error(new Error("cut"));
           },
         }),
         { status: res.status, headers: res.headers },
@@ -852,4 +869,74 @@ describe("review #90", () => {
       lfsFetchFrom([{ name: "B", url: URL_, fetch: noToken }], diskStore(), [p]),
     ).rejects.toThrow(/401/);
   }, 60_000);
+});
+
+describe("review #90, more", () => {
+  it("all parts held but the object not completed: the client's last part completes it", async () => {
+    const { store, url } = await rangedServer();
+    const a = noise(3000, 41);
+    const p = { oid: sha(a), size: a.length };
+    // the parts of the (anonymous) uploader for this size, written as the server writes them
+    const scope = toHex(
+      createSha256()
+        .update(enc.encode(`${a.length}\0`))
+        .digest(),
+    ).slice(0, 32);
+    await store.incomplete.write(
+      p.oid,
+      0,
+      (async function* () {
+        yield a;
+      })(),
+      { scope },
+    );
+    expect(await store.has(p.oid)).toBe(false);
+    const local = diskStore();
+    await local.put([a]);
+    const stats = { bytes: 0, requests: 0 };
+    await lfsPush(url, local, [p], { chunkSize: 1000, stats });
+    expect(await store.has(p.oid)).toBe(true);
+    expect(stats.bytes).toBe(1000); // one part, re-sent
+  });
+
+  it("an upload-only HEAD learns that the object is there, not its size", async () => {
+    const tokens = new Map<string, string>();
+    const { store, url } = await rangedServer({
+      transferAuth: {
+        headers: async (op, oid) => {
+          const t = String(Math.random());
+          tokens.set(t, `${op}:${oid}`);
+          return { authorization: `Bearer ${t}` };
+        },
+        check: async (req, op, oid) =>
+          tokens.get(req.headers.get("authorization")?.replace("Bearer ", "") ?? "") ===
+          `${op}:${oid}`,
+      },
+    });
+    const p = await store.put([noise(5000, 42)]);
+    const t = "upload-token";
+    tokens.set(t, `upload:${p.oid}`);
+    const head = await fetch(`${url}/info/lfs/objects/${p.oid}`, {
+      method: "HEAD",
+      headers: { authorization: `Bearer ${t}` },
+    });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-length") ?? "0").toBe("0");
+  });
+
+  it("a first round failing without a mismatch goes on to the holders one by one", async () => {
+    const content = noise(3000, 43);
+    const p = { oid: sha(content), size: content.length };
+    const { B } = await twoHolders(content);
+    const flaky = onTransfers(B, (req, n) =>
+      n === 0 ? new Response("busy", { status: 503 }) : req,
+    );
+    const d = diskStore();
+    expect(
+      await lfsFetchFrom([{ name: "B", url: URL_, fetch: flaky }], d, [p], { chunkSize: 1000 }),
+    ).toEqual({
+      downloaded: [p.oid],
+      bad: [],
+    });
+  });
 });

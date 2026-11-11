@@ -27,17 +27,29 @@ export interface LfsStore {
     expect?: { oid: string; size?: number },
     opts?: { maxSize?: number },
   ): Promise<Pointer>;
-  /** bytes held for an interrupted download */
+  /**
+   * Bytes held for an unfinished object. A `scope` (hex) keeps one writer's parts apart from
+   * everyone else's (a server: one per uploader and declared size); none is the local downloads'.
+   */
   incomplete: {
-    size(oid: string): Promise<number>;
-    append(oid: string, source: AsyncIterable<Uint8Array>): Promise<number>;
+    size(oid: string, scope?: string): Promise<number>;
+    append(oid: string, source: AsyncIterable<Uint8Array>, scope?: string): Promise<number>;
     /** the byte ranges held, [start, end) each, sorted and disjoint (X12) */
-    ranges(oid: string): Promise<[number, number][]>;
-    /** writes a part at `offset` (bytes that arrived stay if the source fails) (X12) */
-    write(oid: string, offset: number, source: AsyncIterable<Uint8Array>): Promise<number>;
+    ranges(oid: string, scope?: string): Promise<[number, number][]>;
+    /**
+     * Writes a part at `offset`, visible only once whole (X12). Without `length`, the bytes that
+     * arrived stay if the source fails; with it, the part is kept only if it has exactly `length`.
+     */
+    write(
+      oid: string,
+      offset: number,
+      source: AsyncIterable<Uint8Array>,
+      opts?: { scope?: string; length?: number },
+    ): Promise<number>;
     /** verifies what is held and makes it visible */
-    complete(expect: Pointer): Promise<void>;
-    remove(oid: string): Promise<void>;
+    complete(expect: Pointer, scope?: string): Promise<void>;
+    /** a scope's parts, or (no scope) every part of the object */
+    remove(oid: string, scope?: string): Promise<void>;
     /** runs `fn` with no other `exclusive` call on the same object in this process */
     exclusive<T>(oid: string, fn: () => Promise<T>): Promise<T>;
   };
@@ -48,6 +60,9 @@ export class LfsVerifyError extends Error {
 }
 export class LfsTooLargeError extends Error {
   override name = "LfsTooLargeError";
+}
+export class LfsPartLengthError extends Error {
+  override name = "LfsPartLengthError";
 }
 
 /** per FilesApi, per object: the tail of the queue of `exclusive` calls */
@@ -62,32 +77,35 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
     if (!OID.test(oid)) throw new Error(`invalid lfs oid ${JSON.stringify(oid)}`);
     return at(`lfs/objects/${oid.slice(0, 2)}/${oid.slice(2, 4)}/${oid}`);
   };
-  const partsDir = (oid: string) => {
+  const partsDir = (oid: string, scope?: string) => {
     if (!OID.test(oid)) throw new Error(`invalid lfs oid ${JSON.stringify(oid)}`);
-    return at(`lfs/incomplete/${oid}`);
+    if (scope !== undefined && scope !== "" && !/^[0-9a-f]{1,64}$/.test(scope))
+      throw new Error(`invalid parts scope ${JSON.stringify(scope)}`);
+    return at(scope ? `lfs/incomplete/${oid}/@${scope}` : `lfs/incomplete/${oid}`);
   };
-  const allParts = async (oid: string) => {
-    const dir = partsDir(oid);
+  /** finished parts: `<offset>` or `<offset>.<id>`, never written in place */
+  const allParts = async (oid: string, scope?: string) => {
+    const dir = partsDir(oid, scope);
     if (!(await files.exists(dir))) return [];
     const out: { path: string; offset: number; size: number }[] = [];
     for await (const e of files.list(dir)) {
       if (e.kind !== "file") continue;
-      const offset = Number(e.name);
+      const m = /^(\d{16})(?:\.[0-9a-f]+)?$/.exec(e.name);
       const st = await files.stats(`${dir}/${e.name}`);
-      if (Number.isSafeInteger(offset) && st?.kind === "file")
-        out.push({ path: `${dir}/${e.name}`, offset, size: st.size });
+      if (m && st?.kind === "file")
+        out.push({ path: `${dir}/${e.name}`, offset: Number(m[1]), size: st.size });
     }
-    return out.sort((a, b) => a.offset - b.offset);
+    return out.sort((a, b) => a.offset - b.offset || (a.path < b.path ? -1 : 1));
   };
   /**
    * The parts that overlap no earlier one (empty ones aside), merged into the held ranges; the
    * contiguous run from offset 0 (`end`: what a sequential download resumes from); the others.
    */
-  const parts = async (oid: string) => {
+  const parts = async (oid: string, scope?: string) => {
     const kept: { path: string; offset: number; size: number }[] = [];
     const stray: string[] = [];
     let last = 0;
-    for (const p of await allParts(oid)) {
+    for (const p of await allParts(oid, scope)) {
       if (p.size > 0 && p.offset >= last) {
         kept.push(p);
         last = p.offset + p.size;
@@ -103,13 +121,29 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
     const chain = kept.filter((p) => p.offset < end);
     return { kept, chain, stray, ranges, end };
   };
-  /** a part at `offset`; a failing source ends the write normally (what arrived stays) */
-  const writePart = async (oid: string, offset: number, source: AsyncIterable<Uint8Array>) => {
+  /**
+   * A part at `offset`, written aside and renamed into the parts when finished (a listing never
+   * sees one being written). Without `length`, a failing source ends the write normally and what
+   * arrived is kept; with it, the part is kept only with exactly `length` bytes.
+   */
+  const writePart = async (
+    oid: string,
+    offset: number,
+    source: AsyncIterable<Uint8Array>,
+    o: { scope?: string; length?: number } = {},
+  ) => {
+    const dir = partsDir(oid, o.scope);
+    const tmp = at(`lfs/tmp/part-${randomId()}`);
     let failure: unknown;
+    let extra = false;
     let n = 0;
     async function* upTo() {
       try {
         for await (const c of source) {
+          if (o.length !== undefined && n + c.length > o.length) {
+            extra = true;
+            return;
+          }
           n += c.length;
           yield c;
         }
@@ -117,8 +151,24 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
         failure = e;
       }
     }
-    await files.write(`${partsDir(oid)}/${String(offset).padStart(16, "0")}`, upTo());
+    try {
+      await files.write(tmp, upTo());
+      const keep = o.length === undefined ? n > 0 : !extra && !failure && n === o.length;
+      if (
+        keep &&
+        !(await files.move(tmp, `${dir}/${String(offset).padStart(16, "0")}.${randomId()}`))
+      )
+        throw new Error(`lfs part of ${oid} at ${offset}: could not be moved into place`);
+      if (!keep) await files.remove(tmp).catch(() => false);
+    } catch (e) {
+      await files.remove(tmp).catch(() => false);
+      throw e;
+    }
     if (failure) throw failure;
+    if (o.length !== undefined && (extra || n !== o.length))
+      throw new LfsPartLengthError(
+        `lfs part of ${oid} at ${offset}: ${extra ? "more than" : n} of its ${o.length} bytes`,
+      );
     return n;
   };
   const size = async (oid: string) => {
@@ -160,7 +210,7 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
       throw e;
     }
   };
-  const held = async (oid: string) => (await parts(oid)).end;
+  const held = async (oid: string, scope?: string) => (await parts(oid, scope)).end;
   return {
     has: async (oid) => OID.test(oid) && (await size(oid)) !== undefined,
     size,
@@ -168,39 +218,41 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
     put,
     incomplete: {
       size: held,
-      async append(oid, source) {
+      async append(oid, source, scope) {
         // a sequential download: what lies past the run from 0 would overlap it, and goes
-        const { end: offset, chain } = await parts(oid);
+        const { end: offset, chain } = await parts(oid, scope);
         const keep = new Set(chain.map((p) => p.path));
-        for (const p of await allParts(oid))
+        for (const p of await allParts(oid, scope))
           if (!keep.has(p.path)) await files.remove(p.path).catch(() => false);
-        return writePart(oid, offset, source);
+        return writePart(oid, offset, source, { scope });
       },
-      async complete(expect) {
-        const { chain, end } = await parts(expect.oid);
+      async complete(expect, scope) {
+        const { chain, end } = await parts(expect.oid, scope);
         if (end < expect.size)
           throw new Error(`lfs object ${expect.oid}: ${end} of ${expect.size} bytes held`);
         async function* all() {
-          for (const p of chain) yield* files.read(p.path);
+          // each part's bytes as listed (parts are never written in place)
+          for (const p of chain) yield* files.read(p.path, { start: 0, length: p.size });
         }
         try {
           await put(all(), expect);
         } catch (e) {
           // bytes that do not verify are dropped; a failure to read them is not theirs
           if (e instanceof LfsVerifyError)
-            await files.remove(partsDir(expect.oid)).catch(() => false);
+            await files.remove(partsDir(expect.oid, scope)).catch(() => false);
           throw e;
         }
+        // the object is whole: every scope's parts of it are obsolete
         await files.remove(partsDir(expect.oid)).catch(() => false);
       },
-      async remove(oid) {
-        await files.remove(partsDir(oid)).catch(() => false);
+      async remove(oid, scope) {
+        await files.remove(partsDir(oid, scope)).catch(() => false);
       },
-      ranges: async (oid) => (await parts(oid)).ranges,
-      write: (oid, offset, source) => {
+      ranges: async (oid, scope) => (await parts(oid, scope)).ranges,
+      write: async (oid, offset, source, o) => {
         if (!Number.isSafeInteger(offset) || offset < 0)
           throw new Error(`invalid part offset ${offset}`);
-        return writePart(oid, offset, source);
+        return writePart(oid, offset, source, o);
       },
       async exclusive(oid, fn) {
         const byOid = queues.get(files) ?? new Map<string, Promise<unknown>>();

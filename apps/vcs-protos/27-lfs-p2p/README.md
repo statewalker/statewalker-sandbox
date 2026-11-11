@@ -60,12 +60,12 @@ the server (`ranged: true`) and in the client (offered in every batch, chosen by
 | # | Result | How |
 |---|---|---|
 | R1 | ✅ | Over `pairedLinks` with Biscuit tokens: an admin pushes a façade commit (pointer plus `.gitattributes`) and its LFS object to B; a member clones and fetches them back, byte-identical. With no token: 401. A member's upload without `contributors`: 403. `hidden` downloads. With `contributors`, a member's upload is allowed. A role holding only `git:write-own` cannot download (403). |
-| R2 | ✅ | `ranged` is chosen when offered and the server enables it; native git-lfs offers `basic` and gets it, and its push and clone over plain HTTP still work against the same handler. Parts arrive in any order. `HEAD` on a missing object answers 404 with `x-lfs-held: 0-1048575,2097152-3145727`. The part that completes the coverage verifies the object (`x-lfs-complete: true`). A part shorter than its `Content-Range` is refused (400). Against a basic-only server, our client falls back to `basic`. |
+| R2 | ✅ | `ranged` is chosen when offered and the server enables it; native git-lfs offers `basic` and gets it, and its push and clone over plain HTTP still work against the same handler. Parts arrive in any order. Each part is kept apart per uploader and declared size, visible only once whole, exactly its range's length, and never overlapping what is held (409). `HEAD` with `x-lfs-size` on a missing object answers 404 with that uploader's `x-lfs-held: 0-1048575,2097152-3145727`. An empty object goes `basic`. The part that completes the coverage verifies the object (`x-lfs-complete: true`). A part shorter than its `Content-Range` is refused (400). Against a basic-only server, our client falls back to `basic`. |
 | R3 | ✅ | Bridge timeout 1.5 s, upload throttled to 2 MiB/s: a 6 MiB `basic` upload fails and stores nothing; `ranged` in 1 MiB chunks succeeds (eight requests: HEAD, six PUTs and `verify`) and verifies. |
 | R4 | ✅ | An upload cut after 2 of 6 chunks, retried, sends 4 PUTs and 4 MiB. Held ranges in the middle (`[1 MiB, 2 MiB)`) are skipped too: 3 MiB of 4 are sent. A download cut part-way resumes from the held ranges, and the bytes over both attempts equal the object's size. |
 | R5 | ✅ | From two holders in 1 MiB chunks, both serve and the bytes received equal the size. If one holder fails with 502, with no bytes sent, or is cut mid-chunk, the rest of its chunk goes back to the queue and the other holder serves it: still exactly the size. A 206 for another range than asked is refused, nothing is written, and the holder is dropped. |
-| R6 | ✅ | A source altering bytes makes the assembled object fail verification, and the parts are dropped. Each holder is then tried alone until one copy verifies. The recorded chunk hashes are compared with the verified object, and the source is reported: `{ bad: ["C"] }`. When every source alters bytes, the download is refused and nothing becomes visible. |
-| R7 | ✅ | 64 MiB from two sources over `pairedLinks` in 4 MiB chunks: live memory grew by 4.4 MiB. |
+| R6 | ✅ | A source altering bytes makes the assembled object fail verification, and the parts are dropped. Each holder is then tried alone until one copy verifies; B is first and verifies, so C is found by the recorded chunk hashes alone. A source that cuts its altered chunks short is found by the hashes of the bytes it did deliver. The recorded chunk hashes are compared with the verified object, and the source is reported: `{ bad: ["C"] }`. When every source alters bytes, the download is refused and nothing becomes visible. |
+| R7 | ✅ | 64 MiB from two sources over `pairedLinks` in 4 MiB chunks: live memory grew by 2.7 to 4.4 MiB across runs. |
 
 `ranged` uploads send each chunk as a buffer of known length rather than a streamed body. That
 also avoids X10a's two upload findings: undici holding streamed bodies on Node, and Chromium
@@ -115,6 +115,33 @@ The other 8 were killed after tests were added:
 | P21 one worker only | killed |
 | P22 holder size checked | equivalent, removed |
 
+### Review (#90)
+
+A separate review found 12 issues (7 reproduced by running code). All are fixed; each has a test.
+
+| # | Finding | Fix |
+|---|---|---|
+| F1 | A holder failing after the other workers had gone idle aborted the download, though a healthy holder held the object; a failure that was not a mismatch skipped the per-holder retries | Workers wait until nothing is queued or in flight; any first-round failure goes on to the holders one at a time, from what is held |
+| F2 | A part declared for another size (`bytes 0-1999/3000`) blocked every later upload of the object | Parts are kept per uploader (the mesh's proven peer) and declared size: one uploader's bytes cannot touch another's; a client whose parts are all held re-sends its last part, and the server then completes |
+| F3 | Two uploaders of one object: a part rewritten at the same offset truncated the other's, verification failed and dropped every part; unfinished parts were listed as held | Parts are written aside and renamed when whole (never in place, never seen unfinished); per-uploader scopes; completion under the object's lock, reading exactly each part's listed size |
+| F4 | Overlapping parts were stored (unbounded disk) and the mesh had no size limit | A part overlapping what is held is refused (409); `meshLfsHandler` defaults `maxObjectSize` to 5 GiB |
+| F5 | A source cutting its altered chunks short escaped blame | The bytes a failed chunk delivered are hashed and recorded too |
+| F6 | A part with extra bytes was half-stored (400) and wedged the upload | A part is kept only with exactly its range's length |
+| F7 | Empty objects could not go with `ranged` | They go `basic` |
+| F8 | `chunkSize: 0` looped forever | Chunk sizes are integers from 1 byte to 64 MiB |
+| F9 | A holder answering 200 to ranges was dropped | Read from the chunk's start |
+| F10 | Failed batches (401, 403) were hidden behind "not found on any source" | Reported in that error |
+| F11 | `HEAD` with an upload token gave the object's size | 200 without a length |
+| F12 | R3 claimed seven requests and tested `≥ 6`; R6's attribution was not isolated | Exactly 8 (HEAD, six PUTs, `verify`); R6's order makes the chunk hashes the only path that finds C |
+
+Two of the review's tests needed a fix of their own: a test stream that enqueued bytes and failed
+in the same step delivered nothing, because an error discards what is queued. They now deliver
+the bytes, then fail on the next pull.
+
+Mutation check of the fixes: 13 mutants, 12 killed. Q1 (idle workers leave) survives: since F1's
+second fix, the per-holder retries finish what the parallel round left, so the outcome is the same
+and only one extra round is spent. Both are kept.
+
 ## Promotion grades
 
 | File | Grade | Why |
@@ -130,7 +157,8 @@ The other 8 were killed after tests were added:
 2. **Per-chunk verification before assembly**: chunk hashes from a trusted manifest (e.g. Xet's,
    X11) would identify a bad source without the whole-object fallback.
 3. **Parallelism**: more than one request per holder, and chunk sizes tuned to the link.
-4. **Quotas** for members' uploads (`git:write-own`), and garbage collection of LFS objects that no
-   ref points to (X18 for LFS).
+4. **Quotas** for members' uploads (`git:write-own`); expiry of unfinished parts (per-uploader
+   scopes are bounded by a part's declared size, but not in number); garbage collection of LFS
+   objects that no ref points to (X18 for LFS).
 5. **Native git-lfs over the mesh**: a custom transfer agent (`lfs.customtransfer`) speaking to a
    local bridge.

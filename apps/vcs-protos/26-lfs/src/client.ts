@@ -159,7 +159,8 @@ export async function lfsPush(
       skipped.push(o.oid);
       continue;
     }
-    if (transfer === "ranged") await uploadRanged(f, store, o, up, opts);
+    // an empty object has no range to send
+    if (transfer === "ranged" && o.size > 0) await uploadRanged(f, store, o, up, opts);
     else await uploadBasic(f, store, o, up, opts);
     const verify = o.actions?.verify;
     if (verify) {
@@ -205,6 +206,14 @@ async function uploadBasic(
   });
   await res.body?.cancel();
   if (!res.ok) throw new Error(`lfs upload ${o.oid}: HTTP ${res.status}`);
+}
+
+/** a chunk size: an integer from 1 byte to 64 MiB (default 4 MiB) */
+export function chunkSizeOf(n: number | undefined): number {
+  const size = n ?? 4 << 20;
+  if (!Number.isSafeInteger(size) || size < 1 || size > 64 << 20)
+    throw new Error(`invalid chunk size ${n}: from 1 byte to 64 MiB`);
+  return size;
 }
 
 /** "a-b,c-d" (inclusive) → [start, end) ranges */
@@ -267,14 +276,22 @@ async function uploadRanged(
   opts: LfsClientOptions,
 ) {
   const headers = transferHeaders(o, up, opts);
+  const chunk = chunkSizeOf(opts.chunkSize);
   count(opts);
-  const head = await f(up.href, { method: "HEAD", headers, signal: opts.signal });
+  const head = await f(up.href, {
+    method: "HEAD",
+    headers: { ...headers, "x-lfs-size": String(o.size) },
+    signal: opts.signal,
+  });
   await head.body?.cancel();
   if (head.status === 200) return; // the whole object is there already
   if (head.status !== 404) throw new Error(`lfs upload ${o.oid}: HEAD answered ${head.status}`);
   const held = parseHeld(head.headers.get("x-lfs-held"));
+  let chunks = missingChunks(o.size, held, chunk);
+  // everything is held but the object was not completed: the last part again completes it
+  if (!chunks.length) chunks = [[Math.max(0, o.size - chunk), o.size]];
   let complete = false;
-  for (const [s, e] of missingChunks(o.size, held, opts.chunkSize ?? 4 << 20)) {
+  for (const [s, e] of chunks) {
     const part = await readRange(store, o.oid, s, e, opts.signal);
     count(opts);
     const res = await f(up.href, {

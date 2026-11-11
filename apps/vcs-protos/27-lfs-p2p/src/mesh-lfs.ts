@@ -19,7 +19,7 @@ export interface MeshLfsOptions {
   issuer: string;
   /** roles → capabilities (default: X8c's GIT_RULES) */
   rules?: ReturnType<typeof ruleSet>;
-  /** objects larger are refused */
+  /** objects larger are refused (default 5 GiB) */
   maxObjectSize?: number;
 }
 
@@ -29,7 +29,9 @@ export function meshLfsHandler(
 ): (req: Request) => Promise<Response> {
   const lfs = lfsHandler(store, {
     ranged: true,
-    maxObjectSize: opts.maxObjectSize,
+    maxObjectSize: opts.maxObjectSize ?? 5 * 1024 ** 3,
+    // each peer's parts apart: one peer's bytes cannot spoil another's upload
+    uploader: (req) => String(access(req)?.peer ?? ""),
     authorize: async (req, op) => {
       const caps = access(req)?.capabilities() ?? new Set<string>();
       if (op === "download")
