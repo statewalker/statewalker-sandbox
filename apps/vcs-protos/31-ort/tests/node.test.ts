@@ -242,6 +242,110 @@ describe("O2–O4 renames", () => {
   });
 });
 
+/** cases from the review of #99 (see README) */
+const reviewC = Array.from({ length: 10 }, (_, i) => `line ${i} of q\n`).join("");
+const reviewEdit = (t: string) => reviewC.replace("line 3 of q", t);
+const reviewKeep: [string, string, string] = ["keep", "100644", "k\n"];
+const many = (d: string, n: number) =>
+  Array.from(
+    { length: n },
+    (_, i) => [`${d}/f${i}`, "100644", `new ${d} ${i}\n`] as [string, string, string],
+  );
+const ortReviewCases: Case[] = [
+  {
+    // the rename source p is also a directory on ours: its tree is written though p resolves
+    name: "a file moved into a directory of its own name",
+    base: f([reviewKeep, ["p", "100644", reviewC]]),
+    ours: f([reviewKeep, ["p/p", "100644", reviewC]]),
+    theirs: f([reviewKeep, ["p", "100644", reviewEdit("theirs")]]),
+  },
+  {
+    name: "a renamed file's old path becomes a directory",
+    base: f([reviewKeep, ["p", "100644", reviewC]]),
+    ours: f([reviewKeep, ["q", "100644", reviewC], ["p/new", "100644", "new\n"]]),
+    theirs: f([reviewKeep, ["p", "100644", reviewEdit("theirs")]]),
+  },
+  {
+    // traverse_trees visits a-b before directory a when every tree has a-b at its head
+    name: "rename pairs in traverse_trees order",
+    base: f([
+      reviewKeep,
+      ["a-b/s", "100644", reviewC],
+      ["a-b/m", "100644", "m\n"],
+      ["a/s", "100644", reviewC],
+      ["a/keep", "100644", "k\n"],
+    ]),
+    ours: f([
+      reviewKeep,
+      ["a-b/m", "100644", "m\n"],
+      ["a/keep", "100644", "k\n"],
+      ["z", "100644", reviewC],
+    ]),
+    theirs: f([
+      reviewKeep,
+      ["a-b/s", "100644", reviewC],
+      ["a-b/m", "100644", "m2\n"],
+      ["a/s", "100644", reviewEdit("edited")],
+      ["a/keep", "100644", "k\n"],
+    ]),
+  },
+  {
+    // handle_deferred_entries walks deferred directories in hashmap order: B before A
+    name: "deferred directories in git's hashmap order",
+    base: f([reviewKeep, ["s", "100644", reviewC]]),
+    ours: f([reviewKeep, ["A/f", "100644", reviewC], ["B/f", "100644", reviewC]]),
+    theirs: f([reviewKeep, ["s", "100644", reviewEdit("edited")]]),
+  },
+  {
+    name: "the redo with a cached rename into a new directory",
+    base: f([reviewKeep, ["Q", "100644", reviewC]]),
+    ours: f([reviewKeep, ["Q", "100644", reviewEdit("o")]]),
+    theirs: f([reviewKeep, ["R/Q2", "100644", reviewEdit("t")], ...many("N", 10)]),
+  },
+  {
+    name: "the redo with a cached rename/rename (1to2)",
+    base: f([reviewKeep, ["Q", "100644", reviewC]]),
+    ours: f([reviewKeep, ["S/Q1", "100644", reviewEdit("o")], ...many("M", 12)]),
+    theirs: f([reviewKeep, ["R/Q2", "100644", reviewEdit("t")], ...many("N", 12)]),
+  },
+  {
+    name: "the redo with a cached rename/delete",
+    base: f([reviewKeep, ["Q", "100644", reviewC], ["Z", "100644", `${reviewC}z\n`]]),
+    ours: f([reviewKeep, ["Z", "100644", `${reviewC}z o\n`]]),
+    theirs: f([
+      reviewKeep,
+      ["R/Q2", "100644", reviewC],
+      ["R/Z2", "100644", `${reviewC}z\n`],
+      ...many("N", 12),
+    ]),
+  },
+];
+
+describe("O6 cases from the review", () => {
+  it("each equal to git merge-tree", async () => {
+    const r = await run(ortReviewCases);
+    expect(r.wrong).toEqual([]);
+  });
+
+  it("a rename into a path where the other side replaced a directory with a file (the redo; git 2.43 asserts)", async (ctx) => {
+    const c: Case = {
+      name: "rename into a file that replaced a directory",
+      base: f([reviewKeep, ["Q", "100644", reviewC], ["P/x", "100644", "px\n"]]),
+      ours: f([reviewKeep, ["Q", "100644", reviewEdit("ours")], ["P/x", "100644", "px\n"]]),
+      theirs: f([reviewKeep, ["P", "100644", reviewC], ...many("N", 10)]),
+    };
+    let r: Awaited<ReturnType<typeof run>>;
+    try {
+      r = await run([c]);
+    } catch (e) {
+      // git 2.43's ort fails an assertion here (fixed in later git, which this port follows)
+      if (/Assertion|process_renames|core dumped|signal/i.test(String(e))) return ctx.skip();
+      throw e;
+    }
+    expect(r.wrong).toEqual([]);
+  });
+});
+
 describe("O5 portable", () => {
   it("src/ has no node: imports", () => {
     const src = join(dirname(fileURLToPath(import.meta.url)), "../src");
