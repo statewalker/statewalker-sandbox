@@ -228,3 +228,75 @@ test("readDir is one capability call with sizes and times; NUL bytes and gaps ar
   await fs.handle("close", [id]);
   assert.equal(cap.files.get("/n"), "a\0b\0\0c\0\0");
 });
+
+test("metadata cache: listings answer stats, misses are remembered, this run's writes are seen", async () => {
+  const cap = fakeCap({ "/d": null, "/d/a": "1", "/d/b": "22", "/ro/x": "x" });
+  const fs = capHostFs(cap);
+  const count = (from, method) =>
+    cap.calls.slice(from).filter((c) => c.startsWith(`${method} `)).length;
+
+  let at = cap.calls.length;
+  await fs.handle("readDir", ["d"]);
+  await fs.handle("readDir", ["d"]);
+  for (const n of ["a", "b"])
+    assert.equal((await fs.handle("stat", [`d/${n}`])).value.kind, "file");
+  assert.equal(count(at, "readdirStat"), 1, "the listing is reused");
+  assert.equal(count(at, "stat"), 0, "a listing answers its entries' stats");
+
+  at = cap.calls.length;
+  for (let i = 0; i < 3; i++)
+    assert.equal((await fs.handle("stat", ["d/nope"])).error.code, "ENOENT");
+  assert.equal(count(at, "stat"), 1, "no such file is remembered");
+
+  // This run creates it: the next lookup sees it, and the listing shows it.
+  const { value: id } = await fs.handle("open", ["d/nope", ...CREATE]);
+  await fs.handle("write", [id, 0, enc("abc")]);
+  await fs.handle("close", [id]);
+  assert.equal((await fs.handle("stat", ["d/nope"])).value.size, 3);
+  assert.ok((await fs.handle("readDir", ["d"])).value.some((e) => e.name === "nope"));
+
+  // Renames and removals forget the whole tree.
+  await fs.handle("mkdir", ["d/t"]);
+  const { value: t } = await fs.handle("open", ["d/t/f", ...CREATE]);
+  await fs.handle("close", [t]);
+  assert.equal((await fs.handle("stat", ["d/t/f"])).value.kind, "file");
+  await fs.handle("rename", ["d/t", "d/u"]);
+  assert.equal((await fs.handle("stat", ["d/t/f"])).error.code, "ENOENT");
+  assert.equal((await fs.handle("stat", ["d/u/f"])).value.kind, "file");
+  await fs.handle("remove", ["d/u/f"]);
+  assert.equal((await fs.handle("stat", ["d/u/f"])).error.code, "ENOENT");
+
+  // Refusals are not cached.
+  cap.files.set("/secret", "s");
+  const denyStat = cap.call;
+  let refuse = true;
+  cap.call = async (m, p, ...a) => {
+    if (refuse && m === "stat" && p === "/secret")
+      throw Object.assign(new Error("EACCES: no"), { code: "EACCES" });
+    return denyStat.call(cap, m, p, ...a);
+  };
+  assert.equal((await fs.handle("stat", ["secret"])).error.code, "EACCES");
+  refuse = false;
+  assert.equal((await fs.handle("stat", ["secret"])).value.kind, "file");
+});
+
+test("metadata cache: cleared before each command, and kept only briefly within one", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const cap = fakeCap({ "/a": "1" });
+  const fs = capHostFs(cap);
+  const stats = () => cap.calls.filter((c) => c === "stat /a").length;
+  await fs.handle("stat", ["a"]);
+  await fs.handle("stat", ["a"]);
+  assert.equal(stats(), 1);
+  // Another writer changes the file: the next command sees it.
+  cap.files.set("/a", "1234");
+  fs.resetCache();
+  assert.equal((await fs.handle("stat", ["a"])).value.size, 4);
+  assert.equal(stats(), 2);
+  // Within a command, an entry expires.
+  cap.files.set("/a", "12");
+  t.mock.timers.tick(1000);
+  assert.equal((await fs.handle("stat", ["a"])).value.size, 4, "still cached");
+  t.mock.timers.tick(1500);
+  assert.equal((await fs.handle("stat", ["a"])).value.size, 2, "expired");
+});

@@ -566,10 +566,15 @@ at close and keeps its previous content; a length that would cut a character is 
 - **Config:** `WASMER=off` disables it; `WASMER_ENGINE` is the engine's path (Node) or URL
   (browser, default `/wasmer/engine.mjs`); `WASMER_SDK` the SDK's URL in a browser (default
   `/wasmer/sdk/dist/index.js`). `/api/runtime` reports `wasmer`: `node`, `browser`, or why not.
-- **Cost of the prototype:** one file operation is one round trip to the Agent cell (and a
-  capability check), which suits shell work; tools that make tens of thousands of metadata
-  calls (`pip install`) would want a per-run cache. `storageHost` is experimental in the SDK and
-  may change.
+- **Metadata cache:** each sandbox caches stats, "no such file" and directory listings (a
+  listing answers its entries' stats). The kernel clears it before every command, so changes
+  made between commands (a Flue tool's write, another agent's) are seen by the next one; within
+  a command entries live 2 s, and the run's own writes, renames and removals forget what they
+  change. Refusals are not cached. On typical shell work this cuts capability calls 3–20×
+  (`ls -la` of 33 entries: 121 → 6; `wc -l` over 30 files: 293 → 37).
+- **Cost of the prototype:** file contents and writes are still one round trip each to the
+  Agent cell (and a capability check), which suits shell work; package installs that write
+  thousands of files stay slow. `storageHost` is experimental in the SDK and may change.
 
 ### In a browser
 

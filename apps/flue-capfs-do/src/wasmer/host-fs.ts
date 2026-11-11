@@ -43,6 +43,15 @@ const strict = () => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 /** At most this many open files per sandbox; at most this many bytes per file in memory. */
 const MAX_HANDLES = 256;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
+/**
+ * Metadata (stat, "no such file", listings) is cached per sandbox for one command at most:
+ * the kernel clears it before each command, so a write made between commands (a Flue tool, an
+ * other agent) is seen by the next one. Within a command, entries live this long, and this
+ * run's own writes forget what they change. Other writers' changes during a command may be seen
+ * this late.
+ */
+const META_TTL_MS = 2000;
+const MAX_META_ENTRIES = 20_000;
 
 const err = (code: string, message: string) => Object.assign(new Error(message), { code });
 const nanos = (iso: string) => String(BigInt(Date.parse(iso) || 0) * 1_000_000n);
@@ -79,8 +88,54 @@ export function capHostFs(cap: Cap) {
   const files = new Map<string, OpenFile>();
   let next = 1;
 
+  // ---- metadata cache (see META_TTL_MS) ----
+  /** A path's stat, or null: no such file. Refusals (EACCES) are not cached. */
+  const meta = new Map<string, { at: number; stat: PlainStat | null }>();
+  const listings = new Map<string, { at: number; entries: DirEntryStat[] }>();
+  const fresh = (e: { at: number } | undefined) => !!e && Date.now() - e.at < META_TTL_MS;
+  const parentOf = (path: string) => path.slice(0, path.lastIndexOf("/")) || "/";
+  const childOf = (dir: string, name: string) => (dir === "/" ? `/${name}` : `${dir}/${name}`);
+  const remember = (path: string, stat: PlainStat | null) => {
+    if (meta.size >= MAX_META_ENTRIES) meta.clear();
+    meta.set(path, { at: Date.now(), stat });
+  };
+  /** What this run changed at `path` (and under it, for a directory) is forgotten. */
+  const forget = (path: string, tree = false) => {
+    meta.delete(path);
+    listings.delete(path);
+    listings.delete(parentOf(path));
+    if (!tree) return;
+    const under = `${path}/`;
+    for (const k of meta.keys()) if (k.startsWith(under)) meta.delete(k);
+    for (const k of listings.keys()) if (k.startsWith(under)) listings.delete(k);
+  };
+  const plainStat = async (path: string): Promise<PlainStat | null> => {
+    const cached = meta.get(path);
+    if (fresh(cached)) return (cached as { stat: PlainStat | null }).stat;
+    try {
+      const s = (await cap.call("stat", path)) as PlainStat;
+      remember(path, s);
+      return s;
+    } catch (e) {
+      if ((e as { code?: string })?.code !== "ENOENT") throw e;
+      remember(path, null);
+      return null;
+    }
+  };
+  const exists = async (path: string) => (await plainStat(path)) !== null;
+  const listing = async (dir: string): Promise<DirEntryStat[]> => {
+    const cached = listings.get(dir);
+    if (fresh(cached)) return (cached as { entries: DirEntryStat[] }).entries;
+    const entries = (await cap.call("readdirStat", dir)) as DirEntryStat[];
+    listings.set(dir, { at: Date.now(), entries });
+    // A listing answers the stat of each entry it shows (what it hides is asked as before).
+    for (const e of entries) remember(childOf(dir, e.name), e as unknown as PlainStat);
+    return entries;
+  };
+
   const stat = async (path: string) => {
-    const s = (await cap.call("stat", path)) as PlainStat;
+    const s = await plainStat(path);
+    if (!s) throw err("ENOENT", `${path}: no such file or directory`);
     const t = nanos(s.mtime);
     return {
       kind: s.isDirectory ? "directory" : "file",
@@ -99,7 +154,7 @@ export function capHostFs(cap: Cap) {
   const load = async (f: OpenFile) => {
     if (!f.bytes) {
       f.loading ??= (async () => {
-        const bytes = (await cap.call("exists", f.path))
+        const bytes = (await exists(f.path))
           ? encoder.encode((await cap.call("readFile", f.path)) as string)
           : new Uint8Array();
         if (bytes.length > MAX_FILE_BYTES)
@@ -126,6 +181,7 @@ export function capHostFs(cap: Cap) {
     f.dirty = false;
     try {
       await cap.call("writeFile", f.path, text);
+      forget(f.path);
     } catch (e) {
       f.dirty = true;
       throw e;
@@ -136,7 +192,7 @@ export function capHostFs(cap: Cap) {
    * fails at the first write instead (an empty append asks for the right without changing text).
    */
   const mayWrite = (f: OpenFile) => {
-    f.writable ??= cap.call("appendFile", f.path, "").then(() => {});
+    f.writable ??= cap.call("appendFile", f.path, "").then(() => forget(f.path));
     f.writable.catch(() => (f.writable = undefined));
     return f.writable;
   };
@@ -163,7 +219,7 @@ export function capHostFs(cap: Cap) {
     stat: (p) => stat(abs(p)),
     async readDir(p) {
       // One capability call for the whole listing (entries the token may not list are left out).
-      const entries = (await cap.call("readdirStat", abs(p))) as DirEntryStat[];
+      const entries = await listing(abs(p));
       return entries.map((e) => {
         const t = nanos(e.mtime);
         return {
@@ -179,14 +235,17 @@ export function capHostFs(cap: Cap) {
     async open(p, _read, write, create, createNew, truncate, append) {
       const path = abs(p);
       if (handles.size >= MAX_HANDLES) throw err("EMFILE", "too many open files");
-      const exists = (await cap.call("exists", path)) as boolean;
+      const found = await plainStat(path);
+      const exists = found !== null;
       if (createNew && exists) throw err("EEXIST", `${path} exists`);
       if (!exists && !create) throw err("ENOENT", `${path}: no such file`);
-      if (exists && ((await cap.call("stat", path)) as PlainStat).isDirectory)
-        throw err("EISDIR", `${path} is a directory`);
+      if (found?.isDirectory) throw err("EISDIR", `${path} is a directory`);
       // A refused create or truncate fails here. WASIX opens files for writing even to read
       // them, so writing an existing file is checked at the first write instead.
-      if (write && (!exists || truncate)) await cap.call("writeFile", path, "");
+      if (write && (!exists || truncate)) {
+        await cap.call("writeFile", path, "");
+        forget(path);
+      }
       let f = files.get(path);
       if (!f) {
         f = { path, bytes: undefined, size: 0, dirty: false, refs: 0 };
@@ -249,7 +308,7 @@ export function capHostFs(cap: Cap) {
     },
     async fileStat(id) {
       const f = handle(id).file;
-      const s = (await cap.call("exists", f.path))
+      const s = (await exists(f.path))
         ? await stat(f.path)
         : { kind: "file", size: 0, modified: "0", accessed: "0", created: "0" };
       return { ...s, size: f.bytes ? f.size : s.size };
@@ -263,17 +322,26 @@ export function capHostFs(cap: Cap) {
       return null;
     },
     async mkdir(p) {
-      await cap.call("mkdir", abs(p));
+      const path = abs(p);
+      try {
+        await cap.call("mkdir", path);
+      } finally {
+        forget(path);
+      }
       return null;
     },
     async remove(p) {
       const path = abs(p);
       // The store removes a directory only recursively: an empty one is removed that way.
       const s = (await cap.call("stat", path)) as PlainStat;
-      if (s.isDirectory) {
-        if ((await cap.readdir(path)).length) throw err("ENOTEMPTY", `${path} is not empty`);
-        await cap.call("rm", path, { recursive: true });
-      } else await cap.call("rm", path);
+      try {
+        if (s.isDirectory) {
+          if ((await cap.readdir(path)).length) throw err("ENOTEMPTY", `${path} is not empty`);
+          await cap.call("rm", path, { recursive: true });
+        } else await cap.call("rm", path);
+      } finally {
+        forget(path, true);
+      }
       const f = files.get(path);
       if (f) f.dirty = false;
       return null;
@@ -283,7 +351,12 @@ export function capHostFs(cap: Cap) {
       const dst = abs(to);
       const f = files.get(src);
       if (f) await save(f);
-      await cap.move("mv", src, dst);
+      try {
+        await cap.move("mv", src, dst);
+      } finally {
+        forget(src, true);
+        forget(dst, true);
+      }
       if (f) {
         files.delete(src);
         f.path = dst;
@@ -310,10 +383,17 @@ export function capHostFs(cap: Cap) {
         return { error: { code, message } };
       }
     },
+    /** Before each command: what others changed since the last one is seen (see META_TTL_MS). */
+    resetCache() {
+      meta.clear();
+      listings.clear();
+    },
     /** Open files of a sandbox that ends are dropped: what was not flushed is not written. */
     close() {
       handles.clear();
       files.clear();
+      meta.clear();
+      listings.clear();
     },
   };
 }
