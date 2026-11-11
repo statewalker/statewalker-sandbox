@@ -7,6 +7,7 @@
 import type { FilesApi } from "@statewalker/webrun-files";
 import type { GitObjects } from "../../09-git-objects/src/git-objects.js";
 import { openObjectDatabase } from "../../13-pack-reader/src/object-db.js";
+import { PackError } from "../../13-pack-reader/src/pack-reader.js";
 import { installPack, sweepPackTemporaries } from "../../15-resumable-index/src/index-job.js";
 import type { ObjectStore, ObjectType, StoredObject, StoreOptions } from "./object-store.js";
 
@@ -68,24 +69,86 @@ export async function composedStore(
     reopening = run.catch(() => {});
     return run;
   };
+  const root = objectsDir.replace(/\/objects$/, "");
+  const gcDir = `${root}/gc`;
+  /**
+   * git freshens an object written again (its mtime): gc's grace restarts. Here a marker under
+   * gc/fresh names it (a loose id, or a whole pack) — written only once gc is in use (its ledger
+   * exists); gc consumes the markers.
+   */
+  const freshen = async (name: string) => {
+    if (!(await packFiles.exists(`${gcDir}/ledger.json`).catch(() => false))) return;
+    await packFiles.write(`${gcDir}/fresh/${name}`, [new Uint8Array(0)]).catch(() => {});
+  };
+  // a handle opened before another handle's gc holds idx tables of removed packs: a read that
+  // fails on such a copy rescans once and retries
+  // — only when the pack set changed: a corrupt copy in an unchanged set stays refused (a fresh
+  // database would forget X6r's bad-copy marks and read it again)
+  const retrying = async <T>(read: () => Promise<T>): Promise<T> => {
+    try {
+      return await read();
+    } catch (e) {
+      if (!(e instanceof PackError)) throw e;
+      const before = packs
+        .readers()
+        .map((r) => r.packId)
+        .sort()
+        .join();
+      await reopenAfterInstall();
+      if (
+        packs
+          .readers()
+          .map((r) => r.packId)
+          .sort()
+          .join() === before
+      )
+        throw e;
+      return read();
+    }
+  };
   const store: ObjectStore = {
     async put(type: ObjectType, content: Uint8Array) {
-      return loose.put(
+      const id = await loose.put(
         type,
         content.length,
         (async function* () {
           yield content;
         })(),
       );
+      await freshen(`l-${id}`);
+      return id;
     },
     async get(oid, o) {
-      const found = await find(oid, o);
+      const found = await retrying(() => find(oid, o));
       if (found) return found;
       await rescan();
-      return (await packs.get(oid, o)) as StoredObject | undefined;
+      return (await retrying(() => packs.get(oid, o))) as StoredObject | undefined;
+    },
+    gc: {
+      files: packFiles,
+      dir: gcDir,
+      root,
+      packs: () => packs.readers().map((r) => ({ packId: r.packId, ids: () => r.ids() })),
+      async keptPacks() {
+        const kept = new Set<string>();
+        for (const r of packs.readers())
+          if (await packFiles.exists(`${packDir}/pack-${r.packId}.keep`)) kept.add(r.packId);
+        return kept;
+      },
+      loose: () => loose.list(),
+      removeLoose: (oid) => loose.remove(oid),
+      refresh: () => reopenAfterInstall(),
+      async removePacks(packIds) {
+        // idx first: a pack without its idx is ignored by new readers (X6r); open handles rescan
+        // on a failed read. Then the pack and its companions (git's .rev, .bitmap, .mtimes, …).
+        for (const id of packIds)
+          for (const ext of ["idx", "pack", "rev", "bitmap", "mtimes", "promisor"])
+            await packFiles.remove(`${packDir}/pack-${id}.${ext}`).catch(() => false);
+        await reopenAfterInstall();
+      },
     },
     async packedEntry(oid) {
-      return packs.entry(oid);
+      return retrying(() => packs.entry(oid));
     },
     async has(oid) {
       const here = async () =>
@@ -125,6 +188,7 @@ export async function composedStore(
           },
         });
         await reopenAfterInstall();
+        await freshen(`p-${r.packId}`);
         return { packId: r.packId, count: r.count };
       }
     },

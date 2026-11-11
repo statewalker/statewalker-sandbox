@@ -47,6 +47,8 @@ export interface GitObjects {
   has(id: string): Promise<boolean>;
   /** Object ids only (40 hex), whatever else lives in the store. */
   list(): AsyncIterable<string>;
+  /** Deletes a loose object (gc's prune, X18). */
+  remove(id: string): Promise<void>;
 }
 
 const TYPES = new Set<string>(["blob", "tree", "commit", "tag"]);
@@ -290,6 +292,10 @@ export function gitObjects(
     },
     async *list() {
       for await (const id of store.list()) if (OID.test(id)) yield id;
+    },
+    async remove(id) {
+      checkId(id);
+      await store.remove(id);
     },
   };
 }
