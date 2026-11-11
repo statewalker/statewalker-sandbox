@@ -73,8 +73,11 @@ It matches git step by step:
    best first.
 6. **Similarity** (`hash_chars`, `diffcore_count_changes`):
    - Chunks end at LF or after 64 bytes.
-   - In text (no NUL in the first 8,000 bytes), a CR before LF is dropped. Bytes after the last
-     chunk are not counted.
+   - In text (no NUL in the first 8,000 bytes), a CR before LF is dropped.
+   - The bytes after the last chunk (a file without a final LF) form a chunk of their own in newer
+     git (2.56, on CI). git 2.43 drops them. `legacyHashChars` selects 2.43's rule, and the tests
+     probe which one the installed git has. Modes are canonical as in `canon_mode` (`100664` is
+     `100644`).
    - Chunks are hashed into 107,927 buckets with git's two 32-bit accumulators.
    - The score is the bytes copied (the smaller count per bucket) × 60,000 ÷ the larger size,
      truncated. Sizes too far apart score 0.
@@ -89,7 +92,7 @@ It matches git step by step:
 | C2 | Exact renames: a symlink to any mode | killed (R1, R2, R3) |
 | C3 | No CR dropping in text | killed (R1, R2, R3) |
 | C4 | No 64-byte chunks | killed (R1, R2, R3) |
-| C5 | The bytes after the last chunk counted | killed (R2, R3) |
+| C5 | The bytes after the last chunk counted | killed on git 2.43 (R2, R3). This is git 2.56's rule, which CI found (see the review); both rules are now kept, and the unit test in R6 kills either mutant |
 | C6 | The destination's surplus counted as copied | survived; killed by R5 |
 | C7 | No size cutoff | equivalent: bytes copied are at most the smaller size, so a pair the cutoff drops scores below the threshold anyway; it only saves work |
 | C8 | No basename pass | killed (R1, R3) |
@@ -103,6 +106,39 @@ It matches git step by step:
 | C16 | The percent rounded | killed (R1, R2, R3) |
 | C17 | Similarity over the smaller size | killed (R1, R2, R3) |
 | C18 | No exact pass | killed (R1, R2, R3) |
+
+### Review (#98)
+
+A separate review compared the port with the C line by line and ran 6,300 differential cases
+against git 2.43, plus targeted ones:
+- 140 identical sources and 100-candidate limits;
+- CR at byte 63;
+- NUL around byte 8,000;
+- thresholds from 0% to 100%;
+- rename limits around N×M;
+- unicode paths.
+
+Against 2.43 the only mismatch was legacy modes. CI's git 2.56 failed R2 and R3.
+
+| Finding | Fix |
+|---|---|
+| git 2.56's `hash_chars` counts the bytes after a file's last LF as a chunk; the port followed 2.43 (CI: R93 against our R83) | Counted by default, `legacyHashChars` for 2.43, and the tests probe the installed git with a 35%-or-64% pair; R6 |
+| Legacy modes (`100664`) were kept, so an exact rename showed `100664`, a mode-only change showed `T`, and an inexact rename was missed | `canon_mode`; R6 |
+| The corpus gave 90% of files a final newline, so a 2.56-only rule hid there | 40% now lack one |
+| R3 asserted no renames, and `show` cut oids to 7 characters | R3 asserts more than 50 renames, and oids are compared whole |
+| Non-UTF-8 path bytes (`\xfe`, `\xff`) are decoded lossily by 17's `parseTree` and collide | Upstream in 17-repository; an open thread |
+
+The review confirmed the rest as faithful:
+- the 32-bit hash arithmetic;
+- binary detection;
+- `find_identical_files`' order and limit;
+- the basename pass;
+- `record_if_better` and `score_compare`, with a stable sort;
+- `parse_rename_score`;
+- output order;
+- path order (`a`, `a-b`, `a.b`, `a/b`).
+
+It also confirmed that C7 is equivalent.
 
 ## Promotion grades
 
@@ -119,4 +155,11 @@ It matches git step by step:
    and criss-cross merges.
 3. Copies (`-C`), break detection (`-B`), `.gitattributes` binary and diff drivers.
 4. **Performance**: the matrix is N×M similarity estimates, cached by blob. git's own limit
-   (1,000 for diff, 7,000 for merge) bounds it the same way.
+   (1,000 for diff, 7,000 for merge) bounds it the same way. The review measured:
+   - 500×500 candidates: 307 ms against git's 109 ms;
+   - a 30 MB rename: 2.0 s against 0.4 s, from the Map-based span hash.
+
+   Blobs are read whole just to learn their sizes before the size cutoff, and they stay cached for
+   the whole run. `diffTrees` flattens both trees instead of skipping unchanged subtrees.
+5. **Non-UTF-8 path bytes**: 17's `parseTree` decodes names lossily, so two names that differ
+   only in invalid UTF-8 collide.

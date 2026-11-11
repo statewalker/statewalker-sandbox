@@ -32,6 +32,11 @@ export interface RenameOptions {
   limit?: number;
   /** empty files can be renames (diff's default; merge-ort turns it off) */
   renameEmpty?: boolean;
+  /**
+   * git 2.43's `hash_chars`: the bytes after a file's last chunk (no final LF) are not counted.
+   * Newer git (2.56 checked) counts them as a chunk of their own, which is the default here
+   */
+  legacyHashChars?: boolean;
 }
 
 export const MAX_SCORE = 60000;
@@ -46,7 +51,20 @@ interface Entry {
 }
 
 const isTree = (mode: string) => /^0*40000$/.test(mode);
-const fullMode = (mode: string) => mode.padStart(6, "0");
+/** `canon_mode`: regular files are 100755 when their owner may execute them, else 100644 */
+function canonMode(mode: string): string {
+  const m = Number.parseInt(mode, 8);
+  switch (m & 0o170000) {
+    case 0o100000:
+      return m & 0o100 ? "100755" : "100644";
+    case 0o120000:
+      return "120000";
+    case 0o160000:
+      return "160000";
+    default:
+      return mode.padStart(6, "0");
+  }
+}
 const isRegular = (mode: string) => mode === "100644" || mode === "100755";
 const fileType = (mode: string) => (isRegular(mode) ? "reg" : mode);
 const basename = (path: string) => path.slice(path.lastIndexOf("/") + 1);
@@ -73,7 +91,7 @@ async function flatten(repo: Repository, oid: string | undefined): Promise<Map<s
     for (const e of await readTree(repo, tree)) {
       const path = prefix ? `${prefix}/${e.name}` : e.name;
       if (isTree(e.mode)) await walk(e.oid, path);
-      else out.set(path, { mode: fullMode(e.mode), oid: e.oid });
+      else out.set(path, { mode: canonMode(e.mode), oid: e.oid });
     }
   };
   await walk(oid, "");
@@ -106,10 +124,14 @@ function isBinary(data: Uint8Array): boolean {
 }
 
 /**
- * `hash_chars`: chunks ending at LF or 64 bytes long (CR before LF dropped in text; bytes after the
- * last chunk end are not counted), hashed into 107927 values; the sorted values and their byte counts.
+ * `hash_chars`: chunks ending at LF or 64 bytes long (CR before LF dropped in text), hashed into
+ * 107927 values; the sorted values and their byte counts. The bytes after the last chunk end form a
+ * chunk of their own, except in git 2.43 (`legacy`), which drops them.
  */
-export function spanHashes(data: Uint8Array): { hash: Uint32Array; count: Uint32Array } {
+export function spanHashes(
+  data: Uint8Array,
+  legacy = false,
+): { hash: Uint32Array; count: Uint32Array } {
   const text = !isBinary(data);
   const counts = new Map<number, number>();
   let n = 0;
@@ -127,6 +149,10 @@ export function spanHashes(data: Uint8Array): { hash: Uint32Array; count: Uint32
     counts.set(h, (counts.get(h) ?? 0) + n);
     n = 0;
     accum1 = accum2 = 0;
+  }
+  if (n > 0 && !legacy) {
+    const h = ((accum1 + Math.imul(accum2, 0x61)) >>> 0) % HASHBASE;
+    counts.set(h, (counts.get(h) ?? 0) + n);
   }
   const keys = [...counts.keys()].sort((a, b) => a - b);
   return {
@@ -247,7 +273,7 @@ export async function findRenames(
   const spans = (oid: string, data: Uint8Array) => {
     const known = hashes.get(oid);
     if (known) return known;
-    const h = spanHashes(data);
+    const h = spanHashes(data, opts.legacyHashChars);
     hashes.set(oid, h);
     return h;
   };
