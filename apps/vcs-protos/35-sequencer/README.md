@@ -45,8 +45,12 @@ identities.
   written.
 - Matching git 2.43 and newer: X13's merge probes, plus two new ones. `legacyAutoMerge`: merge-ort
   writes `AUTO_MERGE` after every merge that updates the worktree, so a clean cherry-pick or rebase
-  leaves it behind. `legacyRebaseHead`: git 2.43 removes `REBASE_HEAD` before each pick (a rebase
-  that stopped on its last pick leaves it), newer git once per run.
+  leaves it behind. `legacyRebaseHead`: git removes `REBASE_HEAD` before each pick, so a rebase
+  that stopped on its last pick leaves it behind (2.43 and, by its source, 2.56; the probe
+  decides). `legacyTodoFormat` and
+  `legacyRebaseMessage` (found by CI on git 2.56): git 2.43 writes todo lines as
+  `pick <id> <subject>` and `rebase-merge/message` as the message and a newline; 2.56 writes
+  `pick <id> # <subject>` and the message with its conflict list.
 - Out of scope: `--rebase-merges`, interactive todo editing, `--onto`, autostash, dropping commits
   already upstream by patch id (the corpus has none), octopus merges, `rerere`, hooks, signing.
 

@@ -43,11 +43,18 @@ export interface Session {
    */
   legacyAutoMerge?: boolean;
   /**
-   * git 2.43's sequencer removes REBASE_HEAD and AUTO_MERGE before each pick, so a rebase that
-   * stopped on its last pick leaves REBASE_HEAD behind; newer git (2.56) removes them once at the
-   * start of each run
+   * git's sequencer removes REBASE_HEAD and AUTO_MERGE before each pick, so a rebase that stopped
+   * on its last pick leaves REBASE_HEAD behind (2.43; 2.56's source does the same). False: they are
+   * removed once at the start of each run instead
    */
   legacyRebaseHead?: boolean;
+  /** git 2.43 writes todo lines as `pick <id> <subject>`; newer git (2.56) as `pick <id> # <subject>` */
+  legacyTodoFormat?: boolean;
+  /**
+   * git 2.43 writes `rebase-merge/message` as the commit message and a newline; newer git (2.56)
+   * writes the message with the conflict list, as in MERGE_MSG
+   */
+  legacyRebaseMessage?: boolean;
 }
 export interface OpResult {
   status: "clean" | "fast-forward" | "up-to-date" | "conflict" | "stopped" | "done";
@@ -562,6 +569,10 @@ function parseAuthorScript(text: string): Person {
   };
 }
 const todoLine = async (s: Session, oid: string) =>
+  s.legacyTodoFormat
+    ? await plainTodoLine(s, oid)
+    : `pick ${oid} # ${subject((await readCommit(s.repo, oid)).message).replace(/\s+$/, "")}\n`;
+const plainTodoLine = async (s: Session, oid: string) =>
   `pick ${oid} ${subject((await readCommit(s.repo, oid)).message).replace(/\s+$/, "")}\n`;
 function parseTodo(text: string): string[] {
   const out: string[] = [];
@@ -644,7 +655,8 @@ async function runTodo(s: Session): Promise<OpResult> {
     if (r.status !== "conflict") continue;
     const c = await readCommit(s.repo, next);
     await writeText(s.git, `${RM}/author-script`, authorScript(c.author));
-    await writeText(s.git, `${RM}/message`, `${c.message}\n`);
+    const hinted = c.message + conflictList(r.conflicts ?? []);
+    await writeText(s.git, `${RM}/message`, s.legacyRebaseMessage ? `${c.message}\n` : hinted);
     await writeText(s.git, `${RM}/stopped-sha`, `${next}\n`);
     await writeText(s.git, "/REBASE_HEAD", `${next}\n`);
     await writeText(s.git, "/MERGE_MSG", c.message + conflictList(r.conflicts ?? []));

@@ -147,8 +147,12 @@ const legacyAutoMerge = (() => {
   git(d, ["cherry-pick", "side"]);
   return existsSync(join(d, ".git/AUTO_MERGE"));
 })();
-/** does this git leave REBASE_HEAD after a rebase that stopped on its last pick (2.43 does)? */
-const legacyRebaseHead = (() => {
+/**
+ * How this git writes a stopped rebase: does it leave REBASE_HEAD after stopping on its last pick
+ * (2.43 does); does it write todo lines without `# ` before the subject, and `rebase-merge/message`
+ * as the message alone rather than with the conflict list (2.43 does; 2.56 does not)?
+ */
+const rebaseProbe = (() => {
   const d = tmp("x15q-");
   git(d, ["init", "-q", "-b", "main"]);
   write(d, "a", "1\n");
@@ -162,9 +166,15 @@ const legacyRebaseHead = (() => {
   git(d, ["commit", "-qam", "main"]);
   git(d, ["checkout", "-q", "side"]);
   gitMay(d, ["rebase", "main"]);
+  const done = readFileSync(join(d, ".git/rebase-merge/done"), "utf8");
+  const message = readFileSync(join(d, ".git/rebase-merge/message"), "utf8");
   git(d, ["add", "-A"]);
   git(d, ["rebase", "--continue"]);
-  return existsSync(join(d, ".git/REBASE_HEAD"));
+  return {
+    legacyRebaseHead: existsSync(join(d, ".git/REBASE_HEAD")),
+    legacyTodoFormat: !/ # side/.test(done),
+    legacyRebaseMessage: !message.includes("# Conflicts:"),
+  };
 })();
 const twin = (d: string) => {
   const t = tmp("x15t-");
@@ -190,7 +200,7 @@ async function session(d: string): Promise<Session> {
     committer,
     mergeOptions,
     legacyAutoMerge,
-    legacyRebaseHead,
+    ...rebaseProbe,
   };
 }
 
@@ -716,7 +726,7 @@ async function memSession(files: MemFilesApi): Promise<Session> {
     committer,
     mergeOptions,
     legacyAutoMerge,
-    legacyRebaseHead,
+    ...rebaseProbe,
   };
 }
 
