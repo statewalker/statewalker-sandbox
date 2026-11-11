@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "PROTOTYPE — in-browser PDF to PortableText conversion: text layer, images, worker-based OCR and language detection.",
+  "description": "PROTOTYPE \u2014 in-browser PDF to PortableText conversion: text layer, images, worker-based OCR and language detection.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,6 +16,7 @@
   "homepage": "https://github.com/statewalker/statewalker-sandbox/tree/main/packages/pdf-portabletext#readme",
   "exports": {
     ".": "./src/index.ts",
+    "./core": "./src/core.ts",
     "./schema": "./src/schema.ts",
     "./preview": "./src/preview.ts",
     "./vite": "./vite.ts"
