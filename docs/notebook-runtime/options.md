@@ -469,7 +469,7 @@ On cellb.dev's platform (`packages/notebooks`, merged in cellb.dev#98 and on the
 - Open: milestone 5 (`webrun-cells` orchestration), 6 (a notebook DO of its own; the platform's
   `NotebookSite` covers most of it), 7 (data loaders, SQL precompute), and a search index.
 
-The Astro builder's fence-info question (Section 11) is settled: `@portabletext/markdown` keeps the
+The fence-info question of Section 11 is settled: `@portabletext/markdown` keeps the
 whole info string in a code block's `language`.
 
 ## 11. Open questions
