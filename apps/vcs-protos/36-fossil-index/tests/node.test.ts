@@ -238,7 +238,14 @@ describe("F4 speed: 100,000 commits over 50,000 files", () => {
     let ops = "";
     for (let i = 0; i < 50_000; i++) ops += `M 100644 inline ${file(i)}\ndata 2\n${i % 10}\n\n`;
     parts.push(commit("import the tree", ops));
-    for (let c = 1; c < 100_000; c++) {
+    const COMMITS = Number(process.env.X9_COMMITS ?? 100_000);
+    const phases: string[] = [];
+    let phase = performance.now();
+    const mark = (what: string) => {
+      phases.push(`${what} ${((performance.now() - phase) / 1000).toFixed(1)} s`);
+      phase = performance.now();
+    };
+    for (let c = 1; c < COMMITS; c++) {
       const i = Math.floor(rand() * 50_000);
       const word = WORDS[c % WORDS.length] as string;
       const body = `v${c}\n`;
@@ -250,6 +257,7 @@ describe("F4 speed: 100,000 commits over 50,000 files", () => {
       );
     }
     git(d, ["fast-import", "--quiet"], parts.join(""));
+    mark("fast-import");
     const repo = await filesRepository(
       new StreamingNodeFilesApi(join(d, ".git")),
       nodeRefFiles(join(d, ".git")),
@@ -257,7 +265,10 @@ describe("F4 speed: 100,000 commits over 50,000 files", () => {
     const db = await newNodeSqliteDb();
     const index = await fossilIndex(db, repo.objects);
     const tip = git(d, ["rev-parse", "main"]).trim();
-    await index.indexCommits(db, [tip]);
+    const rows = await index.prepare([tip]);
+    mark("prepare");
+    await index.write(db, rows);
+    mark("write");
 
     const target = file(12_345);
     let t0 = performance.now();
@@ -275,9 +286,10 @@ describe("F4 speed: 100,000 commits over 50,000 files", () => {
     const searchMs = performance.now() - t0;
     expect(found).toEqual(lines(git(d, ["log", "--format=%H", "-F", "--grep=Rename d7/e1"])));
 
-    console.log(
+    phases.push(
       `path ${pathMs.toFixed(1)} ms, directory ${dirMs.toFixed(1)} ms, search ${searchMs.toFixed(1)} ms`,
     );
+    if (process.env.X9_TIMES) writeFileSync(process.env.X9_TIMES, phases.join("\n"));
     expect(pathMs).toBeLessThan(100);
     expect(dirMs).toBeLessThan(100);
     expect(searchMs).toBeLessThan(100);

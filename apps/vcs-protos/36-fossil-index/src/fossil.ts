@@ -60,7 +60,7 @@ function treeReader(objects: ObjectStore) {
     }
     t = await readTree({ objects } as Repository, oid);
     cache.set(oid, t);
-    if (cache.size > 512) cache.delete(cache.keys().next().value as string);
+    if (cache.size > 4096) cache.delete(cache.keys().next().value as string);
     return t;
   };
 }
@@ -107,6 +107,16 @@ async function* commitsFrom(
   known: (oid: string) => Promise<boolean>,
 ): AsyncGenerator<CommitInfo> {
   const read = treeReader(repo.objects);
+  // each commit is read once: its tree is kept for the child that diffs against it
+  const trees = new Map<string, string>();
+  const treeOf = async (oid: string) => {
+    let t = trees.get(oid);
+    if (t === undefined) {
+      t = (await readCommit(repo as Repository, oid)).tree;
+      trees.set(oid, t);
+    }
+    return t;
+  };
   const seen = new Set<string>();
   const stack = [...tips];
   while (stack.length) {
@@ -115,12 +125,11 @@ async function* commitsFrom(
     seen.add(oid);
     if (await known(oid)) continue;
     const c = await readCommit(repo as Repository, oid);
+    trees.set(oid, c.tree);
     const merge = c.parents.length > 1;
     const changes: string[] = [];
     if (!merge) {
-      const parentTree = c.parents[0]
-        ? (await readCommit(repo as Repository, c.parents[0])).tree
-        : undefined;
+      const parentTree = c.parents[0] ? await treeOf(c.parents[0]) : undefined;
       await changedPaths(read, parentTree, c.tree, "", changes);
     }
     yield { oid, date: c.committer.when, merge, message: c.message, changes };
@@ -162,8 +171,10 @@ export async function fossilIndex(
   const index: FossilIndex = {
     async prepare(tips) {
       const out: CommitInfo[] = [];
+      // an empty index knows nothing: no query per commit
+      const empty = (await db.query("SELECT 1 FROM fossil_commit LIMIT 1")).length === 0;
       const known = async (oid: string) =>
-        (await db.query("SELECT 1 FROM fossil_commit WHERE oid = ?", [oid])).length > 0;
+        !empty && (await db.query("SELECT 1 FROM fossil_commit WHERE oid = ?", [oid])).length > 0;
       for await (const c of commitsFrom(repo, tips, known)) out.push(c);
       return out;
     },
