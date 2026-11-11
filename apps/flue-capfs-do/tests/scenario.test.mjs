@@ -110,6 +110,46 @@ test("file text keeps NUL bytes and non-ASCII characters (the store keeps bytes)
   assert.equal((await files(ws))["/n/written"], "x\u0000y");
 });
 
+test("binary files are stored byte for byte (seed, just-bash, a tool over RPC)", async () => {
+  const ws = freshWs();
+  const all = Buffer.from(Array.from({ length: 256 }, (_, i) => i)).toString("base64");
+  await seed(ws, { "/b/seed.bin": { $b64: all } });
+  const b64 = () => admin(`/api/w/${ws}/files?encoding=base64`);
+  assert.equal((await b64())["/b/seed.bin"], all);
+  const { token } = await session(ws, "alice", ["/b"]);
+  const r = await sh(
+    `bin-${ws}`,
+    ws,
+    token,
+    "token",
+    "wc -c < /b/seed.bin; cp /b/seed.bin /b/copy.bin; cat /b/seed.bin > /b/cat.bin; cat /b/seed.bin >> /b/cat.bin",
+  );
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.equal(r.stdout.trim(), "256");
+  // just-bash's cat writes bytes ("binary" encoding), cp copies them in the store. (Its printf
+  // writes text: '\377' becomes U+00FF as UTF-8, as on just-bash's own in-memory file system.)
+  const after = await b64();
+  assert.equal(after["/b/copy.bin"], all);
+  const twice = Buffer.concat([Buffer.from(all, "base64"), Buffer.from(all, "base64")]);
+  assert.equal(after["/b/cat.bin"], twice.toString("base64"));
+  // A tool writes and reads bytes through its capability (structured clone over RPC).
+  const code = `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class extends WorkerEntrypoint {
+  async run(files, input) {
+    files ??= this.env.FILES;
+    await files.call("writeFileBuffer", "/b/tool.bin", new Uint8Array([0, 255, 128, 10]));
+    const back = await files.call("readFileBuffer", "/b/tool.bin");
+    return Array.from(new Uint8Array(back));
+  }
+}`;
+  const rt = (await http("/api/runtime")).value;
+  if (rt.toolIsolates !== "isolated") return; // raw tool code runs only in isolates
+  const t = await run(`bt-${ws}`, ws, token, "token", { kind: "tool", code });
+  assert.equal(t.ok, true, t.error);
+  assert.deepEqual(t.value.result, [0, 255, 128, 10]);
+  assert.equal((await b64())["/b/tool.bin"], Buffer.from([0, 255, 128, 10]).toString("base64"));
+});
+
 for (const transport of TRANSPORTS) {
   describe(`transport=${transport}`, () => {
     test("rights: only allowed branches exist for the agent; exact prefixes; '..' cannot escape", async () => {

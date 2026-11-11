@@ -18,7 +18,10 @@ function fakeCap(entries = {}) {
     calls,
     async call(method, path, ...args) {
       calls.push(`${method} ${path}`);
-      if (["writeFile", "appendFile", "mkdir", "rm"].includes(method) && path.startsWith("/ro"))
+      if (
+        ["writeFile", "writeFileBuffer", "appendFile", "mkdir", "rm"].includes(method) &&
+        path.startsWith("/ro")
+      )
         throw E("EACCES", `permission denied, write '${path}'`);
       switch (method) {
         case "exists":
@@ -49,6 +52,22 @@ function fakeCap(entries = {}) {
         case "readFile":
           if (!files.has(path)) throw E("ENOENT", path);
           return files.get(path);
+        // The store keeps bytes: here UTF-8 content is kept as a string (easy to assert on),
+        // anything else as a Buffer.
+        case "readFileBuffer": {
+          if (!files.has(path)) throw E("ENOENT", path);
+          const v = files.get(path);
+          return new Uint8Array(typeof v === "string" ? Buffer.from(v, "utf8") : v);
+        }
+        case "writeFileBuffer": {
+          const b = Buffer.from(args[0]);
+          let text;
+          try {
+            text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(b);
+          } catch {}
+          files.set(path, text ?? b);
+          return;
+        }
         case "writeFile":
           files.set(path, args[0]);
           return;
@@ -125,14 +144,21 @@ test("append mode writes at the end", async () => {
   assert.equal(cap.files.get("/log"), "a\nb\n");
 });
 
-test("binary content is refused at the write; a character split across writes is not", async () => {
+test("binary content is stored byte for byte; a character split across writes is too", async () => {
   const cap = fakeCap();
   const fs = capHostFs(cap);
-  const { value: id } = await fs.handle("open", ["b", ...CREATE]);
-  assert.equal(
-    (await fs.handle("write", [id, 0, Uint8Array.of(0xff, 0xfe)])).error.code,
-    "ENOTSUP",
+  const { value: bin } = await fs.handle("open", ["bin", ...CREATE]);
+  const all = Uint8Array.from({ length: 256 }, (_, i) => i);
+  assert.deepEqual(await fs.handle("write", [bin, 0, all]), { value: 256 });
+  await fs.handle("close", [bin]);
+  assert.deepEqual([...cap.files.get("/bin")], [...all]);
+  const { value: r } = await fs.handle("open", ["bin", ...RW]);
+  assert.deepEqual(
+    [...(await fs.handle("read", [r, 250, 10])).value],
+    [250, 251, 252, 253, 254, 255],
   );
+  await fs.handle("close", [r]);
+  const { value: id } = await fs.handle("open", ["b", ...CREATE]);
   const e = enc("é"); // two bytes
   assert.deepEqual(await fs.handle("write", [id, 0, e.subarray(0, 1)]), { value: 1 });
   assert.deepEqual(await fs.handle("write", [id, 1, e.subarray(1)]), { value: 1 });
@@ -200,14 +226,13 @@ test("Flue's guest paths resolve '..' before they reach the capability", () => {
   assert.equal(resolveGuestPath("/workspace"), "/workspace");
 });
 
-test("a length that cuts a character is refused", async () => {
+test("any length is kept, even one inside a character (the store keeps bytes)", async () => {
   const cap = fakeCap({ "/e": "éX" });
   const fs = capHostFs(cap);
   const { value: id } = await fs.handle("open", ["e", ...RW]);
-  assert.equal((await fs.handle("setLen", [id, 1])).error.code, "ENOTSUP");
-  assert.deepEqual(await fs.handle("setLen", [id, 2]), { value: null });
+  assert.deepEqual(await fs.handle("setLen", [id, 1]), { value: null });
   await fs.handle("close", [id]);
-  assert.equal(cap.files.get("/e"), "é");
+  assert.deepEqual([...cap.files.get("/e")], [0xc3]);
 });
 
 test("readDir is one capability call with sizes and times; NUL bytes and gaps are kept", async () => {

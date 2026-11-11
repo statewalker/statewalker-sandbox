@@ -184,18 +184,27 @@ function writeWorkspace(files) {
   for (const [path, content] of Object.entries(files)) {
     const target = WORKSPACE + path;
     FS.mkdirTree(target.slice(0, target.lastIndexOf("/")) || WORKSPACE);
-    FS.writeFile(target, content);
+    FS.writeFile(target, typeof content === "string" ? content : fromB64(content.$b64));
   }
 }
 
+// A file's content to and from the kernel: UTF-8 text, or other bytes as { $b64 } (IPC is JSON).
+const toB64 = (b) => {
+  let s = "";
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+const sameContent = (a, b) =>
+  typeof a === "string" || typeof b === "string" ? a === b : a?.$b64 === b?.$b64;
+
 /**
- * What changed under /workspace: written (text), binary (not UTF-8: refused), deleted files,
+ * What changed under /workspace: written (text, or { $b64 } for other bytes), deleted files,
  * new dirs, removed dirs (the topmost of each removed tree). Bounded by LIMITS.
  */
 function changes(before) {
   const FS = pyodide.FS;
   const written = {};
-  const binary = [];
   const dirs = [];
   const seen = new Set();
   let files = 0;
@@ -212,22 +221,21 @@ function changes(before) {
         walk(full);
       } else if (FS.isFile(mode)) {
         seen.add(rel);
-        const content = FS.readFile(full);
-        let text;
+        const raw = FS.readFile(full);
+        let content;
         try {
-          text = utf8.decode(content);
+          content = utf8.decode(raw);
         } catch {
-          binary.push(rel);
-          continue;
+          content = { $b64: toB64(raw) };
         }
-        if (before[rel] !== text) {
+        if (!sameContent(before[rel], content)) {
           files += 1;
-          bytes += bytes0(text);
+          bytes += raw.length;
           if (files > LIMITS.files || bytes > LIMITS.bytes) {
             truncated = true;
             continue;
           }
-          written[rel] = text;
+          written[rel] = content;
         }
       }
     }
@@ -242,9 +250,8 @@ function changes(before) {
       if (!exists(d)) gone.add(d);
   }
   const deletedDirs = [...gone].filter((d) => !gone.has(d.slice(0, d.lastIndexOf("/")))).sort();
-  return { written, binary, deleted, dirs, deletedDirs, truncated };
+  return { written, deleted, dirs, deletedDirs, truncated };
 }
-const bytes0 = (s) => new TextEncoder().encode(s).length;
 const hasPrefix = (files, dir) => Object.keys(files).some((p) => p.startsWith(`${dir}/`));
 
 async function run({ id, code, files, cwd }) {
@@ -285,7 +292,7 @@ async function run({ id, code, files, cwd }) {
   try {
     result = changes(files);
   } catch (e) {
-    result = { written: {}, binary: [], deleted: [], dirs: [], deletedDirs: [], truncated: false };
+    result = { written: {}, deleted: [], dirs: [], deletedDirs: [], truncated: false };
     error = `${error ? `${error}\n` : ""}cannot read /workspace: ${e?.message ?? e}`;
   }
   // Modules a run imported (its own, or stdlib) are dropped: the next run starts from the baseline.

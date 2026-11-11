@@ -37,9 +37,7 @@ interface Handle {
   append: boolean;
 }
 
-/** The store keeps UTF-8 text, so a file's bytes must decode. */
 const encoder = new TextEncoder();
-const strict = () => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 /** At most this many open files per sandbox; at most this many bytes per file in memory. */
 const MAX_HANDLES = 256;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
@@ -58,25 +56,8 @@ const MAX_META_ENTRIES = 20_000;
 
 const err = (code: string, message: string) => Object.assign(new Error(message), { code });
 const nanos = (iso: string) => String(BigInt(Date.parse(iso) || 0) * 1_000_000n);
-const isContinuation = (b: number | undefined) => b !== undefined && (b & 0xc0) === 0x80;
-
-/**
- * Refuses a write that makes the file something other than UTF-8 text, at the write itself
- * (WASIX drops the result of close, so a refusal at close would be silent). Only the bytes
- * around the written range are decoded; a character still incomplete at its end is allowed
- * (the next write may finish it) and is caught by the full check when the file is saved.
- */
-function checkText(b: Uint8Array, from: number, to: number, path: string) {
-  let start = from;
-  for (let i = 0; i < 3 && isContinuation(b[start]); i++) start--;
-  let end = to;
-  for (let i = 0; i < 3 && isContinuation(b[end]); i++) end++;
-  try {
-    strict().decode(b.subarray(Math.max(0, start), end), { stream: true });
-  } catch {
-    throw err("ENOTSUP", `${path}: the store keeps UTF-8 text, not binary content`);
-  }
-}
+const asBytes = (v: unknown) =>
+  v instanceof Uint8Array ? v : new Uint8Array(v as ArrayBuffer | ArrayLike<number>);
 
 /** A protocol handler for one sandbox, over `cap`. */
 export function capHostFs(cap: Cap) {
@@ -184,7 +165,7 @@ export function capHostFs(cap: Cap) {
     if (!f.bytes) {
       f.loading ??= (async () => {
         const bytes = (await exists(f.path))
-          ? encoder.encode((await cap.call("readFile", f.path)) as string)
+          ? asBytes(await cap.call("readFileBuffer", f.path))
           : new Uint8Array();
         if (bytes.length > MAX_FILE_BYTES)
           throw err("EFBIG", `${f.path}: files are at most ${MAX_FILE_BYTES} bytes here`);
@@ -201,15 +182,10 @@ export function capHostFs(cap: Cap) {
   };
   const save = async (f: OpenFile) => {
     if (!f.dirty || !f.bytes) return;
-    let text: string;
-    try {
-      text = strict().decode(f.bytes.subarray(0, f.size));
-    } catch {
-      throw err("ENOTSUP", `${f.path}: the store keeps UTF-8 text, not binary content`);
-    }
     f.dirty = false;
     try {
-      await cap.call("writeFile", f.path, text);
+      // The bytes as they are: the store keeps binary content byte for byte.
+      await cap.call("writeFileBuffer", f.path, f.bytes.slice(0, f.size));
       forget(f.path);
     } catch (e) {
       f.dirty = true;
@@ -309,18 +285,9 @@ export function capHostFs(cap: Cap) {
       const at = h.append ? f.size : Number(offset);
       const end = at + data.length;
       const b = reserve(f, Math.max(f.size, end));
-      const before = b.slice(at, end);
-      const size = f.size;
       if (at > f.size) b.fill(0, f.size, at);
       b.set(data, at);
       f.size = Math.max(f.size, end);
-      try {
-        checkText(b, at, end, f.path);
-      } catch (e) {
-        b.set(before, at);
-        f.size = size;
-        throw e;
-      }
       f.dirty = true;
       return data.length;
     },
@@ -329,9 +296,6 @@ export function capHostFs(cap: Cap) {
       await mayWrite(f);
       await load(f);
       const n = Number(length);
-      // Cutting a character in two would make the file unstorable, and only at close.
-      if (n < f.size && isContinuation((f.bytes as Uint8Array)[n]))
-        throw err("ENOTSUP", `${f.path}: the length would cut a UTF-8 character`);
       const b = reserve(f, n);
       if (n > f.size) b.fill(0, f.size, n);
       f.size = n;

@@ -4,7 +4,7 @@
 // bearer credential.
 //
 //   admin  POST /api/w/:ws/seed                    { files: { path: content } }
-//   admin  GET  /api/w/:ws/files                   every file (audit)
+//   admin  GET  /api/w/:ws/files[?encoding=base64] every file (audit; bytes as base64)
 //   admin  GET  /api/w/:ws/stats                   authorizations / verifications
 //   admin  POST /api/w/:ws/sessions                { user, rights, mode, model? } → { session, token }
 //          (model: false (default), true, or a budget { turns?, tokens? })
@@ -162,8 +162,12 @@ export default {
         }
         const ws = env.WORKSPACE.get(env.WORKSPACE.idFromName(parts[2]));
         const [, , , what, sid, action] = parts;
-        if (what === "seed") return ok(await ws.seed(body.files as Record<string, string>));
-        if (what === "files") return ok(await ws.dump());
+        if (what === "seed")
+          return ok(await ws.seed(body.files as Record<string, string | { $b64: string }>));
+        if (what === "files")
+          return ok(
+            await ws.dump(url.searchParams.get("encoding") === "base64" ? "base64" : undefined),
+          );
         if (what === "stats") return ok(await ws.stats());
         if (what === "sessions" && !sid) {
           return ok(

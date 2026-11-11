@@ -2,14 +2,22 @@
 // `ls`, `cat`, `grep -r`, `find`, redirects, `cp`/`mv` — and Flue's read/write/edit/grep/glob/
 // bash tools — run on the filtered file system. There is no other file system underneath.
 
+import { asBytes, bytesToString, encodingOf, isUtf8, stringToBytes } from "./bytes.ts";
 import type { Cap } from "./caps.ts";
 import { fsError, normalise } from "./path.ts";
-import type { DirEntryStat } from "./sql-fs.ts";
+import { bytesArg, type DirEntryStat } from "./sql-fs.ts";
 
-const dec = new TextDecoder();
-const enc = new TextEncoder();
-const text = (d: unknown) =>
-  typeof d === "string" ? d : d instanceof Uint8Array ? dec.decode(d) : String(d ?? "");
+/**
+ * What a write stores: UTF-8 text as text; bytes (a Uint8Array, or a string in a byte encoding
+ * such as just-bash's "binary"/"latin1") as bytes, byte for byte in the store's BLOB.
+ */
+function content(d: unknown, o: unknown): { text: string } | { bytes: Uint8Array } {
+  const b = asBytes(d);
+  if (b) return { bytes: b };
+  const e = encodingOf(o);
+  if (e === undefined || isUtf8(e)) return { text: String(d ?? "") };
+  return { bytes: stringToBytes(String(d ?? ""), e) };
+}
 
 interface PlainStat {
   isFile: boolean;
@@ -44,20 +52,27 @@ export class CapFs {
   constructor(cap: Cap) {
     this.#cap = cap;
   }
-  readFile(p: string, _o?: unknown): Promise<string> {
-    if (isNull(p)) return Promise.resolve("");
-    return this.#cap.call("readFile", p) as Promise<string>;
+  async readFile(p: string, o?: unknown): Promise<string> {
+    if (isNull(p)) return "";
+    const e = encodingOf(o);
+    if (e === undefined || isUtf8(e)) return (await this.#cap.call("readFile", p)) as string;
+    return bytesToString(await this.readFileBuffer(p), e);
   }
   async readFileBuffer(p: string): Promise<Uint8Array> {
-    return enc.encode(await this.readFile(p));
+    if (isNull(p)) return new Uint8Array();
+    return bytesArg(await this.#cap.call("readFileBuffer", p));
   }
-  async writeFile(p: string, d: unknown, _o?: unknown): Promise<void> {
+  async writeFile(p: string, d: unknown, o?: unknown): Promise<void> {
     if (isNull(p)) return;
-    await this.#cap.call("writeFile", p, text(d));
+    const c = content(d, o);
+    if ("bytes" in c) await this.#cap.call("writeFileBuffer", p, c.bytes);
+    else await this.#cap.call("writeFile", p, c.text);
   }
-  async appendFile(p: string, d: unknown, _o?: unknown): Promise<void> {
+  async appendFile(p: string, d: unknown, o?: unknown): Promise<void> {
     if (isNull(p)) return;
-    await this.#cap.call("appendFile", p, text(d));
+    const c = content(d, o);
+    if ("bytes" in c) await this.#cap.call("appendFileBuffer", p, c.bytes);
+    else await this.#cap.call("appendFile", p, c.text);
   }
   async exists(p: string): Promise<boolean> {
     if (isNull(p)) return true;

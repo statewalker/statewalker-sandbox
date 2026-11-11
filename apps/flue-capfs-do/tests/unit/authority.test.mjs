@@ -423,3 +423,37 @@ test("file text is kept as UTF-8 bytes: NUL, non-ASCII and old TEXT rows read ba
   await store.appendFile("/p1/a", "!");
   assert.equal(await store.readFile("/p1/a"), "old é!");
 });
+
+test("binary content is stored byte for byte as a BLOB, and writing it needs the write right", async () => {
+  const { s, store, gate, token } = await setup();
+  const all = Uint8Array.from({ length: 256 }, (_, i) => i);
+  await gate().call("writeFileBuffer", "/p1/bin", all);
+  assert.deepEqual([...(await gate().call("readFileBuffer", "/p1/bin"))], [...all]);
+  assert.equal(
+    s
+      .exec("SELECT typeof(data) AS t, length(data) AS n FROM fs_entries WHERE path = '/p1/bin'")
+      .toArray()[0].t,
+    "blob",
+  );
+  assert.equal((await gate().call("stat", "/p1/bin")).size, 256);
+  assert.equal((await gate().call("readdirStat", "/p1")).find((e) => e.name === "bin").size, 256);
+  // An ArrayBuffer and other views are bytes too; appends keep what is there.
+  await gate().call("appendFileBuffer", "/p1/bin", new Uint16Array([0xffff]).buffer);
+  assert.equal((await store.readFileBuffer("/p1/bin")).length, 258);
+  await store.cp("/p1/bin", "/p1/bin2");
+  assert.deepEqual([...(await store.readFileBuffer("/p1/bin2"))].slice(0, 256), [...all]);
+  // Read as text, invalid sequences become U+FFFD (the bytes stay as they are).
+  await gate().call("writeFileBuffer", "/p1/ff", new Uint8Array([0x61, 0xff, 0x62]));
+  assert.equal(await gate().call("readFile", "/p1/ff"), "a�b");
+  assert.deepEqual([...(await gate().call("readFileBuffer", "/p1/ff"))], [0x61, 0xff, 0x62]);
+  // Parents are created (and authorized) as for text; refused outside the rights and read-only.
+  await gate().call("writeFileBuffer", "/proj/new/deep.bin", new Uint8Array([1]));
+  assert.equal((await store.stat("/proj/new")).isDirectory, true);
+  await denied(gate().call("writeFileBuffer", "/p10/x.bin", new Uint8Array([1])));
+  const ro = Biscuit.fromBase64(token)
+    .attenuate(attenuationBlock({ readOnly: true }))
+    .toBase64();
+  await denied(gate(ro).call("writeFileBuffer", "/p1/bin", new Uint8Array([1])));
+  await denied(gate(ro).call("appendFileBuffer", "/p1/bin", new Uint8Array([1])));
+  await assert.rejects(gate().call("writeFileBuffer", "/p1/s", "text"), (e) => e.code === "EINVAL");
+});

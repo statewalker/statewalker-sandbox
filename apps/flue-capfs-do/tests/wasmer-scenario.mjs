@@ -137,10 +137,23 @@ export function wasmerCases({ api, label = "", llm = false }) {
       [{ readOnly: true }],
     );
     assert.match(r.stdout, /^rc=1\n/, r.stderr);
-    const w = await sh(ws, token, "printf '\\xff\\xfe' > /workspace/proj/b.bin; echo rc=$?");
-    assert.match(w.stdout, /rc=1/, "binary content is refused at the write");
     const f = await files(ws);
     assert.equal(f["/proj/readme.md"], SEED["/proj/readme.md"]);
+    assert.equal(f["/proj/b.bin"], undefined);
+  });
+
+  add("binary files are stored byte for byte from Wasmer", async () => {
+    const { ws, token } = await setup();
+    const w = await sh(
+      ws,
+      token,
+      "printf '\\377\\376\\000\\001' > /workspace/proj/b.bin; cp /workspace/proj/b.bin /workspace/proj/c.bin; wc -c < /workspace/proj/c.bin; od -An -tx1 /workspace/proj/b.bin",
+    );
+    assert.equal(w.exitCode, 0, w.stderr);
+    assert.match(w.stdout, /^4\n\s*ff fe 00 01/);
+    const b64 = await admin(`/api/w/${ws}/files?encoding=base64`);
+    assert.equal(b64["/proj/b.bin"], Buffer.from([0xff, 0xfe, 0, 1]).toString("base64"));
+    assert.equal(b64["/proj/c.bin"], b64["/proj/b.bin"]);
   });
 
   if (llm)

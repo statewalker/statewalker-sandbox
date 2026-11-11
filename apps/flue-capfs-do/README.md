@@ -76,8 +76,8 @@ curl -H "$A" -H "$J" localhost:8787/api/w/acme/sessions/<session>/mode -d '{"mod
 
 | Route | Who | Does |
 |---|---|---|
-| `POST /api/w/:ws/seed` `{files}` | admin | writes files without rights checks (import) |
-| `GET /api/w/:ws/files` | admin | every file and its contents (audit) |
+| `POST /api/w/:ws/seed` `{files}` | admin | writes files without rights checks (import); a value is text, or `{"$b64": "…"}` for binary content |
+| `GET /api/w/:ws/files[?encoding=base64]` | admin | every file and its contents (audit): as text, or the stored bytes in base64 |
 | `GET /api/w/:ws/stats` | admin | `{authorizations, verifications}` of the Workspace instance |
 | `GET /api/w/:ws/sessions/:sid` | admin | `{session, user, mode, revokedAll, revokedIds, model: {allowed, turnsLeft, tokensLeft, used}}` |
 | `POST /api/w/:ws/sessions` `{user, rights, mode, model?}` | admin | mints a session token → `{session, token}`; `model`: `false` (default), `true` or a budget `{turns?, tokens?}` (see [Agent loop](#agent-loop)) |
@@ -257,12 +257,12 @@ class is refused with `EINVAL`. The bundle's entry is a generated `WorkerEntrypo
   export is `fs.promises`).
 - **Errors** carry `code`, `errno`, `syscall` and `path`. `access` checks existence only: the
   capability authorizes the actual write when it happens.
-- **Data:** the store holds UTF-8 text.
-  - `readFile` without an encoding returns a Buffer-like `Uint8Array` with `toString(encoding)`
-    (`utf8`, `latin1`, `ascii`, `hex`, `base64`), so `JSON.parse(buf)` works.
+- **Data:** the store keeps bytes (see [Binary files](#binary-files)).
+  - `readFile` without an encoding returns a Buffer-like `Uint8Array` of the stored bytes, with
+    `toString(encoding)` (`utf8`, `latin1`, `ascii`, `hex`, `base64`), so `JSON.parse(buf)` works.
   - With an encoding it returns that string.
-  - Writing bytes that are not valid UTF-8, or a string with a non-utf8 encoding, is refused
-    with `EINVAL` instead of corrupting the file.
+  - Bytes (any TypedArray or ArrayBuffer) are written byte for byte; a string is written as
+    UTF-8, or in the encoding given (`latin1`/`binary`, `ascii`, `hex`, `base64`).
 - **`path`:** a pure POSIX path (`join`, `resolve` from `/`, `normalize`, `relative`, `parse`,
   `format`, …). `path.win32` throws.
 - **`process`:** a frozen stub. `process.env` is `processEnv` (`NODE_ENV=production` by default),
@@ -364,7 +364,8 @@ capability.
   - A run's write-back stops at 5000 files or 16 MB (`truncated`).
   - `stdout` and `stderr` are cut at 1 MB each, and the value at 64 KB. The engine enforces these
     limits, and the Agent checks them again.
-  - The store holds UTF-8 text, so binary output is refused (`EINVAL`).
+  - Binary files go both ways byte for byte: synced in as bytes, and binary output written back
+    with `writeFileBuffer` (over the Node engine's JSON IPC they travel as base64).
 
 **Configuration** (vars):
 
@@ -526,10 +527,8 @@ with the run's id as the mount id; `src/wasmer/host-fs.ts` answers the protocol 
 capability. Open files are buffered (one buffer per path, shared by its handles) and saved on
 flush or close. WASIX drops what close returns, so nothing may fail there silently: creating or
 truncating a file is written through at open, the write right on an existing file is asked at the
-first write (WASIX opens files read-write even to read them), and content that is not UTF-8 is
-refused at the write that makes it so. One case cannot be: a write may end inside a character
-(the next write may complete it), so a file left with an incomplete last character fails to save
-at close and keeps its previous content; a length that would cut a character is refused.
+first write (WASIX opens files read-write even to read them). Files are read and saved as bytes
+(`readFileBuffer`, `writeFileBuffer`), so binary content is stored byte for byte.
 
 | Runtime | Engine | How file operations reach the Agent cell |
 |---|---|---|
@@ -559,8 +558,7 @@ at close and keeps its previous content; a length that would cut a character is 
   stopped engine fail at once. Sandboxes are built one at a time, each bound to its run's mount,
   and a sandbox whose open timed out is closed when it is built.
 - **Limits:** 60 s per command by default (at most 300 s), 1 MB of output, 256 open files and
-  16 MB per file read or written through an open file. The store keeps UTF-8 text (NUL bytes
-  included), so binary writes are refused (`ENOTSUP`); symlinks are not in the protocol. A directory listing is one
+  16 MB per file read or written through an open file. Symlinks are not in the protocol. A directory listing is one
   capability call (`readdirStat`: the entries the token may list, each with its stat), and its
   reply must fit the SDK's 512 KiB bridge buffer (several thousand entries).
 - **Config:** `WASMER=off` disables it; `WASMER_ENGINE` is the engine's path (Node) or URL
@@ -614,6 +612,24 @@ export default class extends WorkerEntrypoint {
 ```
 
 ## Internals
+
+### Binary files
+
+A file's content is a BLOB of bytes in the owner cell's SQLite (`fs_entries.data`), whatever it
+holds. Text is stored as its UTF-8 bytes (`writeFile`, `appendFile`); binary content as it is
+(`writeFileBuffer`, `appendFileBuffer`, which take a `Uint8Array`, another view, or an
+`ArrayBuffer`). `readFileBuffer` returns the stored bytes; `readFile` decodes them as UTF-8 (the
+invalid sequences of a binary file read as U+FFFD; the bytes themselves stay as they are).
+Writing bytes is a `write` operation like writing text, authorized the same way. Rows written as
+TEXT before BLOBs are read as `CAST(data AS BLOB)`, so they come back whole too.
+
+Every writer sends bytes as bytes:
+- just-bash (`CapFs`): `Uint8Array` content, and strings in a byte encoding (`binary`/`latin1`,
+  `base64`, `hex`), go to `writeFileBuffer`; `readFileBuffer` reads the stored bytes.
+- tools' `node:fs`: Buffers and TypedArrays are written byte for byte; reads return the bytes.
+- Python: binary files are synced in and written back as bytes.
+- Wasmer: open files are read and saved as bytes.
+- Flue's tools on Wasmer: `writeFile(Uint8Array)` and `readFileBuffer`.
 
 ```
 src/worker.ts       gateway: routes, admin guard, opens the capability for stub transport
@@ -741,7 +757,7 @@ shim-only isolates in cellb, or yesterday's vm runner.
   - cellb (seen in 0.5.2; kept for later versions) dispatches any function-valued name of an entrypoint instance, `Object.prototype`
     methods included, so `valueOf()` would return the instance with its props. The entrypoint
     shadows those methods; workerd and celld do not dispatch them at all.
-- **Limits of the prototype:** contents are stored as UTF-8 text (not binary-safe). `readdir`
+- **Limits of the prototype:** `readdir`
   and recursive operations run one Datalog authorization per entry, so a large tree, or a
   costly attenuation block, makes `ls -R`/`grep -r` slow for the Workspace cell. A revocation id
   is checked for form only; it cannot be tied to its session without the token.

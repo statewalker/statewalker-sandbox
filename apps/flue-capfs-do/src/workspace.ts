@@ -16,6 +16,7 @@ import {
   type ModelGrant,
   type ModelUsage,
 } from "./authority.ts";
+import { bytesToString, stringToBytes } from "./bytes.ts";
 import { normalise } from "./path.ts";
 import { SqlFs } from "./sql-fs.ts";
 
@@ -95,20 +96,27 @@ export class Workspace extends DurableObject {
   sessionInfo(session: string) {
     return this.#auth.sessionInfo(session);
   }
-  /** Seed files without rights checks (admin import). */
-  async seed(files: Record<string, string>) {
-    for (const [p, content] of Object.entries(files))
-      await this.#store.writeFile(normalise(p), content);
+  /** Seed files without rights checks (admin import): text, or `{ $b64 }` for binary content. */
+  async seed(files: Record<string, string | { $b64: string }>) {
+    for (const [p, content] of Object.entries(files)) {
+      if (typeof content === "string") await this.#store.writeFile(normalise(p), content);
+      else await this.#store.writeFileBuffer(normalise(p), stringToBytes(content.$b64, "base64"));
+    }
     return Object.keys(files).length;
   }
-  /** Every file and its contents, for audits and tests (admin). */
-  async dump(): Promise<Record<string, string>> {
+  /**
+   * Every file and its contents, for audits and tests (admin): as text, or with
+   * `encoding: "base64"` the stored bytes in base64.
+   */
+  async dump(encoding?: "base64"): Promise<Record<string, string>> {
     const out: Record<string, string> = {};
     const walk = async (dir: string) => {
       for (const name of await this.#store.readdir(dir)) {
         const p = dir === "/" ? `/${name}` : `${dir}/${name}`;
         const st = await this.#store.stat(p);
         if (st.isDirectory) await walk(p);
+        else if (encoding === "base64")
+          out[p] = bytesToString(await this.#store.readFileBuffer(p), "base64");
         else out[p] = await this.#store.readFile(p);
       }
     };

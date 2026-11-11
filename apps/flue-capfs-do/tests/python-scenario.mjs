@@ -185,23 +185,34 @@ r.append("|".join(sorted(os.listdir("/workspace"))))
     assert.equal(r.value, "x-fresh/modules-fresh/proj");
   });
 
-  add("binary output is refused; a runaway run times out and the next run works", async () => {
-    const { ws, token } = await setup();
-    const bin = ok(
-      await py(ws, token, "stub", {
-        code: "open('/workspace/proj/x.bin', 'wb').write(bytes([255, 254]))",
-      }),
-    );
-    assert.deepEqual(
-      bin.denied.map((d) => [d.path, d.error.split(":")[0]]),
-      [["/proj/x.bin", "EINVAL"]],
-    );
-    const slow = await py(ws, token, "stub", { code: "while True:\n    pass", timeoutMs: 1500 });
-    assert.equal(slow.ok, false);
-    assert.equal(slow.code, "ETIMEDOUT");
-    const after = ok(await py(ws, token, "stub", { code: "1 + 1" }));
-    assert.equal(after.value, 2);
-  });
+  add(
+    "binary files go both ways byte for byte; a runaway run times out and the next run works",
+    async () => {
+      const { ws, token } = await setup();
+      const bin = ok(
+        await py(ws, token, "stub", {
+          code: "open('/workspace/proj/x.bin', 'wb').write(bytes(range(256)))",
+        }),
+      );
+      assert.deepEqual(bin.written, ["/proj/x.bin"]);
+      assert.deepEqual(bin.denied, []);
+      const all = Buffer.from(Array.from({ length: 256 }, (_, i) => i)).toString("base64");
+      assert.equal((await admin(`/api/w/${ws}/files?encoding=base64`))["/proj/x.bin"], all);
+      // Synced back in as bytes; an unchanged binary file is not written again.
+      const back = ok(
+        await py(ws, token, "token", {
+          code: "d = open('/workspace/proj/x.bin', 'rb').read()\n[len(d), d[0], d[255]]",
+        }),
+      );
+      assert.equal(back.value, "[256, 0, 255]");
+      assert.deepEqual(back.written, []);
+      const slow = await py(ws, token, "stub", { code: "while True:\n    pass", timeoutMs: 1500 });
+      assert.equal(slow.ok, false);
+      assert.equal(slow.code, "ETIMEDOUT");
+      const after = ok(await py(ws, token, "stub", { code: "1 + 1" }));
+      assert.equal(after.value, 2);
+    },
+  );
 
   // ---- regressions from the PR #47 review ----
 

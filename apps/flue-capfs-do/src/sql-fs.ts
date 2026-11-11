@@ -3,9 +3,11 @@
 // owner cell, and it is the only thing that touches file data. It knows nothing about
 // rights: FsGate authorizes every entry an operation touches before calling it.
 //
-// Paths given to it are already normalised by the caller. Contents are text: stored as the
-// BLOB of their UTF-8 bytes (a TEXT value would end at the first NUL on node:sqlite), read
-// back as text. Binary data written through CapFs is decoded as UTF-8 first: not binary-safe.
+// Paths given to it are already normalised by the caller. A file's content is a BLOB of bytes:
+// text is stored as its UTF-8 bytes (writeFile, appendFile; a TEXT value would end at the
+// first NUL on node:sqlite), binary content as is (writeFileBuffer, appendFileBuffer).
+// readFileBuffer returns the bytes; readFile decodes them as UTF-8 (invalid sequences of a
+// binary file read as U+FFFD there).
 
 import { dirname, fsError, join } from "./path.ts";
 
@@ -62,6 +64,13 @@ const dec = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
 const bytesOf = (data: Row["data"]): Uint8Array =>
   data == null ? new Uint8Array() : data instanceof Uint8Array ? data : new Uint8Array(data);
 /** Bytes as the ArrayBuffer SQL bindings take (exactly the view's bytes). */
+/** Bytes as they arrive over RPC: a Uint8Array, any ArrayBuffer view, or an ArrayBuffer. */
+export function bytesArg(d: unknown): Uint8Array {
+  if (d instanceof Uint8Array) return d;
+  if (ArrayBuffer.isView(d)) return new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
+  if (d instanceof ArrayBuffer) return new Uint8Array(d);
+  throw fsError("EINVAL", "binary content must be a Uint8Array or an ArrayBuffer");
+}
 const toBlob = (b: Uint8Array): ArrayBuffer =>
   (b.byteOffset === 0 && b.byteLength === b.buffer.byteLength
     ? b.buffer
@@ -141,18 +150,30 @@ export class SqlFs {
     return bytesOf(row.data).slice();
   }
   async writeFile(path: string, data: string): Promise<void> {
+    this.#write(path, enc.encode(String(data ?? "")));
+  }
+  /** Binary content, stored byte for byte. */
+  async writeFileBuffer(path: string, data: unknown): Promise<void> {
+    this.#write(path, bytesArg(data));
+  }
+  async appendFile(path: string, data: string): Promise<void> {
+    this.#append(path, enc.encode(String(data ?? "")));
+  }
+  async appendFileBuffer(path: string, data: unknown): Promise<void> {
+    this.#append(path, bytesArg(data));
+  }
+  #write(path: string, bytes: Uint8Array) {
     if (this.#get(path)?.kind === "dir")
       throw fsError("EISDIR", `illegal operation on a directory, write '${path}'`);
     this.#ensureParents(path);
-    this.#put(path, "file", enc.encode(String(data ?? "")));
+    this.#put(path, "file", bytes);
   }
-  async appendFile(path: string, data: string): Promise<void> {
+  #append(path: string, tail: Uint8Array) {
     const row = this.#get(path);
     if (row?.kind === "dir")
       throw fsError("EISDIR", `illegal operation on a directory, append '${path}'`);
     this.#ensureParents(path);
     const head = bytesOf(row?.data ?? null);
-    const tail = enc.encode(String(data ?? ""));
     const out = new Uint8Array(head.length + tail.length);
     out.set(head);
     out.set(tail, head.length);

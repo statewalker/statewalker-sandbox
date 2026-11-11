@@ -422,7 +422,9 @@ export class FsGate {
     const opts = (args[0] ?? {}) as { recursive?: boolean };
     if (
       method === "writeFile" ||
+      method === "writeFileBuffer" ||
       method === "appendFile" ||
+      method === "appendFileBuffer" ||
       (method === "mkdir" && opts.recursive)
     ) {
       await this.#requireParents(path);
