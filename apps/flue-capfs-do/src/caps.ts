@@ -15,6 +15,8 @@ export interface Cap {
   call(method: string, path: string, ...args: unknown[]): Promise<unknown>;
   readdir(path: string): Promise<string[]>;
   move(kind: "cp" | "mv", src: string, dst: string, opts?: unknown): Promise<void>;
+  /** A files-RPC call (webrun-files-rpc); `capFiles(cap)` is the FilesApi over it. */
+  rpc(method: string, args: unknown[]): Promise<unknown>;
   attenuate(datalog: string): Promise<Cap>;
   revocationId(): Promise<string>;
   /** The model right and budget, decided in the owner cell (the `agent` task only). */
@@ -49,6 +51,9 @@ export class StubCap implements Cap {
   }
   move(kind: "cp" | "mv", src: string, dst: string, opts?: unknown) {
     return wrap(Promise.resolve(this.#stub.move(kind, src, dst, opts)));
+  }
+  rpc(method: string, args: unknown[]) {
+    return wrap(Promise.resolve(this.#stub.rpc(method, args)));
   }
   async attenuate(datalog: string): Promise<Cap> {
     return new StubCap(
@@ -89,6 +94,9 @@ export class TokenCap implements Cap {
   }
   move(kind: "cp" | "mv", src: string, dst: string, opts?: unknown) {
     return this.#send({ op: "move", kind, path: src, dst, opts }) as Promise<void>;
+  }
+  rpc(method: string, args: unknown[]) {
+    return this.#send({ op: "rpc", method, args });
   }
   async attenuate(datalog: string): Promise<Cap> {
     return new TokenCap(
@@ -134,5 +142,8 @@ export class ToolFiles extends RpcTarget {
   }
   move(kind: "cp" | "mv", src: string, dst: string, opts?: unknown) {
     return this.#cap.move(kind, src, dst, opts);
+  }
+  rpc(method: string, args: unknown[]) {
+    return this.#cap.rpc(method, args);
   }
 }

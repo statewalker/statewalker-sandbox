@@ -17,6 +17,7 @@ import {
   type ModelUsage,
 } from "./authority.ts";
 import { bytesToString, stringToBytes } from "./bytes.ts";
+import { FilesRpcHub } from "./files-rpc-hub.ts";
 import { fsError, normalise } from "./path.ts";
 import { SqlFs } from "./sql-fs.ts";
 
@@ -30,10 +31,12 @@ export class FilteredFiles extends RpcTarget {
   #token: string;
   #auth: Authority;
   #store: SqlFs;
-  constructor(store: SqlFs, auth: Authority, token: string) {
+  #hub: FilesRpcHub;
+  constructor(store: SqlFs, auth: Authority, hub: FilesRpcHub, token: string) {
     super();
     this.#store = store;
     this.#auth = auth;
+    this.#hub = hub;
     this.#token = token;
     this.#gate = new FsGate(store, auth, token);
   }
@@ -46,6 +49,10 @@ export class FilteredFiles extends RpcTarget {
   move(kind: "cp" | "mv", src: string, dst: string, opts?: unknown) {
     return this.#gate.move(kind, src, dst, opts);
   }
+  /** A files-RPC call (webrun-files-rpc): files of any size, streamed as chunks. */
+  rpc(method: string, args: unknown[]) {
+    return this.#hub.call(this.#token, method, args);
+  }
   /** The model right and budget (the `agent` task; never given to tools). */
   model(action: ModelAction, metered: boolean, usage?: ModelUsage) {
     return this.#gate.model(action, metered, usage);
@@ -54,7 +61,7 @@ export class FilteredFiles extends RpcTarget {
   async attenuate(datalog: string): Promise<FilteredFiles> {
     const token = Biscuit.fromBase64(this.#token).attenuate(datalog).toBase64();
     await this.#auth.verify(token);
-    return new FilteredFiles(this.#store, this.#auth, token);
+    return new FilteredFiles(this.#store, this.#auth, this.#hub, token);
   }
   /** Revocation id of this capability's last block: revoking it cuts it and every descendant. */
   async revocationId(): Promise<string> {
@@ -65,11 +72,13 @@ export class FilteredFiles extends RpcTarget {
 export class Workspace extends DurableObject {
   #store: SqlFs;
   #auth: Authority;
+  #hub: FilesRpcHub;
 
   constructor(ctx: DurableObjectState, env: unknown) {
     super(ctx, env as never);
     this.#store = new SqlFs(ctx.storage.sql);
     this.#auth = new Authority(ctx.storage.sql);
+    this.#hub = new FilesRpcHub(this.#store, this.#auth);
   }
 
   // ---- issuer / admin (called by the gateway after it authenticated the user) ----
@@ -133,12 +142,13 @@ export class Workspace extends DurableObject {
 
   async open(token: string): Promise<FilteredFiles> {
     await this.#auth.sessionOf(token); // reject forged tokens before handing anything out
-    return new FilteredFiles(this.#store, this.#auth, token);
+    return new FilteredFiles(this.#store, this.#auth, this.#hub, token);
   }
 
   // ---- transport 2: token string per request ----
 
   fsCall(token: string, req: FsRequest): Promise<unknown> {
+    if (req?.op === "rpc") return this.#hub.call(token, req.method, req.args);
     return new FsGate(this.#store, this.#auth, token).dispatch(req);
   }
   revocationIds(token: string) {

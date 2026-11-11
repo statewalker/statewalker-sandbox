@@ -1,11 +1,11 @@
-// The `stream` task: a holder streams a file through CapFilesApi over its capability. It makes
-// the chunked transfer observable end to end (and shows how a holder uses it): `write` streams
+// The `stream` task: a holder streams a file through the files-RPC client over its capability.
+// It makes the chunked transfer observable end to end (and shows how a holder uses it): `write` streams
 // `size` deterministic bytes from `seed` in `chunk`-byte pieces, `read` streams a range back;
 // both answer with the byte count, the chunk count and the SHA-256 of what passed (up to
 // 16 MiB; null beyond).
 
-import { CapFilesApi } from "./cap-files-api.ts";
 import type { Cap } from "./caps.ts";
+import { capFiles } from "./files-rpc.ts";
 
 export type StreamTask =
   | { op: "write"; path: string; size: number; seed?: number; chunk?: number }
@@ -42,7 +42,7 @@ async function digest(parts: Uint8Array[]) {
 }
 
 export async function runStreamTask(cap: Cap, task: StreamTask) {
-  const files = new CapFilesApi(cap);
+  const files = capFiles(cap);
   if (task.op === "write") {
     const size = Math.floor(Number(task.size));
     if (!(size >= 0 && size <= MAX_TASK_BYTES))

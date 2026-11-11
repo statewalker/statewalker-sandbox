@@ -199,3 +199,42 @@ describe("robustness: listing does not trust the FilesApi with `after`", () => {
     expect(seen).toEqual(["/a", "/b", "/c", "/d", "/e"]);
   });
 });
+
+describe("robustness: a writer cannot pin memory or a stream", () => {
+  it("a chunk more than two windows past the next to write is refused", async () => {
+    const server = newFilesRpcServer({ fs: new MemFilesApi(), writeWindow: 2 });
+    const { streamId } = await server.openWrite("/a");
+    await expect(server.writeChunk(streamId, 4, text("x"))).rejects.toMatchObject({
+      code: "INVALID",
+    });
+    await expect(server.writeChunk(streamId, 100, text("x"))).rejects.toMatchObject({
+      code: "INVALID",
+    });
+    // Within two windows: kept (0, 1) or waiting for room (2, 3).
+    const waiting = [
+      server.writeChunk(streamId, 2, text("c")),
+      server.writeChunk(streamId, 3, text("d")),
+    ];
+    await server.writeChunk(streamId, 1, text("b"));
+    await server.writeChunk(streamId, 0, text("a"));
+    await Promise.all(waiting);
+    await server.closeWrite(streamId, 4);
+  });
+
+  it("a write waiting for the holder's chunks is swept once idle, waiters and all", async () => {
+    let now = 0;
+    const fs = new MemFilesApi({ initialFiles: { "/a": "old" } });
+    const server = newFilesRpcServer({ fs, writeWindow: 1, idleTimeout: 1000, now: () => now });
+    const { streamId } = await server.openWrite("/a");
+    const far = server.writeChunk(streamId, 1, text("b")); // waits for chunk 0, which never comes
+    const close = server.closeWrite(streamId, 2);
+    far.catch(() => {});
+    close.catch(() => {});
+    now += 5000;
+    expect(server.sweep()).toBe(1);
+    await expect(far).rejects.toMatchObject({ code: "ABORTED" });
+    await expect(close).rejects.toMatchObject({ code: "ABORTED" });
+    expect(server.openStreams()).toBe(0);
+    expect(new TextDecoder().decode(await collect(fs.read("/a")))).toBe("old");
+  });
+});

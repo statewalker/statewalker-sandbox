@@ -57,7 +57,13 @@ export const dirname = (path: string): string => {
 /** Rebuild `code` after a hop that may have dropped it (RPC, HTTP, isolate boundary). */
 export function rebuildError(e: unknown): FsError {
   const message = String((e as Error)?.message ?? e);
-  const code = (e as FsError)?.code ?? message.match(/^(E[A-Z]+)\b/)?.[1] ?? "EIO";
+  // POSIX codes, and the files-RPC protocol's (webrun-files-rpc errorCode reads `code` first).
+  const code =
+    (e as FsError)?.code ??
+    message.match(
+      /^(E[A-Z]+|UNKNOWN_STREAM|CHUNK_RELEASED|TOO_MANY_STREAMS|ABORTED|INVALID)\b/,
+    )?.[1] ??
+    "EIO";
   const err = new Error(message) as FsError;
   err.code = code;
   return err;

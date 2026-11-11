@@ -15,6 +15,7 @@ describe("server: stream lifecycle", () => {
     await server.readChunk(r.streamId, 0);
     const w = await server.openWrite("/b.txt");
     await server.writeChunk(w.streamId, 0, text("new"));
+    await new Promise((r) => setTimeout(r, 5)); // the file system takes it (idle from then on)
     now += 30_000;
     expect(server.sweep()).toBe(0);
     await server.readChunk(r.streamId, 1); // used: idle time starts again

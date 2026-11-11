@@ -48,6 +48,9 @@ export class ToolFilesEntrypoint extends WorkerEntrypoint<Env> {
   async move(kind: "cp" | "mv", src: string, dst: string, opts?: unknown) {
     return (await this.#cap()).move(kind, src, dst, opts);
   }
+  async rpc(method: string, args: unknown[]) {
+    return (await this.#cap()).rpc(method, args);
+  }
   // Some runtimes (cellb 0.5.2) dispatch any function-valued name of the instance, including
   // Object.prototype's: `valueOf()` would hand the tool this instance, with ctx.props. Shadow them.
   valueOf = refuse;

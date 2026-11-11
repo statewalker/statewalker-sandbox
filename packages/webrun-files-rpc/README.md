@@ -65,7 +65,7 @@ Exports:
 | `readAhead` | 4 | Chunks produced ahead, counting from the highest one asked. |
 | `retain` | 16 | A delivered chunk is dropped once the reader asked for one `retain` chunks past it (until then it can be asked again). |
 | `window` | 64 | A read request may name a chunk at most `window` past the lowest chunk not yet delivered (`INVALID` beyond): what one stream makes the server pull and hold stays within `window + readAhead` chunks. |
-| `writeWindow` | 16 | Chunks of a write kept ahead of the next one to write; a chunk beyond it waits (backpressure). |
+| `writeWindow` | 16 | Chunks of a write kept ahead of the next one to write; a chunk beyond it waits (backpressure), one beyond two windows is refused. |
 | `maxChunkSize` | 4 MiB | Largest chunk a write takes. |
 | `idleTimeout` | 2 min | A stream not used for this long is dropped (a read closed, a write aborted). |
 | `maxStreams` | 256 | Open streams at most (`TOO_MANY_STREAMS` beyond). |
@@ -201,7 +201,9 @@ await server.closeRead(r);
 - **Writes:** `openWrite` starts the `FilesApi`'s `write()` at once, on a generator that yields
   the stream's chunks in key order and waits for the next one.
   - `writeChunk` keeps a copy of its chunk; a view of a larger buffer is cut out.
-  - A chunk at or beyond `next + writeWindow` waits until the window moves.
+  - A chunk at or beyond `next + writeWindow` waits until the window moves; one at or beyond
+    `next + 2 × writeWindow` is refused (`INVALID`). So a writer makes the server hold at most two
+    windows of chunks.
   - `closeWrite(n)` tells the generator where to stop and waits for `write()` to finish. If more
     than `n` chunks arrived, the write fails with `INVALID`.
   - `abortWrite`, expiry and `close()` make the generator throw, so `write()` fails. What then
@@ -212,12 +214,14 @@ await server.closeRead(r);
 - **Ended streams:** ids that ended are remembered for `idleTimeout`. Within that time, an open
   delivered after its stream ended does not reopen it, and a `closeWrite` delivered again gets the
   first answer.
-- **Idle and busy:** a stream is idle when no call on it is in progress and none started for
-  `idleTimeout`.
-  - A `readChunk` waiting on a slow source, a `writeChunk` waiting for room, or a `closeWrite`
-    waiting on a slow commit keeps its stream alive.
-  - So does a write whose chunks were all handed to the FilesApi. An `abortWrite` arriving then
-    is too late and does nothing (the commit stands).
+- **Idle and busy:** a stream is idle when nothing happened on it for `idleTimeout`: no call
+  started or ended, and (writes) the FilesApi took no chunk.
+  - A `readChunk` waiting on a slow source keeps its stream alive, and so does a write whose next
+    chunk is there for the FilesApi to take.
+  - A write waiting only for the holder (`writeChunk` waiting for room, `closeWrite` waiting for a
+    missing chunk) is swept once idle; its waiting calls fail with `ABORTED`.
+  - A write whose chunks were all handed to the FilesApi is never swept. An `abortWrite` arriving
+    then is too late and does nothing (the commit stands).
 - **Failures:** a write the FilesApi fails keeps its stream until it is closed, aborted or swept,
   so the next `writeChunk` or `closeWrite` reports that failure, not `UNKNOWN_STREAM`. A source
   yielding something that is not bytes fails the stream with `INVALID`.
@@ -246,6 +250,6 @@ await server.closeRead(r);
 | `server-write.test.ts` | in-order and out-of-order chunks, duplicates, backpressure, `closeWrite` waiting for a gap or refusing a wrong count, empty files, abort, failing writes, byte types |
 | `server-lifecycle.test.ts` | idle expiry, the stream limit, `close()`, unguessable ids, paged listing, metadata |
 | `protocol.test.ts` | caller-chosen keys (opens and `closeWrite` delivered twice, after the end), what is refused, waiting requests failed by a close, error codes across a structured clone, many streams at once, release never dropping an undelivered chunk |
-| `robustness.test.ts` | the window (huge chunk ids refused at once, bounded pulls), busy streams not swept, the sweep timer, a failing write's error reaching the client, a late abort not undoing a commit, a source yielding non-bytes, waiters past the count, aborting a hanging read, `close()` not hanging, listing with a FilesApi that ignores `after` |
+| `robustness.test.ts` | the window (huge chunk ids refused at once, bounded pulls), busy streams not swept, writes too far ahead refused, writes waiting for the holder swept, the sweep timer, a failing write's error reaching the client, a late abort not undoing a commit, a source yielding non-bytes, waiters past the count, aborting a hanging read, `close()` not hanging, listing with a FilesApi that ignores `after` |
 | `client.test.ts` | the `FilesApi` round trip, iterables, ranges, pipelining depth, early stop and abort, failing sources, write depth, listing; delayed, reordered and duplicated calls (five seeds) |
 | `readme.test.ts` | the examples above |

@@ -431,6 +431,9 @@ importers:
       '@statewalker/webrun-files-mem':
         specifier: 'catalog:'
         version: 0.10.3
+      '@statewalker/webrun-files-rpc':
+        specifier: workspace:^
+        version: link:../../packages/webrun-files-rpc
       '@wasmer/sdk':
         specifier: 0.19.1
         version: 0.19.1
