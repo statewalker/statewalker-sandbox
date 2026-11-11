@@ -279,6 +279,90 @@ describe("F3 index rows in the ref batch's transaction", () => {
   });
 });
 
+describe("F6 review cases", () => {
+  it("refs to annotated tags and to a blob: peeled or skipped, as git log --all does", async () => {
+    const d = history(904);
+    git(d, ["tag", "-a", "-m", "release", "v1", "main"]);
+    const blob = git(d, ["hash-object", "-w", "--stdin"], "a key\n").trim();
+    git(d, ["tag", "key", blob]);
+    const { repo, index } = await loadSql(d);
+    for (const path of ["a", "d", "never/there"]) {
+      const want = lines(
+        git(d, ["log", "--all", "--full-history", "--no-merges", "--format=%H", "--", path]),
+      );
+      expect(await index.pathHistory(path), path).toEqual(want);
+      expect(await walkPathHistory(repo, path), path).toEqual(want);
+    }
+  });
+
+  it("pathspecs: a trailing slash, ./ and . as git reads them; magic and empty pathspecs refused", async () => {
+    const d = history(905);
+    const { repo, index } = await loadSql(d);
+    const forms: [string, string][] = [
+      ["d/", "d/"],
+      ["./d", "./d"],
+      ["d/.", "d/."],
+      [".", "."],
+      ["./", "./"],
+    ];
+    for (const [ours, theirs] of forms) {
+      const want = lines(
+        git(d, ["log", "--all", "--full-history", "--no-merges", "--format=%H", "--", theirs]),
+      );
+      expect(await index.pathHistory(ours), ours).toEqual(want);
+      expect(await walkPathHistory(repo, ours), ours).toEqual(want);
+    }
+    for (const bad of ["a*", "a?", "a[b]", ":(literal)a", ""]) {
+      await expect(index.pathHistory(bad), bad).rejects.toThrow(/pathspec/);
+      await expect(walkPathHistory(repo, bad), bad).rejects.toThrow(/pathspec/);
+    }
+  });
+
+  it("search text with newlines: any of its lines, as git splits the pattern", async () => {
+    const d = history(906);
+    const { repo, index } = await loadSql(d);
+    for (const q of ["fix\nwalk", "body line\n", "x\n\ny", "tree\nnowhere at all"]) {
+      const want = lines(
+        git(d, ["log", "--all", "--no-merges", "--format=%H", "-F", `--grep=${q}`]),
+      );
+      expect(await index.searchMessages(q), JSON.stringify(q)).toEqual(want);
+      expect(await walkSearch(repo, q), JSON.stringify(q)).toEqual(want);
+    }
+  });
+
+  it("text of three code units but two characters is not sent to the trigram index", async () => {
+    const d = tmp("x9u-");
+    git(d, ["init", "-q", "-b", "main"]);
+    write(d, "a", "1\n");
+    git(d, ["add", "a"]);
+    git(d, ["commit", "-qm", "accent é😀 here"]);
+    const { repo, index } = await loadSql(d);
+    const want = lines(git(d, ["log", "--all", "--no-merges", "--format=%H", "-F", "--grep=é😀"]));
+    expect(want.length).toBe(1);
+    expect(await index.searchMessages("é😀")).toEqual(want);
+    expect(await walkSearch(repo, "é😀")).toEqual(want);
+  });
+
+  it("equal commit dates: the index and the walk answer in one order", async () => {
+    const d = tmp("x9e-");
+    const at = {
+      ...gitEnv,
+      GIT_AUTHOR_DATE: "1700000000 +0000",
+      GIT_COMMITTER_DATE: "1700000000 +0000",
+    };
+    const g = (args: string[]) => execFileSync("git", args, { cwd: d, env: at }).toString();
+    g(["init", "-q", "-b", "main"]);
+    for (let i = 0; i < 6; i++) {
+      write(d, "f", `${i}\n`);
+      g(["add", "f"]);
+      g(["commit", "-qm", `same second ${i}`]);
+    }
+    const { repo, index } = await loadSql(d);
+    expect(await index.pathHistory("f")).toEqual(await walkPathHistory(repo, "f"));
+    expect(await index.searchMessages("same")).toEqual(await walkSearch(repo, "same"));
+  });
+});
+
 describe("F4 speed: 100,000 commits over 50,000 files", () => {
   it("a path history and a search each under 100 ms", async () => {
     const d = tmp("x9big-");
