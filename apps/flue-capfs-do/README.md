@@ -655,7 +655,7 @@ Limits and notes:
 ### Streaming files of any size
 
 A holder streams files through the capability with
-[`@statewalker/webrun-files-rpc`](../../packages/webrun-files-rpc): `capFiles(cap)`
+[`@statewalker/webrun-files-rpc`](https://github.com/statewalker/webrun-files/tree/main/packages/webrun-files-rpc): `capFiles(cap)`
 (`src/files-rpc.ts`) is a `@statewalker/webrun-files` `FilesApi` whose `read(path, {start,
 length})` yields chunks and whose `write(path, chunks)` takes an (async) iterable of them. It is
 the package's client; the capability carries its calls (`cap.rpc(method, args)`), and the
