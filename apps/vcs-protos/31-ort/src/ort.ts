@@ -358,7 +358,13 @@ class OrtMerge {
         old: p.status === "D" && p.one ? entryOf(p.one.v) : undefined,
         new: p.status === "A" && p.two ? entryOf(p.two.v) : undefined,
       })),
-      { score: 50, limit: 7000, renameEmpty: false, relevant },
+      {
+        score: 50,
+        limit: 7000,
+        renameEmpty: false,
+        relevant,
+        legacyHashChars: this.opts.legacyHashChars,
+      },
     );
     const used = new Set([...found.values()].map((r) => r.src));
     const out: FilePair[] = [];

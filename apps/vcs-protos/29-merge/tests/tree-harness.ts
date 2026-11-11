@@ -34,6 +34,22 @@ export const legacyCompaction = (gitVersion[0] as number) * 1000 + (gitVersion[1
  * Whether this git's ort honours `-Xno-renames` (2.43's ignores it): a rename on one side and an
  * edit on the other merge cleanly only with rename detection.
  */
+/** whether this git drops the bytes after a file's last LF from similarity (X13c's probe) */
+export const legacyHashChars = (() => {
+  const d = mkdtempSync(join(tmpdir(), "x13d-probe-"));
+  dirs.push(d);
+  const git = (args: string[], input?: string) =>
+    execFileSync("git", args, { cwd: d, env: gitEnv, input }).toString().trim();
+  git(["init", "-q", "--bare"]);
+  const a = git(["hash-object", "-w", "--stdin"], "aaaa\nbbbb\ncccc");
+  const b = git(["hash-object", "-w", "--stdin"], "aaaa\nxxxx\ncccc");
+  const ta = git(["mktree"], `100644 blob ${a}\tone\n`);
+  const tb = git(["mktree"], `100644 blob ${b}\ttwo\n`);
+  const out = git(["diff-tree", "-r", "-M20%", ta, tb]);
+  if (/R035/.test(out)) return true;
+  if (/R064/.test(out)) return false;
+  throw new Error(`unexpected similarity probe: ${out}`);
+})();
 export const ortHonorsNoRenames = (() => {
   const d = mkdtempSync(join(tmpdir(), "x13b-probe-"));
   dirs.push(d);
@@ -200,6 +216,7 @@ export async function compareTrees(
       ...branchesOf(i),
       legacyCompaction,
       detectRenames: !(noRenames && ortHonorsNoRenames),
+      legacyHashChars,
     });
     const show = (x: {
       clean: boolean;

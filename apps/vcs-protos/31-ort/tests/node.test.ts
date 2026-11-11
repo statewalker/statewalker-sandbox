@@ -149,7 +149,7 @@ function renameCorpus(n: number, seed: number): Case[] {
   const content = () =>
     Array.from({ length: 6 + Math.floor(rand() * 10) }, (_, i) =>
       rand() < 0.3 ? `${pick(words)} ${pick(words)}` : `line ${seed}-${uid++} ${i}`,
-    ).join("\n") + "\n";
+    ).join("\n") + (rand() < 0.7 ? "\n" : "");
   const edit = (s: string) => {
     const ls = s.split("\n");
     const k = Math.floor(rand() * (ls.length - 1));
