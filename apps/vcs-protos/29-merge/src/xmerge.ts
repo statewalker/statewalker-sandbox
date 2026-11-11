@@ -29,6 +29,8 @@ export interface ContentMergeLabels {
   base?: string;
   /** conflict marker length (7; merge-ort adds 1 for rename/rename and rename collisions) */
   markerSize?: number;
+  /** an inner merge of merge bases (`virtual_ancestor`): binary files keep the base, cleanly */
+  virtualAncestor?: boolean;
 }
 
 const MARKER_SIZE = 7;
@@ -339,7 +341,9 @@ export function mergeContent(
   if (same(theirs, base)) return { content: ours, conflicts: 0, binary: false };
   const tooLarge = [base, ours, theirs].some((b) => b.length > MAX_XDIFF_SIZE);
   if (tooLarge || isBinary(base) || isBinary(ours) || isBinary(theirs))
-    return { content: ours, conflicts: 1, binary: true };
+    return labels.virtualAncestor
+      ? { content: base, conflicts: 0, binary: false }
+      : { content: ours, conflicts: 1, binary: true };
   const { env: xe1, script: s1 } = xdlDiffScript(base, ours, opts);
   const { env: xe2, script: s2 } = xdlDiffScript(base, theirs, opts);
   if (!s1.length) return { content: theirs, conflicts: 0, binary: false };

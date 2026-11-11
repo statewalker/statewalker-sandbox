@@ -130,7 +130,11 @@ async function compareMerges(dags: Dag[]) {
   };
   const wrong: string[] = [];
   const kinds: string[] = [];
+  let recursive = 0;
   for (const [i, dag] of dags.entries()) {
+    const ids0 = all[i] as string[];
+    if ((await mergeBases(repo, ids0[dag.ours] as string, ids0[dag.theirs] as string)).length > 1)
+      recursive++;
     const status = next();
     if (status !== "0" && status !== "1") throw new Error(`merge-tree: status ${status}`);
     const tree = next();
@@ -179,7 +183,7 @@ async function compareMerges(dags: Dag[]) {
     const rs = show(r);
     if (gs !== rs) wrong.push(`${dag.name}\n  git:  ${gs}\n  ours: ${rs}`);
   }
-  return { wrong, kinds };
+  return { wrong, kinds, recursive };
 }
 
 const text = (tag: string, n = 10) =>
@@ -384,6 +388,28 @@ function dagCorpus(n: number, seed: number, { sameDates = false } = {}): Dag[] {
         nodes.push({ parents: [head], files: mutate(nodes[head]?.files as Files), when: when() });
       heads[li] = nodes.length - 1;
     }
+    if (rand() < 0.85) {
+      // end with a criss-cross between lines 0 and 1: each merges the other's head as it was
+      const [h0, h1] = [heads[0] as number, heads[1] as number];
+      const cross = (mine: number, other: number) => {
+        const files: Files = new Map((nodes[mine] as Node).files);
+        for (const [p, v] of (nodes[other] as Node).files) if (rand() < 0.5) files.set(p, v);
+        nodes.push({
+          parents: [mine, other],
+          files: rand() < 0.5 ? mutate(files) : files,
+          when: when(),
+        });
+        return nodes.length - 1;
+      };
+      heads[0] = cross(h0, h1);
+      heads[1] = cross(h1, h0);
+      for (const k of [0, 1])
+        if (rand() < 0.6) {
+          const h = heads[k] as number;
+          nodes.push({ parents: [h], files: mutate((nodes[h] as Node).files), when: when() });
+          heads[k] = nodes.length - 1;
+        }
+    }
     dags.push({ name: `#${i}`, nodes, ours: heads[0] as number, theirs: heads[1] as number });
   }
   return dags;
@@ -398,7 +424,7 @@ describe("C1 merge bases", () => {
     ]);
     expect(r.wrong.slice(0, 3)).toEqual([]);
     expect(r.wrong.length).toBe(0);
-    expect(r.multiple).toBeGreaterThan(50);
+    expect(r.multiple).toBeGreaterThan(200);
   }, 300_000);
 });
 
