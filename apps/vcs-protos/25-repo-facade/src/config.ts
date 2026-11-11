@@ -77,7 +77,7 @@ function quote(value: string): string {
     .replace(/"/g, '\\"')
     .replace(/\n/g, "\\n")
     .replace(/\t/g, "\\t")
-    .replace(/\x08/g, "\\b");
+    .replaceAll("\b", "\\b");
   return /^\s|\s$|[#;]/.test(value) ? `"${escaped}"` : escaped;
 }
 
