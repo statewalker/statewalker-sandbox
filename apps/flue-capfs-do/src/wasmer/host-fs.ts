@@ -47,10 +47,13 @@ const MAX_FILE_BYTES = 16 * 1024 * 1024;
  * Metadata (stat, "no such file", listings) is cached per sandbox for one command at most:
  * the kernel clears it before each command, so a write made between commands (a Flue tool, an
  * other agent) is seen by the next one. Within a command, entries live this long, and this
- * run's own writes forget what they change. Other writers' changes during a command may be seen
- * this late.
+ * run's own writes forget what they change. Other writers' changes during a command (a Flue
+ * tool call running in parallel, another agent), and a revocation, may be seen this late in
+ * names and sizes; contents are read and written through the capability every time, and an
+ * open that may create a file always asks it (a cached "no such file" must not truncate one).
  */
 const META_TTL_MS = 2000;
+/** Stats plus listed entries held; past it, the cache starts over. */
 const MAX_META_ENTRIES = 20_000;
 
 const err = (code: string, message: string) => Object.assign(new Error(message), { code });
@@ -92,33 +95,53 @@ export function capHostFs(cap: Cap) {
   /** A path's stat, or null: no such file. Refusals (EACCES) are not cached. */
   const meta = new Map<string, { at: number; stat: PlainStat | null }>();
   const listings = new Map<string, { at: number; entries: DirEntryStat[] }>();
+  let listed = 0;
+  /**
+   * Bumped by every forget and reset: an answer that arrives after one (a call the kernel gave
+   * up on, a write made meanwhile) is used but not cached.
+   */
+  let epoch = 0;
+  const clear = () => {
+    meta.clear();
+    listings.clear();
+    listed = 0;
+    epoch++;
+  };
   const fresh = (e: { at: number } | undefined) => !!e && Date.now() - e.at < META_TTL_MS;
   const parentOf = (path: string) => path.slice(0, path.lastIndexOf("/")) || "/";
   const childOf = (dir: string, name: string) => (dir === "/" ? `/${name}` : `${dir}/${name}`);
   const remember = (path: string, stat: PlainStat | null) => {
-    if (meta.size >= MAX_META_ENTRIES) meta.clear();
+    if (meta.size + listed >= MAX_META_ENTRIES) clear();
     meta.set(path, { at: Date.now(), stat });
+  };
+  const unlist = (dir: string) => {
+    const old = listings.get(dir);
+    if (!old) return;
+    listed -= old.entries.length;
+    listings.delete(dir);
   };
   /** What this run changed at `path` (and under it, for a directory) is forgotten. */
   const forget = (path: string, tree = false) => {
+    epoch++;
     meta.delete(path);
-    listings.delete(path);
-    listings.delete(parentOf(path));
+    unlist(path);
+    unlist(parentOf(path));
     if (!tree) return;
     const under = `${path}/`;
     for (const k of meta.keys()) if (k.startsWith(under)) meta.delete(k);
-    for (const k of listings.keys()) if (k.startsWith(under)) listings.delete(k);
+    for (const k of listings.keys()) if (k.startsWith(under)) unlist(k);
   };
   const plainStat = async (path: string): Promise<PlainStat | null> => {
     const cached = meta.get(path);
     if (fresh(cached)) return (cached as { stat: PlainStat | null }).stat;
+    const at = epoch;
     try {
       const s = (await cap.call("stat", path)) as PlainStat;
-      remember(path, s);
+      if (at === epoch) remember(path, s);
       return s;
     } catch (e) {
       if ((e as { code?: string })?.code !== "ENOENT") throw e;
-      remember(path, null);
+      if (at === epoch) remember(path, null);
       return null;
     }
   };
@@ -126,8 +149,14 @@ export function capHostFs(cap: Cap) {
   const listing = async (dir: string): Promise<DirEntryStat[]> => {
     const cached = listings.get(dir);
     if (fresh(cached)) return (cached as { entries: DirEntryStat[] }).entries;
+    const at = epoch;
     const entries = (await cap.call("readdirStat", dir)) as DirEntryStat[];
+    if (at !== epoch) return entries;
+    if (meta.size + listed + entries.length >= MAX_META_ENTRIES) clear();
+    const old = listings.get(dir);
+    if (old) listed -= old.entries.length;
     listings.set(dir, { at: Date.now(), entries });
+    listed += entries.length;
     // A listing answers the stat of each entry it shows (what it hides is asked as before).
     for (const e of entries) remember(childOf(dir, e.name), e as unknown as PlainStat);
     return entries;
@@ -235,6 +264,9 @@ export function capHostFs(cap: Cap) {
     async open(p, _read, write, create, createNew, truncate, append) {
       const path = abs(p);
       if (handles.size >= MAX_HANDLES) throw err("EMFILE", "too many open files");
+      // An open that may create the file asks the capability, not the cache: a "no such file"
+      // seen earlier must not truncate a file a parallel writer has made since.
+      if (write && create) forget(path);
       const found = await plainStat(path);
       const exists = found !== null;
       if (createNew && exists) throw err("EEXIST", `${path} exists`);
@@ -385,15 +417,13 @@ export function capHostFs(cap: Cap) {
     },
     /** Before each command: what others changed since the last one is seen (see META_TTL_MS). */
     resetCache() {
-      meta.clear();
-      listings.clear();
+      clear();
     },
     /** Open files of a sandbox that ends are dropped: what was not flushed is not written. */
     close() {
       handles.clear();
       files.clear();
-      meta.clear();
-      listings.clear();
+      clear();
     },
   };
 }

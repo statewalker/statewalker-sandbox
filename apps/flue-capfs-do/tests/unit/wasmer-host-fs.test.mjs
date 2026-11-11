@@ -300,3 +300,38 @@ test("metadata cache: cleared before each command, and kept only briefly within 
   t.mock.timers.tick(1500);
   assert.equal((await fs.handle("stat", ["a"])).value.size, 2, "expired");
 });
+
+test("metadata cache: a parallel writer's file is not truncated, a late answer is not cached", async () => {
+  const cap = fakeCap();
+  const fs = capHostFs(cap);
+  // The guest looked for `log` (no such file, cached); a Flue tool call then wrote it.
+  assert.equal((await fs.handle("stat", ["log"])).error.code, "ENOENT");
+  cap.files.set("/log", "from a tool\n");
+  const { value: id } = await fs.handle("open", ["log", ...APPEND]);
+  await fs.handle("write", [id, 0, enc("guest\n")]);
+  await fs.handle("close", [id]);
+  assert.equal(cap.files.get("/log"), "from a tool\nguest\n");
+
+  // A stat the kernel gave up on answers after the run created the file: not cached.
+  let release;
+  const slow = new Promise((r) => (release = r));
+  const call = cap.call;
+  cap.call = async (m, p, ...a) => {
+    if (m === "stat" && p === "/x" && release) {
+      const r = call.call(cap, m, p, ...a).catch((e) => e);
+      await slow;
+      const v = await r;
+      if (v instanceof Error) throw v;
+      return v;
+    }
+    return call.call(cap, m, p, ...a);
+  };
+  const late = fs.handle("stat", ["x"]);
+  const r = release;
+  release = undefined;
+  const { value: x } = await fs.handle("open", ["x", ...CREATE]);
+  await fs.handle("close", [x]);
+  r();
+  assert.equal((await late).error.code, "ENOENT");
+  assert.equal((await fs.handle("stat", ["x"])).value.kind, "file");
+});

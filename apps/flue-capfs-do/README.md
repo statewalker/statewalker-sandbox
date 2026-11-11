@@ -570,7 +570,10 @@ at close and keeps its previous content; a length that would cut a character is 
   listing answers its entries' stats). The kernel clears it before every command, so changes
   made between commands (a Flue tool's write, another agent's) are seen by the next one; within
   a command entries live 2 s, and the run's own writes, renames and removals forget what they
-  change. Refusals are not cached. On typical shell work this cuts capability calls 3–20×
+  change. Changes others make during a command (a Flue tool call running in parallel), and a
+  revocation, may show in names and sizes up to 2 s late; contents are always read and written
+  through the capability, and an open that may create a file always asks it. Refusals are not
+  cached, nor answers that arrive after a change. On typical shell work this cuts capability calls 3–20×
   (`ls -la` of 33 entries: 121 → 6; `wc -l` over 30 files: 293 → 37).
 - **Cost of the prototype:** file contents and writes are still one round trip each to the
   Agent cell (and a capability check), which suits shell work; package installs that write
