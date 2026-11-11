@@ -38,6 +38,13 @@ export interface BatchObject {
   error?: { code: number; message: string };
 }
 
+/** The batch's headers and the caller's, merged by name (the caller's win). */
+function batchHeaders(extra?: Record<string, string>): Record<string, string> {
+  const h = new Headers({ accept: LFS_JSON, "content-type": LFS_JSON });
+  for (const [k, v] of Object.entries(extra ?? {})) h.set(k, v);
+  return Object.fromEntries(h);
+}
+
 /** One batch request: the transfer the server chose and its answer per object, as asked. */
 export async function lfsBatch(
   url: string,
@@ -48,7 +55,8 @@ export async function lfsBatch(
   const f = opts.fetch ?? fetch;
   const res = await f(`${url.replace(/\/+$/, "")}/info/lfs/objects/batch`, {
     method: "POST",
-    headers: { accept: LFS_JSON, "content-type": LFS_JSON, ...opts.headers },
+    // merged by name (a caller's `Accept` replaces ours rather than joining it)
+    headers: batchHeaders(opts.headers),
     body: JSON.stringify({
       operation,
       transfers: ["ranged", "basic"],

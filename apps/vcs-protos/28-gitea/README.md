@@ -44,10 +44,10 @@ case-insensitively, and the action's value wins. A test in 26 keeps the case wit
 
 | # | Result | How |
 |---|---|---|
-| G1 | ✅ | Our `clone` of a repository native git pushed to Gitea: logs equal. Our `push` with Basic credentials: native `git clone` from Gitea has our log and passes `fsck --strict`. Without credentials: rejected with Gitea's 401. Smart HTTP v2 needed no change. |
-| G2 | ✅ | A façade commit with `.gitattributes` and a pointer, its object sent with `lfsPush` (offering `ranged`; Gitea's answer has no `transfer` field, which means `basic`) and the commit with `vcs.push`: native `git clone` with git-lfs smudges the 3 MiB file byte-identical, and `git lfs fsck` is clean. Gitea accepted our streamed `PUT` without `Content-Length` and our `verify`. A second push sends nothing. |
-| G3 | ✅ | A file native git-lfs pushed to Gitea: `lfsFetch` stores it byte-identical. A download cut after 1 MiB resumes with `Range: bytes=N-`; Gitea answers 206, and the bytes over both attempts equal the size. |
-| G4 | ✅ | A missing object gives Gitea's per-object 404 (our error: not found). Bytes altered in transit from Gitea are refused, and nothing is kept. Gitea itself refuses a `PUT` whose bytes do not hash to the oid in its href. |
+| G1 | ✅ | Our `clone` (protocol v2: Gitea advertises `ls-refs=unborn`, `fetch=shallow wait-for-done filter`) of a private repository native git pushed: logs equal. Our `push` (receive-pack, which has no v2) with Basic credentials: native `git clone` from Gitea has our log and passes `fsck --strict`. Without credentials: `HTTP 401`. |
+| G2 | ✅ | A façade commit with `.gitattributes` and a pointer, its object sent with `lfsPush` (offering `ranged`; Gitea's answer has no `transfer` field, which means `basic`) and the commit with `vcs.push`: native `git clone` with git-lfs smudges the 3 MiB file byte-identical, and `git lfs fsck` is clean. Gitea accepts our streamed `PUT` without `Content-Length` by design: it checks the size and hash of a chunked body (a short one is refused with 422). Our client calls Gitea's `verify` action, though it only checks that the object exists, not its size. A second push sends nothing. |
+| G3 | ✅ | A file native git-lfs pushed to a private Gitea repository: without credentials, the batch is 401; with them, `lfsFetch` stores it byte-identical. A download cut after 1 MiB resumes with `Range: bytes=N-`; Gitea answers 206, and the bytes over both attempts equal the size. Gitea 1.22 reports the total in `Content-Range` as size − start (`bytes 1048576-4194303/3145728`), so the client must read only the start; the test pins this. |
+| G4 | ✅ | A missing object gives Gitea's per-object 404 (our error: not found). Bytes altered in transit from Gitea are refused, and nothing is kept. Gitea itself refuses a `PUT` whose bytes do not hash to the oid in its href with 422 ("content hash does not match OID"), and the object stays absent. |
 | G5 | ✅ | One object held by Gitea and by one of our peers' servers (`ranged`): `lfsFetchFrom` takes 512 KiB chunks from both (Gitea serves single ranges), exactly the size in total. |
 
 ### Running Gitea
@@ -62,6 +62,22 @@ case-insensitively, and the action's value wins. A test in 26 keeps the case wit
 Gitea refuses to run as root. As root (this sandbox), the helper runs it as `nobody` with
 `runuser`, owning its work directory; as an ordinary user (CI), it runs directly. Its root
 override is not used. One instance per test file, stopped and removed afterwards.
+
+### Review (#92)
+
+A separate review found 9 points (6 reproduced by running code). The `transferHeaders` change itself was clean. All are fixed:
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | As root, `stop()` killed `runuser` after 300 ms and left Gitea running (reparented) while its directory was removed | Gitea runs in its own process group; stop sends SIGTERM to the group, waits for the exit up to 10 s, then SIGKILL; removal retries |
+| 2 | Parallel runs raced on one shared download file: 3 of 4 failed | Each writer downloads to its own name and renames it into place; a failed writer re-checks whether the binary is now valid (12 of 12 parallel runs succeed) |
+| 3 | A failed start left its work directory and hid Gitea's log; a death by signal waited the full minute | The start cleans up on any failure, includes the log's tail in the error, and watches `signalCode` too |
+| 4 | G4 accepted any status ≥ 400 (a 401 would pass) | Exactly 422, and the object then absent |
+| 5 | G1's `/401/` could match the random port | `/HTTP 401\b/` |
+| 6 | Public repositories: downloads never exercised credentials; `verify` was claimed, not asserted; Gitea's `Content-Range` total was undocumented | Repositories are private (an anonymous batch is 401); `verify` is counted; the `Content-Range` total is pinned and documented |
+| 7 | A 143 MB download on every CI run; a copy from `GITEA_BIN` kept its source's owner | `actions/cache` keyed on the version (`GITEA_CACHE_DIR`); the copy is chowned to the current user |
+| 8 | A port taken between choosing it and Gitea binding it | The probe checks Gitea's version in the answer; a failed start is retried on another port |
+| 9 | `lfsBatch` still spread the caller's headers as object keys | Merged by name, as `transferHeaders`; a test in 26 |
 
 ### Mutation check
 

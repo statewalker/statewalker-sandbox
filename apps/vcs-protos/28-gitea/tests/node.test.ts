@@ -105,7 +105,7 @@ describe("G1 git over smart HTTP v2", () => {
     // no credentials
     await expect(
       push(url2, mine.repo, { refspecs: ["refs/heads/main:refs/heads/other"] }),
-    ).rejects.toThrow(/401/);
+    ).rejects.toThrow(/HTTP 401\b/);
   }, 180_000);
 });
 
@@ -123,12 +123,13 @@ describe("G2 our LFS upload, cloned natively", () => {
       },
       message: "lfs\n",
     });
-    const stats = { bytes: 0 };
+    const stats = { bytes: 0, requests: 0 };
     expect(await lfsPush(url, store, [p], { headers: auth(), stats })).toEqual({
       uploaded: [p.oid],
       skipped: [],
     });
     expect(stats.bytes).toBe(p.size);
+    expect(stats.requests).toBe(2); // the PUT, then Gitea's verify action
     await v.push(url, { refspecs: ["refs/heads/main:refs/heads/main"], fetch: gitea.fetch });
     const c = join(tmp(), "c");
     git(tmpdir(), ["clone", "-q", gitea.withCredentials(url), c]);
@@ -154,6 +155,10 @@ describe("G3 native LFS upload, our download", () => {
     git(w, ["push", "-q", gitea.withCredentials(url), "HEAD:refs/heads/main"]);
     const obj = { oid: sha(big), size: big.length };
     const whole = lfsStore(new MemFilesApi(), "r");
+    // a private repository: no credentials, no batch
+    await expect(lfsFetch(url, lfsStore(new MemFilesApi(), "r"), [obj])).rejects.toThrow(
+      /HTTP 401\b/,
+    );
     await lfsFetch(url, whole, [obj], { headers: auth() });
     expect(sha(await collect(whole.read(obj.oid)))).toBe(obj.oid);
     // cut after 1 MiB, then resumed
@@ -190,14 +195,24 @@ describe("G3 native LFS upload, our download", () => {
     ).rejects.toThrow();
     const s2 = { bytes: 0 };
     let status = 0;
+    let contentRange = "";
     const watch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const res = await f(input, init);
-      if (new Request(input, init).method === "GET") status = res.status;
+      if (new Request(input, init).method === "GET") {
+        status = res.status;
+        contentRange = res.headers.get("content-range") ?? "";
+      }
       return res;
     }) as typeof fetch;
     await lfsFetch(url, store, [obj], { headers: auth(), fetch: watch, stats: s2 });
     expect(ranges[1]).toMatch(/^bytes=\d+-$/);
     expect(status).toBe(206);
+    // Gitea 1.22 reports the total as size − start (bytes 1048576-4194303/3145728): the client
+    // must read the start only
+    const m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange);
+    const start = Number(m?.[1]);
+    expect(start).toBe(s1.bytes);
+    expect([obj.size, obj.size - start]).toContain(Number(m?.[3]));
     expect(s1.bytes + s2.bytes).toBe(obj.size);
     expect(sha(await collect(store.read(obj.oid)))).toBe(obj.oid);
   }, 180_000);
@@ -247,7 +262,12 @@ describe("G4 verification and errors", () => {
       headers: up?.header,
       body: wrong as BodyInit,
     });
-    expect(r.status).toBeGreaterThanOrEqual(400);
+    expect(r.status).toBe(422); // "content hash does not match OID"
+    await expect(
+      lfsFetch(url, lfsStore(new MemFilesApi(), "r"), [{ oid: claimed, size: 1000 }], {
+        headers: auth(),
+      }),
+    ).rejects.toThrow(/not found/);
   }, 180_000);
 });
 

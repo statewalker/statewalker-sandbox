@@ -22,7 +22,7 @@ import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
 import { git, gitEnv, noise } from "../../12-index-pack/src/git-repo.js";
 import { sqlRepository } from "../../17-repository/src/repository.js";
 import { openRepository } from "../../25-repo-facade/src/vcs.js";
-import { lfsFetch, lfsPush, transferHeaders } from "../src/client.js";
+import { lfsBatch, lfsFetch, lfsPush, transferHeaders } from "../src/client.js";
 import { encodePointer, parsePointer } from "../src/pointer.js";
 import { isLfsRequest, lfsHandler, withLfs } from "../src/server.js";
 import { clean, type LfsStore, lfsStore, repoLfsStore, smudge } from "../src/store.js";
@@ -1030,5 +1030,18 @@ describe("found against Gitea (28)", () => {
       { headers: { authorization: "Basic client", "x-other": "kept" } },
     );
     expect(h).toEqual({ authorization: "Basic action", "x-other": "kept" });
+  });
+
+  it("a caller's Accept on a batch replaces the client's: one header", async () => {
+    let accept: string | null = "";
+    const f = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      accept = new Request(input, init).headers.get("accept");
+      return new Response(JSON.stringify({ objects: [] }), { status: 200 });
+    }) as typeof fetch;
+    await lfsBatch("http://x/repo.git", "download", [], {
+      fetch: f,
+      headers: { Accept: "application/vnd.git-lfs+json; q=1" },
+    });
+    expect(accept).toBe("application/vnd.git-lfs+json; q=1");
   });
 });
