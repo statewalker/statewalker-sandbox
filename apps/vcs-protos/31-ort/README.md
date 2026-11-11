@@ -1,7 +1,8 @@
 # 31 — Can merge-ort's renames be reproduced exactly?
 
 Plan id **X13** (single diff and merge engine), slice **X13d: ort's rename conflicts**. Status:
-**open**.
+**answered — yes: a port that follows merge-ort's own structure matches `git merge-tree` on 3,319
+merges, 1,012 of them with renames**.
 
 ## Question
 
@@ -44,3 +45,86 @@ Rejected if, on any case of the corpus, the tree id, a conflicted entry or a mes
   merges are X13e. The corpus keeps every directory alive so that git finds no directory renames.
 - Out of scope: submodules, the rename limit's warning, `-X` options, and remembering renames across
   a rebase (cached pairs).
+
+## Answer
+
+Yes. `src/ort.ts` (about 800 lines, no `node:` imports) follows merge-ort.c function by function.
+It gives the same tree id, conflicted entries and messages as `git merge-tree --write-tree` on every
+case:
+- O1: all 2,307 of X13b's merges, now run with rename detection on;
+- O2: 1,000 random merges with renames;
+- O3: 12 hand-made cases, one per rename case.
+
+In O2, git reported:
+
+| Message | Count |
+|---|---|
+| rename/rename | 95 |
+| rename/delete | 102 |
+| rename involved in collision | 18 |
+| content | 52 |
+| add/add | 167 |
+| modify/delete | 199 |
+| distinct types | 39 |
+
+The tree ids cover the conflicted blobs too, including their `branch:path` labels and 8-character
+markers.
+
+The structure:
+- **`collect_merge_info`** walks the three trees one directory at a time and records each path as
+  merge-ort does:
+  - a path is resolved early when all three sides match, or when the files on both sides match;
+  - each deletion and addition becomes a rename pair;
+  - a deletion is a relevant source when the other side changed the file too, or when it lies in a
+    directory one side removed and the other added to;
+  - directories one side left alone are deferred, then resolved whole unless rename detection could
+    need a source deleted on that side;
+  - when walking the deferred directories at least triples the paths, the redo detects renames,
+    caches them, and collects again.
+- **Rename detection** is X13c's `findRenames`, run per side over that side's pairs in walk order:
+  - exact renames over every source;
+  - the basename pass and the matrix only over relevant sources;
+  - merge-ort's settings: no empty renames, limit 7,000.
+- **`process_renames`**, over both sides' renames sorted by source path:
+  - **rename/rename(1to1):** the base joins the target entry and the source is removed.
+  - **rename/rename(1to2):** a content merge with 8-character markers, written to both targets;
+    the source stays at stage 1, and all three paths are conflicts.
+  - **rename/add and rename/rename(2to1):** the rename is merged into the colliding entry with
+    8-character markers. A content conflict adds "rename involved in collision".
+  - **rename/delete:** a path conflict. A later modify/delete message is suppressed when the content
+    is unchanged.
+  - **rename against a type change:** the source keeps the other side's type.
+  - **an ordinary rename:** the base and the other side's version join the target entry, with their
+    old path in `pathnames`, so the markers read `branch:path`.
+- **`process_entries`** processes the paths in reverse `sort_dirs_next_to_their_children` order:
+  - a directory's tree is written once its contents are done, and a directory that comes out empty
+    disappears, which is what file/directory decisions read;
+  - `process_entry` handles moving files out of a directory's way, distinct types, content merges,
+    modify/delete, additions and deletions, and records every unclean entry as a conflict.
+
+The X13b emulation (`29-merge/src/merge-trees.ts`) reached the same results path by path on its own
+corpora. With renames it cannot: a rename joins two paths into one entry with a pathname per stage
+and a path-conflict flag, which only ort's structure carries. This port supersedes it.
+
+### Mutation check
+
+MUTATION_TABLE
+
+## Promotion grades
+
+| File | Grade | Why |
+|---|---|---|
+| `src/ort.ts` | **Adopt** (directory renames and criss-cross still to come, X13e) | merge-ort, exactly, renames included; supersedes 29's `merge-trees.ts` |
+
+## Open threads
+
+1. **X13e**: directory renames (`get_provisional_directory_renames`, implicit renames, the
+   basename guesses of `idx_possible_rename` from removed directories) and criss-cross merges
+   (`merge_ort_internal`'s recursive virtual base, with `call_depth` markers).
+2. The order of `handle_deferred_entries`: git walks deferred directories in its hashmap's order. The
+   port uses insertion order. This can only change the order of rename pairs when relevant sources
+   lie inside deferred directories, and no corpus case has shown a difference.
+3. Submodules, `-X` options, the rename limit's warning, and remembering renames across a rebase.
+4. **Large trees**: the port reads only the directories it needs, as ort does. It still writes a tree
+   object for every completed directory, which is correct but slower than git's in-memory
+   `write_tree`.
