@@ -13,6 +13,8 @@ const OCRMYPDF = "https://raw.githubusercontent.com/ocrmypdf/OCRmyPDF/main/tests
 const PYPDF = "https://raw.githubusercontent.com/py-pdf/sample-files/main";
 
 export type CorpusEntry = {
+  /** Name of the run (and its output files); defaults to the file name. */
+  id?: string;
   file: string;
   url: string;
   license: string;
@@ -20,6 +22,8 @@ export type CorpusEntry = {
   /** What the file exercises. */
   purpose: string;
   maxPages?: number;
+  /** UI options for this run (select id → value). */
+  options?: Record<string, string>;
   /**
    * Built locally instead of downloaded: one page per rotation, each holding
    * the image at `url` with its pixels turned clockwise by that angle.
@@ -38,6 +42,10 @@ export type CorpusEntry = {
     rotations?: number[];
     /** Expected rotation of each image's placement on its page, in document order. */
     placementRotations?: number[];
+    /** Phrases that must appear at most this many times (catches duplicated text). */
+    maxOccurrences?: Record<string, number>;
+    /** Engine that must have produced the text of every image with words. */
+    ocrEngine?: string;
   };
 };
 
@@ -190,6 +198,34 @@ export const CORPUS: CorpusEntry[] = [
     expect: { minImages: 1 },
   },
   {
+    file: "graph_ocred.pdf",
+    url: `${OCRMYPDF}/graph_ocred.pdf`,
+    license: "GFDL-1.2-or-later OR CC-BY-SA-3.0",
+    attribution: "(C) 2012 SmokeyJoe, via Wikimedia Commons (OCRed by OCRmyPDF)",
+    purpose: "chart with an invisible OCR text layer: replaced by own OCR, no duplicates",
+    expect: {
+      minImages: 1,
+      contains: ["Percentage"],
+      maxOccurrences: { Percentage: 1, Oppose: 1 },
+      ocrEngine: "tesseract-wasm",
+    },
+  },
+  {
+    id: "graph_ocred-reuse",
+    file: "graph_ocred.pdf",
+    url: `${OCRMYPDF}/graph_ocred.pdf`,
+    license: "GFDL-1.2-or-later OR CC-BY-SA-3.0",
+    attribution: "(C) 2012 SmokeyJoe, via Wikimedia Commons (OCRed by OCRmyPDF)",
+    purpose: "the same, reusing the invisible layer as OCR (no tesseract)",
+    options: { invisible: "reuse" },
+    expect: {
+      minImages: 1,
+      contains: ["Percentage"],
+      maxOccurrences: { Percentage: 1, Oppose: 1 },
+      ocrEngine: "pdf-text-layer",
+    },
+  },
+  {
     file: "lichtenstein.pdf",
     url: `${OCRMYPDF}/lichtenstein.pdf`,
     license: "GFDL-1.2-or-later OR CC-BY-SA-3.0",
@@ -202,8 +238,8 @@ export const CORPUS: CorpusEntry[] = [
     url: `${OCRMYPDF}/multipage.pdf`,
     license: "public domain",
     attribution: "OCRmyPDF test resources (assembled from public-domain scans)",
-    purpose: "six pages mixing scans, a blank page and a partial text layer",
-    expect: { language: "en", minImages: 4 },
+    purpose: "six pages mixing scans, a blank page and an invisible OCR layer",
+    expect: { language: "en", minImages: 4, maxOccurrences: { Percentage: 2 } },
   },
   {
     file: "google-doc-document.pdf",

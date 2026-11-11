@@ -10,6 +10,8 @@ export type TextRun = {
   width: number;
   fontSize: number;
   hasEOL: boolean;
+  /** Drawn in an invisible text rendering mode (typically an OCR layer over a scan). */
+  invisible?: boolean;
 };
 
 export type Paragraph = {

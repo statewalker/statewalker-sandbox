@@ -33,12 +33,14 @@ import type {
   PortableTextBlock,
   TextBlock,
 } from "./schema.ts";
+import { runsToImageWords } from "./text-layer-ocr.ts";
 import {
   bodyFontSize,
   groupTextRuns,
   type Paragraph,
   paragraphToBlock,
   roundBox,
+  type TextRun,
 } from "./text-layout.ts";
 
 export type ConvertOptions = {
@@ -59,6 +61,16 @@ export type ConvertOptions = {
   minConfidence: number;
   /** Only the first `maxPages` pages are converted. */
   maxPages?: number;
+  /**
+   * What to do with invisible text (text rendering mode 3/7), typically the
+   * OCR layer another tool put over a scan:
+   * - `replace` (default): drop it and OCR the images here, so the text is
+   *   not output twice and word boxes come from our OCR;
+   * - `reuse`: use it as the OCR result of the image it covers, mapped into
+   *   the image's pixels, and skip tesseract for that image;
+   * - `keep`: output it like visible text (duplicates the OCR of the image).
+   */
+  invisibleText?: "replace" | "reuse" | "keep";
   onLog?: (message: string) => void;
   /** OCR progress of the current image, 0..100. */
   onProgress?: (percent: number) => void;
@@ -182,11 +194,23 @@ export async function convertPdf(
 
   try {
     // Pass 1: text layer of every page. Its language is the starting point for OCR.
+    const invisibleMode = options.invisibleText ?? "replace";
     const paragraphsByPage: Paragraph[][] = [];
+    const invisibleRunsByPage: TextRun[][] = [];
+    let invisibleCount = 0;
     for (let n = 1; n <= pageCount; n++) {
       const page = await pdf.getPage(n);
-      const paragraphs = groupTextRuns(await extractTextRuns(page));
-      paragraphsByPage.push(paragraphs);
+      const runs = await extractTextRuns(page);
+      const invisible = invisibleMode === "keep" ? [] : runs.filter((r) => r.invisible);
+      invisibleCount += invisible.length;
+      invisibleRunsByPage.push(invisible);
+      const shown = invisibleMode === "keep" ? runs : runs.filter((r) => !r.invisible);
+      paragraphsByPage.push(groupTextRuns(shown));
+    }
+    if (invisibleCount > 0) {
+      log(
+        `invisible text layer found (${invisibleCount} runs): ${invisibleMode === "reuse" ? "reusing it as OCR" : "replaced by OCR"}`,
+      );
     }
     // A few stray characters (e.g. an invisible OCR layer of a chart) must not
     // decide the language of a scanned document.
@@ -266,6 +290,16 @@ export async function convertPdf(
         }
 
         let outcome = ocrCache.get(assetId);
+        if (!outcome && invisibleMode === "reuse" && !img.transform) {
+          const words = runsToImageWords(invisibleRunsByPage[n - 1], img);
+          if (words.length >= 3) {
+            log(`page ${n}: reusing ${words.length} words of the invisible text layer`);
+            outcome = Promise.resolve(
+              reusedOutcome(words, paragraphs, documentLanguage() ?? fallback),
+            );
+            ocrCache.set(assetId, outcome);
+          }
+        }
         if (!outcome) {
           outcome = ocrImage(img, n, paragraphs.map((p) => p.text).join(" "));
           ocrCache.set(assetId, outcome);
@@ -294,9 +328,9 @@ export async function convertPdf(
                 (w) => w.text.trim() !== "" && w.confidence >= options.minConfidence,
               );
               imageBlock.ocr = {
-                engine: "tesseract-wasm",
+                engine: result.engine ?? "tesseract-wasm",
                 language: language.bcp47,
-                model: language.tesseract,
+                model: result.engine === "pdf-text-layer" ? "" : language.tesseract,
                 languageSource,
                 attempts,
                 rotation: result.rotation,
@@ -346,6 +380,18 @@ export async function convertPdf(
     assets: Object.fromEntries([...assets].map(([id, a]) => [id, a.meta])),
   };
   return { document, blobs: new Map([...assets].map(([id, a]) => [id, a.blob])) };
+}
+
+/** OCR outcome built from an existing (invisible) text layer instead of tesseract. */
+function reusedOutcome(words: OcrWord[], paragraphs: Paragraph[], guess: Language): OcrOutcome {
+  const text = `${wordsText(words)} ${paragraphs.map((p) => p.text).join(" ")}`;
+  const detected = letterCount(text) >= MIN_OCR_LETTERS ? detectLanguage(text) : undefined;
+  return {
+    result: { language: "", engine: "pdf-text-layer", words, rotation: 0, durationMs: 0 },
+    language: detected ?? guess,
+    languageSource: detected ? "detected" : "document",
+    attempts: [],
+  };
 }
 
 function attempt(result: OcrResult) {

@@ -89,6 +89,7 @@ form.addEventListener("submit", async (e) => {
       fallbackLanguage: $<HTMLSelectElement>("fallback").value,
       maxPages: Number($<HTMLInputElement>("max-pages").value) || undefined,
       detectOrientation: $<HTMLInputElement>("orientation").checked,
+      invisibleText: $<HTMLSelectElement>("invisible").value as "replace" | "reuse" | "keep",
       imageFormat: $<HTMLSelectElement>("format").value as ImageFormat,
       ocrImages: $<HTMLInputElement>("ocr-images").checked,
       ocrEmptyPages: $<HTMLInputElement>("ocr-pages").checked,

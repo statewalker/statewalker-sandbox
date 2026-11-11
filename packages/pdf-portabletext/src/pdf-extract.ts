@@ -44,10 +44,68 @@ export function pageSize(page: PDFPageProxy): { width: number; height: number } 
   return { width, height };
 }
 
+/** Text drawn by a page, split by visibility (letters and digits only, no spaces). */
+export type TextVisibility = { visible: string; invisible: string };
+
+/** Text rendering modes that paint nothing: 3 (invisible) and 7 (clip only). */
+const INVISIBLE_MODES = new Set([3, 7]);
+const compact = (s: string) => s.replace(/[^\p{L}\p{N}]+/gu, "");
+
+/**
+ * Collects the text of every show-text operation, split by text rendering
+ * mode. OCR tools (OCRmyPDF, scanners, Acrobat) put the recognised text over
+ * the scan in mode 3: `getTextContent` does not tell it apart, this does.
+ */
+export async function scanTextVisibility(page: PDFPageProxy): Promise<TextVisibility> {
+  const opList = await page.getOperatorList();
+  let mode = 0;
+  const stack: number[] = [];
+  const visible: string[] = [];
+  const invisible: string[] = [];
+  for (let i = 0; i < opList.fnArray.length; i++) {
+    const fn = opList.fnArray[i];
+    const args = opList.argsArray[i];
+    switch (fn) {
+      case OPS.save:
+        stack.push(mode);
+        break;
+      case OPS.restore:
+        mode = stack.pop() ?? mode;
+        break;
+      case OPS.setTextRenderingMode:
+        mode = args[0];
+        break;
+      case OPS.showText:
+      case OPS.showSpacedText:
+      case OPS.nextLineShowText:
+      case OPS.nextLineSetSpacingShowText: {
+        const glyphs = args[args.length - 1];
+        if (!Array.isArray(glyphs)) break;
+        let text = "";
+        for (const g of glyphs) if (g && typeof g === "object" && g.unicode) text += g.unicode;
+        (INVISIBLE_MODES.has(mode) ? invisible : visible).push(compact(text));
+        break;
+      }
+    }
+  }
+  return { visible: visible.join(""), invisible: invisible.join("") };
+}
+
+/** Whether a text run belongs to the invisible part of the page's text. */
+export function isInvisibleRun(str: string, visibility: TextVisibility): boolean {
+  if (visibility.invisible === "") return false;
+  const s = compact(str);
+  if (s === "") return visibility.visible === "";
+  return visibility.invisible.includes(s) && !visibility.visible.includes(s);
+}
+
 /** Text-layer runs of a page in top-left point coordinates. */
 export async function extractTextRuns(page: PDFPageProxy): Promise<TextRun[]> {
   const viewport = page.getViewport({ scale: 1 });
-  const content = await page.getTextContent();
+  const [content, visibility] = await Promise.all([
+    page.getTextContent(),
+    scanTextVisibility(page),
+  ]);
   const runs: TextRun[] = [];
   for (const item of content.items) {
     if (!("str" in item)) continue;
@@ -63,6 +121,7 @@ export async function extractTextRuns(page: PDFPageProxy): Promise<TextRun[]> {
       width: item.width * scaleX,
       fontSize,
       hasEOL: item.hasEOL,
+      ...(isInvisibleRun(item.str, visibility) ? { invisible: true } : {}),
     });
   }
   return runs;

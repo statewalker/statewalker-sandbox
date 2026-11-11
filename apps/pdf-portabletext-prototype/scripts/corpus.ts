@@ -121,6 +121,18 @@ function check(doc: PdfPortableTextDocument, entry: CorpusEntry, stats: ImageSta
     });
     add("placement", actual.join() === expect.placementRotations.join(), actual.join("/"));
   }
+  for (const [phrase, max] of Object.entries(expect.maxOccurrences ?? {})) {
+    const n = text.toLowerCase().split(phrase.toLowerCase()).length - 1;
+    add(`"${phrase}" ≤ ${max}×`, n <= max, `${n}×`);
+  }
+  if (expect.ocrEngine) {
+    const engines = images.filter((i) => i.ocr?.wordCount).map((i) => i.ocr?.engine);
+    add(
+      "engine",
+      engines.length > 0 && engines.every((e) => e === expect.ocrEngine),
+      engines.join("/"),
+    );
+  }
   for (const phrase of expect.contains ?? []) {
     add(`contains "${phrase}"`, text.toLowerCase().includes(phrase.toLowerCase()));
   }
@@ -155,11 +167,14 @@ try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   page.on("pageerror", (e) => console.error("[pageerror]", e.message));
   await page.goto("http://localhost:5198/");
-  for (const entry of CORPUS.filter((e) => !filter || e.file.includes(filter))) {
+  for (const entry of CORPUS.filter((e) => !filter || (e.id ?? e.file).includes(filter))) {
     const started = Date.now();
     await page.reload();
     await page.selectOption("#language", "auto");
     await page.fill("#max-pages", String(entry.maxPages ?? 50));
+    for (const [id, value] of Object.entries(entry.options ?? {})) {
+      await page.selectOption(`#${id}`, value);
+    }
     await page.setInputFiles("#file", join(corpusDir, entry.file));
     await page.click("#convert");
     await page.waitForFunction(
@@ -169,7 +184,7 @@ try {
     );
     const seconds = (Date.now() - started) / 1000;
     const log = (await page.textContent("#log")) ?? "";
-    const base = join(outDir, entry.file.replace(/\.pdf$/, ""));
+    const base = join(outDir, (entry.id ?? entry.file).replace(/\.pdf$/, ""));
     writeFileSync(`${base}.log`, log);
     if (/error:/.test(log)) {
       rows.push({
@@ -177,7 +192,7 @@ try {
         seconds,
         checks: [{ name: "conversion", ok: false, detail: log.split("error:")[1].trim() }],
       });
-      console.log(`✗ ${entry.file}: ${log.split("error:")[1].trim()}`);
+      console.log(`✗ ${entry.id ?? entry.file}: ${log.split("error:")[1].trim()}`);
       continue;
     }
     const doc = JSON.parse((await page.textContent("#json pre")) ?? "") as PdfPortableTextDocument;
@@ -212,7 +227,7 @@ try {
     rows.push({ entry, seconds, checks, doc });
     const failed = checks.filter((c) => !c.ok);
     console.log(
-      `${failed.length ? "✗" : "✓"} ${entry.file} (${seconds.toFixed(1)}s, lang ${doc.language ?? "-"}) ` +
+      `${failed.length ? "✗" : "✓"} ${entry.id ?? entry.file} (${seconds.toFixed(1)}s, lang ${doc.language ?? "-"}) ` +
         checks
           .map((c) => `${c.ok ? "" : "!"}${c.name}${c.detail ? `=${c.detail}` : ""}`)
           .join(", "),
@@ -243,7 +258,7 @@ const report = [
     const result = failed.length
       ? `✗ ${failed.map((c) => `${c.name} ${c.detail}`).join("; ")}`
       : `✓ ${checks.map((c) => `${c.name}${c.detail ? ` ${c.detail}` : ""}`).join("; ")}`;
-    return `| [${entry.file}](${entry.url}) | ${entry.purpose} | ${doc?.language ?? "-"} | ${images.length} | ${ocr || "-"} | ${seconds.toFixed(1)}s | ${result} |`;
+    return `| [${entry.id ?? entry.file}](${entry.url}) | ${entry.purpose} | ${doc?.language ?? "-"} | ${images.length} | ${ocr || "-"} | ${seconds.toFixed(1)}s | ${result} |`;
   }),
   "",
 ].join("\n");

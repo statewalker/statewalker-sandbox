@@ -11,6 +11,8 @@ export const DEFAULT_MODEL_BASE_URL =
 export type OcrResult = {
   /** Tesseract language the text was recognised with. */
   language: string;
+  /** Engine that produced the words; tesseract-wasm when absent. */
+  engine?: string;
   words: OcrWord[];
   rotation: number;
   durationMs: number;
