@@ -122,7 +122,7 @@ function blobId(data: Uint8Array): string {
 }
 
 /** the stat fields of an entry, from what the stat source knows */
-function statFields(
+export function statFields(
   st: StatInfo,
 ): Pick<
   IndexEntry,
