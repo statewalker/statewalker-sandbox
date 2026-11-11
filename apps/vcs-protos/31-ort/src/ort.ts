@@ -21,6 +21,7 @@ import {
   type TreeMergeResult,
 } from "../../29-merge/src/merge-trees.js";
 import { mergeContent } from "../../29-merge/src/xmerge.js";
+import { GitStrMap } from "../../30-renames/src/git-strmap.js";
 import { findRenames } from "../../30-renames/src/renames.js";
 
 const S_IFMT = 0o170000;
@@ -96,46 +97,7 @@ function sortDirsNextToChildren(a: string, b: string): number {
   return c1 - c2;
 }
 
-/**
- * A strmap/strintmap that iterates in git's hashmap order (hashmap.c): FNV-1 `strhash`, 64
- * buckets growing 4× past 80% load, each bucket newest first. merge-ort walks deferred directories
- * in this order, which decides the order of rename pairs found inside them.
- */
-class GitStrMap<V> {
-  private table: { key: string; value: V; hash: number }[][] = Array.from({ length: 64 }, () => []);
-  private index = new Map<string, { key: string; value: V; hash: number }>();
-  get size() {
-    return this.index.size;
-  }
-  set(key: string, value: V) {
-    const known = this.index.get(key);
-    if (known) {
-      known.value = value;
-      return;
-    }
-    const e = { key, value, hash: strhash(key) };
-    this.index.set(key, e);
-    this.table[e.hash & (this.table.length - 1)]?.unshift(e);
-    if (this.index.size > Math.floor((this.table.length * 80) / 100)) {
-      const old = this.table;
-      this.table = Array.from({ length: old.length << 2 }, () => []);
-      for (const chain of old)
-        for (const x of chain) this.table[x.hash & (this.table.length - 1)]?.unshift(x);
-    }
-  }
-  *entries(): Generator<[string, V]> {
-    for (const chain of this.table) for (const e of chain) yield [e.key, e.value];
-  }
-  *keys(): Generator<string> {
-    for (const [k] of this.entries()) yield k;
-  }
-}
 const fnvEnc = new TextEncoder();
-function strhash(s: string): number {
-  let h = 0x811c9dc5;
-  for (const c of fnvEnc.encode(s)) h = (Math.imul(h, 0x01000193) ^ c) >>> 0;
-  return h;
-}
 
 /** `name_compare`: bytes, then length */
 function nameCompare(a: Uint8Array, b: Uint8Array): number {
@@ -211,7 +173,15 @@ class OrtMerge {
   messages = new Map<string, MergeMessage[]>();
   // rename_info, per side (index 1 and 2)
   pairs: FilePair[][] = [[], [], []];
-  relevant: Set<string>[] = [new Set(), new Set(), new Set()];
+  /** relevant_sources: path → RELEVANT_CONTENT (1), RELEVANT_LOCATION (2), RELEVANT_NO_MORE (0) */
+  relevant: Map<string, number>[] = [new Map(), new Map(), new Map()];
+  cachedIrrelevant: Set<string>[] = [new Set(), new Set(), new Set()];
+  /** dirs_removed: directory → NOT_RELEVANT (0), RELEVANT_FOR_ANCESTOR (1), RELEVANT_FOR_SELF (2) */
+  dirsRemoved: Map<string, number>[] = [new Map(), new Map(), new Map()];
+  dirRenameCount: Map<string, GitStrMap<number>>[] = [new Map(), new Map(), new Map()];
+  /** dir_renames: old directory → new directory, per side */
+  dirRenames: Map<string, string>[] = [new Map(), new Map(), new Map()];
+  dirRenameClean = true;
   cachedPairs: Map<string, string | null>[] = [new Map(), new Map(), new Map()];
   cachedTargetNames: Set<string>[] = [new Set(), new Set(), new Set()];
   deferred: GitStrMap<number>[] = [new GitStrMap(), new GitStrMap(), new GitStrMap()];
@@ -232,7 +202,10 @@ class OrtMerge {
     this.conflicted = new Map();
     this.messages = new Map();
     this.pairs = [[], [], []];
-    this.relevant = [new Set(), new Set(), new Set()];
+    this.relevant = [new Map(), new Map(), new Map()];
+    this.dirsRemoved = [new Map(), new Map(), new Map()];
+    this.dirRenameCount = [new Map(), new Map(), new Map()];
+    this.dirRenames = [new Map(), new Map(), new Map()];
     this.deferred = [new GitStrMap(), new GitStrMap(), new GitStrMap()];
     this.trivialOkay = [true, true, true];
     this.targetDirs = [new Set(), new Set(), new Set()];
@@ -361,6 +334,16 @@ class OrtMerge {
   ) {
     if (this.dirRenameMask !== 7 && (dirmask === 3 || dirmask === 5))
       this.dirRenameMask = dirmask & ~1;
+    // dirs_removed: a directory gone from a side; relevant for directory renames below it
+    if (dirmask === 1 || dirmask === 3 || dirmask === 5) {
+      const sides = (7 - dirmask) / 2;
+      const relevance = this.dirRenameMask === 7 ? 1 : 0;
+      if (sides & 1) this.dirsRemoved[1]?.set(fullpath, relevance);
+      if (sides & 2) this.dirsRemoved[2]?.set(fullpath, relevance);
+    }
+    // a file added to a directory the other side removed: that directory's own rename matters
+    if (this.dirRenameMask === 7 && (filemask === 2 || filemask === 4))
+      this.dirsRemoved[3 - (filemask >> 1)]?.set(dirOf(fullpath), 2);
     if (filemask === 0 || filemask === 7) return;
     for (const side of [1, 2] as const) {
       const sideMask = 1 << side;
@@ -379,7 +362,8 @@ class OrtMerge {
     }
     const contentRelevant = matchMask === 0;
     const locationRelevant = this.dirRenameMask === 7;
-    if (contentRelevant || locationRelevant) this.relevant[side]?.add(path);
+    if (contentRelevant || locationRelevant)
+      this.relevant[side]?.set(path, contentRelevant ? 1 : 2);
     if (this.cachedPairs[side]?.has(path)) return;
     this.pairs[side]?.push({ status: "D", one: { path, v: { ...(names[0] as Version) } } });
   }
@@ -390,7 +374,8 @@ class OrtMerge {
     for (const side of [1, 2] as const) {
       let okay = true;
       const cached = this.cachedPairs[side] as Map<string, string | null>;
-      for (const src of this.relevant[side] as Set<string>) {
+      for (const src of (this.relevant[side] as Map<string, number>).keys()) {
+        if (this.cachedIrrelevant[side]?.has(src)) continue;
         if (!cached.has(src)) {
           okay = false;
           break;
@@ -458,8 +443,10 @@ class OrtMerge {
   }
 
   async detectRegularRenames(side: 1 | 2): Promise<boolean> {
-    const relevant = this.relevant[side] as Set<string>;
+    const relevant = this.relevant[side] as Map<string, number>;
     for (const p of this.cachedPairs[side]?.keys() ?? []) relevant.delete(p);
+    for (const p of this.cachedIrrelevant[side] ?? []) relevant.delete(p);
+    this.dirRenameCount[side] = new Map();
     if (!this.possibleSideRenames(side)) return false;
     const pairs = this.pairs[side] as FilePair[];
     const found = await findRenames(
@@ -474,6 +461,8 @@ class OrtMerge {
         limit: 7000,
         renameEmpty: false,
         relevant,
+        dirsRemoved: this.dirsRemoved[side],
+        dirRenameCount: this.dirRenameCount[side],
         legacyHashChars: this.opts.legacyHashChars,
       },
     );
@@ -489,7 +478,9 @@ class OrtMerge {
   }
 
   possiblyCacheNewPair(p: FilePair, side: 1 | 2) {
-    if (!this.relevant[side]?.has(onePath(p))) return;
+    const val = this.relevant[side]?.get(onePath(p)) ?? -1;
+    if (val === 0) this.cachedIrrelevant[side]?.add(onePath(p));
+    if (val <= 0) return;
     if (p.status === "D") this.cachedPairs[side]?.set(onePath(p), null);
     else if (p.status === "R") {
       this.cachedPairs[side]?.set(onePath(p), twoPath(p));
@@ -531,12 +522,240 @@ class OrtMerge {
             : { status: "D", one: { path: from, v: none() } },
         );
       }
+    // directory renames (merge.directoryRenames=conflict, merge-tree's default)
+    let clean = true;
+    this.dirRenameClean = true;
+    for (const side of [1, 2] as const) clean = this.provisionalDirectoryRenames(side) && clean;
+    this.handleDirectoryLevelConflicts();
+    const collisions: Map<string, string[]>[] = [new Map(), new Map(), new Map()];
+    for (const side of [1, 2] as const)
+      collisions[side] = this.computeCollisions(
+        this.dirRenames[3 - side] as Map<string, string>,
+        this.pairs[side] as FilePair[],
+      );
+    const reported = new Set<string>();
     const combined: FilePair[] = [];
     for (const side of [1, 2] as const)
-      for (const p of this.pairs[side] as FilePair[])
-        if (p.status === "R") combined.push({ ...p, side });
+      for (const p of this.pairs[side] as FilePair[]) {
+        if (p.status !== "A" && p.status !== "R") continue;
+        const newPath = this.checkForDirectoryRename(p, side, collisions, reported);
+        if (p.status !== "R" && newPath === undefined) continue;
+        const q: FilePair =
+          newPath === undefined
+            ? { ...p }
+            : {
+                ...p,
+                one: p.one ?? { path: twoPath(p), v: none() },
+                two: { path: newPath, v: (p.two as { v: Version }).v },
+              };
+        if (newPath !== undefined) this.applyDirectoryRenameModifications(q, twoPath(p), newPath);
+        combined.push({ ...q, side });
+      }
     combined.sort((a, b) => comparePaths(onePath(a), onePath(b)));
-    return this.processRenames(combined);
+    return (await this.processRenames(combined)) && clean && this.dirRenameClean;
+  }
+
+  /** get_provisional_directory_renames: each removed directory's majority destination */
+  provisionalDirectoryRenames(side: 1 | 2): boolean {
+    let clean = true;
+    for (const [sourceDir, counts] of this.dirRenameCount[side] as Map<string, GitStrMap<number>>) {
+      let max = 0;
+      let badMax = 0;
+      let best: string | undefined;
+      for (const [targetDir, count] of counts.entries()) {
+        if (count === max) badMax = max;
+        else if (count > max) {
+          max = count;
+          best = targetDir;
+        }
+      }
+      if (max === 0) continue;
+      if (badMax === max) {
+        this.pathMsg(
+          sourceDir,
+          [],
+          `CONFLICT (directory rename split): Unclear where to rename ${sourceDir} to; it was renamed to multiple other directories, with no destination getting a majority of the files.`,
+        );
+        clean = false;
+      } else this.dirRenames[side]?.set(sourceDir, best as string);
+    }
+    return clean;
+  }
+
+  /** handle_directory_level_conflicts: a directory both sides renamed is renamed by neither */
+  handleDirectoryLevelConflicts() {
+    const one = this.dirRenames[1] as Map<string, string>;
+    const two = this.dirRenames[2] as Map<string, string>;
+    for (const dir of [...one.keys()])
+      if (two.has(dir)) {
+        one.delete(dir);
+        two.delete(dir);
+      }
+  }
+
+  /** check_dir_renamed: the deepest renamed directory above `path` */
+  checkDirRenamed(path: string, dirRenames: Map<string, string>): [string, string] | undefined {
+    // each proper ancestor with a name (never the root), deepest first
+    for (let d = path; d.includes("/"); ) {
+      d = dirOf(d);
+      const to = dirRenames.get(d);
+      if (to !== undefined) return [d, to];
+    }
+    return undefined;
+  }
+
+  /** apply_dir_rename */
+  applyDirRename([oldDir, newDir]: [string, string], oldPath: string): string {
+    const rest = oldPath.slice(oldDir.length + (newDir === "" ? 1 : 0));
+    return `${newDir}${rest}`;
+  }
+
+  /** compute_collisions: where the other side's directory renames would put this side's paths */
+  computeCollisions(dirRenames: Map<string, string>, pairs: FilePair[]): Map<string, string[]> {
+    const collisions = new Map<string, string[]>();
+    if (!dirRenames.size) return collisions;
+    for (const p of pairs) {
+      if (p.status !== "A" && p.status !== "R") continue;
+      const info = this.checkDirRenamed(twoPath(p), dirRenames);
+      if (!info) continue;
+      const newPath = this.applyDirRename(info, twoPath(p));
+      const list = collisions.get(newPath) ?? [];
+      collisions.set(newPath, list);
+      if (!list.includes(twoPath(p))) list.push(twoPath(p));
+      list.sort(comparePaths);
+    }
+    return collisions;
+  }
+
+  /** check_for_directory_rename and handle_path_level_conflicts */
+  checkForDirectoryRename(
+    p: FilePair,
+    side: 1 | 2,
+    collisions: Map<string, string[]>[],
+    reported: Set<string>,
+  ): string | undefined {
+    const path = twoPath(p);
+    const dirRenames = this.dirRenames[3 - side] as Map<string, string>;
+    const exclusions = this.dirRenames[side] as Map<string, string>;
+    if (!dirRenames.size) return undefined;
+    if (collisions[3 - side]?.has(path)) return undefined;
+    const info = this.checkDirRenamed(path, dirRenames);
+    if (!info) return undefined;
+    const [oldDir, newDir] = info;
+    if (exclusions.has(newDir)) {
+      this.pathMsg(
+        oldDir,
+        [path, newDir],
+        `WARNING: Avoiding applying ${oldDir} -> ${newDir} rename to ${path}, because ${newDir} itself was renamed.`,
+      );
+      return undefined;
+    }
+    const newPath = this.applyDirRename(info, path);
+    const sources = collisions[side]?.get(newPath) as string[];
+    const key = `${side}\0${newPath}`;
+    // a path the rename cannot place makes the merge unclean (`*clean_merge &= new_path != NULL`)
+    if (reported.has(key)) {
+      this.dirRenameClean = false;
+      return undefined;
+    }
+    if (this.pathInWay(newPath, 1 << side, p)) {
+      reported.add(key);
+      this.dirRenameClean = false;
+      this.pathMsg(
+        newPath,
+        sources,
+        `CONFLICT (implicit dir rename): Existing file/dir at ${newPath} in the way of implicit directory rename(s) putting the following path(s) there: ${sources.join(", ")}.`,
+      );
+      return undefined;
+    }
+    if (sources.length > 1) {
+      reported.add(key);
+      this.dirRenameClean = false;
+      this.pathMsg(
+        newPath,
+        sources,
+        `CONFLICT (implicit dir rename): Cannot map more than one path to ${newPath}; implicit directory renames tried to put these paths there: ${sources.join(", ")}`,
+      );
+      return undefined;
+    }
+    return newPath;
+  }
+
+  /** path_in_way (newer git also counts a base file at the path, unless it is the rename's source) */
+  pathInWay(path: string, sideMask: number, p: FilePair): boolean {
+    const mi = this.paths.get(path);
+    if (!mi) return false;
+    if (mi.clean) return true;
+    const ci = mi as Conflict;
+    return (
+      (sideMask & (ci.filemask | ci.dirmask)) !== 0 || (!!(ci.filemask & 1) && onePath(p) !== path)
+    );
+  }
+
+  /** apply_directory_rename_modifications: the path moves into the renamed directory */
+  applyDirectoryRenameModifications(pair: FilePair, oldPath: string, newPath: string) {
+    let ci = this.paths.get(oldPath) as Conflict;
+    // the directories above the new path that no entry has yet
+    const toInsert: string[] = [];
+    for (let cur = newPath; cur.includes("/"); ) {
+      const parent = dirOf(cur);
+      if (this.paths.has(parent)) break;
+      toInsert.push(parent);
+      cur = parent;
+    }
+    for (let i = toInsert.length - 1; i >= 0; i--)
+      this.paths.set(toInsert[i] as string, {
+        conflict: true,
+        result: none(),
+        isNull: false,
+        clean: false,
+        stages: [none(), none(), none()],
+        pathnames: ["", "", ""],
+        filemask: 0,
+        dirmask: ci.filemask,
+        matchMask: 0,
+        dfConflict: false,
+        pathConflict: false,
+      });
+    if (ci.dirmask === 0) this.paths.delete(oldPath);
+    else {
+      const moved: Conflict = {
+        ...ci,
+        result: { ...ci.result },
+        stages: [{ ...ci.stages[0] }, none(), { ...ci.stages[2] }],
+        pathnames: [...ci.pathnames] as [string, string, string],
+        dirmask: 0,
+      };
+      ci.filemask = 0;
+      ci.clean = true;
+      for (let i = 0; i < 3; i++) if (!(ci.dirmask & (1 << i))) ci.stages[i] = none();
+      ci = moved;
+    }
+    const branchWithNewPath = ci.filemask === 2 ? this.opts.ours : this.opts.theirs;
+    const branchWithDirRename = ci.filemask === 2 ? this.opts.theirs : this.opts.ours;
+    const existing = this.paths.get(newPath) as Conflict | undefined;
+    if (!existing) this.paths.set(newPath, ci);
+    else {
+      existing.filemask |= ci.filemask;
+      if (existing.dirmask) existing.dfConflict = true;
+      const index = ci.filemask >> 1;
+      existing.pathnames[index] = ci.pathnames[index] as string;
+      existing.stages[index] = { ...(ci.stages[index] as Version) };
+      ci = existing;
+    }
+    ci.pathConflict = true;
+    if (pair.status === "A")
+      this.pathMsg(
+        newPath,
+        [oldPath],
+        `CONFLICT (file location): ${oldPath} added in ${branchWithNewPath} inside a directory that was renamed in ${branchWithDirRename}, suggesting it should perhaps be moved to ${newPath}.`,
+      );
+    else
+      this.pathMsg(
+        newPath,
+        [oldPath],
+        `CONFLICT (file location): ${onePath(pair)} renamed to ${oldPath} in ${branchWithNewPath}, inside a directory that was renamed in ${branchWithDirRename}, suggesting it should perhaps be moved to ${newPath}.`,
+      );
   }
 
   async processRenames(renames: FilePair[]): Promise<boolean> {
@@ -547,6 +766,8 @@ class OrtMerge {
       const newpath = twoPath(pair);
       const oldinfo = this.paths.get(oldpath);
       const newinfo = this.paths.get(newpath);
+      // newer git: a rename into itself (a directory rename undoing a rename) is no rename
+      if (oldinfo && oldpath === newpath) continue;
       if (!oldinfo || oldinfo.clean) continue;
       const next = renames[i + 1];
       if (next && onePath(next) === oldpath) {

@@ -149,9 +149,14 @@ function dirCorpus(n: number, seed: number): Case[] {
             m.delete(p);
             m.set(q, [mode, rand() < 0.4 ? edit(c) : c]);
           }
-        } else if (r < 0.5) {
+        } else if (r < 0.42) {
           const p = `${d}/new${uid++}`;
           if (free(m, p)) m.set(p, ["100644", content()]);
+        } else if (r < 0.5) {
+          // the same new name in a directory and in a likely rename target (a path in the way)
+          const name = `n${uid++}`;
+          for (const q of [`${d}/${name}`, `${pick(targets)}/${name}`])
+            if (free(m, q)) m.set(q, ["100644", content()]);
         } else if (r < 0.62) {
           // a file renamed into a directory
           const all = [...m.keys()].filter((p) => p !== "keep");
@@ -175,7 +180,25 @@ function dirCorpus(n: number, seed: number): Case[] {
       }
       return m;
     };
-    cases.push({ name: `#${i}`, base, ours: mutate(), theirs: mutate() });
+    const ours = mutate();
+    const theirs = mutate();
+    if (rand() < 0.1 && under(base, "d1").length && under(base, "d2").length) {
+      // ours renames d1 into d2 while theirs renames d2 away and adds to d1: git skips applying
+      // d1 -> d2 to theirs' file, because d2 itself was renamed (the warning)
+      const move = (m: Files, from: string, to: string) => {
+        for (const p of under(m, from)) {
+          const q = `${to}/${p.slice(from.length + 1)}`;
+          if (!free(m, q)) continue;
+          m.set(q, m.get(p) as [string, string]);
+          m.delete(p);
+        }
+      };
+      move(ours, "d1", "d2");
+      move(theirs, "d2", "e2");
+      const p = `d1/w${uid++}`;
+      if (free(theirs, p)) theirs.set(p, ["100644", content()]);
+    }
+    cases.push({ name: `#${i}`, base, ours, theirs });
   }
   return cases;
 }
@@ -213,7 +236,7 @@ describe("E2–E4 directory renames", () => {
 
   it("E4: the corpus reaches every directory-rename message", () => {
     const count = (k: string) => kinds.filter((x) => x === k).length;
-    for (const k of ["file location", "directory rename split", "implicit dir rename"])
+    for (const k of ["file location", "directory rename split", "implicit dir rename", "warning"])
       expect(count(k), k).toBeGreaterThan(0);
   });
 });

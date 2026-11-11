@@ -13,6 +13,7 @@
 
 import { readTree } from "../../17-repository/src/commands.js";
 import type { Repository } from "../../17-repository/src/object-store.js";
+import { GitStrMap } from "./git-strmap.js";
 
 export interface DiffEntry {
   status: "A" | "D" | "M" | "T" | "R" | "C";
@@ -39,10 +40,30 @@ export interface RenameOptions {
   legacyHashChars?: boolean;
   /**
    * merge-ort's relevant sources: past the exact pass, only these source paths are paired (the
-   * basename pass skips the others, and they leave the matrix)
+   * basename pass skips the others, and they leave the matrix). Values: RELEVANT_CONTENT (1) or
+   * RELEVANT_LOCATION (2); a location-only source may be downgraded to RELEVANT_NO_MORE (0) here
    */
-  relevant?: Set<string>;
+  relevant?: Map<string, number>;
+  /**
+   * merge-ort's `dirs_removed` for this side: directory → NOT_RELEVANT (0), RELEVANT_FOR_ANCESTOR
+   * (1) or RELEVANT_FOR_SELF (2). Updated in place (`handle_early_known_dir_renames`)
+   */
+  dirsRemoved?: Map<string, number>;
+  /** filled with `dir_rename_count`: removed directory → {new directory → renames} */
+  dirRenameCount?: Map<string, GitStrMap<number>>;
 }
+
+const NOT_RELEVANT = 0;
+const RELEVANT_FOR_ANCESTOR = 1;
+const RELEVANT_FOR_SELF = 2;
+const RELEVANT_LOCATION = 2;
+const RELEVANT_NO_MORE = 0;
+/** a placeholder destination: "renamed to somewhere not yet known" */
+const UNKNOWN_DIR = "/";
+const dirnameOf = (path: string) => {
+  const at = path.lastIndexOf("/");
+  return at < 0 ? "" : path.slice(0, at);
+};
 
 export const MAX_SCORE = 60000;
 const NULL_OID = "0".repeat(40);
@@ -193,6 +214,21 @@ interface Spec {
   used: boolean;
 }
 
+/** dir_rename_already_determinable: the leader stays ahead even if every unknown went elsewhere */
+function alreadyDeterminable(counts: GitStrMap<number>): boolean {
+  let first = 0;
+  let second = 0;
+  let unknown = 0;
+  for (const [dir, n] of counts.entries()) {
+    if (dir === UNKNOWN_DIR) unknown = n;
+    else if (n >= first) {
+      second = first;
+      first = n;
+    } else if (n >= second) second = n;
+  }
+  return first > second + unknown;
+}
+
 /** the minimum score in MAX_SCORE units, as `parse_rename_score` reads `<n>%` */
 function minimumScore(percent: number | undefined): number {
   const p = percent ?? 50;
@@ -233,11 +269,47 @@ export async function findRenames(
   const result = new Map<number, { src: number; score: number }>();
   if (!dsts.length || !srcs.length) return result;
 
-  const record = (dst: (typeof dsts)[number], src: Spec, score: number) => {
+  const record = (dst: (typeof dsts)[number], src: Spec, score: number, count = false) => {
     src.used = true;
     dst.rename = { src, score };
     result.set(dst.pair, { src: src.pair, score });
+    if (count) updateDirRenameCounts(src.path, dst.path);
   };
+
+  // dir_rename_info (initialize_dir_rename_info): set up when merge-ort passes its maps
+  const relevant = opts.relevant;
+  const dirsRemoved = opts.dirsRemoved;
+  const setup = !!(dirsRemoved || relevant);
+  const dirRenameCount = opts.dirRenameCount ?? new Map<string, GitStrMap<number>>();
+  const relevantSourceDirs: { has(d: string): boolean } | undefined =
+    dirsRemoved ?? (relevant ? new Set([...relevant.keys()].map(dirnameOf)) : undefined);
+  const idxMap = new Map<string, (typeof dsts)[number]>();
+  const dirRenameGuess = new Map<string, string>();
+  const incrementCount = (oldDir: string, newDir: string) => {
+    const counts = dirRenameCount.get(oldDir) ?? new GitStrMap<number>();
+    dirRenameCount.set(oldDir, counts);
+    counts.set(newDir, (counts.get(newDir) ?? 0) + 1);
+  };
+  /** update_dir_rename_counts: the removed directory, and its ancestors while their own names stay */
+  function updateDirRenameCounts(oldName: string, newName: string) {
+    if (!setup) return;
+    let oldCur = oldName;
+    let newCur = newName;
+    let first = true;
+    for (;;) {
+      const oldDir = dirnameOf(oldCur);
+      if (relevantSourceDirs && !relevantSourceDirs.has(oldDir)) break;
+      const newDir = dirnameOf(newCur);
+      if (!first && basename(oldCur) !== basename(newCur)) break;
+      const flag = dirsRemoved?.get(oldDir) ?? NOT_RELEVANT;
+      if (flag === RELEVANT_FOR_SELF || first) incrementCount(oldDir, newDir);
+      first = false;
+      if (flag === NOT_RELEVANT) break;
+      if (!oldDir || !newDir) break;
+      oldCur = oldDir;
+      newCur = newDir;
+    }
+  }
 
   // exact renames: sources by blob, in order
   const byOid = new Map<string, Spec[]>();
@@ -264,112 +336,166 @@ export async function findRenames(
     if (best) record(dst, best, MAX_SCORE);
   }
   if (minimum === MAX_SCORE) return result;
-
-  // content, sizes and span hashes, loaded once
-  const blobs = new Map<string, Uint8Array>();
-  const hashes = new Map<string, ReturnType<typeof spanHashes>>();
-  const blob = async (oid: string) => {
-    const known = blobs.get(oid);
-    if (known) return known;
-    const b = await readBlob(repo, oid);
-    blobs.set(oid, b);
-    return b;
-  };
-  const spans = (oid: string, data: Uint8Array) => {
-    const known = hashes.get(oid);
-    if (known) return known;
-    const h = spanHashes(data, opts.legacyHashChars);
-    hashes.set(oid, h);
-    return h;
-  };
-  const similarity = async (src: Spec, dst: Spec, min: number): Promise<number> => {
-    if (!isRegular(src.mode) || !isRegular(dst.mode)) return 0;
-    const a = await blob(src.oid);
-    const b = await blob(dst.oid);
-    const max = Math.max(a.length, b.length);
-    const delta = max - Math.min(a.length, b.length);
-    if (max * (MAX_SCORE - min) < delta * MAX_SCORE) return 0;
-    const ha = spans(src.oid, a);
-    const hb = spans(dst.oid, b);
-    if (!b.length) return 0;
-    return Math.floor((sourceCopied(ha, hb) * MAX_SCORE) / max);
-  };
-
-  // basenames unique on both sides
-  srcs = srcs.filter((s) => !s.used);
-  const minBasename = minimum + Math.floor(0.5 * (MAX_SCORE - minimum));
-  const unique = <T extends Spec>(list: T[]) => {
-    const m = new Map<string, T | null>();
-    for (const s of list) {
-      const b = basename(s.path);
-      m.set(b, m.has(b) ? null : s);
+  if (setup) {
+    for (const dst of dsts)
+      if (!dst.rename) idxMap.set(dst.path, dst);
+      else updateDirRenameCounts(dst.rename.src.path, dst.path);
+    for (const [oldDir, counts] of dirRenameCount) {
+      // get_highest_rename_path: the first strictly highest count, in the map's order
+      let highest = 0;
+      let best: string | undefined;
+      for (const [newDir, n] of counts.entries())
+        if (n > highest) {
+          highest = n;
+          best = newDir;
+        }
+      if (best !== undefined) dirRenameGuess.set(oldDir, best);
     }
-    return m;
-  };
-  const srcByBase = unique(srcs);
-  const dstByBase = unique(dsts.filter((d) => !d.rename));
-  const relevant = opts.relevant;
-  for (const src of srcs) {
-    if (relevant && !relevant.has(src.path)) continue;
-    const b = basename(src.path);
-    if (!dstByBase.has(b)) continue;
-    const dst = dstByBase.get(b);
-    if (!dst || srcByBase.get(b) !== src) continue; // not unique: no directory-rename guess here
-    if (dst.rename) continue;
-    const score = await similarity(src, dst, minBasename);
-    if (score < minBasename) continue;
-    record(dst, src, score);
   }
-  srcs = srcs.filter((s) => !s.used && (!relevant || relevant.has(s.path)));
-
-  const left = dsts.filter((d) => !d.rename);
-  if (!left.length || !srcs.length) return result;
-  if (limit > 0 && left.length * srcs.length > limit * limit) return result;
-
-  // the matrix: 4 best candidates per destination
-  interface Score {
-    dst: number;
-    src: number;
-    score: number;
-    name: number;
-  }
-  const compare = (a: Score, b: Score) => {
-    if (a.dst < 0) return b.dst >= 0 ? 1 : 0;
-    if (b.dst < 0) return -1;
-    if (a.score === b.score) return b.name - a.name;
-    return b.score - a.score;
-  };
-  const mx: Score[] = [];
-  for (const [di, dst] of left.entries()) {
-    const m: Score[] = Array.from({ length: NUM_CANDIDATE_PER_DST }, () => ({
-      dst: -1,
-      src: -1,
-      score: 0,
-      name: 0,
-    }));
-    for (const [si, src] of srcs.entries()) {
-      const o: Score = {
-        dst: di,
-        src: si,
-        score: await similarity(src, dst, minimum),
-        name: basename(src.path) === basename(dst.path) ? 1 : 0,
-      };
-      let worst = 0;
-      for (let i = 1; i < NUM_CANDIDATE_PER_DST; i++)
-        if (compare(m[i] as Score, m[worst] as Score) > 0) worst = i;
-      if (compare(m[worst] as Score, o) > 0) m[worst] = o;
+  await inexact();
+  if (setup && opts.dirRenameCount && dirsRemoved) {
+    // cleanup_dir_rename_info, keeping the counts of removed directories for merge-ort
+    for (const [dir, counts] of [...dirRenameCount]) {
+      if (!dirsRemoved.get(dir)) dirRenameCount.delete(dir);
+      else counts.delete(UNKNOWN_DIR);
     }
-    mx.push(...m);
-  }
-  mx.sort(compare);
-  for (const c of mx) {
-    if (c.dst < 0 || c.score < minimum) break;
-    const dst = left[c.dst] as (typeof dsts)[number];
-    const src = srcs[c.src] as Spec;
-    if (dst.rename || src.used) continue;
-    record(dst, src, c.score);
   }
   return result;
+
+  async function inexact() {
+    // content, sizes and span hashes, loaded once
+    const blobs = new Map<string, Uint8Array>();
+    const hashes = new Map<string, ReturnType<typeof spanHashes>>();
+    const blob = async (oid: string) => {
+      const known = blobs.get(oid);
+      if (known) return known;
+      const b = await readBlob(repo, oid);
+      blobs.set(oid, b);
+      return b;
+    };
+    const spans = (oid: string, data: Uint8Array) => {
+      const known = hashes.get(oid);
+      if (known) return known;
+      const h = spanHashes(data, opts.legacyHashChars);
+      hashes.set(oid, h);
+      return h;
+    };
+    const similarity = async (src: Spec, dst: Spec, min: number): Promise<number> => {
+      if (!isRegular(src.mode) || !isRegular(dst.mode)) return 0;
+      const a = await blob(src.oid);
+      const b = await blob(dst.oid);
+      const max = Math.max(a.length, b.length);
+      const delta = max - Math.min(a.length, b.length);
+      if (max * (MAX_SCORE - min) < delta * MAX_SCORE) return 0;
+      const ha = spans(src.oid, a);
+      const hb = spans(dst.oid, b);
+      if (!b.length) return 0;
+      return Math.floor((sourceCopied(ha, hb) * MAX_SCORE) / max);
+    };
+
+    // basenames unique on both sides
+    srcs = srcs.filter((s) => !s.used);
+    const minBasename = minimum + Math.floor(0.5 * (MAX_SCORE - minimum));
+    const unique = <T extends Spec>(list: T[]) => {
+      const m = new Map<string, T | null>();
+      for (const s of list) {
+        const b = basename(s.path);
+        m.set(b, m.has(b) ? null : s);
+      }
+      return m;
+    };
+    const srcByBase = unique(srcs);
+    const dstByBase = unique(dsts.filter((d) => !d.rename));
+    for (const src of srcs) {
+      if (relevant && !relevant.has(src.path)) continue;
+      const b = basename(src.path);
+      if (!dstByBase.has(b)) continue;
+      let dst = dstByBase.get(b) ?? undefined;
+      if (!dst || srcByBase.get(b) !== src) {
+        // idx_possible_rename: where the source's directory most often went
+        const newDir = setup ? dirRenameGuess.get(dirnameOf(src.path)) : undefined;
+        dst = newDir === undefined ? undefined : idxMap.get(`${newDir}/${b}`);
+      }
+      if (!dst || dst.rename) continue;
+      const score = await similarity(src, dst, minBasename);
+      if (score < minBasename) continue;
+      record(dst, src, score, true);
+    }
+    srcs = srcs.filter((s) => !s.used && (!relevant || relevant.has(s.path)));
+    if (dirsRemoved && relevant) {
+      // handle_early_known_dir_renames: a source needed only to locate a directory whose majority
+      // is already known leaves the search
+      for (const src of srcs)
+        for (
+          let d = dirnameOf(src.path);
+          d && (dirsRemoved.get(d) ?? NOT_RELEVANT) !== NOT_RELEVANT;
+          d = dirnameOf(d)
+        )
+          incrementCount(d, UNKNOWN_DIR);
+      for (const [dir, counts] of dirRenameCount)
+        if (dirsRemoved.get(dir) === RELEVANT_FOR_SELF && alreadyDeterminable(counts))
+          dirsRemoved.set(dir, RELEVANT_FOR_ANCESTOR);
+      srcs = srcs.filter((src) => {
+        if (relevant.get(src.path) !== RELEVANT_LOCATION) return true;
+        for (let d = dirnameOf(src.path); ; d = dirnameOf(d)) {
+          const res = dirsRemoved.get(d) ?? NOT_RELEVANT;
+          if (res === NOT_RELEVANT) break;
+          if (res === RELEVANT_FOR_SELF) return true;
+          if (!d) break;
+        }
+        relevant.set(src.path, RELEVANT_NO_MORE);
+        return false;
+      });
+    }
+
+    const left = dsts.filter((d) => !d.rename);
+    if (!left.length || !srcs.length) return;
+    if (limit > 0 && left.length * srcs.length > limit * limit) return;
+
+    // the matrix: 4 best candidates per destination
+    interface Score {
+      dst: number;
+      src: number;
+      score: number;
+      name: number;
+    }
+    const compare = (a: Score, b: Score) => {
+      if (a.dst < 0) return b.dst >= 0 ? 1 : 0;
+      if (b.dst < 0) return -1;
+      if (a.score === b.score) return b.name - a.name;
+      return b.score - a.score;
+    };
+    const mx: Score[] = [];
+    for (const [di, dst] of left.entries()) {
+      const m: Score[] = Array.from({ length: NUM_CANDIDATE_PER_DST }, () => ({
+        dst: -1,
+        src: -1,
+        score: 0,
+        name: 0,
+      }));
+      for (const [si, src] of srcs.entries()) {
+        const o: Score = {
+          dst: di,
+          src: si,
+          score: await similarity(src, dst, minimum),
+          name: basename(src.path) === basename(dst.path) ? 1 : 0,
+        };
+        let worst = 0;
+        for (let i = 1; i < NUM_CANDIDATE_PER_DST; i++)
+          if (compare(m[i] as Score, m[worst] as Score) > 0) worst = i;
+        if (compare(m[worst] as Score, o) > 0) m[worst] = o;
+      }
+      mx.push(...m);
+    }
+    mx.sort(compare);
+    for (const c of mx) {
+      if (c.dst < 0 || c.score < minimum) break;
+      const dst = left[c.dst] as (typeof dsts)[number];
+      const src = srcs[c.src] as Spec;
+      if (dst.rename || src.used) continue;
+      record(dst, src, c.score, true);
+    }
+  }
 }
 
 /** `git diff-tree -r -M`: the changes from tree `a` to tree `b`, renames found as git finds them */

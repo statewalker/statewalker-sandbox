@@ -241,7 +241,11 @@ export async function compareTrees(
   return {
     wrong,
     kinds: results.flatMap((g) =>
-      g.messages.map((e) => /^CONFLICT \(([^)]+)\)/.exec(e.text)?.[1] ?? ""),
+      g.messages.map(
+        (e) =>
+          /^CONFLICT \(([^)]+)\)/.exec(e.text)?.[1] ??
+          (e.text.startsWith("WARNING:") ? "warning" : ""),
+      ),
     ),
   };
 }
