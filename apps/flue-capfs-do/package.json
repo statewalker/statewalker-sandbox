@@ -38,7 +38,7 @@
     "@statewalker/webrun-bundler": "0.1.1",
     "@statewalker/webrun-files": "catalog:",
     "@statewalker/webrun-files-mem": "catalog:",
-    "@statewalker/webrun-files-rpc": "workspace:^",
+    "@statewalker/webrun-files-rpc": "link:../../../webrun-files/packages/webrun-files-rpc",
     "@wasmer/sdk": "0.19.1",
     "acorn": "^8.15.0",
     "acorn-walk": "^8.3.4",

@@ -33,6 +33,18 @@ makes them a real deployment shape:
 
 ## How to run it
 
+`@statewalker/webrun-files-rpc` is not on npm yet: it is linked from a
+[webrun-files](https://github.com/statewalker/webrun-files) checkout beside this repository
+(`link:../../../webrun-files/packages/webrun-files-rpc`), built before installing here:
+
+```sh
+git clone https://github.com/statewalker/webrun-files ../webrun-files   # beside statewalker-sandbox
+(cd ../webrun-files && pnpm install --filter '@statewalker/webrun-files-rpc...' \
+  && pnpm --filter '@statewalker/webrun-files-rpc...' run build)
+```
+
+Then:
+
 ```sh
 pnpm install                                        # at the repository root
 pnpm --filter @statewalker/flue-capfs-do test       # unit + cellb + cellb(celld bucket) + wrangler
@@ -655,7 +667,7 @@ Limits and notes:
 ### Streaming files of any size
 
 A holder streams files through the capability with
-[`@statewalker/webrun-files-rpc`](../../packages/webrun-files-rpc): `capFiles(cap)`
+[`@statewalker/webrun-files-rpc`](https://github.com/statewalker/webrun-files/tree/main/packages/webrun-files-rpc): `capFiles(cap)`
 (`src/files-rpc.ts`) is a `@statewalker/webrun-files` `FilesApi` whose `read(path, {start,
 length})` yields chunks and whose `write(path, chunks)` takes an (async) iterable of them. It is
 the package's client; the capability carries its calls (`cap.rpc(method, args)`), and the
