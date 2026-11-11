@@ -21,7 +21,15 @@ const outDir = join(root, "e2e-output", "corpus");
 mkdirSync(outDir, { recursive: true });
 const filter = process.argv[2];
 
-type ImageStat = { id: string; width: number; height: number; mean: number; stddev: number };
+type ImageStat = {
+  id: string;
+  width: number;
+  height: number;
+  mean: number;
+  stddev: number;
+  /** Share of pixels that are not fully opaque. */
+  alpha: number;
+};
 type Check = { name: string; ok: boolean; detail: string };
 type Row = { entry: CorpusEntry; seconds: number; checks: Check[]; doc?: PdfPortableTextDocument };
 
@@ -202,6 +210,28 @@ function check(doc: PdfPortableTextDocument, entry: CorpusEntry, stats: ImageSta
       engines.join("/"),
     );
   }
+  if (expect.imageChecks) {
+    const actual = images.map((img) => {
+      const stat = stats.find((s) => s.id === img.asset._ref);
+      return {
+        mimeType: img.mimeType,
+        alpha: (stat?.alpha ?? 0) > 0.01,
+        stencil: !!img.source.stencil,
+      };
+    });
+    const show = (x: { mimeType?: string; alpha?: boolean; stencil?: boolean }) =>
+      `${x.mimeType?.replace("image/", "") ?? "?"}${x.alpha ? "+alpha" : ""}${x.stencil ? "+stencil" : ""}`;
+    const ok = expect.imageChecks.every((want, i) => {
+      const got = actual[i];
+      return (
+        got &&
+        (want.mimeType === undefined || want.mimeType === got.mimeType) &&
+        (want.alpha === undefined || want.alpha === got.alpha) &&
+        (want.stencil === undefined || want.stencil === got.stencil)
+      );
+    });
+    add("image types", ok, actual.map(show).join(", "));
+  }
   if (expect.formatting) checkFormatting(doc, expect.formatting, add);
   for (const phrase of expect.contains ?? []) {
     add(`contains "${phrase}"`, text.toLowerCase().includes(phrase.toLowerCase()));
@@ -284,7 +314,15 @@ try {
         try {
           const bmp = await createImageBitmap(blob);
           const w = Math.min(bmp.width, 512), h = Math.max(1, Math.round(bmp.height * w / bmp.width));
+          const clear = new OffscreenCanvas(w, h).getContext("2d");
+          clear.drawImage(bmp, 0, 0, w, h);
+          const a = clear.getImageData(0, 0, w, h).data;
+          let transparent = 0;
+          for (let i = 3; i < a.length; i += 4) if (a[i] < 250) transparent++;
+          // Luminance over white, as the image would be seen on a page.
           const ctx = new OffscreenCanvas(w, h).getContext("2d");
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, w, h);
           ctx.drawImage(bmp, 0, 0, w, h);
           const d = ctx.getImageData(0, 0, w, h).data;
           let sum = 0, sq = 0, n = 0;
@@ -293,7 +331,7 @@ try {
             sum += l; sq += l * l; n++;
           }
           const mean = sum / n;
-          out.push({ id, width: bmp.width, height: bmp.height, mean: Math.round(mean), stddev: Math.round(Math.sqrt(sq / n - mean * mean) * 10) / 10 });
+          out.push({ id, width: bmp.width, height: bmp.height, mean: Math.round(mean), stddev: Math.round(Math.sqrt(sq / n - mean * mean) * 10) / 10, alpha: transparent / n });
         } catch (e) {}
       }
       return out;

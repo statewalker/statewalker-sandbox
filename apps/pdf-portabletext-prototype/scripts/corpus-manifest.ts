@@ -28,7 +28,11 @@ export type CorpusEntry = {
    * Built locally instead of downloaded: one page per rotation, each holding
    * the image at `url` with its pixels turned clockwise by that angle.
    */
-  derive?: { kind: "rotate"; rotations: number[] } | { kind: "columns" } | { kind: "formatting" };
+  derive?:
+    | { kind: "rotate"; rotations: number[] }
+    | { kind: "columns" }
+    | { kind: "formatting" }
+    | { kind: "images" };
   expect: {
     /** Expected `document.language` (BCP 47). */
     language?: string;
@@ -60,6 +64,8 @@ export type CorpusEntry = {
     maxOccurrences?: Record<string, number>;
     /** Engine that must have produced the text of every image with words. */
     ocrEngine?: string;
+    /** Per image, in document order: stored type, transparency, stencil mask. */
+    imageChecks?: { mimeType?: string; alpha?: boolean; stencil?: boolean }[];
     /** Text formatting: phrases that must carry a decorator, list items, tables. */
     formatting?: {
       strong?: string[];
@@ -168,6 +174,23 @@ export const CORPUS: CorpusEntry[] = [
         maxLevel: 2,
         tables: [{ rows: 4, cols: 3, headerRows: 1 }],
       },
+    },
+  },
+  {
+    file: "images-en.pdf",
+    url: "scripts/make-images.ts",
+    license: "CC0-1.0",
+    attribution: "Made for this test suite",
+    purpose: "JPEG kept byte for byte, PNG with alpha (soft mask), 1-bit stencil mask",
+    derive: { kind: "images" },
+    expect: {
+      minImages: 3,
+      contains: ["Original JPEG photo", "Transparent label text", "Stencil mask scan"],
+      imageChecks: [
+        { mimeType: "image/jpeg", alpha: false },
+        { mimeType: "image/png", alpha: true },
+        { mimeType: "image/png", alpha: true, stencil: true },
+      ],
     },
   },
   {
@@ -337,8 +360,8 @@ export const CORPUS: CorpusEntry[] = [
     url: `${PYPDF}/023-cmyk-image/cmyk-image.pdf`,
     license: "CC-BY-SA-4.0",
     attribution: "py-pdf/sample-files contributors",
-    purpose: "CMYK image colour conversion",
-    expect: { minImages: 1 },
+    purpose: "CMYK JPEG: converted (not kept, browsers render CMYK JPEGs differently)",
+    expect: { minImages: 1, imageChecks: [{ mimeType: "image/png" }] },
   },
   {
     file: "grayscale-image.pdf",

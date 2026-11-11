@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "PROTOTYPE — in-browser PDF to PortableText conversion: text layer, images, worker-based OCR and language detection.",
+  "description": "PROTOTYPE \u2014 in-browser PDF to PortableText conversion: text layer, images, worker-based OCR and language detection.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -32,6 +32,7 @@
     "@portabletext/to-html": "^6.0.0",
     "fflate": "^0.8.3",
     "franc-all": "^7.2.0",
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.4.299",
     "tesseract-wasm": "^0.11.0"
   },

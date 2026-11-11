@@ -85,6 +85,10 @@ export type ImageBlock = {
     /** Axis-aligned bounds of the image on the page; may extend past the page edges. */
     bbox: PageBox;
     /**
+     * A 1-bit stencil mask (painted pixels black, the rest transparent).
+     */
+    stencil?: boolean;
+    /**
      * Only for images not drawn upright (rotated, flipped, skewed): matrix mapping the image's unit
      * square to page points; (0,1) is the image's top-left corner.
      */

@@ -1,9 +1,10 @@
 import {
   encodeImageAsset,
   type ImageFormat,
+  jpegAsset,
+  ocrInput,
   ocrScale,
   type StoredAsset,
-  scaleBitmap,
 } from "./assets.ts";
 import { createKeyGen } from "./keys.ts";
 import {
@@ -18,6 +19,7 @@ import {
 } from "./languages.ts";
 import type { OcrPool, OcrResult } from "./ocr-client.ts";
 import { type OcrWord, ocrWordsToBlocks } from "./ocr-layout.ts";
+import { findOriginalJpegs, matchOriginalJpeg } from "./original-images.ts";
 import {
   type ExtractedImage,
   extractImages,
@@ -131,7 +133,11 @@ export async function convertPdf(
   if (!auto && !fixedLanguage) throw new Error(`Unsupported language ${options.language}`);
   const fallback = languageByTesseract(options.fallbackLanguage ?? "") ?? DEFAULT_LANGUAGE;
 
-  const pdf = await openPdf(await file.arrayBuffer());
+  const data = await file.arrayBuffer();
+  // pdf.js may take over (detach) the buffer it is given: read originals from a copy.
+  const originals =
+    options.imageFormat === "original" ? await findOriginalJpegs(data.slice(0)) : undefined;
+  const pdf = await openPdf(data);
   const pageCount = Math.min(pdf.numPages, options.maxPages ?? Number.POSITIVE_INFINITY);
   const pages: PageInfo[] = [];
   const blocks: PortableTextBlock[] = [];
@@ -146,8 +152,7 @@ export async function convertPdf(
 
   async function recognize(img: PageImage, language: Language, page: number) {
     const scale = ocrScale(img.width, img.height);
-    const input =
-      scale === 1 ? await createImageBitmap(img.bitmap) : await scaleBitmap(img.bitmap, scale);
+    const input = ocrInput(img.bitmap, scale);
     log(
       `page ${page}: OCR ${img.width}×${img.height} image with ${language.tesseract} (×${scale})`,
     );
@@ -273,7 +278,16 @@ export async function convertPdf(
       const ocrJobs: Promise<void>[] = [];
       for (const img of images) {
         options.signal?.throwIfAborted();
-        const stored = await encodeImageAsset(img.bitmap, options.imageFormat);
+        const original =
+          originals && img.kind === "pdfImage" && !img.stencil
+            ? await matchOriginalJpeg(originals.get(n), img.bitmap)
+            : null;
+        const stored = original
+          ? await jpegAsset(original, img.width, img.height)
+          : await encodeImageAsset(
+              img.bitmap,
+              options.imageFormat === "original" ? "png" : options.imageFormat,
+            );
         const assetId = stored.meta._id;
         if (!assets.has(assetId)) assets.set(assetId, stored);
         const asset = { _type: "reference" as const, _ref: assetId };
@@ -289,6 +303,7 @@ export async function convertPdf(
             page: n,
             bbox: roundBox(img.bbox),
             ...(img.transform ? { transform: img.transform } : {}),
+            ...(img.stencil ? { stencil: true } : {}),
           },
         };
         const pageItem: PageItem = { box: img.bbox, blocks: [imageBlock] };

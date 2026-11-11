@@ -170,6 +170,8 @@ export type ExtractedImage = {
    * square to page points (top-left origin); (0,1) is the image's top-left corner.
    */
   transform?: number[];
+  /** A 1-bit stencil mask: painted pixels are black, the rest transparent. */
+  stencil?: boolean;
 };
 
 type Matrix = [number, number, number, number, number, number];
@@ -227,6 +229,43 @@ function toImageData(img: PdfjsImage): ImageData | null {
   return out;
 }
 
+/**
+ * Decodes a stencil mask. pdf.js has already applied the mask's /Decode:
+ * a 0 bit is painted (with the fill colour; black here), a 1 bit is not.
+ */
+async function maskToBitmap(img: PdfjsImage): Promise<ImageBitmap | null> {
+  const { width, height } = img;
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  if (img.bitmap) {
+    ctx.drawImage(img.bitmap, 0, 0);
+    ctx.globalCompositeOperation = "source-in";
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, width, height);
+  } else if (img.data && img.data.length === width * height * 4) {
+    // Large masks arrive already expanded to RGBA (painted = opaque black).
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(img.data), width, height), 0, 0);
+  } else if (img.data) {
+    const out = new ImageData(width, height);
+    const rowBytes = (width + 7) >> 3;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const bit = (img.data[y * rowBytes + (x >> 3)] >> (7 - (x & 7))) & 1;
+        if (bit === 0) out.data[(y * width + x) * 4 + 3] = 255;
+      }
+    }
+    ctx.putImageData(out, 0, 0);
+  } else {
+    return null;
+  }
+  // A mask that paints nothing shows nothing: not worth an image.
+  const alpha = ctx.getImageData(0, 0, width, height).data;
+  let painted = false;
+  for (let i = 3; i < alpha.length && !painted; i += 4) painted = alpha[i] > 0;
+  return painted ? canvas.transferToImageBitmap() : null;
+}
+
 async function toBitmap(img: PdfjsImage): Promise<ImageBitmap | null> {
   if (img.bitmap) {
     // pdf.js owns (and may close) its bitmap: take a copy.
@@ -273,7 +312,12 @@ export async function extractImages(
   const minSize = options.minSize ?? 24;
   const viewport = page.getViewport({ scale: 1 });
   const opList = await page.getOperatorList();
-  const placements: { objId: string | null; inline?: PdfjsImage; ctm: Matrix }[] = [];
+  const placements: {
+    objId: string | null;
+    inline?: PdfjsImage;
+    ctm: Matrix;
+    stencil?: boolean;
+  }[] = [];
   let ctm = viewport.transform.slice() as Matrix;
   const stack: Matrix[] = [];
 
@@ -305,18 +349,30 @@ export async function extractImages(
       case OPS.paintInlineImageXObject:
         placements.push({ objId: null, inline: args[0], ctm });
         break;
+      case OPS.paintImageMaskXObject:
+        // Stencil masks (1-bit scans are often stored this way) come as data.
+        placements.push({ objId: null, inline: args[0], ctm, stencil: true });
+        break;
     }
   }
 
   const images: ExtractedImage[] = [];
   let inlineCount = 0;
   for (const placement of placements) {
-    const img = placement.objId ? await getObject(page, placement.objId) : placement.inline;
+    let img = placement.objId ? await getObject(page, placement.objId) : placement.inline;
+    // pdf.js 6 passes a stencil mask's pixels as the id of an object in the page's store.
+    if (img && typeof (img.data as unknown) === "string") {
+      const stored = await getObject(page, img.data as unknown as string);
+      img = stored
+        ? { ...stored, width: stored.width ?? img.width, height: stored.height ?? img.height }
+        : null;
+    }
     if (!img || img.width < minSize || img.height < minSize) continue;
-    const bitmap = await toBitmap(img);
+    const bitmap = placement.stencil ? await maskToBitmap(img) : await toBitmap(img);
     if (!bitmap) continue;
     images.push({
-      objId: placement.objId ?? `inline-${inlineCount++}`,
+      objId: placement.objId ?? `${placement.stencil ? "mask" : "inline"}-${inlineCount++}`,
+      ...(placement.stencil ? { stencil: true } : {}),
       bitmap,
       width: bitmap.width,
       height: bitmap.height,
