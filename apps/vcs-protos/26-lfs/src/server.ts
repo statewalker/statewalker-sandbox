@@ -29,6 +29,11 @@ export interface LfsServerOptions {
   /** bounds on a batch request: bytes of its body (1 MiB) and objects (1000) */
   maxBatchBytes?: number;
   maxBatchObjects?: number;
+  /**
+   * X12's `ranged` transfer adapter, chosen when a client offers it: uploads as `PUT`s with
+   * `Content-Range`, `HEAD` reporting the held ranges (`x-lfs-held`). Default off.
+   */
+  ranged?: boolean;
   /** per batch: true, or a refusal (401: credentials needed; 403: not allowed) */
   authorize?: (
     req: Request,

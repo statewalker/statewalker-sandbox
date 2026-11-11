@@ -19,8 +19,10 @@ export interface LfsClientOptions {
   fetch?: typeof fetch;
   headers?: Record<string, string>;
   signal?: AbortSignal;
-  /** bytes sent or received in transfer bodies */
-  stats?: { bytes: number };
+  /** bytes sent or received in transfer bodies (and `requests`: transfer requests made) */
+  stats?: { bytes: number; requests?: number };
+  /** X12: offer the `ranged` adapter; uploads in parts of this many bytes (default 4 MiB) */
+  chunkSize?: number;
 }
 
 const LFS_JSON = "application/vnd.git-lfs+json";

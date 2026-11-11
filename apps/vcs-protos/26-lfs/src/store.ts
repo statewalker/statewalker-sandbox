@@ -29,6 +29,10 @@ export interface LfsStore {
   incomplete: {
     size(oid: string): Promise<number>;
     append(oid: string, source: AsyncIterable<Uint8Array>): Promise<number>;
+    /** the byte ranges held, [start, end) each, sorted and disjoint (X12) */
+    ranges(oid: string): Promise<[number, number][]>;
+    /** writes a part at `offset` (bytes that arrived stay if the source fails) (X12) */
+    write(oid: string, offset: number, source: AsyncIterable<Uint8Array>): Promise<number>;
     /** verifies what is held and makes it visible */
     complete(expect: Pointer): Promise<void>;
     remove(oid: string): Promise<void>;
@@ -170,6 +174,12 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
       },
       async remove(oid) {
         await files.remove(partsDir(oid)).catch(() => false);
+      },
+      async ranges(_oid) {
+        throw new Error("not implemented");
+      },
+      async write(_oid, _offset, _source) {
+        throw new Error("not implemented");
       },
       async exclusive(oid, fn) {
         const byOid = queues.get(files) ?? new Map<string, Promise<unknown>>();
