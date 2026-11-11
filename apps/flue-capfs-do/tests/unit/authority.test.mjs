@@ -393,7 +393,11 @@ test("file text is kept as UTF-8 bytes: NUL, non-ASCII and old TEXT rows read ba
   await store.cp("/p1/nul", "/p1/copy");
   assert.equal(await store.readFile("/p1/copy"), `${text}\u0000z`);
   assert.equal(
-    s.exec("SELECT typeof(data) AS t FROM fs_entries WHERE path = '/p1/nul'").toArray()[0].t,
+    s
+      .exec(
+        "SELECT typeof(b.data) AS t FROM fs_blocks b JOIN fs_entries e ON b.content = e.content WHERE e.path = '/p1/nul'",
+      )
+      .toArray()[0].t,
     "blob",
   );
   // A leading BOM is text: kept by read, append, copy and readFileBuffer.
@@ -406,7 +410,7 @@ test("file text is kept as UTF-8 bytes: NUL, non-ASCII and old TEXT rows read ba
   assert.equal((await store.readFileBuffer("/p1/bom2")).length, 6);
   // An old TEXT row holding NUL (workerd and celld keep it) reads whole on node:sqlite too.
   s.exec(
-    "UPDATE fs_entries SET data = CAST(? AS TEXT) WHERE path = '/p1/bom'",
+    "UPDATE fs_entries SET data = CAST(? AS TEXT), content = NULL, size = NULL WHERE path = '/p1/bom'",
     new TextEncoder().encode("a\u0000b").buffer,
   );
   assert.equal(
@@ -417,7 +421,10 @@ test("file text is kept as UTF-8 bytes: NUL, non-ASCII and old TEXT rows read ba
   await store.appendFile("/p1/bom", "c");
   assert.equal(await store.readFile("/p1/bom"), "a\u0000bc");
   // A row written as TEXT (before BLOBs) still reads, and is rewritten as a BLOB.
-  s.exec("UPDATE fs_entries SET data = ? WHERE path = '/p1/a'", "old é");
+  s.exec(
+    "UPDATE fs_entries SET data = ?, content = NULL, size = NULL WHERE path = '/p1/a'",
+    "old é",
+  );
   assert.equal(await store.readFile("/p1/a"), "old é");
   assert.equal((await store.stat("/p1/a")).size, 6);
   await store.appendFile("/p1/a", "!");
@@ -431,7 +438,9 @@ test("binary content is stored byte for byte as a BLOB, and writing it needs the
   assert.deepEqual([...(await gate().call("readFileBuffer", "/p1/bin"))], [...all]);
   assert.equal(
     s
-      .exec("SELECT typeof(data) AS t, length(data) AS n FROM fs_entries WHERE path = '/p1/bin'")
+      .exec(
+        "SELECT typeof(b.data) AS t FROM fs_blocks b JOIN fs_entries e ON b.content = e.content WHERE e.path = '/p1/bin'",
+      )
       .toArray()[0].t,
     "blob",
   );
@@ -458,21 +467,22 @@ test("binary content is stored byte for byte as a BLOB, and writing it needs the
   await assert.rejects(gate().call("writeFileBuffer", "/p1/s", "text"), (e) => e.code === "EINVAL");
 });
 
-test("a file is at most 2,000,000 bytes, text or binary (EFBIG)", async () => {
+test("whole-file calls move at most 16 MiB (EFBIG); larger files are streamed", async () => {
   const { gate, store } = await setup();
-  await gate().call("writeFileBuffer", "/p1/max", new Uint8Array(2_000_000));
+  const max = 16 * 1024 * 1024;
+  await gate().call("writeFileBuffer", "/p1/max", new Uint8Array(max));
   await assert.rejects(
-    gate().call("writeFileBuffer", "/p1/big", new Uint8Array(2_000_001)),
+    gate().call("writeFileBuffer", "/p1/big", new Uint8Array(max + 1)),
     (e) => e.code === "EFBIG",
   );
   await assert.rejects(
-    gate().call("writeFile", "/p1/big", "x".repeat(2_000_001)),
+    gate().call("writeFile", "/p1/big", "x".repeat(max + 1)),
     (e) => e.code === "EFBIG",
   );
-  await assert.rejects(
-    gate().call("appendFileBuffer", "/p1/max", new Uint8Array(1)),
-    (e) => e.code === "EFBIG",
-  );
-  assert.equal((await store.stat("/p1/max")).size, 2_000_000);
+  // Appending to a file at the limit works (its blocks are shared, not read whole); reading it
+  // whole then does not.
+  await gate().call("appendFileBuffer", "/p1/max", new Uint8Array(1));
+  assert.equal((await store.stat("/p1/max")).size, max + 1);
+  await assert.rejects(gate().call("readFileBuffer", "/p1/max"), (e) => e.code === "EFBIG");
   assert.equal(await store.exists("/p1/big"), false);
 });

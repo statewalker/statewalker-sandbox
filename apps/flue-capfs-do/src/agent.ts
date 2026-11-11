@@ -27,6 +27,7 @@ import { rgForFlue } from "./flue-compat.ts";
 import { attenuationBlock } from "./policy.ts";
 import { engineHost } from "./python/hosts.ts";
 import { PythonKernel, type PythonRunRequest } from "./python/kernel.ts";
+import { runStreamTask, type StreamTask } from "./stream-task.ts";
 import type { BundleRequest } from "./tools/bundle-request.ts";
 import { bundleInDeployment } from "./tools/bundler-client.ts";
 import { deploymentToolConfig } from "./tools/config.ts";
@@ -61,7 +62,9 @@ export type Task =
   | ({ kind: "python" } & PythonRunRequest)
   | ({ kind: "agent" } & AgentLoopRequest)
   /** A bash script in a Wasmer sandbox whose /workspace is the capability (cellb only). */
-  | ({ kind: "wasmer" } & WasmerRunRequest);
+  | ({ kind: "wasmer" } & WasmerRunRequest)
+  /** Streams a file through CapFilesApi (chunks over the capability). */
+  | ({ kind: "stream" } & StreamTask);
 
 interface WorkerLoader {
   get(
@@ -220,6 +223,8 @@ export class Agent extends DurableObject<AgentEnv> {
         return this.#python().run(cap, task);
       case "wasmer":
         return this.#wasmer().run(cap, task);
+      case "stream":
+        return runStreamTask(cap, task);
       case "agent":
         return runAgentLoop(cap, task, this.env, this.ctx.storage as never, {
           // Only a session needs the scope (one more call to the Workspace).

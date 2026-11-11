@@ -7,6 +7,8 @@
 export type FsErrorCode =
   | "EACCES"
   | "EFBIG"
+  | "EMFILE"
+  | "EBADF"
   | "ENOENT"
   | "EEXIST"
   | "EISDIR"

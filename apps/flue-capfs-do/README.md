@@ -124,6 +124,8 @@ Tasks:
 - `{kind: "agent", prompt, instructions?, maxTurns?, timeoutMs?, session?, cwd?}` runs an LLM
   agent whose tools are Flue's (read, write, edit, grep, glob, bash) over the capability (see
   [Agent loop](#agent-loop)).
+- `{kind: "stream", op: "write" | "read", path, …}` streams a file through `CapFilesApi` in chunks
+  over the capability (see [Streaming](#streaming-files-of-any-size)).
 - `{kind: "wasmer", script, packages?, cwd?, env?, timeoutMs?}` runs a bash script in a Wasmer
   sandbox whose `/workspace` is the capability (see [Wasmer](#wasmer)); `{kind: "agent", …,
   sandbox: "wasmer"}` runs Flue's tools on such a sandbox.
@@ -615,8 +617,8 @@ export default class extends WorkerEntrypoint {
 
 ### Binary files
 
-A file's content is a BLOB of bytes in the owner cell's SQLite (`fs_entries.data`), whatever it
-holds. Text is stored as its UTF-8 bytes (`writeFile`, `appendFile`); binary content as it is
+A file's content is bytes in the owner cell's SQLite, whatever it holds: BLOB blocks of at most
+1 MiB in `fs_blocks` (see [Streaming](#streaming-files-of-any-size)). Text is stored as its UTF-8 bytes (`writeFile`, `appendFile`); binary content as it is
 (`writeFileBuffer`, `appendFileBuffer`, which take a `Uint8Array`, another view, or an
 `ArrayBuffer`). `readFileBuffer` returns the stored bytes; `readFile` decodes them as UTF-8 (the
 invalid sequences of a binary file read as U+FFFD; the bytes themselves stay as they are).
@@ -632,8 +634,9 @@ Every writer sends bytes as bytes:
 - Flue's tools on Wasmer: `writeFile(Uint8Array)` and `readFileBuffer`.
 
 Limits and notes:
-- **Size:** a file is one BLOB, and SQLite-backed Durable Objects keep a BLOB under 2 MB, so the
-  store refuses larger files on every runtime (`EFBIG`, HTTP 413). Wasmer refuses them at the write.
+- **Size:** whole-file calls (`readFile`, `writeFileBuffer`, …) move at most 16 MiB in one
+  message (`EFBIG`, HTTP 413, beyond); larger files are streamed. Wasmer refuses larger files at
+  the write.
 - **Approved tool bundles:** the `node:fs` shim is inlined into every tool bundle, so bundles
   built after this change hash differently. Approve them again; bundles already approved still
   run (their shim writes text only).
@@ -641,6 +644,61 @@ Limits and notes:
   read there comes back with U+FFFD. Files under `/workspace` are synced as bytes.
 - **just-bash's `printf`** writes `\377` as the character U+00FF (UTF-8 `c3 bf`), as on just-bash's
   own in-memory file system; `cat`, `cp`, redirects of binary data and `base64 -d` are byte-exact.
+
+### Streaming files of any size
+
+The capability's FilesApi streams: `CapFilesApi` (`src/cap-files-api.ts`) is a
+`@statewalker/webrun-files` `FilesApi` over any capability, whose `read(path, {start, length})`
+yields chunks and whose `write(path, chunks)` takes an (async) iterable of them.
+
+**Why chunks with ids, not streams.** Measured from the Worker to the Workspace cell:
+
+| | cellb (Node) | wrangler (workerd) | celld |
+|---|---|---|---|
+| `ReadableStream` over Durable Object RPC | refused (transfer list) | works | refused ("RPC streams cannot cross isolate boundaries") |
+| a stream through an RpcTarget (the stub transport) | works (one process) | works | refused (stubs cannot cross isolates) |
+| a streamed `fetch()` body to the Durable Object | works | works | works |
+
+Streams over the capability's RPC are not portable, and the capability is an RPC object handed
+from cell to cell and into tool isolates, not an HTTP endpoint. (`@statewalker/webrun-files-http`
+could serve a FilesApi over the Durable Object's `fetch`, which streams everywhere, but it would
+need a second, token-checking HTTP surface beside the capability.) So content moves as chunks,
+each an ordinary capability call, through every transport unchanged: the stub, the token
+(`Workspace.fsCall`) and the tool isolates' `FILES` entrypoint.
+
+**Protocol** (`call(method, path, …)`, authorized like any call; `read` for reads, `write` for
+writes, missing parents at open and commit):
+
+| Call | Returns |
+|---|---|
+| `openRead(path, {start?, length?})` | `{id, size}`; the content as it is now (held until closed) |
+| `readChunk(path, id, maxBytes?)` | the next chunk (at most 1 MiB); an empty one at the end |
+| `closeRead(path, id)` | |
+| `openWrite(path, {append?})` | `{id}`; nothing changes yet |
+| `writeChunk(path, id, bytes)` | `{size}` so far |
+| `commitWrite(path, id)` | `{size}`; the file has the new content, at once |
+| `abortWrite(path, id)` | |
+
+- **Every chunk is a capability call:** authorized again, so a revocation or a mode switch stops
+  a stream between two chunks.
+- **A stream id belongs to the token that opened it, and to its path:** another capability, or
+  another path, gets `EBADF`.
+- **Streams are bounded:** a stream unused for 2 minutes is closed (an unfinished write leaves
+  nothing). At most 256 streams are open per Workspace cell; a file is at most 1 GiB.
+
+**Storage.** A file's content is BLOB blocks of at most 1 MiB in `fs_blocks`, each one row under
+the Durable Object row limit, under an immutable content id the entry points at. A rename or a copy
+shares the content id; an overwrite writes a new one and drops the old once no entry and no open
+reader refers to it. A write in progress fills a content id nobody sees until its commit. Blocks of
+writes that never committed are dropped when the cell starts. Rows from before blocks keep their
+content in `fs_entries.data` and are read from there. (`@statewalker/webrun-files-sqlite`'s
+`SqliteFilesApi` stores blocks the same way; this store keeps its own tables because every entry an
+operation touches is authorized against them.)
+
+The `stream` task (`{kind: "stream", op: "write", path, size, seed?, chunk?}` and
+`{kind: "stream", op: "read", path, start?, length?}`) streams a file through `CapFilesApi` with the
+run's capability and answers with the byte count, the chunk count and a SHA-256: the transfer,
+observable end to end on every runtime.
 
 ```
 src/worker.ts       gateway: routes, admin guard, opens the capability for stub transport

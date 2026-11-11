@@ -4,9 +4,11 @@
 // scripts/run-env.mjs starts a runtime (wrangler | cellb | celld) and runs this file.
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import { Biscuit, generateKeypair } from "@statewalker/webrun-biscuit";
+import { patternChunks } from "../src/stream-task.ts";
 import { bundleTodoTool } from "./fixtures/bundle-fixture.mjs";
 
 const TODO_TOOL = new URL("./fixtures/todo-tool.ts", import.meta.url);
@@ -154,6 +156,37 @@ export default class extends WorkerEntrypoint {
 
 for (const transport of TRANSPORTS) {
   describe(`transport=${transport}`, () => {
+    test("files of any size stream in chunks over the capability (CapFilesApi)", async () => {
+      const ws = freshWs();
+      await seed(ws, SEED);
+      const { token } = await session(ws, "alice", ["/proj"]);
+      const size = 5 * 1024 * 1024 + 123; // more than one row (2 MB) and five store blocks
+      const sha = (b) => createHash("sha256").update(b).digest("hex");
+      const all = Buffer.concat([...patternChunks(size, 7, 1 << 20)]);
+      const stream = (task, chain) =>
+        run(`st-${ws}`, ws, token, transport, { kind: "stream", ...task }, chain);
+      const w = await stream({ op: "write", path: "/proj/big.bin", size, seed: 7 });
+      assert.equal(w.ok, true, w.error);
+      assert.equal(w.value.result.sha256, sha(all));
+      const r = await stream({ op: "read", path: "/proj/big.bin" });
+      assert.equal(r.ok, true, r.error);
+      assert.equal(r.value.result.bytes, size);
+      assert.equal(r.value.result.sha256, sha(all));
+      assert.ok(r.value.result.chunks >= 6, "read in chunks");
+      const start = 3 * 1024 * 1024 - 5;
+      const range = await stream({ op: "read", path: "/proj/big.bin", start, length: 1_500_000 });
+      assert.equal(range.value.result.sha256, sha(all.subarray(start, start + 1_500_000)));
+      // Rights hold for streams: outside them, and a read-only chain, cannot write.
+      const out = await stream({ op: "write", path: "/p1/x.bin", size: 10 });
+      assert.equal(out.ok, false);
+      assert.equal(out.code, "EACCES");
+      const ro = await stream({ op: "write", path: "/proj/ro.bin", size: 10 }, [
+        { readOnly: true },
+      ]);
+      assert.equal(ro.ok, false);
+      assert.equal(ro.code, "EACCES");
+    });
+
     test("rights: only allowed branches exist for the agent; exact prefixes; '..' cannot escape", async () => {
       const ws = freshWs();
       await seed(ws, SEED);
