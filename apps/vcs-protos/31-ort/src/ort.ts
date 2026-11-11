@@ -96,6 +96,109 @@ function sortDirsNextToChildren(a: string, b: string): number {
   return c1 - c2;
 }
 
+/**
+ * A strmap/strintmap that iterates in git's hashmap order (hashmap.c): FNV-1 `strhash`, 64
+ * buckets growing 4× past 80% load, each bucket newest first. merge-ort walks deferred directories
+ * in this order, which decides the order of rename pairs found inside them.
+ */
+class GitStrMap<V> {
+  private table: { key: string; value: V; hash: number }[][] = Array.from({ length: 64 }, () => []);
+  private index = new Map<string, { key: string; value: V; hash: number }>();
+  get size() {
+    return this.index.size;
+  }
+  set(key: string, value: V) {
+    const known = this.index.get(key);
+    if (known) {
+      known.value = value;
+      return;
+    }
+    const e = { key, value, hash: strhash(key) };
+    this.index.set(key, e);
+    this.table[e.hash & (this.table.length - 1)]?.unshift(e);
+    if (this.index.size > Math.floor((this.table.length * 80) / 100)) {
+      const old = this.table;
+      this.table = Array.from({ length: old.length << 2 }, () => []);
+      for (const chain of old)
+        for (const x of chain) this.table[x.hash & (this.table.length - 1)]?.unshift(x);
+    }
+  }
+  *entries(): Generator<[string, V]> {
+    for (const chain of this.table) for (const e of chain) yield [e.key, e.value];
+  }
+  *keys(): Generator<string> {
+    for (const [k] of this.entries()) yield k;
+  }
+}
+const fnvEnc = new TextEncoder();
+function strhash(s: string): number {
+  let h = 0x811c9dc5;
+  for (const c of fnvEnc.encode(s)) h = (Math.imul(h, 0x01000193) ^ c) >>> 0;
+  return h;
+}
+
+/** `name_compare`: bytes, then length */
+function nameCompare(a: Uint8Array, b: Uint8Array): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return (a[i] as number) - (b[i] as number);
+  return a.length - b.length;
+}
+/** `check_entry_match`: 0 found, 1 keep looking (`a` may hide behind `b`), -1 absent */
+function checkEntryMatch(a: Uint8Array, b: Uint8Array): number {
+  const cmp = nameCompare(a, b);
+  if (!cmp) return 0;
+  if (cmp > 0) return 1;
+  if (a.length < b.length && a.every((c, i) => b[i] === c) && (b[a.length] as number) < 0x2f)
+    return 1;
+  return -1;
+}
+/**
+ * The names `traverse_trees` visits, in its order: the smallest head by `name_compare`, found in
+ * each tree at its head or just behind it (a directory `t` hides behind `t-2`), entries taken early
+ * skipped later.
+ */
+function traverseOrder(levels: Map<string, unknown>[]): string[] {
+  const lists = levels.map((l) => [...l.keys()].map((k) => ({ k, b: fnvEnc.encode(k) })));
+  const cursors = lists.map(() => ({ d: 0, skip: new Set<number>() }));
+  const out: string[] = [];
+  for (;;) {
+    const heads = cursors.map((t, i) => {
+      const list = lists[i] as { k: string; b: Uint8Array }[];
+      while (t.d < list.length && t.skip.has(t.d)) t.d++;
+      return t.d < list.length ? t.d : -1;
+    });
+    let first: { k: string; b: Uint8Array } | undefined;
+    heads.forEach((h, i) => {
+      if (h < 0) return;
+      const e = (lists[i] as { k: string; b: Uint8Array }[])[h] as { k: string; b: Uint8Array };
+      if (!first || nameCompare(e.b, first.b) < 0) first = e;
+    });
+    if (!first) return out;
+    const name = first;
+    out.push(name.k);
+    heads.forEach((h, i) => {
+      if (h < 0) return;
+      const list = lists[i] as { k: string; b: Uint8Array }[];
+      const t = cursors[i] as { d: number; skip: Set<number> };
+      let j = -1;
+      const m = checkEntryMatch(name.b, (list[h] as { b: Uint8Array }).b);
+      if (m === 0) j = h;
+      else if (m === 1)
+        for (let p = t.d; p < list.length; p++) {
+          const mm = checkEntryMatch(name.b, (list[p] as { b: Uint8Array }).b);
+          if (mm === -1) break;
+          if (mm === 0) {
+            j = p;
+            break;
+          }
+        }
+      if (j < 0) return;
+      if (t.d === j) t.d++;
+      else t.skip.add(j);
+    });
+  }
+}
+
 const dirOf = (path: string) => {
   const at = path.lastIndexOf("/");
   return at < 0 ? "" : path.slice(0, at);
@@ -111,7 +214,7 @@ class OrtMerge {
   relevant: Set<string>[] = [new Set(), new Set(), new Set()];
   cachedPairs: Map<string, string | null>[] = [new Map(), new Map(), new Map()];
   cachedTargetNames: Set<string>[] = [new Set(), new Set(), new Set()];
-  deferred: Map<string, number>[] = [new Map(), new Map(), new Map()];
+  deferred: GitStrMap<number>[] = [new GitStrMap(), new GitStrMap(), new GitStrMap()];
   trivialOkay = [true, true, true];
   targetDirs: Set<string>[] = [new Set(), new Set(), new Set()];
   dirRenameMask = 0;
@@ -130,7 +233,7 @@ class OrtMerge {
     this.messages = new Map();
     this.pairs = [[], [], []];
     this.relevant = [new Set(), new Set(), new Set()];
-    this.deferred = [new Map(), new Map(), new Map()];
+    this.deferred = [new GitStrMap(), new GitStrMap(), new GitStrMap()];
     this.trivialOkay = [true, true, true];
     this.targetDirs = [new Set(), new Set(), new Set()];
     this.dirRenameMask = 0;
@@ -158,7 +261,7 @@ class OrtMerge {
   /** traverse_trees over one directory of the three trees (the wrapper when dir_rename_mask asks) */
   async traverse(dir: string, trees: (string | undefined)[]) {
     const levels = await Promise.all(trees.map((t) => this.entries(t)));
-    const names = [...new Set(levels.flatMap((l) => [...l.keys()]))].sort(comparePaths);
+    const names = traverseOrder(levels);
     const rows = names.map((name) => levels.map((l) => l.get(name)));
     if (this.dirRenameMask !== 0 && this.dirRenameMask !== 7) {
       // traverse_trees_wrapper_callback: a file added on the side that kept the directory
@@ -301,9 +404,9 @@ class OrtMerge {
         }
       }
       this.trivialOkay[side] = okay;
-      const copy = this.deferred[side] as Map<string, number>;
-      this.deferred[side] = new Map();
-      for (const [path, mask] of copy) {
+      const copy = this.deferred[side] as GitStrMap<number>;
+      this.deferred[side] = new GitStrMap();
+      for (const [path, mask] of copy.entries()) {
         const ci = this.paths.get(path) as Conflict;
         if (okay && !this.targetDirs[side]?.has(path)) {
           this.resolveTrivialDirectoryMerge(ci, side);
@@ -319,7 +422,7 @@ class OrtMerge {
         this.dirRenameMask = mask;
         await this.traverse(path, trees);
       }
-      for (const path of (this.deferred[side] as Map<string, number>).keys())
+      for (const path of (this.deferred[side] as GitStrMap<number>).keys())
         this.resolveTrivialDirectoryMerge(this.paths.get(path) as Conflict, side);
       if (!okay || after) after = this.paths.size;
     }
@@ -328,11 +431,19 @@ class OrtMerge {
     } else if (this.redo === 2) this.redo = 0;
   }
 
+  /**
+   * resolve_trivial_directory_merge as newer git has it (2.56 checked): the matching sides leave
+   * the masks, and a file left from a file/directory conflict stays unresolved (it may be part of a
+   * rename). git 2.43 marks the entry clean, and then fails an assertion where this matters.
+   */
   resolveTrivialDirectoryMerge(ci: Conflict, side: 1 | 2) {
     ci.result = { ...ci.stages[side] };
     ci.isNull = ci.stages[side].oid === NULL_OID;
+    ci.dirmask &= ~ci.matchMask;
+    ci.filemask &= ~ci.matchMask;
     ci.matchMask = 0;
-    ci.clean = true;
+    ci.clean = !ci.dfConflict || ci.dirmask !== 0;
+    ci.dfConflict = false;
   }
 
   async collectMergeInfo(trees: (string | undefined)[]) {
@@ -408,12 +519,18 @@ class OrtMerge {
     }
     // use_cached_pairs
     for (const side of [1, 2] as const)
-      for (const [from, to] of this.cachedPairs[side] as Map<string, string | null>)
+      for (const [from, to] of this.cachedPairs[side] as Map<string, string | null>) {
+        // newer git: a cached rename whose target is gone or resolved is dropped
+        if (to) {
+          const mi = this.paths.get(to);
+          if (!mi || mi.clean) continue;
+        }
         this.pairs[side]?.push(
           to
             ? { status: "R", one: { path: from, v: none() }, two: { path: to, v: none() } }
             : { status: "D", one: { path: from, v: none() } },
         );
+      }
     const combined: FilePair[] = [];
     for (const side of [1, 2] as const)
       for (const p of this.pairs[side] as FilePair[])
@@ -643,15 +760,15 @@ class OrtMerge {
 
   async processEntries(): Promise<string> {
     const plist = [...this.paths.keys()].sort(sortDirsNextToChildren);
+    // write_completed_directory runs for every directory with entries below it, whatever the
+    // directory's own entry became (a rename source that is also a directory keeps its tree)
+    const hasEntries = new Set(plist.map(dirOf));
     for (let k = plist.length - 1; k >= 0; k--) {
       const path = plist[k] as string;
       const mi = this.paths.get(path) as Info;
+      if (hasEntries.has(path)) await this.completeDirectory(path, mi);
       if (mi.clean) this.record(path, mi);
-      else {
-        const ci = mi as Conflict;
-        if (ci.dirmask) await this.completeDirectory(path, ci);
-        await this.processEntry(path, ci);
-      }
+      else await this.processEntry(path, mi as Conflict);
     }
     return writeTree(this.repo, this.children.get("") ?? []);
   }

@@ -1,8 +1,8 @@
 # 31 — Can merge-ort's renames be reproduced exactly?
 
 Plan id **X13** (single diff and merge engine), slice **X13d: ort's rename conflicts**. Status:
-**answered — yes: a port that follows merge-ort's own structure matches `git merge-tree` on 3,321
-merges, 1,014 of them with renames**.
+**answered — yes: a port that follows merge-ort's own structure matches `git merge-tree` on 3,328
+merges, 1,021 of them with renames**.
 
 ## Question
 
@@ -129,6 +129,40 @@ collection groups (T1b, T1c, T1d, T4/T5).
 | D14 | `unique_path` suffixes counted from 1 | killed (T1c, T5) |
 | D15 | rename/rename(1to2) leaves the source unconflicted | killed (O2, O3) |
 | D16 | Binary rename/rename: both targets get ours' bytes | survived the corpora; killed by an O3 case added afterwards |
+| D17 | Directories completed only for unresolved entries | killed (O6) |
+| D18 | Names in byte order instead of `traverse_trees`' | killed (O6) |
+| D19 | Deferred directories in insertion order instead of hashmap order | killed (O6) |
+
+### Review (#99)
+
+A separate review compared the port with merge-ort.c and ran 6,500 differential merges from its own
+generators:
+- chains and swaps;
+- rename/rename 1to1 and 1to2;
+- rename/add at the other side's target;
+- type changes, symlinks, executables and binary files;
+- `path~branch` names;
+- duplicate content and many renames;
+- file/directory flips with and without kept directories;
+- unrelated histories.
+
+| Finding | Fix |
+|---|---|
+| A rename source that is also a directory on one side resolves clean, and its directory's tree was never written. A file moved into a directory of its own name vanished, on a clean merge | `write_completed_directory` runs for every directory with entries below it, whatever its own entry became; O6 |
+| The order of names differed from `traverse_trees`: git visits `a-b` before directory `a` when every tree has `a-b` at its head. That order is the order of rename pairs, so exact and matrix tie-breaks went the other way | `traverse_trees`' walk, with `name_compare` and `check_entry_match`'s look-ahead; O6 |
+| Deferred directories were walked in insertion order; git walks them in its hashmap's order (FNV-1, 64 buckets, newest first), which orders the pairs found inside them | A map that iterates in git's hashmap order; O6 |
+| Newer git (2.56) strips the matched sides in `resolve_trivial_directory_merge` and keeps a file left from a file/directory conflict unresolved; `use_cached_pairs` skips renames whose target is gone or resolved. On the redo, a rename into a file that replaced a directory lost an edit (git 2.43 asserts there) | Newer git's rules; O6's case runs on git that doesn't crash (CI) and is skipped on 2.43 |
+| No test combined renames with file/directory changes, cached renames, or duplicate content | O6 |
+
+After the fixes, the review's generators match git except where a directory disappears and git
+reports directory renames, which is X13e. Rerun at 500 merges each:
+- kept directories with duplicates: 0 mismatches;
+- many renames: 0 mismatches;
+- file/directory flips: 8 mismatches, all directory renames.
+
+Not ported: git cancels the redo when the rename limit is hit, which needs more than 7,000²
+candidate pairs. The matrix is about 15 times slower than git's, with no quadratic step beyond git's
+own.
 
 ## Promotion grades
 
@@ -141,9 +175,7 @@ collection groups (T1b, T1c, T1d, T4/T5).
 1. **X13e**: directory renames (`get_provisional_directory_renames`, implicit renames, the
    basename guesses of `idx_possible_rename` from removed directories) and criss-cross merges
    (`merge_ort_internal`'s recursive virtual base, with `call_depth` markers).
-2. The order of `handle_deferred_entries`: git walks deferred directories in its hashmap's order. The
-   port uses insertion order. This can only change the order of rename pairs when relevant sources
-   lie inside deferred directories, and no corpus case has shown a difference.
+2. The redo is not cancelled at the rename limit (more than 7,000² candidate pairs).
 3. Submodules, `-X` options, the rename limit's warning, and remembering renames across a rebase.
 4. **Large trees**: the port reads only the directories it needs, as ort does. It still writes a tree
    object for every completed directory, which is correct but slower than git's in-memory
