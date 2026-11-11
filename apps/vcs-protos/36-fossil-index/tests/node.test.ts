@@ -225,6 +225,58 @@ describe("F3 index rows in the ref batch's transaction", () => {
     expect((await repo.refs.batch([{ name: `${name}-copy`, old: null, new: oid }])).ok).toBe(true);
     expect(await count(db)).toBe(before);
   });
+
+  it("concurrent batches: on one handle each indexes its own commits; on two handles none twice", async () => {
+    // three unrelated histories: rows written for the wrong batch leave commits out
+    const d = tmp("x9c-");
+    git(d, ["init", "-q", "-b", "main"]);
+    for (const branch of ["one", "two", "three"]) {
+      git(d, ["checkout", "-q", "--orphan", branch]);
+      git(d, ["rm", "-rq", "--cached", "--ignore-unmatch", "."]);
+      for (let i = 0; i < 4; i++) {
+        write(d, `${branch}.txt`, `${branch} ${i}\n`);
+        git(d, ["add", `${branch}.txt`]);
+        git(d, ["commit", "-qm", `${branch} ${i}`]);
+      }
+    }
+    const tips = git(d, ["for-each-ref", "--format=%(refname) %(objectname)"])
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => l.split(" ") as [string, string]);
+    const all = Number(git(d, ["rev-list", "--all", "--count"]).trim());
+    const pack = execFileSync("git", ["pack-objects", "--all", "--stdout", "-q"], {
+      cwd: d,
+      input: "",
+    });
+    const install = async (repo: {
+      objects: { installPack: (s: AsyncIterable<Uint8Array>) => Promise<unknown> };
+    }) =>
+      repo.objects.installPack(
+        (async function* () {
+          yield new Uint8Array(pack);
+        })(),
+      );
+    // one handle, the refs in separate batches at once
+    const db1 = await newNodeSqliteDb();
+    const one = await indexedSqlRepository(db1);
+    await install(one.repo);
+    const r1 = await Promise.all(
+      tips.map(([name, oid]) => one.repo.refs.batch([{ name, old: null, new: oid }])),
+    );
+    expect(r1.every((r) => r.ok)).toBe(true);
+    expect(await count(db1)).toBe(all);
+    // two handles on one database, the same refs at once (each under its own name)
+    const db2 = await newNodeSqliteDb();
+    const a = await indexedSqlRepository(db2);
+    const b = await indexedSqlRepository(db2);
+    await install(a.repo);
+    const r2 = await Promise.all([
+      ...tips.map(([name, oid]) => a.repo.refs.batch([{ name: `${name}-a`, old: null, new: oid }])),
+      ...tips.map(([name, oid]) => b.repo.refs.batch([{ name: `${name}-b`, old: null, new: oid }])),
+    ]);
+    expect(r2.every((r) => r.ok)).toBe(true);
+    expect(await count(db2)).toBe(all);
+  });
 });
 
 describe("F4 speed: 100,000 commits over 50,000 files", () => {
