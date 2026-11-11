@@ -58,13 +58,14 @@ function messyBare() {
   const bare = join(tmp(), "repo.git");
   git(tmpdir(), ["clone", "-q", "--bare", "--no-local", src, bare]);
   // the side branch is dropped: its commits, packed, become unreachable
+  const sideTip = rev(bare, "refs/heads/side");
   git(bare, ["update-ref", "-d", "refs/heads/side"]);
   // main rewound by two commits
   git(bare, ["update-ref", "refs/heads/main", "refs/heads/main~2"]);
   // loose dangling objects
   for (let i = 0; i < 5; i++) hashBlob(bare, `dangling blob ${i}\n`);
   danglingCommit(bare, "dangling commit");
-  return { src, bare };
+  return { src, bare, sideTip };
 }
 
 describe("R1 the result native git gc --prune=now keeps", () => {
@@ -89,19 +90,22 @@ describe("R1 the result native git gc --prune=now keeps", () => {
 
 describe("R2 the grace period", () => {
   it("a first run records and keeps the unreachable; a run past the grace deletes them, not one made reachable again", async () => {
-    const { bare } = messyBare();
+    const { bare, sideTip } = messyBare();
     const dangling = hashBlob(bare, "watched dangling\n");
     const back = danglingCommit(bare, "comes back");
     const t0 = Date.now();
     await gc(await openBare(bare), { graceMs: 10_000, now: () => t0 });
     expect(objectsOf(bare)).toContain(dangling);
     expect(objectsOf(bare)).toContain(back);
+    expect(objectsOf(bare)).toContain(sideTip); // packed and unreachable, still young: its pack stays
     git(bare, ["update-ref", "refs/heads/back", back]);
     await gc(await openBare(bare), { graceMs: 10_000, now: () => t0 + 5_000 });
     expect(objectsOf(bare)).toContain(dangling); // not yet: 5 s of 10
     await gc(await openBare(bare), { graceMs: 10_000, now: () => t0 + 11_000 });
     expect(objectsOf(bare)).not.toContain(dangling);
+    expect(objectsOf(bare)).not.toContain(sideTip);
     expect(objectsOf(bare)).toContain(back);
+    expect(packsOf(bare).length).toBe(1);
     git(bare, ["fsck", "--strict"]);
   }, 120_000);
 });

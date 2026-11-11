@@ -84,6 +84,21 @@ export async function composedStore(
       await rescan();
       return (await packs.get(oid, o)) as StoredObject | undefined;
     },
+    gc: {
+      files: packFiles,
+      dir: `${objectsDir.replace(/\/objects$/, "")}/gc`,
+      packs: () => packs.readers().map((r) => ({ packId: r.packId, ids: () => r.ids() })),
+      loose: () => loose.list(),
+      removeLoose: (oid) => loose.remove(oid),
+      async removePacks(packIds) {
+        // idx first: a pack without its idx is ignored by readers (X6r), never half-read
+        for (const id of packIds) {
+          await packFiles.remove(`${packDir}/pack-${id}.idx`).catch(() => false);
+          await packFiles.remove(`${packDir}/pack-${id}.pack`).catch(() => false);
+        }
+        await reopenAfterInstall();
+      },
+    },
     async packedEntry(oid) {
       return packs.entry(oid);
     },

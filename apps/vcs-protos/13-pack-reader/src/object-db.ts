@@ -31,6 +31,8 @@ export interface ObjectDatabase {
   entry(oid: string): Promise<PackedEntry | undefined>;
   /** Packs that could not be opened (corrupt idx, mismatched pack…), skipped as git does. */
   readonly skipped: { pack: string; error: string }[];
+  /** The installed packs, in lookup order (gc's inventory). */
+  readers(): readonly PackReader[];
 }
 
 const OID = /^[0-9a-f]{40}$/;
@@ -57,6 +59,7 @@ export async function openObjectDatabase(
   };
   const db: ObjectDatabase = {
     skipped: [],
+    readers: () => packs,
     async get(oid, o) {
       if (!OID.test(oid)) return undefined;
       // A copy that fails (a corrupt entry, a bad delta) is passed over for the next pack, then
