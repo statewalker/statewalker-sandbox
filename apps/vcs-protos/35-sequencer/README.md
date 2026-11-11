@@ -29,15 +29,24 @@ identities.
 | S5 | **Rebase** (`git rebase <upstream>`, merge backend, linear branch). Clean: the same commits as git, unchanged picks fast-forwarded, commits that become empty dropped. Stopped: the same `rebase-merge/` files git reads (`head-name`, `onto`, `orig-head`, `git-rebase-todo`, `done`, `msgnum`, `end`, `author-script`, `message`, `stopped-sha`, `interactive`, `drop_redundant_commits`, `no-reschedule-failed-exec`), `REBASE_HEAD`, `MERGE_MSG`, index and files. Native `git rebase --continue` finishes ours, and our `continueOp` finishes native's, with the same final commits. `--abort` both ways restores the branch. |
 | S6 | **Resume.** The S5 flow on an in-memory FilesApi: each step runs on a freshly opened repository over the same files (a reload), with the same final commit ids as git. |
 | S7 | **Portable.** `src/` has no `node:` imports. |
+| S9 | Added after review: untracked files a merge, cherry-pick or rebase would overwrite are refused as git refuses them, with the same state left; a branch with merge commits is refused; merge messages for a remote-tracking branch, a commit id, a lightweight tag, a detached HEAD and a short name; messages without a final newline or with CRLF (conflict list, `rebase-merge/message`, todo subjects); `rewritten-list`; X5's ref contract on `filesRefFiles`, directly and through `subFiles`. |
 | S8 | Added after the mutation check: a rebased commit that becomes empty is dropped; a directory a merge empties is removed; files a merge does not change are not rewritten and keep their index stat data. (The corpus also got side commits with their own author and date.) |
 
 ## Scope
 
-- The working tree must be clean before an operation starts (git refuses local changes that a
-  merge would overwrite; we refuse any).
-- Matching git 2.43 and newer: X13's merge probes, plus one new one (`legacyAutoMerge`): git 2.43's
-  merge-ort writes `AUTO_MERGE` after every merge that updates the worktree, so a clean cherry-pick
-  or rebase leaves it behind.
+- Tracked files must be unchanged before an operation starts. git refuses only the local changes
+  the operation would overwrite; we refuse any (stricter). Untracked files the operation would
+  overwrite are refused, as git refuses them (`verify_absent`).
+- Rebase of a linear branch: a branch with merge commits is refused (git replays the merged-in
+  commits too, in `rev-list --topo-order` order; not ported). Annotated tags are not merged.
+- File modes follow the index with `core.fileMode=false` and `core.symlinks=false`: a symlink is
+  written as a file holding its target, and no executable bit is set.
+- `rebase-merge/patch` and `git-rebase-todo.backup` (shown to the user, not read back) are not
+  written.
+- Matching git 2.43 and newer: X13's merge probes, plus two new ones. `legacyAutoMerge`: merge-ort
+  writes `AUTO_MERGE` after every merge that updates the worktree, so a clean cherry-pick or rebase
+  leaves it behind. `legacyRebaseHead`: git 2.43 removes `REBASE_HEAD` before each pick (a rebase
+  that stopped on its last pick leaves it), newer git once per run.
 - Out of scope: `--rebase-merges`, interactive todo editing, `--onto`, autostash, dropping commits
   already upstream by patch id (the corpus has none), octopus merges, `rerere`, hooks, signing.
 
@@ -45,7 +54,7 @@ identities.
 
 Yes. `src/sequencer.ts` (about 620 lines) and `src/files-adapters.ts` (a FilesApi seen from a
 subdirectory, and X5's `RefFiles` over any FilesApi, about 100 lines) implement it on X13's merges
-and X14's index. All 12 tests pass:
+and X14's index. All 17 tests pass:
 
 - **S1, merge.** 120 random histories (clean merges and conflicts) and three hand-made cases
   (fast-forward, already up to date, a merge into another branch): every state file, index entry,
@@ -60,14 +69,17 @@ and X14's index. All 12 tests pass:
 - **S6, resume.** Rebases on an in-memory FilesApi, each step on a freshly opened repository: the
   same final commits as git.
 - **S8.** Empty picks dropped, emptied directories removed, unchanged files left alone.
+- **S9, review cases.** Untracked files, branches with merges, merge message wording, messages
+  without a final newline, `rewritten-list`, and X5's ref contract on `filesRefFiles`.
 
 **What git keeps, and we write the same way:**
 - **Merge** (builtin/merge.c): `ORIG_HEAD` always (also when already up to date); on a conflict
-  `MERGE_HEAD`, `MERGE_MODE` (empty), `MERGE_MSG` (`Merge branch 'x'`, with ` into y` unless y is
-  main or master, then `# Conflicts:` and each conflicted path once) and `AUTO_MERGE` (the merged
+  `MERGE_HEAD`, `MERGE_MODE` (empty), `MERGE_MSG` (fmt-merge-msg's title: `Merge branch 'x'`,
+  `remote-tracking branch`, `tag` or `commit '<id>'`, with ` into y` unless y is main or master,
+  ` into HEAD` when detached; then `# Conflicts:` and each conflicted path once) and `AUTO_MERGE` (the merged
   tree with markers). The index has the conflict stages, the working tree the merged files.
 - **Cherry-pick** (sequencer.c `do_pick_commit`): `CHERRY_PICK_HEAD`, `MERGE_MSG` (the commit's
-  message and the conflict list), `AUTO_MERGE`; markers labelled `HEAD` and `<abbrev> (<subject>)`.
+  message as it is, then the conflict list: no blank line when the message lacks a final newline), `AUTO_MERGE`; markers labelled `HEAD` and `<abbrev> (<subject>)`.
   No `ORIG_HEAD`.
 - **Committing** (`git commit --no-edit`): the message is `MERGE_MSG` with whitespace cleaned and
   comments kept; a merge has both parents, a cherry-pick keeps the picked commit's author and
@@ -75,7 +87,8 @@ and X14's index. All 12 tests pass:
 - **Rebase** (merge backend): `rebase-merge/` holds `head-name`, `onto`, `orig-head`, the todo list
   and `done` (`pick <id> <subject>`), `msgnum`, `end`, and three empty marker files. A stop adds
   `author-script` (shell-quoted, `@<seconds> <tz>` date), `message` (the message and a blank line),
-  `stopped-sha`, `REBASE_HEAD`, `MERGE_MSG` and `AUTO_MERGE`. A pick whose parent is HEAD is
+  `stopped-sha`, `REBASE_HEAD`, `MERGE_MSG` and `AUTO_MERGE`; each committed pick adds
+  `<old> <new>` to `rewritten-list`. A pick whose parent is HEAD is
   fast-forwarded; a pick that becomes empty is dropped. `REBASE_HEAD` goes with the next pick, so a
   rebase that stopped on its last pick leaves it behind, as git does.
 - **Abort**: a reset to HEAD (merge) or to `orig-head` with HEAD reattached (rebase); files the
@@ -83,7 +96,8 @@ and X14's index. All 12 tests pass:
 
 **Resume.** No step keeps anything in memory: each reads HEAD, the index and the state files, so a
 page reload or a Durable Object's recreation continues where the files say. On a FilesApi, refs use
-`filesRefFiles` (one writer at a time; X2's adapters where several writers race).
+`filesRefFiles`, whose changes go through one queue per instance (exclusive within a process;
+X2's adapters where several processes or tabs race).
 
 ### Mutation check
 
@@ -121,3 +135,18 @@ page reload or a Durable Object's recreation continues where the files say. On a
 3. Reflog messages as git writes them (`rebase (pick): …`, `merge side: Merge made by …`).
 4. Checking only the paths an operation touches for local changes (git's rule), instead of
    refusing any change.
+5. Rebasing branches with merges (`rev-list --topo-order --no-merges`), merging annotated tags
+   (fmt-merge-msg's tag message), symlinks and executable bits where the platform has them.
+
+### Review
+
+| Finding | Fix |
+|---|---|
+| Untracked files overwritten (a fast-forward, a cherry-pick, a rebase's checkout) | refused before anything changes, as `verify_absent` (S9) |
+| Rebase of a branch with merges silently lost the merged-in commits | refused (S9); porting git's topo order is an open thread |
+| `MERGE_MSG` wording for remote-tracking branches, commit ids, tags, detached HEAD; short names unresolved | fmt-merge-msg's titles, dwim-style resolution; annotated tags refused (S9) |
+| A blank line too many before `# Conflicts:` for messages without a final newline | the list appended to the message as it is; `rebase-merge/message` and todo subjects likewise (S9) |
+| `filesRefFiles` lost updates under concurrent batches in one process | one queue per instance; X5's contract passes (S9) |
+| git 2.56 removes `REBASE_HEAD` once per run, not per pick | `legacyRebaseHead` probe (S5 runs with it) |
+| `rewritten-list` not written | written (compared in S5) |
+| Modes, `patch`, `git-rebase-todo.backup`; tracked-file check stricter than git | documented in the scope |

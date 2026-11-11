@@ -38,11 +38,15 @@ export interface Session {
   /** merge options for the git version being matched (X13's probes) */
   mergeOptions?: Partial<TreeMergeOptions>;
   /**
-   * git 2.43's merge-ort writes AUTO_MERGE after every merge that updates the worktree, and a
-   * clean cherry-pick (or rebase pick) leaves it behind
+   * merge-ort writes AUTO_MERGE after every merge that updates the worktree (2.43 and 2.56 alike),
+   * so a clean cherry-pick (or rebase pick) leaves it behind; a probe tells
    */
   legacyAutoMerge?: boolean;
-  /** (stub) */
+  /**
+   * git 2.43's sequencer removes REBASE_HEAD and AUTO_MERGE before each pick, so a rebase that
+   * stopped on its last pick leaves REBASE_HEAD behind; newer git (2.56) removes them once at the
+   * start of each run
+   */
   legacyRebaseHead?: boolean;
 }
 export interface OpResult {
@@ -195,6 +199,18 @@ async function checkout(
     indexed.add(e.path);
     if (e.stage === 0) kept.set(e.path, e);
   }
+  // verify_absent: a file the operation would create must not be there untracked
+  if (!reset)
+    for (const path of next.keys()) {
+      if (old.has(path) || indexed.has(path)) continue;
+      const st = await s.wt.files.stats(`/${path}`);
+      if (!st) continue;
+      if (st.kind === "file")
+        throw new Error(`untracked working tree file would be overwritten: ${path}`);
+      for await (const f of s.wt.files.list(`/${path}`, { recursive: true }))
+        if (f.kind === "file" && !old.has(f.path.replace(/^\//, "")))
+          throw new Error(`untracked working tree file would be removed: ${f.path}`);
+    }
   // a reset also drops what the index holds beyond `from` (a stopped merge's files)
   const gone = new Set([...old.keys(), ...(reset ? indexed : [])]);
   for (const path of gone)
@@ -267,10 +283,45 @@ async function head(s: Session): Promise<{ oid: string; branch?: string }> {
 async function treeOf(s: Session, commit: string): Promise<string> {
   return (await readCommit(s.repo, commit)).tree;
 }
+interface Rev {
+  oid: string;
+  /** the full ref name, when the revision named one */
+  ref?: string;
+}
+/** a revision as git's dwim_ref reads it: a ref, a short name, or a full commit id */
+async function resolveRev(s: Session, name: string): Promise<Rev> {
+  const candidates = name.startsWith("refs/")
+    ? [name]
+    : [name, `refs/${name}`, `refs/tags/${name}`, `refs/heads/${name}`, `refs/remotes/${name}`];
+  for (const ref of candidates) {
+    if (ref === name && !name.startsWith("refs/") && name !== "HEAD") continue;
+    const oid = await s.repo.refs.resolve(ref);
+    if (!oid) continue;
+    const o = await s.repo.objects.get(oid);
+    if (o) {
+      await o.content[Symbol.asyncIterator]().return?.();
+      if (o.type === "tag") throw new Error(`${name}: merging annotated tags is not handled`);
+    }
+    return { oid, ref };
+  }
+  if (/^[0-9a-f]{40}$/.test(name) && (await s.repo.objects.has(name))) return { oid: name };
+  throw new Error(`${name}: unknown revision`);
+}
 async function mustResolve(s: Session, name: string): Promise<string> {
-  const oid = (await s.repo.refs.resolve(name)) ?? (/^[0-9a-f]{40}$/.test(name) ? name : undefined);
-  if (!oid) throw new Error(`${name}: unknown revision`);
-  return oid;
+  return (await resolveRev(s, name)).oid;
+}
+
+/** fmt-merge-msg's title: what was merged, and ` into <branch>` unless main/master */
+function mergeTitle(name: string, rev: Rev, branch: string | undefined): string {
+  const what = rev.ref?.startsWith("refs/heads/")
+    ? `branch '${rev.ref.slice(11)}'`
+    : rev.ref?.startsWith("refs/remotes/")
+      ? `remote-tracking branch '${rev.ref.slice(13)}'`
+      : rev.ref?.startsWith("refs/tags/")
+        ? `tag '${rev.ref.slice(10)}'`
+        : `commit '${name}'`;
+  const into = branch ? branch.replace(/^refs\/heads\//, "") : "HEAD";
+  return `Merge ${what}${into !== "main" && into !== "master" ? ` into ${into}` : ""}\n`;
 }
 async function moveHead(s: Session, from: string, to: string, detach = false) {
   // detaching replaces HEAD itself, whose old value may be a symbolic ref: no id to compare
@@ -314,7 +365,6 @@ function conflictList(conflicts: ConflictEntry[]): string {
   );
   return `\n# Conflicts:\n${paths.map((p) => `#\t${p}\n`).join("")}`;
 }
-const withEol = (m: string) => (m.endsWith("\n") ? m : `${m}\n`);
 
 /** strbuf_stripspace: trailing spaces, runs of blank lines, leading and trailing blank lines */
 function stripspace(message: string, stripComments: boolean): string {
@@ -343,7 +393,8 @@ function mergeOpts(s: Session, ours: string, theirs: string): TreeMergeOptions {
 /** `git merge <branch>` */
 export async function merge(s: Session, ref: string): Promise<OpResult> {
   const h = await head(s);
-  const theirs = await mustResolve(s, ref);
+  const rev = await resolveRev(s, ref);
+  const theirs = rev.oid;
   const headTree = await treeOf(s, h.oid);
   await requireClean(s, headTree);
   const bases = await mergeBases(s.repo, h.oid, theirs);
@@ -355,9 +406,8 @@ export async function merge(s: Session, ref: string): Promise<OpResult> {
     await moveHead(s, h.oid, theirs);
     return { status: "fast-forward", commit: theirs };
   }
-  const name = ref.replace(/^refs\/(heads|remotes)\//, "");
-  const into = h.branch?.replace(/^refs\/heads\//, "");
-  const message = `Merge branch '${name}'${into && into !== "main" && into !== "master" ? ` into ${into}` : ""}\n`;
+  const name = ref.replace(/^refs\/heads\//, "");
+  const message = mergeTitle(name, rev, h.branch);
   const r = await mergeCommits(s.repo, h.oid, theirs, mergeOpts(s, "HEAD", name));
   await checkout(s, headTree, r.tree, r.clean ? [] : r.conflicts);
   if (r.clean) {
@@ -377,6 +427,7 @@ interface Picked {
   status: "committed" | "dropped" | "conflict";
   conflicts?: ConflictEntry[];
   tree?: string;
+  commit?: string;
 }
 
 /**
@@ -402,19 +453,21 @@ async function pickOnto(s: Session, pick: string, rebasing: boolean): Promise<Pi
   if (!r.clean) return { status: "conflict", conflicts: r.conflicts, tree: r.tree };
   if (s.legacyAutoMerge) await writeText(s.git, "/AUTO_MERGE", `${r.tree}\n`);
   if (rebasing && r.tree === headTree && c.tree !== baseTree) return { status: "dropped" };
-  await newCommit(s, r.tree, [h.oid], c.message, c.author);
-  return { status: "committed" };
+  const commit = await newCommit(s, r.tree, [h.oid], c.message, c.author);
+  return { status: "committed", commit };
 }
 
 /** `git cherry-pick <commit>` */
-export async function cherryPick(s: Session, commit: string): Promise<OpResult> {
+export async function cherryPick(s: Session, revision: string): Promise<OpResult> {
+  const commit = await mustResolve(s, revision);
   const h = await head(s);
   await requireClean(s, await treeOf(s, h.oid));
   const r = await pickOnto(s, commit, false);
   if (r.status !== "conflict") return { status: "clean", commit: (await head(s)).oid };
   const c = await readCommit(s.repo, commit);
   await writeText(s.git, "/CHERRY_PICK_HEAD", `${commit}\n`);
-  await writeText(s.git, "/MERGE_MSG", withEol(c.message) + conflictList(r.conflicts ?? []));
+  // append_conflicts_hint: the list goes right after the message as it is
+  await writeText(s.git, "/MERGE_MSG", c.message + conflictList(r.conflicts ?? []));
   await writeText(s.git, "/AUTO_MERGE", `${r.tree}\n`);
   return { status: "conflict" };
 }
@@ -509,7 +562,7 @@ function parseAuthorScript(text: string): Person {
   };
 }
 const todoLine = async (s: Session, oid: string) =>
-  `pick ${oid} ${subject((await readCommit(s.repo, oid)).message)}\n`;
+  `pick ${oid} ${subject((await readCommit(s.repo, oid)).message).replace(/\s+$/, "")}\n`;
 function parseTodo(text: string): string[] {
   const out: string[] = [];
   for (const line of text.split("\n")) {
@@ -519,7 +572,7 @@ function parseTodo(text: string): string[] {
   return out;
 }
 
-/** the commits of `upstream..head` (first parents, oldest first; merges are skipped) */
+/** the commits of `upstream..head`, oldest first (a linear branch) */
 async function rebaseList(s: Session, upstream: string, tip: string): Promise<string[]> {
   const upstreamSide = new Set<string>();
   const stack = [upstream];
@@ -532,7 +585,10 @@ async function rebaseList(s: Session, upstream: string, tip: string): Promise<st
   const out: string[] = [];
   for (let c: string | undefined = tip; c && !upstreamSide.has(c); ) {
     const data = await readCommit(s.repo, c);
-    if (data.parents.length < 2) out.push(c);
+    // git replays the merged-in side's commits too (rev-list --topo-order --no-merges): not ported
+    if (data.parents.length > 1)
+      throw new Error(`rebase: ${c} is a merge commit; branches with merges are not handled`);
+    out.push(c);
     c = data.parents[0];
   }
   return out.reverse();
@@ -548,6 +604,7 @@ export async function rebase(s: Session, upstream: string): Promise<OpResult> {
   const bases = await mergeBases(s.repo, h.oid, onto);
   if (bases.includes(onto)) return { status: "up-to-date" };
   const todo = await rebaseList(s, onto, h.oid);
+  await checkout(s, headTree, await treeOf(s, onto)); // refuses before any state is written
   await writeText(s.git, "/ORIG_HEAD", `${h.oid}\n`);
   await writeText(s.git, `${RM}/head-name`, `${h.branch}\n`);
   await writeText(s.git, `${RM}/onto`, `${onto}\n`);
@@ -559,13 +616,19 @@ export async function rebase(s: Session, upstream: string): Promise<OpResult> {
   for (const c of todo) lines += await todoLine(s, c);
   await writeText(s.git, `${RM}/git-rebase-todo`, lines);
   await writeText(s.git, `${RM}/end`, `${todo.length}\n`);
-  await checkout(s, headTree, await treeOf(s, onto));
   await moveHead(s, h.oid, onto, true);
   return runTodo(s);
 }
 
+/** rewritten-list: each picked commit and its copy, for post-rewrite and notes */
+async function rewritten(s: Session, from: string, to: string) {
+  const old = (await readText(s.git, `${RM}/rewritten-list`)) ?? "";
+  await writeText(s.git, `${RM}/rewritten-list`, `${old}${from} ${to}\n`);
+}
+
 /** pick the todo list's commits until it is empty (done) or a pick conflicts (stopped) */
 async function runTodo(s: Session): Promise<OpResult> {
+  if (!s.legacyRebaseHead) await removeFiles(s.git, ["/REBASE_HEAD", "/AUTO_MERGE"]);
   for (;;) {
     const todo = parseTodo((await readText(s.git, `${RM}/git-rebase-todo`)) ?? "");
     const next = todo[0];
@@ -575,15 +638,16 @@ async function runTodo(s: Session): Promise<OpResult> {
     await writeText(s.git, `${RM}/done`, done);
     await writeText(s.git, `${RM}/git-rebase-todo`, rest.slice(rest.indexOf("\n") + 1));
     await writeText(s.git, `${RM}/msgnum`, `${done.split("\n").filter(Boolean).length}\n`);
-    await removeFiles(s.git, ["/REBASE_HEAD"]); // the previous stop's, gone with the next pick
+    if (s.legacyRebaseHead) await removeFiles(s.git, ["/REBASE_HEAD"]); // gone with the next pick
     const r = await pickOnto(s, next, true);
+    if (r.status === "committed") await rewritten(s, next, r.commit as string);
     if (r.status !== "conflict") continue;
     const c = await readCommit(s.repo, next);
     await writeText(s.git, `${RM}/author-script`, authorScript(c.author));
-    await writeText(s.git, `${RM}/message`, `${withEol(c.message)}\n`);
+    await writeText(s.git, `${RM}/message`, `${c.message}\n`);
     await writeText(s.git, `${RM}/stopped-sha`, `${next}\n`);
     await writeText(s.git, "/REBASE_HEAD", `${next}\n`);
-    await writeText(s.git, "/MERGE_MSG", withEol(c.message) + conflictList(r.conflicts ?? []));
+    await writeText(s.git, "/MERGE_MSG", c.message + conflictList(r.conflicts ?? []));
     await writeText(s.git, "/AUTO_MERGE", `${r.tree}\n`);
     return { status: "stopped" };
   }
@@ -602,7 +666,7 @@ async function finishRebase(s: Session): Promise<OpResult> {
   await removeFiles(
     s.git,
     left.map((f) => `/${f}`),
-  ); // REBASE_HEAD stays, as git leaves it
+  ); // REBASE_HEAD stays where git 2.43 leaves it
   return { status: "done", commit: h.oid };
 }
 
@@ -618,7 +682,7 @@ export async function continueOp(s: Session): Promise<OpResult> {
     if (tree !== (await treeOf(s, h.oid))) {
       const author = parseAuthorScript((await readText(s.git, `${RM}/author-script`)) ?? "");
       const message = stripspace((await readText(s.git, "/MERGE_MSG")) ?? "", true);
-      await newCommit(s, tree, [h.oid], message, author);
+      await rewritten(s, stopped, await newCommit(s, tree, [h.oid], message, author));
     }
     await removeFiles(s.git, [
       "/MERGE_MSG",
