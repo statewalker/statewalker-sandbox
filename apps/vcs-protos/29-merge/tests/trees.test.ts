@@ -25,6 +25,32 @@ const gitVersion = execFileSync("git", ["--version"], { env: gitEnv })
   ?.slice(1)
   .map(Number) ?? [0, 0];
 const legacyCompaction = (gitVersion[0] as number) * 1000 + (gitVersion[1] as number) < 2054;
+/**
+ * Whether this git's ort honours `-Xno-renames` (2.43's ignores it): a rename on one side and an
+ * edit on the other merge cleanly only with rename detection.
+ */
+const ortHonorsNoRenames = (() => {
+  const d = mkdtempSync(join(tmpdir(), "x13b-probe-"));
+  dirs.push(d);
+  const git = (args: string[], input?: string) =>
+    execFileSync("git", args, { cwd: d, env: gitEnv, input }).toString().trim();
+  git(["init", "-q", "--bare"]);
+  const text = Array.from({ length: 10 }, (_, i) => `line ${i}\n`).join("");
+  const a = git(["hash-object", "-w", "--stdin"], text);
+  const a2 = git(["hash-object", "-w", "--stdin"], `${text}more\n`);
+  const tree = (name: string, oid: string) => git(["mktree"], `100644 blob ${oid}\t${name}\n`);
+  const commit = (t: string, parent?: string) =>
+    git(["commit-tree", t, "-m", "x", ...(parent ? ["-p", parent] : [])]);
+  const base = commit(tree("a", a));
+  const ours = commit(tree("b", a), base);
+  const theirs = commit(tree("a", a2), base);
+  try {
+    git(["merge-tree", "--write-tree", "-Xno-renames", ours, theirs]);
+    return false;
+  } catch {
+    return true;
+  }
+})();
 
 /** a side: path → [mode, content] */
 type Files = Map<string, [string, string]>;
@@ -152,6 +178,7 @@ async function compareTrees(cases: Case[], { unrelated = false } = {}) {
     const r = await mergeTrees(repo, unrelated ? undefined : m.base, m.ours, m.theirs, {
       ...branchesOf(i),
       legacyCompaction,
+      detectRenames: !ortHonorsNoRenames,
     });
     const show = (x: {
       clean: boolean;

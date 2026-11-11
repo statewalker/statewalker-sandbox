@@ -247,7 +247,9 @@ Five behaviours were found only by differential testing against git:
    and collects again. Every relevant deletion is then known, so every directory deferred in the
    first walk is resolved whole, with no file/directory message. Four new files under a former file
    are enough to trigger it. git cancels the redo past the rename limit (7,000² candidate pairs),
-   which these tests cannot reach.
+   which these tests cannot reach. Newer git's ort (2.56 here, on CI) also skips the redo under
+   `-Xno-renames`, which 2.43's ort ignores. The option `detectRenames: false` does the same, and
+   the tests probe which behaviour the installed git has.
 5. **`unique_path` avoids every path ort holds** (found by the review). That includes directories
    any side has at that level, even ones the merge deletes. It does not avoid only the paths of the
    result.

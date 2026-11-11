@@ -40,6 +40,11 @@ export interface TreeMergeOptions extends XdOptions {
   /** branch names: conflict markers, `path~<branch>` names, messages */
   ours: string;
   theirs: string;
+  /**
+   * rename detection on (the default). Off (`-Xno-renames`), newer git's ort (2.56 checked) also
+   * skips its redo after renames; git 2.43's ort ignores the option
+   */
+  detectRenames?: boolean;
 }
 
 const isTree = (mode: string) => mode === "40000" || mode === "040000";
@@ -158,7 +163,7 @@ function uniquePath(taken: (p: string) => boolean, path: string, branch: string)
  * side has; `handle_deferred_entries` then takes the other side's directory as it is, unless rename
  * detection may need a source deleted on that side). Their paths get no file/directory moves.
  */
-function trivialDirectoryMerges(sides: Side[]): Set<string> {
+function trivialDirectoryMerges(sides: Side[], detectRenames: boolean): Set<string> {
   const children = new Map<string, Set<string>>();
   for (const side of sides)
     for (const path of [...side.files.keys(), ...side.dirs.keys()]) {
@@ -233,7 +238,7 @@ function trivialDirectoryMerges(sides: Side[]): Set<string> {
   // directory deferred in the first walk is resolved whole (git cancels the redo only past the
   // rename limit, out of reach here)
   // (a walk of deferred directories needs a relevant source on its side, so rename detection runs)
-  if (pathsAfter && Math.floor(pathsAfter / pathsBefore) >= 3)
+  if (detectRenames && pathsAfter && Math.floor(pathsAfter / pathsBefore) >= 3)
     return new Set(deferred.slice(0, firstPass).map(([, p]) => p));
   return trivial;
 }
@@ -375,7 +380,7 @@ export async function mergeTrees(
   const finalPath = new Map<string, string>();
   let uncleanDropped = false;
   const messages: MergeMessage[] = [];
-  const trivial = trivialDirectoryMerges(trees);
+  const trivial = trivialDirectoryMerges(trees, opts.detectRenames ?? true);
   const movedTo = new Set<string>();
   const underTrivial = (path: string) => {
     for (let at = path.length; at > 0; at = path.lastIndexOf("/", at - 1))
