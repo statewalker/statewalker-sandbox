@@ -138,6 +138,9 @@ catalogs:
     '@statewalker/webrun-files-node':
       specifier: ^0.10.0
       version: 0.10.3
+    '@statewalker/webrun-files-rpc':
+      specifier: ^0.1.0
+      version: 0.1.0
     '@statewalker/webrun-http-browser':
       specifier: ^0.7.0
       version: 0.7.0
@@ -432,8 +435,8 @@ importers:
         specifier: 'catalog:'
         version: 0.10.3
       '@statewalker/webrun-files-rpc':
-        specifier: link:../../../webrun-files/packages/webrun-files-rpc
-        version: link:../../../webrun-files/packages/webrun-files-rpc
+        specifier: 'catalog:'
+        version: 0.1.0
       '@wasmer/sdk':
         specifier: 0.19.1
         version: 0.19.1
@@ -1311,7 +1314,7 @@ importers:
         version: 0.1.3
       '@statewalker/httpeers-hub':
         specifier: 'catalog:'
-        version: 0.1.4(@statewalker/webrun-files@0.10.3)
+        version: 0.1.4(@statewalker/webrun-files@0.10.4)
       '@statewalker/httpeers-libp2p':
         specifier: 'catalog:'
         version: 0.3.0(bufferutil@4.2.0)(react-native-webrtc@124.0.8(react-native@0.87.1(@babel/core@7.29.13)(@types/react@19.3.0)(bufferutil@4.2.0)(react@19.3.0)))
@@ -4562,6 +4565,9 @@ packages:
   '@statewalker/webrun-files-node@0.10.3':
     resolution: {integrity: sha512-h74IPpnC1VSh+YJhQO3KQbQ1HFS5ygwIiuMOqiwimUITeljlNrWjaUAksPhHyXRK9M/ZKUk+XBxmDWZndcQRhw==}
 
+  '@statewalker/webrun-files-rpc@0.1.0':
+    resolution: {integrity: sha512-Qpbtwh8ZLkhkjzmfc03Q7dCmA5JneUFiAkLFizgtN7OAQOXtGm1zX3YlRUkbqIjhRoA4kvp4r/f3V7wMrAEqvg==}
+
   '@statewalker/webrun-files-sqlite@0.11.0':
     resolution: {integrity: sha512-j3lbImRrxfF88CJene1JJiZcMIJJqoagM5B4qLhRVa7eoYSybRY0h2w5bcr5avOVnv5oHqU1HZi9aXD4ri77Wg==}
 
@@ -4570,6 +4576,9 @@ packages:
 
   '@statewalker/webrun-files@0.10.3':
     resolution: {integrity: sha512-YALXiT2lyPhV2dq7kNVjcy3fUw8AAMyKub+9PdJ0T+5jnTD9RcRudy266Aqb18Nw/T2Up5B/eG4hEFnFQR3p8A==}
+
+  '@statewalker/webrun-files@0.10.4':
+    resolution: {integrity: sha512-8+i8e3TYX5fAzJySDUBXRxC9S2kSC229Va6sI3LcmBm2OS9OF1IKXBcXNhLXo/zNMzjUFesZ9iX23KaGBFJNKw==}
 
   '@statewalker/webrun-http-browser@0.12.2':
     resolution: {integrity: sha512-Ftjyjz5DouRq3AtDu0s+1yLP6OfBpsRcAqmhDpLkmSMupgUBr1awS+y64AWFGCDRePR+Z0DEnYw2uwui5oTyEQ==}
@@ -11222,13 +11231,13 @@ snapshots:
 
   '@statewalker/httpeers-core@0.1.3': {}
 
-  '@statewalker/httpeers-hub@0.1.4(@statewalker/webrun-files@0.10.3)':
+  '@statewalker/httpeers-hub@0.1.4(@statewalker/webrun-files@0.10.4)':
     dependencies:
       '@statewalker/httpeers-access': 0.1.4
       '@statewalker/httpeers-core': 0.1.3
       hono: 4.13.13
     optionalDependencies:
-      '@statewalker/webrun-files': 0.10.3
+      '@statewalker/webrun-files': 0.10.4
 
   '@statewalker/httpeers-libp2p@0.3.0(bufferutil@4.2.0)(react-native-webrtc@124.0.8(react-native@0.87.1(@babel/core@7.29.13)(@types/react@19.3.0)(bufferutil@4.2.0)(react@19.3.0)))':
     dependencies:
@@ -11373,6 +11382,10 @@ snapshots:
     dependencies:
       '@statewalker/webrun-files': 0.10.3
 
+  '@statewalker/webrun-files-rpc@0.1.0':
+    dependencies:
+      '@statewalker/webrun-files': 0.10.4
+
   '@statewalker/webrun-files-sqlite@0.11.0':
     dependencies:
       '@statewalker/db-api': 0.1.4
@@ -11382,6 +11395,8 @@ snapshots:
   '@statewalker/webrun-files@0.10.2': {}
 
   '@statewalker/webrun-files@0.10.3': {}
+
+  '@statewalker/webrun-files@0.10.4': {}
 
   '@statewalker/webrun-http-browser@0.12.2':
     dependencies:
