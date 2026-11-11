@@ -48,22 +48,54 @@ const typeOf = (mode: string) =>
 const same = (a?: Entry, b?: Entry) =>
   a === b || (!!a && !!b && a.mode === b.mode && a.oid === b.oid);
 
-/** path → entry for every non-tree entry, and the set of directories */
-async function flatten(repo: Repository, oid: string | undefined): Promise<Map<string, Entry>> {
-  const out = new Map<string, Entry>();
-  if (!oid) return out;
+/** a side: path → entry for every non-tree entry, and path → tree id for every directory */
+interface Side {
+  files: Map<string, Entry>;
+  dirs: Map<string, string>;
+}
+async function flatten(repo: Repository, oid: string | undefined): Promise<Side> {
+  const side: Side = { files: new Map(), dirs: new Map() };
+  if (!oid) return side;
   const walk = async (tree: string, prefix: string) => {
     for (const e of await readTree(repo, tree)) {
       const path = prefix ? `${prefix}/${e.name}` : e.name;
-      if (isTree(e.mode)) await walk(e.oid, path);
-      else out.set(path, { mode: normalizeMode(e.mode), oid: e.oid });
+      if (isTree(e.mode)) {
+        side.dirs.set(path, e.oid);
+        await walk(e.oid, path);
+      } else side.files.set(path, { mode: canonMode(e.mode), oid: e.oid });
     }
   };
   await walk(oid, "");
-  return out;
+  return side;
 }
-function normalizeMode(mode: string): string {
-  return mode.replace(/^0+/, "");
+/** `canon_mode`: a regular file is 100755 when its owner may execute it, else 100644 */
+function canonMode(mode: string): string {
+  const m = Number.parseInt(mode, 8);
+  switch (m & 0o170000) {
+    case 0o100000:
+      return m & 0o100 ? "100755" : "100644";
+    case 0o120000:
+      return "120000";
+    case 0o160000:
+      return "160000";
+    default:
+      return mode.replace(/^0+/, "");
+  }
+}
+
+/** git's order of paths: bytes (`strcmp`), not UTF-16 units */
+const utf8 = new TextEncoder();
+const isAscii = (s: string) => {
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) > 0x7f) return false;
+  return true;
+};
+export function comparePaths(a: string, b: string): number {
+  if (isAscii(a) && isAscii(b)) return a < b ? -1 : a > b ? 1 : 0;
+  const x = utf8.encode(a);
+  const y = utf8.encode(b);
+  for (let i = 0; i < x.length && i < y.length; i++)
+    if (x[i] !== y[i]) return (x[i] as number) - (y[i] as number);
+  return x.length - y.length;
 }
 
 async function blob(repo: Repository, oid: string): Promise<Uint8Array> {
@@ -126,45 +158,36 @@ function uniquePath(taken: (p: string) => boolean, path: string, branch: string)
  * side has; `handle_deferred_entries` then takes the other side's directory as it is, unless rename
  * detection may need a source deleted on that side). Their paths get no file/directory moves.
  */
-function trivialDirectoryMerges(sides: Map<string, Entry>[], dirsOf: Set<string>[]): Set<string> {
+function trivialDirectoryMerges(sides: Side[]): Set<string> {
   const children = new Map<string, Set<string>>();
-  for (const m of sides)
-    for (const path of m.keys()) {
-      const parts = path.split("/");
-      for (let i = 0; i < parts.length; i++) {
-        const dir = parts.slice(0, i).join("/");
-        const set = children.get(dir) ?? new Set<string>();
-        children.set(dir, set);
-        set.add(parts.slice(0, i + 1).join("/"));
-      }
+  for (const side of sides)
+    for (const path of [...side.files.keys(), ...side.dirs.keys()]) {
+      const at = path.lastIndexOf("/");
+      const dir = at < 0 ? "" : path.slice(0, at);
+      const set = children.get(dir) ?? new Set<string>();
+      children.set(dir, set);
+      set.add(path);
     }
-  const sigCache = new Map<string, string>();
-  const signature = (i: number, dir: string) => {
-    const key = `${i}\0${dir}`;
-    let sig = sigCache.get(key);
-    if (sig === undefined) {
-      const lines: string[] = [];
-      for (const [p, e] of sides[i] as Map<string, Entry>)
-        if (p.startsWith(`${dir}/`)) lines.push(`${p} ${e.mode} ${e.oid}`);
-      sig = lines.sort().join("\n");
-      sigCache.set(key, sig);
-    }
-    return sig;
+  const isFile = (i: number, p: string) => (sides[i] as Side).files.has(p);
+  const isDir = (i: number, p: string) => (sides[i] as Side).dirs.has(p);
+  /** names[i] equal to names[j], as merge-ort compares them: mode and object id */
+  const matches = (i: number, j: number, p: string) => {
+    const x = sides[i] as Side;
+    const y = sides[j] as Side;
+    if (x.files.has(p)) return same(x.files.get(p), y.files.get(p));
+    const t = x.dirs.get(p);
+    return t !== undefined && t === y.dirs.get(p);
   };
-  const isFile = (i: number, p: string) => (sides[i] as Map<string, Entry>).has(p);
-  const isDir = (i: number, p: string) => (dirsOf[i] as Set<string>).has(p);
-  const matches = (i: number, j: number, p: string) =>
-    isFile(i, p)
-      ? same(sides[i]?.get(p), sides[j]?.get(p))
-      : isDir(i, p) && isDir(j, p) && signature(i, p) === signature(j, p);
   const relevant = [false, false, false]; // a rename source deleted on side 1 / 2
   const deferred: [number, string, number][] = []; // [side, directory, dir_rename_mask]
-  const trivial = new Set<string>();
+  /** entries in merge-ort's `paths` map: every name at every level it walks */
+  let paths = 0;
 
   // dir_rename_mask: in a directory one side removed, a file the other side added makes every
   // deletion below a rename source relevant for directory renames (0x07)
   const visit = (dir: string, mask: number) => {
-    const names = [...(children.get(dir) ?? [])].sort();
+    const names = [...(children.get(dir) ?? [])].sort(comparePaths);
+    paths += names.length;
     const fileMask = (p: string) => [0, 1, 2].reduce((m, i) => m | (isFile(i, p) ? 1 << i : 0), 0);
     const dirMask = (p: string) => [0, 1, 2].reduce((m, i) => m | (isDir(i, p) ? 1 << i : 0), 0);
     if (mask !== 0 && mask !== 7 && names.some((p) => fileMask(p) === mask)) mask = 7;
@@ -191,6 +214,10 @@ function trivialDirectoryMerges(sides: Map<string, Entry>[], dirsOf: Set<string>
     }
   };
   visit("", 0);
+  const firstPass = deferred.length;
+  const pathsBefore = paths;
+  let pathsAfter = 0;
+  const trivial = new Set<string>();
   for (const side of [1, 2]) {
     const okay = !relevant[side];
     for (let k = 0; k < deferred.length; k++) {
@@ -199,7 +226,15 @@ function trivialDirectoryMerges(sides: Map<string, Entry>[], dirsOf: Set<string>
       if (okay) trivial.add(p);
       else visit(p, mask);
     }
+    if (!okay || pathsAfter) pathsAfter = paths;
   }
+  // `redo_after_renames`: when walking the deferred directories tripled the paths, ort runs rename
+  // detection, caches its answers and collects again; every deletion is then known, so every
+  // directory deferred in the first walk is resolved whole (git cancels the redo only past the
+  // rename limit, out of reach here)
+  // (a walk of deferred directories needs a relevant source on its side, so rename detection runs)
+  if (pathsAfter && Math.floor(pathsAfter / pathsBefore) >= 3)
+    return new Set(deferred.slice(0, firstPass).map(([, p]) => p));
   return trivial;
 }
 
@@ -230,12 +265,13 @@ export async function mergeTrees(
   theirs: string,
   opts: TreeMergeOptions,
 ): Promise<TreeMergeResult> {
-  const sides = await Promise.all([
+  const trees = await Promise.all([
     flatten(repo, base),
     flatten(repo, ours),
     flatten(repo, theirs),
   ]);
-  const dirsOf = sides.map((m) => dirsAbove(m.keys()));
+  const sides = trees.map((t) => t.files);
+  const dirsOf = trees.map((t) => new Set(t.dirs.keys()));
   const branch = (side: 1 | 2) => (side === 1 ? opts.ours : opts.theirs);
   /** final path → slot (distinct types place theirs here at once; the rest after file/directory) */
   const slots = new Map<string, Slot>();
@@ -281,7 +317,7 @@ export async function mergeTrees(
     return { result: { mode, oid }, clean };
   };
 
-  const filePaths = [...new Set(sides.flatMap((m) => [...m.keys()]))].sort();
+  const filePaths = [...new Set(sides.flatMap((m) => [...m.keys()]))].sort(comparePaths);
   const outcome = new Map<string, Slot>();
   for (const path of filePaths) {
     const st = sides.map((m) => m.get(path));
@@ -339,7 +375,8 @@ export async function mergeTrees(
   const finalPath = new Map<string, string>();
   let uncleanDropped = false;
   const messages: MergeMessage[] = [];
-  const trivial = trivialDirectoryMerges(sides, dirsOf);
+  const trivial = trivialDirectoryMerges(trees);
+  const movedTo = new Set<string>();
   const underTrivial = (path: string) => {
     for (let at = path.length; at > 0; at = path.lastIndexOf("/", at - 1))
       if (trivial.has(path.slice(0, at))) return true;
@@ -351,13 +388,19 @@ export async function mergeTrees(
       continue;
     }
     const side: 1 | 2 = dirsOf[1]?.has(path) ? 2 : 1; // the side without the directory
+    // `unique_path` avoids every path merge-ort holds: what any side has at that level (files and
+    // directories, kept or not) and the paths made so far
     const moved = uniquePath(
       (q) =>
-        slots.has(q) || outcome.has(q) || mergedDirs.has(q) || [...finalPath.values()].includes(q),
+        sides.some((m) => m.has(q)) ||
+        dirsOf.some((d) => d.has(q)) ||
+        slots.has(q) ||
+        movedTo.has(q),
       path,
       branch(side),
     );
     finalPath.set(path, moved);
+    movedTo.add(moved);
     messages.push({
       paths: [moved, path],
       text: `CONFLICT (file/directory): directory in the way of ${path} from ${branch(side)}; moving it to ${moved} instead.\n`,
@@ -389,12 +432,8 @@ export async function mergeTrees(
     });
   }
   if (uncleanDropped) clean = false;
-  conflicts.sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : x.stage - y.stage));
+  conflicts.sort((x, y) => comparePaths(x.path, y.path) || x.stage - y.stage);
   // by the path each is listed under; a stable sort keeps a path's own order
-  messages.sort((x, y) => {
-    const p = x.paths[0] as string;
-    const q = y.paths[0] as string;
-    return p < q ? -1 : p > q ? 1 : 0;
-  });
+  messages.sort((x, y) => comparePaths(x.paths[0] as string, y.paths[0] as string));
   return { tree: await buildTree(repo, merged), clean, conflicts, messages };
 }
