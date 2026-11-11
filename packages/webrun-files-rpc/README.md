@@ -53,7 +53,8 @@ Exports:
 - `newFilesRpcServer`, `newFilesRpcClient`, `FilesRpcClient`;
 - `FilesRpcError` and `errorCode`;
 - types `FilesRpc`, `FilesRpcServer`, `FilesRpcServerOptions`, `FilesRpcClientOptions`,
-  `ReadResult`, `ListPage`, `OpenOptions`, `OpenReadOptions`, `FilesRpcErrorCode`.
+  `ReadResult`, `ListPage`, `ListPageOptions`, `OpenOptions`, `OpenReadOptions`,
+  `FilesRpcErrorCode`.
 
 ### `newFilesRpcServer(options)`
 
@@ -63,17 +64,20 @@ Exports:
 | `chunkSize` | 256 KiB | Largest chunk a read answers. |
 | `readAhead` | 4 | Chunks produced ahead, counting from the highest one asked. |
 | `retain` | 16 | A delivered chunk is dropped once the reader asked for one `retain` chunks past it (until then it can be asked again). |
+| `window` | 64 | A read request may name a chunk at most `window` past the lowest chunk not yet delivered (`INVALID` beyond): what one stream makes the server pull and hold stays within `window + readAhead` chunks. |
 | `writeWindow` | 16 | Chunks of a write kept ahead of the next one to write; a chunk beyond it waits (backpressure). |
 | `maxChunkSize` | 4 MiB | Largest chunk a write takes. |
 | `idleTimeout` | 2 min | A stream not used for this long is dropped (a read closed, a write aborted). |
 | `maxStreams` | 256 | Open streams at most (`TOO_MANY_STREAMS` beyond). |
 | `maxPageSize` | 256 | Largest listing page. |
+| `sweepInterval` | none | Sweep idle streams every this many ms. Without it, opening a stream sweeps; a server that stops receiving opens needs this (or calls to `sweep()`). |
 | `now` | `Date.now` | The clock (tests). |
 
 The server is a `FilesRpc` plus:
 - `sweep()`: drops idle streams and returns how many (opening a stream also sweeps);
 - `openStreams()`: how many streams are open;
-- `close()`: ends every stream.
+- `close()`: ends every stream and stops the sweep timer. It doesn't wait for the FilesApi's
+  writes to settle, and waits at most a second for sources to end.
 
 ### `newFilesRpcClient(options)`
 
@@ -81,7 +85,7 @@ The server is a `FilesRpc` plus:
 |---|---|---|
 | `rpc` | (required) | The server's methods, through any transport. |
 | `chunkSize` | 256 KiB | Bytes per chunk written (at most the server's `maxChunkSize`). |
-| `readAhead` | 4 | `readChunk` calls in flight while reading. |
+| `readAhead` | 4 | `readChunk` calls in flight while reading (below the server's `window`). |
 | `writeAhead` | 4 | `writeChunk` calls not yet answered while writing. |
 | `pageSize` | 256 | Listing page size. |
 
@@ -203,14 +207,29 @@ await server.closeRead(r);
   - `abortWrite`, expiry and `close()` make the generator throw, so `write()` fails. What then
     remains of the file is up to the `FilesApi`: `MemFilesApi` writes only at the end, so the file
     keeps what it had.
-- **Ended streams:** ids that ended are remembered for `idleTimeout`. An open delivered after its
-  stream ended does not reopen it, and a `closeWrite` delivered again gets the first answer.
+  - `write()` starts at `openWrite`, not at the first chunk. A FilesApi that truncates when a
+    write starts has emptied the file already if the write is then aborted.
+- **Ended streams:** ids that ended are remembered for `idleTimeout`. Within that time, an open
+  delivered after its stream ended does not reopen it, and a `closeWrite` delivered again gets the
+  first answer.
+- **Idle and busy:** a stream is idle when no call on it is in progress and none started for
+  `idleTimeout`.
+  - A `readChunk` waiting on a slow source, a `writeChunk` waiting for room, or a `closeWrite`
+    waiting on a slow commit keeps its stream alive.
+  - So does a write whose chunks were all handed to the FilesApi. An `abortWrite` arriving then
+    is too late and does nothing (the commit stands).
+- **Failures:** a write the FilesApi fails keeps its stream until it is closed, aborted or swept,
+  so the next `writeChunk` or `closeWrite` reports that failure, not `UNKNOWN_STREAM`. A source
+  yielding something that is not bytes fails the stream with `INVALID`.
+- **Bounds:** a read request beyond `window` is refused at once, so asking for chunk
+  1,000,000,000 neither loops nor loads anything.
 - **The client:**
   - **Read:** it keeps `readAhead` `readChunk` calls in flight and yields the answers in key
     order. Breaking out of the loop, or aborting through `signal`, closes the stream.
   - **Write:** it cuts any sequence of byte arrays into chunks of exactly `chunkSize` and keeps
     `writeAhead` unanswered. Any failure (of the source, or of a call) aborts the write.
-  - **List:** it asks page after page with `after`.
+  - **List:** it asks page after page with `after`. The server also applies `after` itself, in
+    code-point order, so a FilesApi that ignores it cannot make pages repeat.
 - **Not covered:**
   - A stream lives in one server's memory; a server restart loses open streams (`UNKNOWN_STREAM`).
   - Serializing `Uint8Array` for a JSON-only transport (base64, msgpack) is the transport's job.
@@ -227,5 +246,6 @@ await server.closeRead(r);
 | `server-write.test.ts` | in-order and out-of-order chunks, duplicates, backpressure, `closeWrite` waiting for a gap or refusing a wrong count, empty files, abort, failing writes, byte types |
 | `server-lifecycle.test.ts` | idle expiry, the stream limit, `close()`, unguessable ids, paged listing, metadata |
 | `protocol.test.ts` | caller-chosen keys (opens and `closeWrite` delivered twice, after the end), what is refused, waiting requests failed by a close, error codes across a structured clone, many streams at once, release never dropping an undelivered chunk |
+| `robustness.test.ts` | the window (huge chunk ids refused at once, bounded pulls), busy streams not swept, the sweep timer, a failing write's error reaching the client, a late abort not undoing a commit, a source yielding non-bytes, waiters past the count, aborting a hanging read, `close()` not hanging, listing with a FilesApi that ignores `after` |
 | `client.test.ts` | the `FilesApi` round trip, iterables, ranges, pipelining depth, early stop and abort, failing sources, write depth, listing; delayed, reordered and duplicated calls (five seeds) |
 | `readme.test.ts` | the examples above |

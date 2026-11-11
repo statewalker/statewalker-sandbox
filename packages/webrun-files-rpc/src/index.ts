@@ -11,6 +11,7 @@ export type {
   FilesRpc,
   FilesRpcErrorCode,
   ListPage,
+  ListPageOptions,
   OpenOptions,
   OpenReadOptions,
   ReadResult,

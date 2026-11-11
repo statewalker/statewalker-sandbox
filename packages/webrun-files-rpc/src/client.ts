@@ -12,7 +12,7 @@ export interface FilesRpcClientOptions {
   rpc: FilesRpc;
   /** Bytes per chunk written. Default 256 KiB (keep it at most the server's `maxChunkSize`). */
   chunkSize?: number;
-  /** Chunk requests kept in flight while reading. Default 4 (at most the server's `retain`). */
+  /** Chunk requests kept in flight while reading. Default 4 (below the server's `window`). */
   readAhead?: number;
   /** Chunks sent and not yet acknowledged while writing. Default 4. */
   writeAhead?: number;
@@ -89,6 +89,15 @@ export class FilesRpcClient implements FilesApi {
       streamId: newStreamId(),
     });
     const pending = new Map<number, Promise<ReadResult>>();
+    // An abort interrupts the wait for an answer, not only the loop between answers.
+    const aborted = signal
+      ? new Promise<never>((_, reject) => {
+          const fail = () => reject(signal.reason ?? new Error("aborted"));
+          if (signal.aborted) fail();
+          else signal.addEventListener("abort", fail, { once: true });
+        })
+      : undefined;
+    aborted?.catch(() => {});
     let asked = 0;
     let finished = false;
     try {
@@ -100,7 +109,7 @@ export class FilesRpcClient implements FilesApi {
         }
         const answer = pending.get(next) as Promise<ReadResult>;
         pending.delete(next);
-        const { data, done } = await answer;
+        const { data, done } = await (aborted ? Promise.race([answer, aborted]) : answer);
         signal?.throwIfAborted();
         if (done) finished = true;
         const bytes = toBytes(data);
@@ -186,6 +195,6 @@ export class FilesRpcClient implements FilesApi {
 }
 
 /** A FilesApi over a FilesRpc. */
-export function newFilesRpcClient(options: FilesRpcClientOptions): FilesApi {
+export function newFilesRpcClient(options: FilesRpcClientOptions): FilesRpcClient {
   return new FilesRpcClient(options);
 }

@@ -12,6 +12,11 @@ export interface FilesRpcServerOptions {
   readAhead?: number;
   /** A chunk is released once the reader asked for one `retain` chunks past it. Default 16. */
   retain?: number;
+  /**
+   * A read request may name a chunk at most this many past the lowest chunk not yet delivered
+   * (INVALID beyond). Bounds what one stream makes the server pull and hold. Default 64.
+   */
+  window?: number;
   /** Chunks of a write kept ahead of the next one to write. Default 16. */
   writeWindow?: number;
   /** Largest chunk a write takes. Default 4 MiB. */
@@ -22,6 +27,8 @@ export interface FilesRpcServerOptions {
   maxStreams?: number;
   /** Largest listing page. Default 256. */
   maxPageSize?: number;
+  /** Sweeps idle streams every this many ms (default: only when a stream is opened). */
+  sweepInterval?: number;
   /** The clock (tests). Default `Date.now`. */
   now?: () => number;
 }
@@ -32,13 +39,18 @@ export interface FilesRpcServer extends FilesRpc {
   sweep(): number;
   /** Streams open now. */
   openStreams(): number;
-  /** Ends every stream (reads closed, writes aborted). */
+  /**
+   * Ends every stream (reads closed, writes aborted) and stops the sweep timer. It does not wait
+   * for the FilesApi's writes to settle, and waits at most a second for sources to end.
+   */
   close(): Promise<void>;
 }
 
 interface ReadStream {
   kind: "read";
   touched: number;
+  /** Calls in progress: a stream with any is not idle. */
+  busy: number;
   source: AsyncIterator<Uint8Array>;
   chunks: Keyed<ReadResult>;
   /** Bytes pulled from the source, not yet a chunk. */
@@ -49,6 +61,8 @@ interface ReadStream {
    * delivered (`delivered`: ids answered at least once and not yet dropped).
    */
   produced: number;
+  /** Every chunk below `low` was delivered; `delivered`: those above it that were. */
+  low: number;
   delivered: Set<number>;
   asked: number;
   released: number;
@@ -61,6 +75,7 @@ interface ReadStream {
 interface WriteStream {
   kind: "write";
   touched: number;
+  busy: number;
   /** Chunks received and not yet written, by id; the next id to write. */
   chunks: Map<number, Uint8Array>;
   next: number;
@@ -97,6 +112,19 @@ function chunkIdOf(v: unknown): number {
   return n;
 }
 
+/** Orders paths by Unicode code point, as `FilesApi.list()` does (webrun-files' comparePaths). */
+function comparePaths(a: string, b: string): number {
+  const x = a[Symbol.iterator]();
+  const y = b[Symbol.iterator]();
+  for (;;) {
+    const p = x.next();
+    const q = y.next();
+    if (p.done || q.done) return p.done && q.done ? 0 : p.done ? -1 : 1;
+    const d = (p.value.codePointAt(0) as number) - (q.value.codePointAt(0) as number);
+    if (d !== 0) return d;
+  }
+}
+
 /** Joins the first `n` buffered bytes into one chunk. */
 function take(s: ReadStream, n: number): Uint8Array {
   const out = new Uint8Array(n);
@@ -119,6 +147,7 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
   const chunkSize = Math.max(1, options.chunkSize ?? 256 * 1024);
   const readAhead = Math.max(1, options.readAhead ?? 4);
   const retain = Math.max(1, options.retain ?? 16);
+  const window = Math.max(1, options.window ?? 64);
   const writeWindow = Math.max(1, options.writeWindow ?? 16);
   const maxChunkSize = Math.max(1, options.maxChunkSize ?? 4 * 1024 * 1024);
   const idleTimeout = options.idleTimeout ?? 2 * 60_000;
@@ -144,6 +173,17 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
       throw new FilesRpcError("UNKNOWN_STREAM", `no open ${kind} stream '${String(id)}'`);
     s.touched = now();
     return s as Extract<Stream, { kind: K }>;
+  };
+
+  /** Runs `work` as a call in progress on `s`: the stream is not idle meanwhile. */
+  const busy = async <T>(s: Stream, work: () => Promise<T>): Promise<T> => {
+    s.busy++;
+    try {
+      return await work();
+    } finally {
+      s.busy--;
+      s.touched = now();
+    }
   };
 
   /** An id for a new stream, or the stream an open delivered twice already opened. */
@@ -211,7 +251,14 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
           s.chunks.settleFrom(s.produced, () => ({ data: EMPTY, done: true }));
           return;
         }
-        const part = toBytes(next.value);
+        let part: Uint8Array;
+        try {
+          part = toBytes(next.value);
+        } catch {
+          s.error = new FilesRpcError("INVALID", "the source yielded something that is not bytes");
+          s.chunks.fail(s.error);
+          return;
+        }
         if (part.length) {
           s.buffer.push(part);
           s.buffered += part.length;
@@ -292,7 +339,10 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
       );
       const entries: FileInfo[] = [];
       let more = false;
-      for await (const entry of fs.list(path, { recursive: !!opts.recursive, after: opts.after })) {
+      const after = opts.after;
+      for await (const entry of fs.list(path, { recursive: !!opts.recursive, after })) {
+        // `after` is applied here too: a FilesApi that ignores it must not make pages repeat.
+        if (after !== undefined && comparePaths(entry.path, after) <= 0) continue;
         if (entries.length === limit) {
           more = true;
           break;
@@ -313,11 +363,13 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
       streams.set(id, {
         kind: "read",
         touched: now(),
+        busy: 0,
         source,
         chunks: new Keyed<ReadResult>(),
         buffer: [],
         buffered: 0,
         produced: 0,
+        low: 0,
         delivered: new Set(),
         asked: 0,
         released: 0,
@@ -330,6 +382,11 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
     async readChunk(streamId, chunkIdArg) {
       const s = stream(streamId, "read");
       const chunkId = chunkIdOf(chunkIdArg);
+      if (chunkId >= s.low + window)
+        throw new FilesRpcError(
+          "INVALID",
+          `chunk ${chunkId} is more than ${window} chunks past the lowest undelivered (${s.low})`,
+        );
       // Behind the release line, a chunk is gone once it was delivered; one nobody received yet
       // (asked out of order, or still to be produced) is still served.
       if (chunkId < s.released && chunkId < s.produced && !s.chunks.has(chunkId))
@@ -340,18 +397,25 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
       if (chunkId > s.asked) {
         s.asked = chunkId;
         // Chunks `retain` behind the highest asked are not asked again: release the delivered.
+        // (At most `window` steps: `asked` stays within the window.)
         const keepFrom = s.asked - retain + 1;
         for (; s.released < keepFrom; s.released++) {
-          if (s.delivered.delete(s.released)) s.chunks.delete(s.released);
+          if (s.released < s.low || s.delivered.has(s.released)) s.chunks.delete(s.released);
         }
       }
       if (s.ended && chunkId >= s.produced) return { data: EMPTY, done: true };
-      const answer = s.chunks.wait(chunkId);
-      void pump(s);
-      const result = await answer;
-      if (chunkId < s.released) s.chunks.delete(chunkId);
-      else s.delivered.add(chunkId);
-      return result;
+      return busy(s, async () => {
+        const answer = s.chunks.wait(chunkId);
+        void pump(s);
+        const result = await answer;
+        // Delivered: the lowest undelivered chunk moves up over every delivered one.
+        if (chunkId === s.low) {
+          s.low++;
+          while (s.delivered.delete(s.low)) s.low++;
+        } else if (chunkId > s.low) s.delivered.add(chunkId);
+        if (chunkId < s.released) s.chunks.delete(chunkId);
+        return result;
+      });
     },
 
     async closeRead(streamId) {
@@ -367,6 +431,7 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
       const s: WriteStream = {
         kind: "write",
         touched: now(),
+        busy: 0,
         chunks: new Map(),
         next: 0,
         room: [],
@@ -381,10 +446,9 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
           throw s.failure;
         },
       );
-      // Settled by closeWrite (or nobody, after an abort): never an unhandled rejection.
-      s.done.catch(() => {
-        if (streams.get(id) === s) finish(id, s.failure);
-      });
+      // Settled by closeWrite (or nobody, after an abort): never an unhandled rejection. A
+      // failed stream stays until closed, aborted or swept, so its next call gets the failure.
+      s.done.catch(() => {});
       streams.set(id, s);
       return { streamId: id };
     },
@@ -404,7 +468,10 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
       // Delivered twice: already written, or already kept.
       if (chunkId < s.next || s.chunks.has(chunkId)) return;
       if (chunkId >= s.next + writeWindow) {
-        await new Promise<void>((resolve, reject) => s.room.push({ chunkId, resolve, reject }));
+        await busy(
+          s,
+          () => new Promise<void>((resolve, reject) => s.room.push({ chunkId, resolve, reject })),
+        );
         if (chunkId < s.next || s.chunks.has(chunkId)) return;
       }
       // A copy: the caller's buffer may be reused, and a view of a larger buffer is cut out.
@@ -432,9 +499,16 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
         throw error;
       }
       s.total = total;
+      // A chunk waiting for room past the count will never be written.
+      for (const r of s.room.filter((r) => r.chunkId >= total)) {
+        s.room.splice(s.room.indexOf(r), 1);
+        r.reject(
+          new FilesRpcError("INVALID", `chunk ${r.chunkId} is past the stream's ${total} chunks`),
+        );
+      }
       s.wake?.();
       try {
-        await s.done;
+        await busy(s, () => s.done);
         if (streams.get(id) === s) finish(id);
       } catch (e) {
         if (streams.get(id) === s) finish(id, e);
@@ -446,6 +520,8 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
       const id = String(streamId);
       const s = streams.get(id);
       if (s?.kind !== "write") return;
+      // Every chunk was handed to the FilesApi: the commit is under way; an abort is too late.
+      if (s.total !== undefined && s.next >= s.total) return;
       const error = new FilesRpcError("ABORTED", reason ? String(reason) : "the write was aborted");
       finish(id, error);
       failWrite(s, error);
@@ -455,7 +531,8 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
       const t = now();
       let dropped = 0;
       for (const [id, s] of [...streams]) {
-        if (t - s.touched <= idleTimeout) continue;
+        if (t - s.touched <= idleTimeout || s.busy > 0) continue;
+        if (s.kind === "write" && s.total !== undefined && s.next >= s.total) continue;
         dropped++;
         const error = new FilesRpcError("ABORTED", "the stream was idle too long");
         finish(id, error);
@@ -471,18 +548,27 @@ export function newFilesRpcServer(options: FilesRpcServerOptions): FilesRpcServe
     },
 
     async close() {
-      const writes: Promise<unknown>[] = [];
+      if (timer) clearInterval(timer);
+      const sources: Promise<unknown>[] = [];
       for (const [id, s] of [...streams]) {
         const error = new FilesRpcError("ABORTED", "the server closed");
         finish(id, error);
-        if (s.kind === "read") writes.push(closeSource(s));
-        else {
-          failWrite(s, error);
-          writes.push(s.done.catch(() => {}));
-        }
+        if (s.kind === "read") sources.push(closeSource(s));
+        else failWrite(s, error); // not awaited: a FilesApi write may never settle
       }
-      await Promise.all(writes);
+      await Promise.race([
+        Promise.all(sources),
+        new Promise((r) => {
+          const t = setTimeout(r, 1000);
+          (t as { unref?: () => void }).unref?.();
+        }),
+      ]);
     },
   };
+  const timer =
+    options.sweepInterval && options.sweepInterval > 0
+      ? setInterval(() => server.sweep(), options.sweepInterval)
+      : undefined;
+  (timer as { unref?: () => void } | undefined)?.unref?.();
   return server;
 }

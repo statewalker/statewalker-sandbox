@@ -12,6 +12,13 @@ export interface ListPage {
   more: boolean;
 }
 
+/** One page of `list`: `after` the given path (exclusive), at most `limit` entries. */
+export interface ListPageOptions {
+  recursive?: boolean;
+  after?: string;
+  limit?: number;
+}
+
 /** Open options shared by reads and writes. */
 export interface OpenOptions {
   /**
@@ -47,10 +54,7 @@ export interface FilesRpc {
   remove(path: string): Promise<boolean>;
   move(source: string, target: string): Promise<boolean>;
   copy(source: string, target: string): Promise<boolean>;
-  list(
-    path: string,
-    options?: { recursive?: boolean; after?: string; limit?: number },
-  ): Promise<ListPage>;
+  list(path: string, options?: ListPageOptions): Promise<ListPage>;
 
   /** Opens `path` for reading. A file that does not exist reads as nothing. */
   openRead(path: string, options?: OpenReadOptions): Promise<{ streamId: string }>;
