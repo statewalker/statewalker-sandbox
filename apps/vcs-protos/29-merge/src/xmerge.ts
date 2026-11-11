@@ -29,13 +29,16 @@ export interface ContentMergeLabels {
 }
 
 const MARKER_SIZE = 7;
+/** git's MAX_XDIFF_SIZE (xdiff-interface.h): larger inputs are merged as binary */
+export const MAX_XDIFF_SIZE = 1024 * 1024 * 1023;
 const FIRST_FEW_BYTES = 8000;
 
 export function isBinary(data: Uint8Array): boolean {
   return data.subarray(0, FIRST_FEW_BYTES).indexOf(0) >= 0;
 }
 
-interface Merge {
+/** a hunk of the merge (exported for tests) */
+export interface Merge {
   /** 0 conflict, 1 take side 1, 2 take side 2, 3 both, 4 identical after refinement */
   mode: number;
   i0: number;
@@ -208,21 +211,18 @@ function refineConflicts(xe1: XdEnv, xe2: XdEnv, merges: Merge[]): Merge[] {
   return out;
 }
 
-/** xdl_simplify_non_conflicts: conflicts at most 3 lines apart are joined */
-function simplifyNonConflicts(merges: Merge[]): Merge[] {
-  const out = [...merges];
-  let k = 0;
-  while (k + 1 < out.length) {
-    const m = out[k] as Merge;
-    const next = out[k + 1] as Merge;
-    const begin = m.i1 + m.chg1;
-    const end = next.i1;
-    if (m.mode !== 0 || next.mode !== 0 || end - begin > 3) k++;
-    else {
+/**
+ * xdl_simplify_non_conflicts: conflicts at most 3 lines apart are joined. One pass, as git's
+ * list walk: a grown conflict is compared with its new next.
+ */
+export function simplifyNonConflicts(merges: Merge[]): Merge[] {
+  const out: Merge[] = [];
+  for (const next of merges) {
+    const m = out.at(-1);
+    if (m && m.mode === 0 && next.mode === 0 && next.i1 - (m.i1 + m.chg1) <= 3) {
       m.chg1 = next.i1 + next.chg1 - m.i1;
       m.chg2 = next.i2 + next.chg2 - m.i2;
-      out.splice(k + 1, 1);
-    }
+    } else out.push(next);
   }
   return out;
 }
@@ -310,6 +310,12 @@ function doMerge(
   return { content, conflicts: refined.filter((m) => m.mode === 0).length };
 }
 
+function same(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 /** git's content merge of `ours` and `theirs` against `base` */
 export function mergeContent(
   base: Uint8Array,
@@ -317,7 +323,12 @@ export function mergeContent(
   theirs: Uint8Array,
   labels: ContentMergeLabels,
 ): ContentMergeResult {
-  if (isBinary(base) || isBinary(ours) || isBinary(theirs))
+  // merge-ort's trivial merges (handle_content_merge), before anything looks at the bytes
+  if (same(ours, theirs) || same(ours, base))
+    return { content: theirs, conflicts: 0, binary: false };
+  if (same(theirs, base)) return { content: ours, conflicts: 0, binary: false };
+  const tooLarge = [base, ours, theirs].some((b) => b.length > MAX_XDIFF_SIZE);
+  if (tooLarge || isBinary(base) || isBinary(ours) || isBinary(theirs))
     return { content: ours, conflicts: 1, binary: true };
   const { env: xe1, script: s1 } = xdlDiffScript(base, ours);
   const { env: xe2, script: s2 } = xdlDiffScript(base, theirs);

@@ -19,8 +19,9 @@ differences make JGit's merge produce other bytes:
   conflicts at most three lines apart;
 - git conflicts on changes to adjacent lines.
 
-Can a TypeScript port of git's xdiff produce, for any three versions of a file, the bytes and the
-clean/conflicted result that `git merge-tree` writes?
+Can a TypeScript port of git's xdiff produce, for any three versions of a file that git can merge,
+the bytes and the clean or conflicted result that `git merge-tree` writes? Histogram's chain limit
+makes git fail some merges outright; there the port throws `XdiffLimitError`.
 
 Slices:
 - **X13a (this):** the content merge.
@@ -105,6 +106,40 @@ they are git's code.
 | D12 identical changes conflict | killed |
 | D13 no newline added at the end of a conflict side | killed |
 
+### Review (#93)
+
+A separate review compared the port line by line with the C and ran about 53,000 differential merges
+against `git merge-tree`, with generators of its own:
+- byte noise;
+- CRLF, CR-only and LF/CR mixes;
+- lines of up to 41 KB;
+- file ends;
+- bytes 0x80–0x9F and NUL past byte 8000;
+- block moves.
+
+Its fuzzer caught deliberately planted bugs (forced CRLF markers; an off-by-one in histogram's
+fallback). It found one class of divergence and some robustness points. All are fixed:
+
+| Finding | Fix |
+|---|---|
+| Binary files: merge-ort's trivial merges come first (ours = theirs or ours = base → theirs; theirs = base → ours, all clean), before the binary check. We conflicted, and sometimes kept the wrong bytes (81 mismatches across the fuzz runs) | The trivial merges come first, as in `handle_content_merge`; three M1 cases |
+| Joining refined conflicts was quadratic (an array splice per join) | One pass, as git's list walk. 400,000 joins take 114 ms, against 49.5 s quadratic |
+| Histogram's chain limit (64 distinct lines in one bucket) is reachable: git fails the merge ("failed to execute internal merge"); ours threw a plain `Error` | `XdiffLimitError`; documented in the question |
+| The test's merge-tree parser could hang on a misread token | Status, tree id, message counts and full consumption checked |
+| Files over git's `MAX_XDIFF_SIZE` (1023 MiB) are merged as binary; the port had no size rule | Same rule |
+| `TextDecoder("latin1")` is missing in some engines | A char-code fallback for the line keys |
+
+The review confirmed several points as faithful:
+- index offsets and the sentinels;
+- `xdl_split`'s reads only of values written in the same call, so its uninitialised C memory cannot
+  diverge;
+- the fallback's re-preparation of the sub-range;
+- refinement, mode 4, and the CRLF rules.
+
+It measured a recursion depth of at most 168, so there is no stack risk. Pathological inputs of
+100,000 lines take 2–4 times git's time. Histogram's own quadratic case (an LCS of 5 lines each
+time) is 5 times slower than C, from allocations; that is an open thread.
+
 ## Promotion grades
 
 | File | Grade | Why |
@@ -121,5 +156,6 @@ they are git's code.
    criss-cross merges (ort's recursive virtual base).
 3. **Styles and options**: diff3 and zdiff3, `-Xours`/`-Xtheirs`/union, whitespace flags, the
    patience diff, the indent heuristic (for `diff` output).
-4. **Performance**: classes are keyed by latin-1 strings; a hash with byte comparison, as git
-   does, would avoid the copies on large files.
+4. **Performance**: classes are keyed by latin-1 strings, where a hash with byte comparison (as git
+   does) would avoid the copies; histogram allocates its tables on every call (typed arrays, reused,
+   would close most of its 5× gap to C on its quadratic case).

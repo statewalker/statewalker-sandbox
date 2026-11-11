@@ -68,8 +68,30 @@ function hashlong(v: number, b: number): number {
   return (v + Math.floor(v / 2 ** b)) & ((1 << b) - 1);
 }
 
-/** the latin-1 view of bytes: a lossless string key for a line */
-const latin1 = new TextDecoder("latin1");
+/**
+ * Histogram's limit (64 distinct lines in one hash bucket): git fails the merge there too
+ * ("failed to execute internal merge"); a caller reports it as git does.
+ */
+export class XdiffLimitError extends Error {
+  override name = "XdiffLimitError";
+}
+
+/**
+ * A lossless string key for a line's bytes: `TextDecoder("latin1")` (WHATWG windows-1252, which
+ * maps every byte to a distinct code point), or char codes where a runtime lacks it.
+ */
+const lineKey: (bytes: Uint8Array) => string = (() => {
+  try {
+    const d = new TextDecoder("latin1");
+    return (b: Uint8Array) => d.decode(b);
+  } catch {
+    return (b: Uint8Array) => {
+      let s = "";
+      for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192));
+      return s;
+    };
+  }
+})();
 
 /** splits `data` into records (lines keeping their `\n`) */
 function records(data: Uint8Array): { start: number[]; end: number[] } {
@@ -98,7 +120,7 @@ function prepareCtx(pass: 1 | 2, data: Uint8Array, cf: Classifier): XdFile {
   const { start, end } = records(data);
   const ha: number[] = new Array(start.length);
   for (let i = 0; i < start.length; i++) {
-    const key = latin1.decode(data.subarray(start[i] as number, end[i] as number));
+    const key = lineKey(data.subarray(start[i] as number, end[i] as number));
     let c = cf.classes.get(key);
     if (c === undefined) {
       c = cf.classes.size;
@@ -564,7 +586,8 @@ function histogramDiff(env: XdEnv, line1: number, count1: number, line2: number,
     }
     const lcs: Region = { begin1: 0, end1: 0, begin2: 0, end2: 0 };
     const found = findLcs(env, lcs, line1, count1, line2, count2);
-    if (found < 0) throw new Error("xdiff: histogram chain too long");
+    if (found < 0)
+      throw new XdiffLimitError("xdiff: histogram chain too long (git fails this merge too)");
     if (found) {
       fallBack(env, line1, count1, line2, count2);
       return;

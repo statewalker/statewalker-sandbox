@@ -11,7 +11,7 @@ import { encodeCommit } from "../../17-repository/src/git-format.js";
 import type { Repository } from "../../17-repository/src/object-store.js";
 import { filesRepository } from "../../17-repository/src/repository.js";
 import { XdiffLimitError } from "../src/xdiff.js";
-import { mergeContent } from "../src/xmerge.js";
+import { type Merge, mergeContent, simplifyNonConflicts } from "../src/xmerge.js";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -428,16 +428,23 @@ describe("review #93", () => {
   });
 
   it("joining many refined conflicts is linear (git's is a list walk)", () => {
-    const n = 200_000;
-    const lines = (f: (i: number) => string) =>
-      enc.encode(Array.from({ length: n }, (_, i) => `${f(i)}\n`).join(""));
-    const base = lines((i) => `b${i}`);
-    const ours = lines((i) => (i % 2 ? "c" : `o${i}`));
-    const theirs = lines((i) => (i % 2 ? "c" : `t${i}`));
+    // 400,000 conflicts two lines apart: all join into one. A quadratic join (an array splice per
+    // join) moves ~8·10^10 entries; git's list walk, and ours, one pass.
+    const n = 400_000;
+    const merges: Merge[] = Array.from({ length: n }, (_, k) => ({
+      mode: 0,
+      i0: 3 * k,
+      chg0: 1,
+      i1: 3 * k,
+      chg1: 1,
+      i2: 3 * k,
+      chg2: 1,
+    }));
     const t0 = performance.now();
-    const r = mergeContent(base, ours, theirs, { ours: "o", theirs: "t" });
-    const ms = performance.now() - t0;
-    expect(r.conflicts).toBe(1);
-    expect(ms).toBeLessThan(3000); // 5.2 s with the quadratic join
-  }, 60_000);
+    const out = simplifyNonConflicts(merges);
+    expect(out).toEqual([
+      { mode: 0, i0: 0, chg0: 1, i1: 0, chg1: 3 * n - 2, i2: 0, chg2: 3 * n - 2 },
+    ]);
+    expect(performance.now() - t0).toBeLessThan(2000);
+  }, 120_000);
 });
