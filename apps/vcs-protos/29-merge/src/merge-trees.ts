@@ -45,6 +45,8 @@ export interface TreeMergeOptions extends XdOptions {
    * skips its redo after renames; git 2.43's ort ignores the option
    */
   detectRenames?: boolean;
+  /** git 2.43's rename similarity (see X13c's `legacyHashChars`); used by merges that detect renames */
+  legacyHashChars?: boolean;
 }
 
 const isTree = (mode: string) => mode === "40000" || mode === "040000";

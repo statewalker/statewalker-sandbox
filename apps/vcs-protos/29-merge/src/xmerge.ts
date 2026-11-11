@@ -27,6 +27,8 @@ export interface ContentMergeLabels {
   ours: string;
   theirs: string;
   base?: string;
+  /** conflict marker length (7; merge-ort adds 1 for rename/rename and rename collisions) */
+  markerSize?: number;
 }
 
 const MARKER_SIZE = 7;
@@ -134,9 +136,14 @@ function recsCopy(out: Out, x: XdFile, i: number, count: number, needsCr: boolea
   }
 }
 
-function marker(ch: string, name: string | undefined, needsCr: boolean): Uint8Array {
+function marker(
+  ch: string,
+  name: string | undefined,
+  needsCr: boolean,
+  size = MARKER_SIZE,
+): Uint8Array {
   return enc.encode(
-    `${ch.repeat(MARKER_SIZE)}${name !== undefined ? ` ${name}` : ""}${needsCr ? "\r" : ""}\n`,
+    `${ch.repeat(size)}${name !== undefined ? ` ${name}` : ""}${needsCr ? "\r" : ""}\n`,
   );
 }
 
@@ -152,11 +159,11 @@ function fillMergeBuffer(
     if (m.mode === 0) {
       const needsCr = isCrNeeded(xe1, xe2, m);
       recsCopy(out, xe1.xdf2, i, m.i1 - i, false, false);
-      out.push(marker("<", labels.ours, needsCr));
+      out.push(marker("<", labels.ours, needsCr, labels.markerSize));
       recsCopy(out, xe1.xdf2, m.i1, m.chg1, needsCr, true);
-      out.push(marker("=", undefined, needsCr));
+      out.push(marker("=", undefined, needsCr, labels.markerSize));
       recsCopy(out, xe2.xdf2, m.i2, m.chg2, needsCr, true);
-      out.push(marker(">", labels.theirs, needsCr));
+      out.push(marker(">", labels.theirs, needsCr, labels.markerSize));
     } else if (m.mode & 3) {
       recsCopy(out, xe1.xdf2, i, m.i1 - i, false, false);
       if (m.mode & 1)

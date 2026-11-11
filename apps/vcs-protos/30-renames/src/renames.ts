@@ -37,6 +37,11 @@ export interface RenameOptions {
    * Newer git (2.56 checked) counts them as a chunk of their own, which is the default here
    */
   legacyHashChars?: boolean;
+  /**
+   * merge-ort's relevant sources: past the exact pass, only these source paths are paired (the
+   * basename pass skips the others, and they leave the matrix)
+   */
+  relevant?: Set<string>;
 }
 
 export const MAX_SCORE = 60000;
@@ -303,7 +308,9 @@ export async function findRenames(
   };
   const srcByBase = unique(srcs);
   const dstByBase = unique(dsts.filter((d) => !d.rename));
+  const relevant = opts.relevant;
   for (const src of srcs) {
+    if (relevant && !relevant.has(src.path)) continue;
     const b = basename(src.path);
     if (!dstByBase.has(b)) continue;
     const dst = dstByBase.get(b);
@@ -313,7 +320,7 @@ export async function findRenames(
     if (score < minBasename) continue;
     record(dst, src, score);
   }
-  srcs = srcs.filter((s) => !s.used);
+  srcs = srcs.filter((s) => !s.used && (!relevant || relevant.has(s.path)));
 
   const left = dsts.filter((d) => !d.rename);
   if (!left.length || !srcs.length) return result;
