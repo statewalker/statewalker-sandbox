@@ -28,7 +28,7 @@ export type CorpusEntry = {
    * Built locally instead of downloaded: one page per rotation, each holding
    * the image at `url` with its pixels turned clockwise by that angle.
    */
-  derive?: { kind: "rotate"; rotations: number[] } | { kind: "columns" };
+  derive?: { kind: "rotate"; rotations: number[] } | { kind: "columns" } | { kind: "formatting" };
   expect: {
     /** Expected `document.language` (BCP 47). */
     language?: string;
@@ -60,6 +60,16 @@ export type CorpusEntry = {
     maxOccurrences?: Record<string, number>;
     /** Engine that must have produced the text of every image with words. */
     ocrEngine?: string;
+    /** Text formatting: phrases that must carry a decorator, list items, tables. */
+    formatting?: {
+      strong?: string[];
+      em?: string[];
+      /** Minimum number of spans marked strong anywhere. */
+      minStrong?: number;
+      listItems?: { bullet?: number; number?: number };
+      maxLevel?: number;
+      tables?: { rows: number; cols: number; headerRows?: number }[];
+    };
   };
 };
 
@@ -142,12 +152,32 @@ export const CORPUS: CorpusEntry[] = [
     },
   },
   {
+    file: "formatting-en.pdf",
+    url: "scripts/make-formatting.ts",
+    license: "CC0-1.0",
+    attribution: "Written for this test suite",
+    purpose: "inline bold/italic, bullet + nested + numbered lists, a table with header",
+    derive: { kind: "formatting" },
+    expect: {
+      language: "en",
+      contains: ["The end of the formatting test."],
+      formatting: {
+        strong: ["bold words", "Formatting Test"],
+        em: ["italic words"],
+        listItems: { bullet: 4, number: 3 },
+        maxLevel: 2,
+        tables: [{ rows: 4, cols: 3, headerRows: 1 }],
+      },
+    },
+  },
+  {
     file: "multicolumn.pdf",
     url: `${PYPDF}/026-latex-multicolumn/multicolumn.pdf`,
     license: "CC-BY-SA-4.0",
     attribution: "py-pdf/sample-files contributors",
     purpose: "LaTeX two-column article (lorem ipsum) and a table",
     expect: {
+      formatting: { tables: [{ rows: 6, cols: 5, headerRows: 1 }] },
       groundTruth: { file: "multicolumn.txt", fromStream: true, minRecall: 0.98, minOrder: 0.95 },
     },
   },
@@ -292,7 +322,7 @@ export const CORPUS: CorpusEntry[] = [
     attribution: "Martin Thoma, py-pdf/sample-files",
     purpose: "German LaTeX lecture notes: language detected from the text layer",
     maxPages: 6,
-    expect: { language: "de", contains: ["Topologie"] },
+    expect: { language: "de", contains: ["Topologie"], formatting: { minStrong: 3 } },
   },
   {
     file: "crazyones-pdfa.pdf",

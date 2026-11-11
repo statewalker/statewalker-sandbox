@@ -66,9 +66,61 @@ function recall(truth: string, text: string): number {
 
 function blockText(doc: PdfPortableTextDocument, page?: number): string {
   return doc.blocks
-    .filter((b) => b._type === "block" && (page === undefined || b.source.page === page))
-    .map((b) => (b._type === "block" ? b.children.map((c) => c.text).join("") : ""))
+    .filter((b) => b._type !== "image" && (page === undefined || b.source.page === page))
+    .map((b) => {
+      if (b._type === "table") return b.rows.map((r) => r.cells.join(" ")).join("\n");
+      if (b._type === "block") return b.children.map((c) => c.text).join("");
+      return "";
+    })
     .join("\n");
+}
+
+function checkFormatting(
+  doc: PdfPortableTextDocument,
+  f: NonNullable<CorpusEntry["expect"]["formatting"]>,
+  add: (name: string, ok: boolean, detail?: string) => void,
+) {
+  const blocks = doc.blocks.filter((b) => b._type === "block");
+  const spans = blocks.flatMap((b) => (b._type === "block" ? b.children : []));
+  const marked = (mark: string) =>
+    spans
+      .filter((s) => s.marks.includes(mark))
+      .map((s) => s.text.trim())
+      .join(" | ");
+  for (const [mark, phrases] of [
+    ["strong", f.strong],
+    ["em", f.em],
+  ] as const) {
+    for (const phrase of phrases ?? []) {
+      add(`${mark} "${phrase}"`, marked(mark).includes(phrase), "");
+    }
+  }
+  if (f.minStrong !== undefined) {
+    const n = spans.filter((s) => s.marks.includes("strong")).length;
+    add("strong spans", n >= f.minStrong, `${n}`);
+  }
+  if (f.listItems) {
+    for (const type of ["bullet", "number"] as const) {
+      const want = f.listItems[type];
+      if (want === undefined) continue;
+      const n = blocks.filter((b) => b._type === "block" && b.listItem === type).length;
+      add(`${type} items`, n === want, `${n}`);
+    }
+  }
+  if (f.maxLevel !== undefined) {
+    const max = Math.max(0, ...blocks.map((b) => (b._type === "block" ? (b.level ?? 0) : 0)));
+    add("list levels", max === f.maxLevel, `${max}`);
+  }
+  if (f.tables) {
+    const tables = doc.blocks.filter((b) => b._type === "table");
+    const shapes = tables.map((t) =>
+      t._type === "table"
+        ? `${t.rows.length}×${t.rows[0]?.cells.length ?? 0}/h${t.headerRows ?? 0}`
+        : "",
+    );
+    const want = f.tables.map((t) => `${t.rows}×${t.cols}/h${t.headerRows ?? 0}`);
+    add("tables", shapes.join() === want.join(), shapes.join() || "none");
+  }
 }
 
 function check(doc: PdfPortableTextDocument, entry: CorpusEntry, stats: ImageStat[]): Check[] {
@@ -150,6 +202,7 @@ function check(doc: PdfPortableTextDocument, entry: CorpusEntry, stats: ImageSta
       engines.join("/"),
     );
   }
+  if (expect.formatting) checkFormatting(doc, expect.formatting, add);
   for (const phrase of expect.contains ?? []) {
     add(`contains "${phrase}"`, text.toLowerCase().includes(phrase.toLowerCase()));
   }

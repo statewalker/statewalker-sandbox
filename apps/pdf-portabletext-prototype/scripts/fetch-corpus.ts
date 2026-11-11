@@ -10,6 +10,7 @@ import { PDFDocument } from "pdf-lib";
 import { chromium } from "playwright";
 import { CORPUS } from "./corpus-manifest.ts";
 import { buildColumnsPdf } from "./make-columns.ts";
+import { buildFormattingPdf } from "./make-formatting.ts";
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "corpus");
 mkdirSync(dir, { recursive: true });
@@ -93,6 +94,8 @@ for (const entry of CORPUS) {
   if (!entry.derive || existsSync(path)) continue;
   if (entry.derive.kind === "rotate") {
     writeFileSync(path, await rotatedPages(entry.url, entry.derive.rotations));
+  } else if (entry.derive.kind === "formatting") {
+    writeFileSync(path, await buildFormattingPdf());
   } else {
     const { pdf, truth } = await buildColumnsPdf();
     writeFileSync(path, pdf);

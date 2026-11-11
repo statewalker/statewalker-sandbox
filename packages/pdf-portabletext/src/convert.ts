@@ -37,11 +37,13 @@ import type {
 import { runsToImageWords } from "./text-layer-ocr.ts";
 import {
   bodyFontSize,
-  groupTextRuns,
+  layoutText,
   type Paragraph,
   paragraphToBlock,
   roundBox,
+  type Table,
   type TextRun,
+  tableToBlock,
 } from "./text-layout.ts";
 
 export type ConvertOptions = {
@@ -197,6 +199,7 @@ export async function convertPdf(
     // Pass 1: text layer of every page. Its language is the starting point for OCR.
     const invisibleMode = options.invisibleText ?? "replace";
     const paragraphsByPage: Paragraph[][] = [];
+    const tablesByPage: Table[][] = [];
     const invisibleRunsByPage: TextRun[][] = [];
     let invisibleCount = 0;
     for (let n = 1; n <= pageCount; n++) {
@@ -206,7 +209,9 @@ export async function convertPdf(
       invisibleCount += invisible.length;
       invisibleRunsByPage.push(invisible);
       const shown = invisibleMode === "keep" ? runs : runs.filter((r) => !r.invisible);
-      paragraphsByPage.push(groupTextRuns(shown));
+      const layout = layoutText(shown);
+      paragraphsByPage.push(layout.paragraphs);
+      tablesByPage.push(layout.tables);
     }
     if (invisibleCount > 0) {
       log(
@@ -240,6 +245,9 @@ export async function convertPdf(
         const language = detectLanguage(p.text) ?? pageLanguage;
         if (language) block.language = language.bcp47;
         items.push({ box: p.bbox, blocks: [block] });
+      }
+      for (const t of tablesByPage[n - 1]) {
+        items.push({ box: t.bbox, blocks: [tableToBlock(t, { keyGen, page: n })] });
       }
 
       let images: PageImage[] = (await extractImages(page, { minSize: options.minImageSize })).map(

@@ -36,6 +36,8 @@ export function openPdf(data: ArrayBuffer): Promise<PDFDocumentProxy> {
     cMapPacked: true,
     standardFontDataUrl: resourceUrl("standard_fonts"),
     iccUrl: resourceUrl("iccs"),
+    // Font names are needed to tell bold and italic text apart.
+    fontExtraProperties: true,
   }).promise;
 }
 
@@ -99,13 +101,40 @@ export function isInvisibleRun(str: string, visibility: TextVisibility): boolean
   return visibility.invisible.includes(s) && !visibility.visible.includes(s);
 }
 
+type FontInfo = { name?: string; bold?: boolean; black?: boolean; italic?: boolean };
+
+const BOLD_NAME = /bold|black|heavy|semibold|demi|(^|[+-])(cmbx|cmb|sfbx|sfb|ecbx|ecb|lmbx)/i;
+const ITALIC_NAME = /italic|oblique|slanted|(^|[+-])(cmti|cmsl|sfti|sfsl|ecti|ecsl|cmbxti|cmbxsl)/i;
+
+/** Bold / italic of a font, from pdf.js flags and the font name (incl. TeX names like CMBX10). */
+export function fontStyle(font: FontInfo | null | undefined): { bold: boolean; italic: boolean } {
+  const name = (font?.name ?? "").replace(/^[A-Z]{6}\+/, "");
+  return {
+    bold: !!(font?.bold || font?.black) || BOLD_NAME.test(name),
+    italic: !!font?.italic || ITALIC_NAME.test(name),
+  };
+}
+
 /** Text-layer runs of a page in top-left point coordinates. */
 export async function extractTextRuns(page: PDFPageProxy): Promise<TextRun[]> {
   const viewport = page.getViewport({ scale: 1 });
+  // The operator list (scanned for visibility) loads the fonts into commonObjs.
   const [content, visibility] = await Promise.all([
     page.getTextContent(),
     scanTextVisibility(page),
   ]);
+  const styles = new Map<string, { bold: boolean; italic: boolean }>();
+  const styleOf = (fontName: string) => {
+    let style = styles.get(fontName);
+    if (!style) {
+      const font = page.commonObjs.has(fontName)
+        ? (page.commonObjs.get(fontName) as FontInfo)
+        : null;
+      style = fontStyle(font);
+      styles.set(fontName, style);
+    }
+    return style;
+  };
   const runs: TextRun[] = [];
   for (const item of content.items) {
     if (!("str" in item)) continue;
@@ -122,6 +151,8 @@ export async function extractTextRuns(page: PDFPageProxy): Promise<TextRun[]> {
       fontSize,
       hasEOL: item.hasEOL,
       ...(isInvisibleRun(item.str, visibility) ? { invisible: true } : {}),
+      ...(item.fontName && styleOf(item.fontName).bold ? { bold: true } : {}),
+      ...(item.fontName && styleOf(item.fontName).italic ? { italic: true } : {}),
     });
   }
   return runs;

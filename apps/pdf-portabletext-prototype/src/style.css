@@ -180,3 +180,14 @@ figcaption {
   color: var(--muted);
   margin-top: 4px;
 }
+.pt-table {
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 0.9rem;
+}
+.pt-table td,
+.pt-table th {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  text-align: left;
+}
