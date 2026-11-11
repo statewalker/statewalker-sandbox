@@ -10,7 +10,7 @@
  *   `process_entry` for every conflicted path.
  */
 
-import { readTree, writeTree } from "../../17-repository/src/commands.js";
+import { readTree } from "../../17-repository/src/commands.js";
 import type { TreeEntry } from "../../17-repository/src/git-format.js";
 import type { Repository } from "../../17-repository/src/object-store.js";
 import {
@@ -161,6 +161,38 @@ function traverseOrder(levels: Map<string, unknown>[]): string[] {
   }
 }
 
+/**
+ * write_tree as merge-ort does it: entries in tree order (a directory sorts as "name/"), each mode
+ * as `%o`. Unlike a checked tree writer it writes what the merge produced, git's mode-0 entries
+ * included (a file split from a base directory by a directory rename, merge-ort.c's
+ * apply_directory_rename_modifications zeroing stage 1)
+ */
+async function writeRawTree(repo: Repository, entries: TreeEntry[]): Promise<string> {
+  const key = (e: TreeEntry) => {
+    const b = fnvEnc.encode(e.name);
+    if (Number.parseInt(e.mode, 8) !== S_IFDIR) return b;
+    const k = new Uint8Array(b.length + 1);
+    k.set(b);
+    k[b.length] = 0x2f;
+    return k;
+  };
+  const sorted = [...entries].sort((x, y) => nameCompare(key(x), key(y)));
+  const parts: Uint8Array[] = [];
+  for (const e of sorted) {
+    parts.push(fnvEnc.encode(`${Number.parseInt(e.mode, 8).toString(8)} ${e.name}\0`));
+    const oid = new Uint8Array(20);
+    for (let i = 0; i < 20; i++) oid[i] = Number.parseInt(e.oid.slice(2 * i, 2 * i + 2), 16);
+    parts.push(oid);
+  }
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return repo.objects.put("tree", out);
+}
+
 const dirOf = (path: string) => {
   const at = path.lastIndexOf("/");
   return at < 0 ? "" : path.slice(0, at);
@@ -204,7 +236,6 @@ class OrtMerge {
     this.pairs = [[], [], []];
     this.relevant = [new Map(), new Map(), new Map()];
     this.dirsRemoved = [new Map(), new Map(), new Map()];
-    this.dirRenameCount = [new Map(), new Map(), new Map()];
     this.dirRenames = [new Map(), new Map(), new Map()];
     this.deferred = [new GitStrMap(), new GitStrMap(), new GitStrMap()];
     this.trivialOkay = [true, true, true];
@@ -446,8 +477,9 @@ class OrtMerge {
     const relevant = this.relevant[side] as Map<string, number>;
     for (const p of this.cachedPairs[side]?.keys() ?? []) relevant.delete(p);
     for (const p of this.cachedIrrelevant[side] ?? []) relevant.delete(p);
-    this.dirRenameCount[side] = new Map();
+    // the counts survive the redo (cached_pairs_valid_side = -1): a pass that detects nothing keeps them
     if (!this.possibleSideRenames(side)) return false;
+    this.dirRenameCount[side] = new Map();
     const pairs = this.pairs[side] as FilePair[];
     const found = await findRenames(
       this.repo,
@@ -766,7 +798,7 @@ class OrtMerge {
       const oldinfo = this.paths.get(oldpath);
       const newinfo = this.paths.get(newpath);
       // newer git: a rename into itself (a directory rename undoing a rename) is no rename
-      if (oldinfo && oldpath === newpath) continue;
+      if (oldinfo && oldpath === newpath && !this.opts.legacyRenameToSelf) continue;
       if (!oldinfo || oldinfo.clean) continue;
       const next = renames[i + 1];
       if (next && onePath(next) === oldpath) {
@@ -968,7 +1000,7 @@ class OrtMerge {
       return;
     }
     mi.isNull = false;
-    mi.result = { mode: S_IFDIR, oid: await writeTree(this.repo, kids) };
+    mi.result = { mode: S_IFDIR, oid: await writeRawTree(this.repo, kids) };
   }
 
   uniquePath(path: string, branch: string): string {
@@ -990,7 +1022,7 @@ class OrtMerge {
       if (mi.clean) this.record(path, mi);
       else await this.processEntry(path, mi as Conflict);
     }
-    return writeTree(this.repo, this.children.get("") ?? []);
+    return writeRawTree(this.repo, this.children.get("") ?? []);
   }
 
   async processEntry(entryPath: string, entry: Conflict) {
@@ -1160,7 +1192,7 @@ class OrtMerge {
       for (let i = 0; i < 3; i++)
         if (ci.filemask & (1 << i))
           conflicts.push({
-            mode: (ci.stages[i] as Version).mode.toString(8),
+            mode: (ci.stages[i] as Version).mode.toString(8).padStart(6, "0"),
             oid: (ci.stages[i] as Version).oid,
             stage: (i + 1) as 1 | 2 | 3,
             path,

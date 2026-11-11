@@ -108,10 +108,10 @@ Each mutant ran against E2 and E3.
 | # | Mutant | Result |
 |---|---|---|
 | X1 | No basename guesses (`idx_possible_rename`) | survived the corpora; killed by an E2 case added afterwards |
-| X2 | No early culling (`handle_early_known_dir_renames`) | survived. Argued equivalent: it acts only when a directory's majority can no longer change, and a dropped location-only source would only have been paired as a plain rename that merges the same way |
+| X2 | No early culling (`handle_early_known_dir_renames`) | survived the corpora. My argument that it was equivalent was wrong: a culled source can no longer take a destination in the matrix that another source then gets (review case `early-culling`, E6), and E6 kills it |
 | X3 | A split taken as a majority | killed (E2, E3) |
 | X4 | A directory both sides renamed kept | survived. Reaching it needs both sides to hold the same removed directory as relevant, which only nested renames can make (one side renames the parent, the other the child); no corpus case does |
-| X5 | The other side's collisions ignored | survived. It needs both sides to rename directories, with one side's path equal to the other side's collision target; not reached |
+| X5 | The other side's collisions ignored | survived the corpora; the review built a reachable case (`other-side-collisions`, E6), which kills it |
 | X6 | No re-rename exclusion | killed (E2, E3) |
 | X7 | No path-in-the-way check | killed (E2, E3) |
 | X8 | `path_in_way` forced to 2.43's or to newer git's rule | newer git's rule is killed on 2.43 by an E2 case added afterwards; 2.43's rule is the legacy path and is killed on CI's git 2.56 |
@@ -122,6 +122,41 @@ Each mutant ran against E2 and E3.
 | X14 | Ancestors never counted | killed (E3) |
 | X15 | Unknown destinations kept in the counts | killed (E3, E4) |
 | X16 | Counts for directories that were not removed | survived. Such counts are dropped before merge-ort reads them; they could only change a basename guess for a directory that was not removed |
+
+### Review (#101)
+
+A separate review compared the port with the C and ran about 13,500 random merges from its own
+generators:
+- renames to and from the root;
+- nested renames on opposite sides;
+- both sides renaming;
+- renames into existing directories;
+- basename guesses decided by ties;
+- many files;
+- D/F;
+- symlinks and binary files.
+
+| Finding | Fix |
+|---|---|
+| ort's redo keeps `dir_rename_count` across passes (`cached_pairs_valid_side = -1`), and the second pass usually detects nothing, so the first pass's counts apply. The port reset them, so a file location went missing on a clean merge | The counts survive the reset and are cleared only when detection runs again; E6 `redo` |
+| `apply_directory_rename_modifications` zeroes stage 1 on a base-directory split. With the file on ours, git writes a mode-0 entry (`0 x`, null oid) into the tree; the port's checked tree writer threw | merge-ort's trees are written as `write_tree` writes them, mode-0 entries included; conflicted modes print as `%06o`; E6 `mode-zero` |
+| git 2.43 processes a rename that a directory rename maps back onto its own source; newer git skips it | `legacyRenameToSelf`, probed with the review's case; E6 `rename-into-itself` |
+| X2 is not equivalent, and X5 is reachable | E6 `early-culling` and `other-side-collisions` |
+| E2's "renamed by both sides" never tested directory-level conflicts (`d/new1` keeps `d` on ours) | Kept as a rename/rename case; X4 stays unobservable in a single merge |
+
+The review confirmed the rest line by line:
+- `update_dir_rename_counts`, including its root case;
+- the setup of the directory-rename info;
+- the early culling and the cleanup;
+- the order of `dirs_removed` updates;
+- `check_dir_renamed` and `apply_dir_rename`;
+- collisions;
+- inserted directories;
+- message texts.
+
+A mutant breaking ties in the highest count the other way was killed on its own tie generator, so
+the map order is right. Two shapes still make git 2.43 abort (`handle_content_merge`'s type
+assertion, a rename/rename together with a split); those are crashes, not mismatches.
 
 ## Promotion grades
 

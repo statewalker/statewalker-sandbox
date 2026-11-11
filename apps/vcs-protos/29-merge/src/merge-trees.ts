@@ -52,6 +52,11 @@ export interface TreeMergeOptions extends XdOptions {
    * (newer git, 2.56 checked, counts it unless it is the rename's own source)
    */
   legacyPathInWay?: boolean;
+  /**
+   * git 2.43's process_renames: a directory rename that turns a rename into a rename onto its own
+   * source is processed (newer git skips it; 2.43 often fails an assertion there instead)
+   */
+  legacyRenameToSelf?: boolean;
 }
 
 const isTree = (mode: string) => mode === "40000" || mode === "040000";
