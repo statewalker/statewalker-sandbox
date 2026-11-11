@@ -669,14 +669,25 @@ function groupSlideUp(x: XdFile, g: Group): boolean {
   return false;
 }
 
+/**
+ * What changed between git releases on merge-ort's path. git 2.54 added a step to compaction:
+ * a histogram group that slid, and lines up with a group of the other side, is diffed again
+ * with the classic algorithm. `legacyCompaction` gives git ≤ 2.53's result.
+ */
+export interface XdOptions {
+  legacyCompaction?: boolean;
+}
+
 /** slides groups of changes as far down as they go, back up to align with the other side's */
-export function xdlChangeCompact(x: XdFile, xo: XdFile): void {
+export function xdlChangeCompact(x: XdFile, xo: XdFile, opts: XdOptions = {}): void {
   const g: Group = { start: 0, end: 0 };
   const go: Group = { start: 0, end: 0 };
   groupInit(x, g);
   groupInit(xo, go);
   for (;;) {
     if (g.end !== g.start) {
+      const origStart = g.start;
+      const origEnd = g.end;
       let groupsize: number;
       let earliestEnd: number;
       let endMatchingOther: number;
@@ -702,6 +713,19 @@ export function xdlChangeCompact(x: XdFile, xo: XdFile): void {
         }
       }
       // (no indent heuristic: merge-ort does not set it)
+      // git ≥ 2.54: a slid group facing a change on the other side is diffed again (classic)
+      if (
+        !opts.legacyCompaction &&
+        go.end !== go.start &&
+        (g.start !== origStart || g.end !== origEnd)
+      )
+        fallBack(
+          { xdf1: x, xdf2: xo },
+          g.start + 1,
+          g.end - g.start,
+          go.start + 1,
+          go.end - go.start,
+        );
     }
     if (!groupNext(x, g)) break;
     if (!groupNext(xo, go)) throw new Error("xdiff: group sync broken moving to next group");
@@ -727,9 +751,13 @@ export function xdlBuildScript(env: XdEnv): XdChange[] {
 }
 
 /** diff, compact both ways, script: what xdl_merge does to each side */
-export function xdlDiffScript(a: Uint8Array, b: Uint8Array): { env: XdEnv; script: XdChange[] } {
+export function xdlDiffScript(
+  a: Uint8Array,
+  b: Uint8Array,
+  opts: XdOptions = {},
+): { env: XdEnv; script: XdChange[] } {
   const env = xdlDoDiff(a, b);
-  xdlChangeCompact(env.xdf1, env.xdf2);
-  xdlChangeCompact(env.xdf2, env.xdf1);
+  xdlChangeCompact(env.xdf1, env.xdf2, opts);
+  xdlChangeCompact(env.xdf2, env.xdf1, opts);
   return { env, script: xdlBuildScript(env) };
 }

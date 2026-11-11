@@ -10,6 +10,7 @@ import {
   type XdChange,
   type XdEnv,
   type XdFile,
+  type XdOptions,
   xdlBuildScript,
   xdlChangeCompact,
   xdlDiffScript,
@@ -169,7 +170,7 @@ function fillMergeBuffer(
 }
 
 /** xdl_refine_conflicts: a conflict narrowed to where the two sides differ */
-function refineConflicts(xe1: XdEnv, xe2: XdEnv, merges: Merge[]): Merge[] {
+function refineConflicts(xe1: XdEnv, xe2: XdEnv, merges: Merge[], opts: XdOptions): Merge[] {
   const out: Merge[] = [];
   for (const m of merges) {
     if (m.mode || m.chg1 === 0 || m.chg2 === 0) {
@@ -181,8 +182,8 @@ function refineConflicts(xe1: XdEnv, xe2: XdEnv, merges: Merge[]): Merge[] {
     const t1 = a1.data.subarray(a1.start[m.i1], a1.end[m.i1 + m.chg1 - 1]);
     const t2 = a2.data.subarray(a2.start[m.i2], a2.end[m.i2 + m.chg2 - 1]);
     const env = xdlDoDiff(t1, t2);
-    xdlChangeCompact(env.xdf1, env.xdf2);
-    xdlChangeCompact(env.xdf2, env.xdf1);
+    xdlChangeCompact(env.xdf1, env.xdf2, opts);
+    xdlChangeCompact(env.xdf2, env.xdf1, opts);
     const script = xdlBuildScript(env);
     if (!script.length) {
       m.mode = 4; // identical
@@ -233,6 +234,7 @@ function doMerge(
   xe2: XdEnv,
   s2: XdChange[],
   labels: ContentMergeLabels,
+  opts: XdOptions,
 ) {
   const merges: Merge[] = [];
   let a = 0;
@@ -305,7 +307,7 @@ function doMerge(
       x2.chg2,
     );
   }
-  const refined = simplifyNonConflicts(refineConflicts(xe1, xe2, merges));
+  const refined = simplifyNonConflicts(refineConflicts(xe1, xe2, merges, opts));
   const content = fillMergeBuffer(xe1, xe2, refined, labels);
   return { content, conflicts: refined.filter((m) => m.mode === 0).length };
 }
@@ -322,6 +324,7 @@ export function mergeContent(
   ours: Uint8Array,
   theirs: Uint8Array,
   labels: ContentMergeLabels,
+  opts: XdOptions = {},
 ): ContentMergeResult {
   // merge-ort's trivial merges (handle_content_merge), before anything looks at the bytes
   if (same(ours, theirs) || same(ours, base))
@@ -330,9 +333,9 @@ export function mergeContent(
   const tooLarge = [base, ours, theirs].some((b) => b.length > MAX_XDIFF_SIZE);
   if (tooLarge || isBinary(base) || isBinary(ours) || isBinary(theirs))
     return { content: ours, conflicts: 1, binary: true };
-  const { env: xe1, script: s1 } = xdlDiffScript(base, ours);
-  const { env: xe2, script: s2 } = xdlDiffScript(base, theirs);
+  const { env: xe1, script: s1 } = xdlDiffScript(base, ours, opts);
+  const { env: xe2, script: s2 } = xdlDiffScript(base, theirs, opts);
   if (!s1.length) return { content: theirs, conflicts: 0, binary: false };
   if (!s2.length) return { content: ours, conflicts: 0, binary: false };
-  return { ...doMerge(xe1, s1, xe2, s2, labels), binary: false };
+  return { ...doMerge(xe1, s1, xe2, s2, labels, opts), binary: false };
 }

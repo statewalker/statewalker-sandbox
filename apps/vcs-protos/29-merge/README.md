@@ -106,6 +106,21 @@ they are git's code.
 | D12 identical changes conflict | killed |
 | D13 no newline added at the end of a conflict side | killed |
 
+### git versions: compaction changed in 2.54
+
+CI (git 2.56) differed from this sandbox (git 2.43) on about 0.4% of the corpus. git 2.54 added a
+step to `xdl_change_compact`: under histogram diff, a group of changes that slid, and that lines up
+with a group on the other side, is diffed again with the classic algorithm. The release was found
+by checking which tags' `xdiffi.c` carry the step: 2.53.0 does not, 2.54.0 does. Between 2.43 and
+2.56 the rest of xdiff changed in form only: records stored by value, `rchg` renamed `changed`, a
+faster line hash. The one other behavioural change is that an empty label no longer gets a space
+after the marker.
+
+The port gives git ≥ 2.54's result by default, and git ≤ 2.53's with `{ legacyCompaction: true }`.
+The tests ask the installed git for its version and pass the matching option. CI's git 2.56 checks
+the new path and this sandbox's git 2.43 the old one, so both are checked against a real git.
+Building git 2.56 here to check both in one place was not permitted (code from outside the project).
+
 ### Review (#93)
 
 A separate review compared the port line by line with the C and ran about 53,000 differential merges

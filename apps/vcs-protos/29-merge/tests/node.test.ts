@@ -114,7 +114,13 @@ async function compare(cases: Case[]) {
     const p = pairs[i] as { ours: string; theirs: string };
     const entry = (await readTree(repo, g.tree)).find((e) => e.name === "f");
     const expected = entry ? await blob(repo, entry.oid) : new Uint8Array(0);
-    const ours = mergeContent(c.base, c.ours, c.theirs, { ours: p.ours, theirs: p.theirs });
+    const ours = mergeContent(
+      c.base,
+      c.ours,
+      c.theirs,
+      { ours: p.ours, theirs: p.theirs },
+      xdOptions,
+    );
     const same = Buffer.compare(Buffer.from(ours.content), Buffer.from(expected)) === 0;
     if (!same || (ours.conflicts === 0) !== g.clean)
       wrong.push(
@@ -123,6 +129,16 @@ async function compare(cases: Case[]) {
   }
   return wrong;
 }
+
+/** the installed git's merge behaviour: compaction changed in 2.54 */
+const gitVersion = execFileSync("git", ["--version"], { env: gitEnv })
+  .toString()
+  .match(/(\d+)\.(\d+)/)
+  ?.slice(1)
+  .map(Number) ?? [0, 0];
+const xdOptions = {
+  legacyCompaction: (gitVersion[0] as number) * 1000 + (gitVersion[1] as number) < 2054,
+};
 
 const L = (...lines: string[]) => enc.encode(lines.map((l) => `${l}\n`).join(""));
 
