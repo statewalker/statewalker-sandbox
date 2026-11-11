@@ -22,7 +22,8 @@
     "fixture": "tsx scripts/make-fixture.ts",
     "e2e": "tsx scripts/e2e.ts",
     "corpus:fetch": "NODE_USE_ENV_PROXY=1 tsx scripts/fetch-corpus.ts",
-    "corpus": "tsx scripts/corpus.ts"
+    "corpus": "tsx scripts/corpus.ts",
+    "corpus:md": "tsx scripts/write-corpus-md.ts"
   },
   "dependencies": {
     "@statewalker/pdf-portabletext": "workspace:*"

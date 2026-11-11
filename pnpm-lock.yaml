@@ -1244,15 +1244,27 @@ importers:
 
   packages/pdf-portabletext:
     dependencies:
+      '@gutenye/ocr-browser':
+        specifier: ^1.4.9
+        version: 1.4.9
+      '@gutenye/ocr-models':
+        specifier: ^1.4.2
+        version: 1.4.2
       '@portabletext/to-html':
         specifier: ^6.0.0
         version: 6.0.0
+      '@techstark/opencv-js':
+        specifier: 4.9.0-release.3
+        version: 4.9.0-release.3
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
       franc-all:
         specifier: ^7.2.0
         version: 7.2.0
+      onnxruntime-web:
+        specifier: 1.31.1
+        version: 1.31.1
       pdf-lib:
         specifier: ^1.17.1
         version: 1.17.1
@@ -1956,6 +1968,15 @@ packages:
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
+
+  '@gutenye/ocr-browser@1.4.9':
+    resolution: {integrity: sha512-CpPIRddvmao2XgxxZW+Hr9c6dx0RGUodP/SZdbG50IRqDd2gkJUxIkokSy5xnFU7q2Ufmj7uIzVJEtkAKKkKNg==}
+
+  '@gutenye/ocr-common@1.4.9':
+    resolution: {integrity: sha512-1ry8Uw5fWZBZ/TsYB31x/YH04cOk7cO2PyLcauW9rmrK+0bxV0IeBRWngeje+fhdVJ99L1s+Y0BZwrjEVCxgOA==}
+
+  '@gutenye/ocr-models@1.4.2':
+    resolution: {integrity: sha512-y7cLEpGFOeroavopfCd/ejyZB/UeF6xdn0mBFqVHNOI5wQTv2My+/nKxvxKTtG4DVMBzt9TpOfaX7aZGbuciUw==}
 
   '@hono/node-server@2.1.3':
     resolution: {integrity: sha512-TA//nWMqPhbfdfneACk6t5a9eqbS9lABEPyKn0/xZTah3H3U2XaVg85rJFl0/Fyit0I552YDHgXGVSf3GwqbUw==}
@@ -3695,6 +3716,9 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
+  '@techstark/opencv-js@4.9.0-release.3':
+    resolution: {integrity: sha512-y+KoLLlkXVUHWozYlN1vmMD9TQMPJObqml5nPA5vPWgHtOgm8q5O74UtzM23eayidvmeFX6tF5e2gDdyxcpy3Q==}
+
   '@tokenizer/inflate@0.4.1':
     resolution: {integrity: sha512-2mAv+8pkG6GIZiF1kNg1jAjh27IDxEPKwdGul3snfztFerfPGI1LjDezZp3i7BElXompqEtPmoPx6c2wgtWsOA==}
     engines: {node: '>=18'}
@@ -4583,6 +4607,9 @@ packages:
     resolution: {integrity: sha512-aAWcW57uxVNrQZqFXjITpW3sIUQmHGG3qSb9mUah9MgMC4NeWhNOlNjXEYq3HjRAvL6arUviZGGJsBg6z0zsWA==}
     engines: {node: '>= 0.8'}
 
+  flatbuffers@25.9.23:
+    resolution: {integrity: sha512-MI1qs7Lo4Syw0EOzUl0xjs2lsoeqFku44KpngfIduHBYvzm8h2+7K8YMQh1JtVVVrUvhLpNwqVi4DERegUJhPQ==}
+
   flatted@3.4.4:
     resolution: {integrity: sha512-5+ybhBZANEJxaH3X5evAFatUxLfEHSr7n6kYJ+1Qd0mUqr4eu9gIf6GDbWHf8RJijHrjjO8G+la14SlL2SeS1Q==}
 
@@ -4665,6 +4692,9 @@ packages:
   guarded-fetch@0.1.3:
     resolution: {integrity: sha512-PSaNyJk8VJlUVEhMHPXT/Z/WgNrLBh43WaYQJiu1qvyCuPQA+kgFMNmAOxI3GU3uXrCkO/xRW11XjcswrksYOA==}
     engines: {node: '>=20.19'}
+
+  guid-typescript@1.0.9:
+    resolution: {integrity: sha512-Y8T4vYhEfwJOTbouREvG+3XDsjr8E3kIr7uf+JZ0BYloFsttiHU0WfvANVsR7TxNUJa/WpCnw/Ino/p+DeBhBQ==}
 
   happy-dom@20.14.5:
     resolution: {integrity: sha512-x/RzkpWO40bTjIoT30iQtt64FLLmH/iRcUCN2X//bLx7H3ifkdfPXyqsro/OYtqzIAhiLMMA7mmiOR9C3NOKjQ==}
@@ -4895,6 +4925,9 @@ packages:
 
   jose@6.2.12:
     resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
+
+  js-clipper@1.0.1:
+    resolution: {integrity: sha512-0XYAS0ZoCki5K0fWwj8j8ug4mgxHXReW3ayPbVqr4zXPJuIs2pyvemL1sALadsEiAywZwW5Ify1XfU4bNJvokg==}
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -5385,6 +5418,12 @@ packages:
   once@1.4.0:
     resolution: {integrity: sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==}
 
+  onnxruntime-common@1.31.1:
+    resolution: {integrity: sha512-F+nnYNiQtmNJ95V6R/isBJqiVpdANCrsMEg1OaF+Bkbl3GAtzWLR7Ng17Ld0QtYtYJyotOHPJzOQn1Y6PLZjpg==}
+
+  onnxruntime-web@1.31.1:
+    resolution: {integrity: sha512-5GeH+bWQ+HxM10z7erGlsWqryrwMbSvm/1tkIsKTT48g0fI19VXVVC435t4t7VsPdSQeS7NmuZPXrQ73k82URw==}
+
   open@7.4.2:
     resolution: {integrity: sha512-MVHddDVweXZF3awtlAS+6pgKLlm/JgxZ90+/NBurBoQctVOOB/zDdVjcyPzQ+0laDGbsWgrRkflI65sQeOgT9Q==}
     engines: {node: '>=8'}
@@ -5545,6 +5584,9 @@ packages:
   pkce-challenge@5.0.1:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
     engines: {node: '>=16.20.0'}
+
+  platform@1.3.6:
+    resolution: {integrity: sha512-fnWVljUchTro6RiCFvCXBbNhJc2NijN7oIQxbwsyL0buWJPG85v81ehlHI9fXrJsMNgTofEoWIQeClKpgxFLrg==}
 
   playwright-core@1.63.0:
     resolution: {integrity: sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==}
@@ -6009,6 +6051,9 @@ packages:
 
   throat@5.0.0:
     resolution: {integrity: sha512-fcwX4mndzpLQKBS1DVYhGAcYaYt7vsHNIvQV+WXMvnow5cgjPphq5CaayLaGsjRdSCKZFNGt7/GYAuXaNOiYCA==}
+
+  tiny-invariant@1.3.3:
+    resolution: {integrity: sha512-+FbBPE1o9QAYvviau/qC5SE3caw21q3xkvWKBtja5vgqOWIHHJ3ioaq1VPfn/Szqctz2bU/oYeKd9/z5BL+PVg==}
 
   tinybench@6.2.0:
     resolution: {integrity: sha512-78U2TlB2CnVenajOFzf3BKSm0J6oz5L0NV7g32LCPccvYc0lbWvys4d3uUUCS2B1N8PAf2+aekR8i1KbC3HO7Q==}
@@ -7121,6 +7166,20 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
+
+  '@gutenye/ocr-browser@1.4.9':
+    dependencies:
+      '@gutenye/ocr-common': 1.4.9
+      '@gutenye/ocr-models': 1.4.2
+      onnxruntime-web: 1.31.1
+
+  '@gutenye/ocr-common@1.4.9':
+    dependencies:
+      '@techstark/opencv-js': 4.9.0-release.3
+      js-clipper: 1.0.1
+      tiny-invariant: 1.3.3
+
+  '@gutenye/ocr-models@1.4.2': {}
 
   '@hono/node-server@2.1.3(hono@4.13.13)':
     dependencies:
@@ -9062,6 +9121,8 @@ snapshots:
       tailwindcss: 4.3.3
       vite: 8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)
 
+  '@techstark/opencv-js@4.9.0-release.3': {}
+
   '@tokenizer/inflate@0.4.1':
     dependencies:
       debug: 4.4.3
@@ -9788,6 +9849,8 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  flatbuffers@25.9.23: {}
+
   flatted@3.4.4: {}
 
   flow-enums-runtime@0.0.6: {}
@@ -9870,6 +9933,8 @@ snapshots:
     dependencies:
       ipaddr.js: 2.2.0
       undici: 7.30.0
+
+  guid-typescript@1.0.9: {}
 
   happy-dom@20.14.5:
     dependencies:
@@ -10131,6 +10196,8 @@ snapshots:
   jju@1.4.0: {}
 
   jose@6.2.12: {}
+
+  js-clipper@1.0.1: {}
 
   js-tokens@4.0.0: {}
 
@@ -10700,6 +10767,17 @@ snapshots:
       wrappy: 1.0.2
     optional: true
 
+  onnxruntime-common@1.31.1: {}
+
+  onnxruntime-web@1.31.1:
+    dependencies:
+      flatbuffers: 25.9.23
+      guid-typescript: 1.0.9
+      long: 5.3.2
+      onnxruntime-common: 1.31.1
+      platform: 1.3.6
+      protobufjs: 7.6.6
+
   open@7.4.2:
     dependencies:
       is-docker: 2.2.1
@@ -10820,6 +10898,8 @@ snapshots:
   pirates@4.0.7: {}
 
   pkce-challenge@5.0.1: {}
+
+  platform@1.3.6: {}
 
   playwright-core@1.63.0: {}
 
@@ -11404,6 +11484,8 @@ snapshots:
       any-promise: 1.3.0
 
   throat@5.0.0: {}
+
+  tiny-invariant@1.3.3: {}
 
   tinybench@6.2.0: {}
 

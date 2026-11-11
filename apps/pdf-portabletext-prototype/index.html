@@ -36,6 +36,13 @@
           <input type="number" id="max-pages" value="50" min="1" />
         </label>
         <label>
+          OCR engine
+          <select id="engine">
+            <option value="tesseract" selected>Tesseract (per language)</option>
+            <option value="paddle">PaddleOCR (experimental, zh+en)</option>
+          </select>
+        </label>
+        <label>
           Invisible text layer
           <select id="invisible">
             <option value="replace" selected>Replace with own OCR</option>

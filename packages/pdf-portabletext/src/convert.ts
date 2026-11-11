@@ -240,7 +240,7 @@ export async function* convertPdfStream(
     // too short to tell the language reliably.
     const text = `${wordsText(result.words)} ${pageText}`;
     const detected = letterCount(text) >= MIN_OCR_LETTERS ? detectLanguage(text) : undefined;
-    if (detected && detected !== first) {
+    if (detected && detected !== first && !ocr.languageIndependent) {
       log(`page ${page}: image text looks ${detected.name}, re-running OCR`);
       const second = await recognize(img, detected, page);
       attempts.push(attempt(second));
@@ -250,6 +250,8 @@ export async function* convertPdfStream(
         languageSource = "detected";
       }
     } else if (detected) {
+      // Confirmed, or (language-independent engine) only a label for the text.
+      language = detected;
       languageSource = "detected";
     }
     return { result, language, languageSource, attempts };

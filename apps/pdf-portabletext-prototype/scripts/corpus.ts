@@ -17,9 +17,13 @@ import { CORPUS, type CorpusEntry } from "./corpus-manifest.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const corpusDir = join(root, "fixtures", "corpus");
-const outDir = join(root, "e2e-output", "corpus");
+const args = process.argv.slice(2);
+/** OCR engine for every run: `--engine=paddle` compares PaddleOCR with the default tesseract. */
+const engine =
+  args.find((a) => a.startsWith("--engine="))?.slice("--engine=".length) ?? "tesseract";
+const outDir = join(root, "e2e-output", engine === "tesseract" ? "corpus" : `corpus-${engine}`);
 mkdirSync(outDir, { recursive: true });
-const filter = process.argv[2];
+const filter = args.find((a) => !a.startsWith("--"));
 
 type ImageStat = {
   id: string;
@@ -287,10 +291,16 @@ try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   page.on("pageerror", (e) => console.error("[pageerror]", e.message));
   await page.goto("http://localhost:5198/");
-  for (const entry of CORPUS.filter((e) => !filter || (e.id ?? e.file).includes(filter))) {
+  // The filter is a comma-separated list of substrings of run names.
+  const wanted = filter?.split(",") ?? [];
+  const selected = CORPUS.filter(
+    (e) => wanted.length === 0 || wanted.some((w) => (e.id ?? e.file).includes(w)),
+  );
+  for (const entry of selected) {
     const started = Date.now();
     await page.reload();
     await page.selectOption("#language", "auto");
+    await page.selectOption("#engine", engine);
     await page.fill("#max-pages", String(entry.maxPages ?? 50));
     for (const [id, value] of Object.entries(entry.options ?? {})) {
       await page.selectOption(`#${id}`, value);

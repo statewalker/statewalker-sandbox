@@ -7,6 +7,7 @@ import {
   download,
   type ImageFormat,
   LANGUAGES,
+  type OcrEngine,
   type OcrPool,
   type PdfPortableTextDocument,
 } from "@statewalker/pdf-portabletext";
@@ -80,7 +81,13 @@ form.addEventListener("submit", async (e) => {
   cancelBtn.disabled = false;
   jsonBtn.disabled = zipBtn.disabled = true;
   abort = new AbortController();
+  const engine = $<HTMLSelectElement>("engine").value as OcrEngine;
+  if (ocr && ocr.engine !== engine) {
+    ocr.terminate();
+    ocr = null;
+  }
   ocr ??= createOcrPool({
+    engine,
     modelBaseUrl: new URLSearchParams(location.search).get("models") ?? undefined,
   });
   const started = performance.now();

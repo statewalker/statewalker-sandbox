@@ -18,6 +18,7 @@ export {
 export {
   createOcrPool,
   DEFAULT_MODEL_BASE_URL,
+  type OcrEngine,
   type OcrPool,
   type OcrResult,
 } from "./ocr-client.ts";
