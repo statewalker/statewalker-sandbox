@@ -41,8 +41,12 @@ type Row = {
   id: number;
   path: string;
   kind: "file" | "dir";
-  /** A BLOB (ArrayBuffer on workerd and cellb), or TEXT in rows written before BLOBs. */
-  data: ArrayBuffer | Uint8Array | string | null;
+  /**
+   * The file's UTF-8 bytes, read as `CAST(data AS BLOB)` so rows written as TEXT before BLOBs
+   * come back whole too (node:sqlite cuts TEXT at a NUL). ArrayBuffer on workerd and cellb;
+   * NULL for directories and for empty files (an empty buffer binds as NULL).
+   */
+  data: ArrayBuffer | Uint8Array | null;
   mode: number;
   mtime: number;
 };
@@ -53,17 +57,15 @@ const SUBTREE = "(path = ? OR substr(path, 1, ?) = ?)";
 const subtreeArgs = (path: string) => [path, path.length + 1, `${path}/`];
 
 const enc = new TextEncoder();
-const dec = new TextDecoder();
-/** A file's text as the value stored: its UTF-8 bytes, as the ArrayBuffer SQL bindings take. */
-const toBlob = (text: string): ArrayBuffer => enc.encode(text).buffer as ArrayBuffer;
-const textOf = (data: Row["data"]): string =>
-  data == null ? "" : typeof data === "string" ? data : dec.decode(data);
-const sizeOf = (data: Row["data"]): number =>
-  data == null
-    ? 0
-    : typeof data === "string"
-      ? enc.encode(data).length
-      : (data as ArrayBuffer | Uint8Array).byteLength;
+// A leading U+FEFF is part of the text, not a marker to drop.
+const dec = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
+const bytesOf = (data: Row["data"]): Uint8Array =>
+  data == null ? new Uint8Array() : data instanceof Uint8Array ? data : new Uint8Array(data);
+/** Bytes as the ArrayBuffer SQL bindings take (exactly the view's bytes). */
+const toBlob = (b: Uint8Array): ArrayBuffer =>
+  (b.byteOffset === 0 && b.byteLength === b.buffer.byteLength
+    ? b.buffer
+    : b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)) as ArrayBuffer;
 
 export class SqlFs {
   #sql: SqlLike;
@@ -79,7 +81,7 @@ export class SqlFs {
     if (path === "/") return { id: 0, path: "/", kind: "dir", data: null, mode: 0o755, mtime: 0 };
     return this.#sql
       .exec(
-        "SELECT rowid AS id, path, kind, data, mode, mtime FROM fs_entries WHERE path = ?",
+        "SELECT rowid AS id, path, kind, CAST(data AS BLOB) AS data, mode, mtime FROM fs_entries WHERE path = ?",
         path,
       )
       .toArray()[0] as Row | undefined;
@@ -89,14 +91,15 @@ export class SqlFs {
     if (!row) throw fsError("ENOENT", `no such file or directory '${path}'`);
     return row;
   }
-  #put(path: string, kind: "file" | "dir", text: string | null, mode?: number) {
+  /** The column is declared TEXT; TEXT affinity never converts a BLOB, so the bytes stay. */
+  #put(path: string, kind: "file" | "dir", bytes: Uint8Array | null, mode?: number) {
     this.#sql.exec(
       `INSERT INTO fs_entries (path, parent, kind, data, mode, mtime) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET kind = excluded.kind, data = excluded.data, mtime = excluded.mtime`,
       path,
       dirname(path),
       kind,
-      text === null ? null : toBlob(text),
+      bytes === null ? null : toBlob(bytes),
       mode ?? (kind === "dir" ? 0o755 : 0o644),
       Date.now(),
     );
@@ -129,23 +132,31 @@ export class SqlFs {
     const row = this.#must(path);
     if (row.kind === "dir")
       throw fsError("EISDIR", `illegal operation on a directory, read '${path}'`);
-    return textOf(row.data);
+    return dec.decode(bytesOf(row.data));
   }
   async readFileBuffer(path: string): Promise<Uint8Array> {
-    return enc.encode(await this.readFile(path));
+    const row = this.#must(path);
+    if (row.kind === "dir")
+      throw fsError("EISDIR", `illegal operation on a directory, read '${path}'`);
+    return bytesOf(row.data).slice();
   }
   async writeFile(path: string, data: string): Promise<void> {
     if (this.#get(path)?.kind === "dir")
       throw fsError("EISDIR", `illegal operation on a directory, write '${path}'`);
     this.#ensureParents(path);
-    this.#put(path, "file", String(data ?? ""));
+    this.#put(path, "file", enc.encode(String(data ?? "")));
   }
   async appendFile(path: string, data: string): Promise<void> {
     const row = this.#get(path);
     if (row?.kind === "dir")
       throw fsError("EISDIR", `illegal operation on a directory, append '${path}'`);
     this.#ensureParents(path);
-    this.#put(path, "file", textOf(row?.data ?? null) + String(data ?? ""));
+    const head = bytesOf(row?.data ?? null);
+    const tail = enc.encode(String(data ?? ""));
+    const out = new Uint8Array(head.length + tail.length);
+    out.set(head);
+    out.set(tail, head.length);
+    this.#put(path, "file", out);
   }
   async exists(path: string): Promise<boolean> {
     return this.#get(path) !== undefined;
@@ -158,7 +169,7 @@ export class SqlFs {
       isFile: row.kind === "file",
       isDirectory: row.kind === "dir",
       isSymbolicLink: false,
-      size: row.kind === "file" ? sizeOf(row.data) : 0,
+      size: row.kind === "file" ? bytesOf(row.data).length : 0,
       mode: row.mode,
       mtime: new Date(row.mtime).toISOString(),
     };
@@ -265,7 +276,12 @@ export class SqlFs {
     for (const e of list) {
       const target = dst + e.path.slice(src.length);
       if (e.kind === "dir") await this.mkdir(target, { recursive: true });
-      else await this.writeFile(target, textOf(this.#get(e.path)?.data ?? null));
+      else {
+        if (this.#get(target)?.kind === "dir")
+          throw fsError("EISDIR", `illegal operation on a directory, write '${target}'`);
+        this.#ensureParents(target);
+        this.#put(target, "file", bytesOf(this.#get(e.path)?.data ?? null)); // the bytes, as they are
+      }
     }
   }
 

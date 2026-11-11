@@ -396,6 +396,26 @@ test("file text is kept as UTF-8 bytes: NUL, non-ASCII and old TEXT rows read ba
     s.exec("SELECT typeof(data) AS t FROM fs_entries WHERE path = '/p1/nul'").toArray()[0].t,
     "blob",
   );
+  // A leading BOM is text: kept by read, append, copy and readFileBuffer.
+  await store.writeFile("/p1/bom", "\uFEFFhi");
+  assert.equal(await store.readFile("/p1/bom"), "\uFEFFhi");
+  assert.equal((await store.stat("/p1/bom")).size, 5);
+  await store.appendFile("/p1/bom", "!");
+  await store.cp("/p1/bom", "/p1/bom2");
+  assert.equal(await store.readFile("/p1/bom2"), "\uFEFFhi!");
+  assert.equal((await store.readFileBuffer("/p1/bom2")).length, 6);
+  // An old TEXT row holding NUL (workerd and celld keep it) reads whole on node:sqlite too.
+  s.exec(
+    "UPDATE fs_entries SET data = CAST(? AS TEXT) WHERE path = '/p1/bom'",
+    new TextEncoder().encode("a\u0000b").buffer,
+  );
+  assert.equal(
+    s.exec("SELECT typeof(data) AS t FROM fs_entries WHERE path = '/p1/bom'").toArray()[0].t,
+    "text",
+  );
+  assert.equal(await store.readFile("/p1/bom"), "a\u0000b");
+  await store.appendFile("/p1/bom", "c");
+  assert.equal(await store.readFile("/p1/bom"), "a\u0000bc");
   // A row written as TEXT (before BLOBs) still reads, and is rewritten as a BLOB.
   s.exec("UPDATE fs_entries SET data = ? WHERE path = '/p1/a'", "old é");
   assert.equal(await store.readFile("/p1/a"), "old é");
