@@ -1,7 +1,8 @@
 # 29 — Can one diff and merge engine produce git merge-tree's trees, conflicts and markers?
 
-Plan id **X13** (single diff and merge engine), slice **X13a: git's content merge, byte for
-byte**. Status: **answered — yes: a port of git's xdiff matches `git merge-tree` byte for byte on every case**.
+Plan id **X13** (single diff and merge engine), slices **X13a: git's content merge, byte for
+byte** (answered — yes: a port of git's xdiff matches `git merge-tree` byte for byte on every case)
+and **X13b: the tree merge without renames** (in progress).
 
 ## Question
 
@@ -154,6 +155,42 @@ The review confirmed several points as faithful:
 It measured a recursion depth of at most 168, so there is no stack risk. Pathological inputs of
 100,000 lines take 2–4 times git's time. Histogram's own quadratic case (an LCS of 5 lines each
 time) is 5 times slower than C, from allocations; that is an open thread.
+
+## X13b — the tree merge (without renames)
+
+### Question
+
+Given the merged blobs from X13a, can the tree merge around them produce what
+`git merge-tree --write-tree` writes when no renames are involved? That means the same tree id; the
+same conflicted entries (mode, blob, stage, path); and the same conflict messages, with the paths
+they name. merge-ort decides path by path (`process_entry`), and its conflict kinds are:
+- content and add/add;
+- modify/delete;
+- distinct types (a file against a symlink or submodule);
+- file/directory, where the file moves to `path~<branch>`.
+
+It also takes shortcuts that change what gets reported, such as resolving a directory one side left
+untouched without looking inside it.
+
+### Reject condition
+
+Rejected if, on any case of the corpus, the tree id, a conflicted entry or a message differs from
+`git merge-tree --write-tree -Xno-renames`, or a merge is clean here and conflicted there.
+
+### Acceptance criteria (fixed before code)
+
+| # | Requirement |
+|---|---|
+| T1 | 400 random tree merges (paths up to 3 deep over 4 names; regular, executable and symlink entries; edits, deletions, mode flips, files becoming directories and back): the tree id, the conflicted entries and the messages are equal to git's. |
+| T1b | 1000 more random merges from another seed, compared the same way. |
+| T2 | The corpus reaches every conflict kind in scope: git reports content, add/add, modify/delete, distinct types and file/directory conflicts in it. |
+| T3 | Portable: `src/merge-trees.ts` has no `node:` imports. Objects are read and written through the `Repository` of 17. |
+
+### Scope
+
+- Renames are X13c. git 2.43's merge-tree ignores `-Xno-renames`, so the corpus gives every new file
+  content of its own and git finds no renames.
+- Submodules (gitlinks) are out: there is no submodule merge. Only one merge base is handled.
 
 ## Promotion grades
 
