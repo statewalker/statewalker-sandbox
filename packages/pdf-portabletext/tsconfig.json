@@ -20,6 +20,6 @@
       "tesseract-wasm": ["./node_modules/tesseract-wasm/dist/index.d.ts"]
     }
   },
-  "include": ["src", "tests", "vite.ts"],
+  "include": ["src", "test", "vite.ts"],
   "exclude": ["node_modules"]
 }

@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import type { PdfPortableTextDocument } from "@statewalker/pdf-portabletext/schema";
 import { chromium } from "playwright";
 import { createServer } from "vite";
-import { CORPUS, type CorpusEntry } from "./corpus-manifest.ts";
+import { CORPUS, type CorpusEntry } from "../scripts/corpus-manifest.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const corpusDir = join(root, "fixtures", "corpus");

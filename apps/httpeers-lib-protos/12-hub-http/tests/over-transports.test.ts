@@ -28,7 +28,12 @@ import { createHubState } from "@statewalker/httpeers-stack/src/hub/hub-state.js
 import { appRules } from "@statewalker/httpeers-stack/src/policy.js";
 import { peerIdOf } from "@statewalker/httpeers-stack/src/setup/keys.js";
 import { fetchOverDuplex, serveFetchOverDuplex } from "@statewalker/webrun-http-streams";
-import { connect as connectPort, serve as servePort } from "@statewalker/webrun-rpc";
+import {
+  connect as connectPort,
+  overPipe,
+  serve as servePort,
+  structuredCodec,
+} from "@statewalker/webrun-rpc";
 import { connect as connectLibp2p, serveConnections } from "@statewalker/webrun-streams-libp2p";
 import { createLibp2p } from "libp2p";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -138,10 +143,12 @@ describe("12 — the hub protocol over three transports", () => {
       const hub = await buildHub((request) => request.headers.get("x-peer") ?? undefined);
       const channel = new MessageChannel();
       const stopServing = await servePort(
-        { port: channel.port2 },
+        { mux: overPipe(channel.port2, { codec: structuredCodec, side: "responder" }) },
         serveFetchOverDuplex(hub.site.handler),
       );
-      const connection = await connectPort({ port: channel.port1 });
+      const connection = await connectPort({
+        mux: overPipe(channel.port1, { codec: structuredCodec, side: "initiator" }),
+      });
       teardown.push(async () => {
         await connection.close();
         await stopServing();

@@ -48,6 +48,10 @@ against a transcript, and word-pair recall for reading order); duplicated text; 
 placed on the page, decodable, not blank), stored type, transparency and stencil flag; OCR
 rotation and placement; page count and JS heap. The latest results are in [CORPUS.md](CORPUS.md).
 
+Browser runs live in `e2e-browser/` (`e2e.ts`, `corpus.ts`), tools in `scripts/` (fixture
+builders, corpus manifest and download, report writer); the library's unit tests are in
+`packages/pdf-portabletext/test/` (`pnpm --filter @statewalker/pdf-portabletext test`).
+
 The browser scripts use Playwright's Chromium; set `CHROMIUM_PATH` to use another binary. They
 download tessdata models, so they need network access.
 

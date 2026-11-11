@@ -20,7 +20,12 @@
 import type { Libp2p } from "@libp2p/interface";
 import { peerIdFromString } from "@libp2p/peer-id";
 import { fetchOverDuplex, serveFetchOverDuplex } from "@statewalker/webrun-http-streams";
-import { connect as connectPort, serve as servePort } from "@statewalker/webrun-rpc";
+import {
+  connect as connectPort,
+  overPipe,
+  serve as servePort,
+  structuredCodec,
+} from "@statewalker/webrun-rpc";
 import { connect as connectLibp2p, serveConnections } from "@statewalker/webrun-streams-libp2p";
 import type { Caller } from "./scenarios.js";
 
@@ -43,8 +48,13 @@ export function directRung(handler: Handler): Rung {
 /** RUNG 2 — one `MessageChannel`: the server holds one end, the caller the other. */
 export async function portRung(handler: Handler): Promise<Rung> {
   const channel = new MessageChannel();
-  const stopServing = await servePort({ port: channel.port2 }, serveFetchOverDuplex(handler));
-  const client = await connectPort({ port: channel.port1 });
+  const stopServing = await servePort(
+    { mux: overPipe(channel.port2, { codec: structuredCodec, side: "responder" }) },
+    serveFetchOverDuplex(handler),
+  );
+  const client = await connectPort({
+    mux: overPipe(channel.port1, { codec: structuredCodec, side: "initiator" }),
+  });
 
   return {
     call: (request) => fetchOverDuplex(client.call, request),

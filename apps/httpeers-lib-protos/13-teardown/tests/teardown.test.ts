@@ -35,7 +35,12 @@ import { yamux } from "@chainsafe/libp2p-yamux";
 import { identify } from "@libp2p/identify";
 import { peerIdFromString } from "@libp2p/peer-id";
 import { tcp } from "@libp2p/tcp";
-import { connect as connectPort, serve as servePort } from "@statewalker/webrun-rpc";
+import {
+  connect as connectPort,
+  overPipe,
+  serve as servePort,
+  structuredCodec,
+} from "@statewalker/webrun-rpc";
 import type { Duplex } from "@statewalker/webrun-streams";
 import { connect as connectLibp2p, serve as serveLibp2p } from "@statewalker/webrun-streams-libp2p";
 import { createLibp2p } from "libp2p";
@@ -140,8 +145,13 @@ describe("13 — tearing down a duplex whose input is still open", () => {
 
     beforeAll(async () => {
       channel = new MessageChannel();
-      stopServing = await servePort({ port: channel.port2 }, echo);
-      connection = await connectPort({ port: channel.port1 });
+      stopServing = await servePort(
+        { mux: overPipe(channel.port2, { codec: structuredCodec, side: "responder" }) },
+        echo,
+      );
+      connection = await connectPort({
+        mux: overPipe(channel.port1, { codec: structuredCodec, side: "initiator" }),
+      });
     });
 
     afterAll(async () => {

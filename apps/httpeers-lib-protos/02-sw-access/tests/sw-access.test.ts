@@ -105,12 +105,15 @@ describe("02 — Biscuit inside a ServiceWorker", () => {
     return result;
   }
 
-  it("CLAIM 1 — the published build cannot be used in a module worker", async () => {
+  it("CLAIM 1 — the published build verifies a real token in a module worker", async () => {
     const outcome = await run("naive");
-    // Recorded whichever way it goes: if this ever starts passing, the
-    // constraint has been lifted upstream and the seam below is unnecessary.
-    expect(outcome.ok).toBe(false);
-    expect(outcome.stage).toBe("register");
+    // This used to fail at `register`: biscuit-wasm's top-level await is not
+    // allowed in a module ServiceWorker. `verifyToken` now runs on
+    // `@statewalker/webrun-biscuit`, which is pure TypeScript, so the plain
+    // import works and the seam below is no longer needed for it.
+    expect(outcome).toMatchObject({ stage: "verify", ok: true });
+    expect(outcome.detail).toContain(sub);
+    expect(outcome.detail).toContain("member");
   }, 120_000);
 
   it("CLAIM 2 — instantiating from bytes through the loader seam verifies a real token", async () => {

@@ -22,6 +22,6 @@
       ]
     }
   },
-  "include": ["src", "scripts", "vite.config.ts"],
+  "include": ["src", "scripts", "e2e-browser", "vite.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

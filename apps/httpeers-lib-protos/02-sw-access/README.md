@@ -2,11 +2,13 @@
 
 `pnpm test 02-sw-access`
 
-**Answer: not with the package as published, and yes through a loader seam
-that the package already exposes.** Both variants are real workers in a real
-Chromium, registered by `@statewalker/webrun-http-browser`'s
-`initServiceWorker`, each asked to verify one token minted by
-`httpeers.core`'s own `mintToken`.
+**Answer: yes, with the package as published.** `httpeers.core`'s
+`verifyToken` runs on `@statewalker/webrun-biscuit`, which is pure TypeScript,
+so a plain import works in a module ServiceWorker. The loader seam below is
+what it takes to use `@biscuit-auth/biscuit-wasm` itself there; `verifyToken`
+no longer needs it. Both variants are real workers in a real Chromium,
+registered by `@statewalker/webrun-http-browser`'s `initServiceWorker`, each
+asked to verify one token minted by `httpeers.core`'s own `mintToken`.
 
 **But the architecture means this is an option, not a requirement.** The
 shipping worker (`apps/httpeers-stack/src/pages/app/sw.ts`) is *one*
@@ -20,10 +22,12 @@ what it would cost to move one into the worker, not that anything must.
 
 | # | Claim | How it is established | What would falsify it |
 |---|---|---|---|
-| 1 | The published build **cannot** be used in a module worker | `sw-naive.ts` imports `verifyToken` normally; registration never yields a controlling worker, and the page reports `stage: "register"` | Registration succeeding — which would mean the constraint was lifted upstream and variant B is unnecessary |
-| 2 | Instantiating **from bytes** through `__wbg_set_wasm` verifies a real token in the worker | `sw-manual.ts` calls `initBiscuit(wasmUrl)` then `verifyToken`; the worker returns `{sub, roles}` matching what was minted | Any failure inside the worker — the reply carries the error verbatim |
+| 1 | The published build **verifies** a real token in a module worker | `sw-naive.ts` imports `verifyToken` normally; the worker returns `{sub, roles}` matching what was minted | Any failure inside the worker, or registration never yielding a controlling worker (`stage: "register"`) |
+| 2 | Instantiating biscuit-wasm **from bytes** through `__wbg_set_wasm` works in the worker | `sw-manual.ts` calls `initBiscuit(wasmUrl)` then `verifyToken`; the worker returns `{sub, roles}` matching what was minted | Any failure inside the worker — the reply carries the error verbatim |
 
-Measured 2026-09-12, both pass.
+Both pass. Claim 1 failed with `stage: "register"` while `verifyToken` ran
+on biscuit-wasm, whose top-level await module ServiceWorkers reject (see the
+next section).
 
 ## The seam, and its price
 
