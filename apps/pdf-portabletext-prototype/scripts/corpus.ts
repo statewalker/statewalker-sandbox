@@ -31,6 +31,23 @@ const words = (text: string) =>
     .split(/[^\p{L}\p{N}]+/u)
     .filter((w) => w.length >= 2);
 
+/** Fraction of the ground truth's adjacent word pairs (as a multiset) found in `text`. */
+function orderRecall(truth: string, text: string): number {
+  const pairs = (ws: string[]) => ws.slice(1).map((w, i) => `${ws[i]} ${w}`);
+  const bag = new Map<string, number>();
+  for (const p of pairs(words(text))) bag.set(p, (bag.get(p) ?? 0) + 1);
+  const expected = pairs(words(truth));
+  let hit = 0;
+  for (const p of expected) {
+    const n = bag.get(p) ?? 0;
+    if (n > 0) {
+      hit++;
+      bag.set(p, n - 1);
+    }
+  }
+  return expected.length === 0 ? 1 : hit / expected.length;
+}
+
 /** Fraction of ground-truth words (as a multiset) found in `text`. */
 function recall(truth: string, text: string): number {
   const bag = new Map<string, number>();
@@ -137,20 +154,29 @@ function check(doc: PdfPortableTextDocument, entry: CorpusEntry, stats: ImageSta
     add(`contains "${phrase}"`, text.toLowerCase().includes(phrase.toLowerCase()));
   }
   if (expect.groundTruth) {
-    const truth = readFileSync(
-      join(corpusDir, expect.groundTruth.url.split("/").pop() as string),
-      "utf8",
-    );
-    const pages = expect.groundTruth.perPage ? doc.pages.map((p) => p.number) : [undefined];
+    const gt = expect.groundTruth;
+    const truth = readFileSync(join(corpusDir, gt.file), "utf8");
+    const pages = gt.perPage ? doc.pages.map((p) => p.number) : [undefined];
     for (const page of pages) {
-      const r = recall(truth, blockText(doc, page));
+      const output = blockText(doc, page);
+      const r = recall(truth, output);
+      const suffix = page ? ` p${page}` : "";
       add(
-        `recall${page ? ` p${page}` : ""}`,
-        r >= expect.groundTruth.minRecall,
-        `${(r * 100).toFixed(1)}% (min ${expect.groundTruth.minRecall * 100}%)`,
+        `recall${suffix}`,
+        r >= gt.minRecall,
+        `${(r * 100).toFixed(1)}% (min ${gt.minRecall * 100}%)`,
       );
+      if (gt.minOrder !== undefined) {
+        const o = orderRecall(truth, output);
+        add(
+          `order${suffix}`,
+          o >= gt.minOrder,
+          `${(o * 100).toFixed(1)}% (min ${gt.minOrder * 100}%)`,
+        );
+      }
     }
   }
+
   return checks;
 }
 

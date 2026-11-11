@@ -28,7 +28,7 @@ export type CorpusEntry = {
    * Built locally instead of downloaded: one page per rotation, each holding
    * the image at `url` with its pixels turned clockwise by that angle.
    */
-  derive?: { rotations: number[] };
+  derive?: { kind: "rotate"; rotations: number[] } | { kind: "columns" };
   expect: {
     /** Expected `document.language` (BCP 47). */
     language?: string;
@@ -37,7 +37,21 @@ export type CorpusEntry = {
     /** Words/phrases that must appear in the text (case-insensitive). */
     contains?: string[];
     /** Plain-text ground truth: fraction of its words found in the OCR text, per page. */
-    groundTruth?: { url: string; minRecall: number; perPage?: boolean };
+    /**
+     * Plain-text transcript in reading order, `file` in the corpus directory:
+     * downloaded from `url`, written by a `derive` builder, or (`fromStream`)
+     * taken from the PDF's own text in content-stream order. Checks the
+     * fraction of its words found (recall, per page with `perPage`) and of its
+     * adjacent word pairs found (`minOrder`: catches wrong reading order).
+     */
+    groundTruth?: {
+      file: string;
+      url?: string;
+      fromStream?: boolean;
+      minRecall: number;
+      minOrder?: number;
+      perPage?: boolean;
+    };
     /** Expected OCR rotation of each image, in document order. */
     rotations?: number[];
     /** Expected rotation of each image's placement on its page, in document order. */
@@ -49,7 +63,7 @@ export type CorpusEntry = {
   };
 };
 
-const linnTruth = `${OCRMYPDF}/linn.txt`;
+const linnTruth = { file: "linn.txt", url: `${OCRMYPDF}/linn.txt` };
 
 export const CORPUS: CorpusEntry[] = [
   {
@@ -61,7 +75,7 @@ export const CORPUS: CorpusEntry[] = [
     expect: {
       language: "en",
       minImages: 1,
-      groundTruth: { url: linnTruth, minRecall: 0.9 },
+      groundTruth: { ...linnTruth, minRecall: 0.9, minOrder: 0.85 },
     },
   },
   {
@@ -73,7 +87,7 @@ export const CORPUS: CorpusEntry[] = [
     expect: {
       language: "en",
       minImages: 1,
-      groundTruth: { url: linnTruth, minRecall: 0.9 },
+      groundTruth: { ...linnTruth, minRecall: 0.9 },
     },
   },
   {
@@ -85,7 +99,7 @@ export const CORPUS: CorpusEntry[] = [
     expect: {
       language: "en",
       minImages: 1,
-      groundTruth: { url: linnTruth, minRecall: 0.9 },
+      groundTruth: { ...linnTruth, minRecall: 0.9 },
     },
   },
   {
@@ -97,7 +111,7 @@ export const CORPUS: CorpusEntry[] = [
     expect: {
       language: "en",
       minImages: 4,
-      groundTruth: { url: linnTruth, minRecall: 0.85, perPage: true },
+      groundTruth: { ...linnTruth, minRecall: 0.85, perPage: true },
       placementRotations: [0, 90, 180, 270],
     },
   },
@@ -107,12 +121,34 @@ export const CORPUS: CorpusEntry[] = [
     license: "GFDL-1.2-or-later OR CC-BY-SA-3.0",
     attribution: "(C) 1985 Forat Electronics; pixels rotated by scripts/fetch-corpus.ts",
     purpose: "scan whose pixels are stored sideways/upside down: OCR orientation detection",
-    derive: { rotations: [90, 180, 270] },
+    derive: { kind: "rotate", rotations: [90, 180, 270] },
     expect: {
       language: "en",
       minImages: 3,
-      groundTruth: { url: linnTruth, minRecall: 0.85, perPage: true },
+      groundTruth: { ...linnTruth, minRecall: 0.85, perPage: true },
       rotations: [90, 180, 270],
+    },
+  },
+  {
+    file: "columns-en.pdf",
+    url: "scripts/make-columns.ts",
+    license: "CC0-1.0",
+    attribution: "Written for this test suite",
+    purpose: "two columns drawn line-interleaved, aligned paragraph breaks, longer left column",
+    derive: { kind: "columns" },
+    expect: {
+      language: "en",
+      groundTruth: { file: "columns-en.txt", minRecall: 0.98, minOrder: 0.95 },
+    },
+  },
+  {
+    file: "multicolumn.pdf",
+    url: `${PYPDF}/026-latex-multicolumn/multicolumn.pdf`,
+    license: "CC-BY-SA-4.0",
+    attribution: "py-pdf/sample-files contributors",
+    purpose: "LaTeX two-column article (lorem ipsum) and a table",
+    expect: {
+      groundTruth: { file: "multicolumn.txt", fromStream: true, minRecall: 0.98, minOrder: 0.95 },
     },
   },
   {
@@ -124,7 +160,7 @@ export const CORPUS: CorpusEntry[] = [
     expect: {
       language: "en",
       minImages: 1,
-      groundTruth: { url: linnTruth, minRecall: 0.8 },
+      groundTruth: { ...linnTruth, minRecall: 0.8 },
     },
   },
   {

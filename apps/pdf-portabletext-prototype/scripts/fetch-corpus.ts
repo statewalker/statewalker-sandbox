@@ -2,12 +2,14 @@
  * Downloads the test corpus into `fixtures/corpus/` (skips files already
  * there) and builds the derived files described by `derive` entries.
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PDFDocument } from "pdf-lib";
 import { chromium } from "playwright";
-import { CORPUS, type CorpusEntry } from "./corpus-manifest.ts";
+import { CORPUS } from "./corpus-manifest.ts";
+import { buildColumnsPdf } from "./make-columns.ts";
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "corpus");
 mkdirSync(dir, { recursive: true });
@@ -47,8 +49,8 @@ async function rotatePixels(image: Uint8Array, rotations: number[]): Promise<Uin
   }
 }
 
-async function derive(entry: CorpusEntry & { derive: { rotations: number[] } }) {
-  const pngs = await rotatePixels(await download(entry.url), entry.derive.rotations);
+async function rotatedPages(url: string, rotations: number[]) {
+  const pngs = await rotatePixels(await download(url), rotations);
   const pdf = await PDFDocument.create();
   for (const png of pngs) {
     const image = await pdf.embedPng(png);
@@ -60,11 +62,25 @@ async function derive(entry: CorpusEntry & { derive: { rotations: number[] } }) 
   return pdf.save();
 }
 
+/** The PDF's text in content-stream order, words hyphenated across lines rejoined. */
+async function streamText(path: string): Promise<string> {
+  const require = createRequire(import.meta.url);
+  const pdfjs = await import(require.resolve("pdfjs-dist/legacy/build/pdf.mjs"));
+  const data = new Uint8Array(readFileSync(path));
+  const doc = await pdfjs.getDocument({ data, verbosity: 0 }).promise;
+  const out: string[] = [];
+  for (let n = 1; n <= doc.numPages; n++) {
+    const content = await (await doc.getPage(n)).getTextContent();
+    for (const item of content.items) if ("str" in item) out.push(item.str);
+  }
+  return out.join(" ").replace(/(\p{L})- +(\p{Ll})/gu, "$1$2");
+}
+
 const downloads = new Map<string, string>();
 for (const entry of CORPUS) {
   if (!entry.derive) downloads.set(entry.file, entry.url);
-  const truth = entry.expect.groundTruth?.url;
-  if (truth) downloads.set(truth.split("/").pop() as string, truth);
+  const truth = entry.expect.groundTruth;
+  if (truth?.url) downloads.set(truth.file, truth.url);
 }
 for (const [file, url] of downloads) {
   const path = join(dir, file);
@@ -75,8 +91,20 @@ for (const [file, url] of downloads) {
 for (const entry of CORPUS) {
   const path = join(dir, entry.file);
   if (!entry.derive || existsSync(path)) continue;
-  writeFileSync(path, await derive(entry as CorpusEntry & { derive: { rotations: number[] } }));
+  if (entry.derive.kind === "rotate") {
+    writeFileSync(path, await rotatedPages(entry.url, entry.derive.rotations));
+  } else {
+    const { pdf, truth } = await buildColumnsPdf();
+    writeFileSync(path, pdf);
+    writeFileSync(join(dir, entry.file.replace(/\.pdf$/, ".txt")), truth);
+  }
   console.log(`built ${entry.file}`);
+}
+for (const entry of CORPUS) {
+  const truth = entry.expect.groundTruth;
+  if (!truth?.fromStream || existsSync(join(dir, truth.file))) continue;
+  writeFileSync(join(dir, truth.file), await streamText(join(dir, entry.file)));
+  console.log(`wrote ${truth.file} from the content stream`);
 }
 
 const notice = CORPUS.map(

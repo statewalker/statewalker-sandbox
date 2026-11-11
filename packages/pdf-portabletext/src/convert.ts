@@ -26,6 +26,7 @@ import {
   pageSize,
   renderPage,
 } from "./pdf-extract.ts";
+import { type OrderBox, readingOrder } from "./reading-order.ts";
 import type {
   ImageBlock,
   PageInfo,
@@ -83,7 +84,7 @@ export type ConvertResult = {
   blobs: Map<string, Blob>;
 };
 
-type PageItem = { top: number; left: number; blocks: PortableTextBlock[] };
+type PageItem = { box: OrderBox; blocks: PortableTextBlock[] };
 type PageImage = ExtractedImage & { kind: ImageBlock["source"]["type"] };
 type OcrOutcome = {
   result: OcrResult;
@@ -238,7 +239,7 @@ export async function convertPdf(
         const block = paragraphToBlock(p, { keyGen, page: n, bodySize });
         const language = detectLanguage(p.text) ?? pageLanguage;
         if (language) block.language = language.bcp47;
-        items.push({ top: p.bbox.y, left: p.bbox.x, blocks: [block] });
+        items.push({ box: p.bbox, blocks: [block] });
       }
 
       let images: PageImage[] = (await extractImages(page, { minSize: options.minImageSize })).map(
@@ -282,7 +283,7 @@ export async function convertPdf(
             ...(img.transform ? { transform: img.transform } : {}),
           },
         };
-        const pageItem: PageItem = { top: img.bbox.y, left: img.bbox.x, blocks: [imageBlock] };
+        const pageItem: PageItem = { box: img.bbox, blocks: [imageBlock] };
         items.push(pageItem);
         if (!options.ocrImages) {
           img.bitmap.close();
@@ -350,9 +351,10 @@ export async function convertPdf(
       }
       await Promise.all(ocrJobs);
 
-      // Reading order: top to bottom, then left to right (single-column heuristic).
-      items.sort((a, b) => (Math.abs(a.top - b.top) < 2 ? a.left - b.left : a.top - b.top));
-      for (const item of items) blocks.push(...item.blocks);
+      // Reading order: XY-cut over the page's paragraphs and images (columns
+      // left to right, rows top to bottom); OCR text stays after its image.
+      const ordered = readingOrder(items.map((item) => item.box));
+      for (const index of ordered) blocks.push(...items[index].blocks);
       page.cleanup();
     }
   } finally {

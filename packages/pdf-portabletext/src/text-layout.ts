@@ -34,9 +34,17 @@ function joinRuns(runs: TextRun[]): Line[] {
   let line: Line | null = null;
   let last: TextRun | null = null;
   for (const run of runs) {
-    if (run.str === "" && !run.hasEOL) continue;
+    // pdf.js inserts whitespace items to fill gaps between chunks, even across a
+    // column gutter: they carry no geometry worth measuring.
+    if (run.str.trim() === "" && !run.hasEOL) continue;
+    // Same baseline and close: a wide gap means another column or table cell,
+    // even when the PDF draws the two in one go.
     const sameLine =
-      line !== null && last !== null && Math.abs(run.y - last.y) < Math.max(run.fontSize, 1) * 0.5;
+      line !== null &&
+      last !== null &&
+      Math.abs(run.y - last.y) < Math.max(run.fontSize, 1) * 0.5 &&
+      run.x - (last.x + last.width) < Math.max(run.fontSize, 1) * 1.5 &&
+      run.x + run.width > last.x;
     if (!sameLine || line === null) {
       if (line) lines.push(line);
       line = {
@@ -49,7 +57,7 @@ function joinRuns(runs: TextRun[]): Line[] {
       };
       last = null;
     }
-    if (run.str !== "") {
+    if (run.str.trim() !== "") {
       if (last) {
         const gap = run.x - (last.x + last.width);
         const needsSpace =
@@ -74,24 +82,38 @@ function joinRuns(runs: TextRun[]): Line[] {
   return lines.filter((l) => l.text.trim() !== "");
 }
 
-/** Groups text-layer runs into paragraphs using line spacing and font size. */
+/** How well `line` continues a paragraph ending with `prev` (lower is better), or null. */
+function continuation(prev: Line, line: Line): number | null {
+  const gap = line.top - prev.bottom;
+  const sizeRatio = line.fontSize / prev.fontSize;
+  if (gap >= line.fontSize * 0.6 || gap <= -line.fontSize * 0.5) return null;
+  if (sizeRatio <= 0.87 || sizeRatio >= 1.15) return null;
+  const overlap = Math.min(prev.right, line.right) - Math.max(prev.left, line.left);
+  const narrower = Math.min(prev.right - prev.left, line.right - line.left);
+  if (overlap < narrower * 0.3) return null;
+  return Math.abs(gap);
+}
+
+/**
+ * Groups text-layer runs into paragraphs using line spacing, horizontal
+ * overlap and font size. Lines join the paragraph directly above them,
+ * whatever order the PDF drew them in (columns may be drawn interleaved).
+ */
 export function groupTextRuns(runs: TextRun[]): Paragraph[] {
   const lines = joinRuns(runs);
   const groups: Line[][] = [];
-  for (const line of lines) {
-    const group = groups[groups.length - 1];
-    const prev = group?.[group.length - 1];
-    if (prev) {
-      const gap = line.top - prev.bottom;
-      const sizeRatio = line.fontSize / prev.fontSize;
-      const continues =
-        gap < line.fontSize * 0.6 && gap > -line.fontSize && sizeRatio > 0.87 && sizeRatio < 1.15;
-      if (continues) {
-        group.push(line);
-        continue;
+  for (const line of [...lines].sort((a, b) => a.top - b.top || a.left - b.left)) {
+    let best: Line[] | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const group of groups) {
+      const score = continuation(group[group.length - 1], line);
+      if (score !== null && score < bestScore) {
+        best = group;
+        bestScore = score;
       }
     }
-    groups.push([line]);
+    if (best) best.push(line);
+    else groups.push([line]);
   }
   return groups.map((group) => {
     let text = "";
