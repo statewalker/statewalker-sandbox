@@ -8,7 +8,9 @@
 // /proj/a.md). Errors carry the POSIX code the protocol maps (ENOENT, EEXIST, EACCES, ENOTDIR,
 // EISDIR, ENOTEMPTY, ENOTSUP).
 
+import { errorCode } from "@statewalker/webrun-files-rpc";
 import type { Cap } from "../caps.ts";
+import { capFilesRpc } from "../files-rpc.ts";
 import { type DirEntryStat, MAX_WHOLE_FILE_BYTES } from "../sql-fs.ts";
 
 export type HostFsReply = { value: unknown } | { error: { code: string; message: string } };
@@ -33,17 +35,22 @@ interface OpenFile {
 }
 
 /**
- * Until a file is written (and its `bytes` loaded), each handle reads it through a chunk stream
- * of its own: only the current chunk is held, so a file of any size reads in a constant amount of
- * memory, and two handles reading at different places do not disturb each other.
+ * Until a file is written (and its `bytes` loaded), each handle reads it through a files-RPC read
+ * stream of its own: only the current chunk is held here, so a file of any size reads in a
+ * constant amount of memory, and two handles reading at different places do not disturb each
+ * other.
  */
 interface Reader {
+  /** The files-RPC stream, and the id of its next chunk. */
   id: string;
+  next: number;
+  /** The stream has given its last chunk: nothing lies past `pos`. */
+  done: boolean;
   /** The path the stream was opened on (a rename closes it). */
   path: string;
-  /** When it was last used (on EMFILE the least recently used one makes room). */
+  /** When it was last used (with no room for a stream, the least recently used one makes room). */
   used: number;
-  /** The file's size when the stream was opened (what it reads). */
+  /** The file's size as this handle sees it (its last stat when the stream opened; exact at the end). */
   size: number;
   /** Where the stream continues, and the chunk last read (bytes from `chunkAt`). */
   pos: number;
@@ -65,8 +72,6 @@ const encoder = new TextEncoder();
 const MAX_HANDLES = 256;
 /** What all open files of a sandbox may hold in memory together. */
 const MAX_OPEN_BYTES = 64 * 1024 * 1024;
-/** Bytes per chunk of a read stream (one store block). */
-const STREAM_CHUNK = 1024 * 1024;
 const EMPTY_BYTES = new Uint8Array();
 /** What the store takes whole: a larger file would only fail at close, which WASIX does not report. */
 const MAX_FILE_BYTES = MAX_WHOLE_FILE_BYTES;
@@ -90,6 +95,7 @@ const asBytes = (v: unknown) =>
 
 /** A protocol handler for one sandbox, over `cap`. */
 export function capHostFs(cap: Cap) {
+  const rpc = capFilesRpc(cap);
   const abs = (rel: unknown) => {
     const p = String(rel ?? "")
       .split("/")
@@ -254,10 +260,12 @@ export function capHostFs(cap: Cap) {
   };
   const codeOf = (e: unknown) =>
     (e as { code?: string })?.code ?? /^(E[A-Z]+):/.exec(String((e as Error)?.message))?.[1];
+  /** No room for one more stream (of this capability, or in the store). */
+  const noRoom = (e: unknown) => errorCode(e) === "TOO_MANY_STREAMS" || codeOf(e) === "EMFILE";
   const closeReader = (h: Handle) => {
     const r = h.reader;
     h.reader = undefined;
-    if (r) cap.call("closeRead", r.path, r.id).catch(() => {});
+    if (r) rpc.closeRead(r.id).catch(() => {});
   };
   /** The file's readers are of no use once it is loaded, truncated or renamed. */
   const closeReaders = (f: OpenFile) => {
@@ -265,75 +273,110 @@ export function capHostFs(cap: Cap) {
   };
   const live = (h: Handle) => handles.get(h.id) === h && !h.file.bytes;
   /** Opens `h`'s stream at `at`; undefined: read the file whole instead (no stream to be had). */
-  const openReader = async (h: Handle, at: number): Promise<Reader | undefined> => {
+  const openReader = async (
+    h: Handle,
+    at: number,
+    evicted = false,
+  ): Promise<Reader | undefined> => {
     closeReader(h);
     const path = h.file.path;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const { id, size } = (await cap.call("openRead", path, { start: at })) as {
-          id: string;
-          size: number;
-        };
-        // Closed, loaded or renamed while the stream was opening: give it back.
-        if (!live(h) || h.file.path !== path) {
-          cap.call("closeRead", path, id).catch(() => {});
-          return undefined;
-        }
-        h.reader = {
-          id,
-          path,
-          used: Date.now(),
-          size,
-          pos: Math.min(at, size),
-          chunk: EMPTY_BYTES,
-          chunkAt: at,
-        };
-        return h.reader;
-      } catch (e) {
-        if (codeOf(e) !== "EMFILE") throw e;
-        // No room: the least recently used reader of another handle makes room (it reopens
-        // where it was on its next read), once; else the file is read whole, as before streams.
-        let lru: Handle | undefined;
-        for (const o of handles.values())
-          if (o !== h && o.reader && (!lru || o.reader.used < (lru.reader as Reader).used)) lru = o;
-        if (attempt > 0 || !lru) return undefined;
-        closeReader(lru);
+    try {
+      // The size, for fstat: the metadata cache usually has it (the open looked the file up).
+      const [{ streamId }, size] = await Promise.all([
+        rpc.openRead(path, { start: at }),
+        stat(path).then(
+          (s) => Number(s.size),
+          () => at,
+        ),
+      ]);
+      // Closed, loaded or renamed while the stream was opening: give it back.
+      if (!live(h) || h.file.path !== path) {
+        rpc.closeRead(streamId).catch(() => {});
+        return undefined;
       }
+      h.reader = {
+        id: streamId,
+        next: 0,
+        done: false,
+        path,
+        used: Date.now(),
+        size,
+        pos: at,
+        chunk: EMPTY_BYTES,
+        chunkAt: at,
+      };
+      return h.reader;
+    } catch (e) {
+      if (!noRoom(e)) throw e;
+      return makeRoom(h, at, evicted);
     }
+  };
+  /**
+   * No room for `h`'s stream: the least recently used reader of another handle makes room (it
+   * reopens where it was on its next read), once; else the file is read whole, as before streams.
+   */
+  const makeRoom = (h: Handle, at: number, evicted: boolean) => {
+    let lru: Handle | undefined;
+    for (const o of handles.values())
+      if (o !== h && o.reader && (!lru || o.reader.used < (lru.reader as Reader).used)) lru = o;
+    if (evicted || !lru) return undefined;
+    closeReader(lru);
+    return openReader(h, at, true);
+  };
+  /** The next chunk of `h`'s stream (reopened where it was if the stream is gone). */
+  const nextChunk = async (h: Handle, r: Reader): Promise<Reader | undefined> => {
+    let res: { data: Uint8Array; done: boolean };
+    try {
+      res = await rpc.readChunk(r.id, r.next);
+    } catch (e) {
+      // The stream expired (idle 2 min), the Workspace cell restarted, or the store had no room
+      // for the stream's source: reopen where it was (making room once).
+      const gone = errorCode(e) === "UNKNOWN_STREAM";
+      if (!gone && !noRoom(e)) throw e;
+      const again = gone ? await openReader(h, r.pos) : await makeRoom(h, r.pos, false);
+      if (!again) return undefined;
+      r = again;
+      res = await rpc.readChunk(r.id, r.next);
+    }
+    r.next++;
+    r.done = res.done;
+    r.chunk = asBytes(res.data);
+    r.chunkAt = r.pos;
+    r.pos += r.chunk.length;
+    if (res.done) {
+      r.size = r.pos;
+      // The last chunk: the server has ended the stream's source; give the stream back now.
+      rpc.closeRead(r.id).catch(() => {});
+    }
+    return r;
   };
   /** `length` bytes at `offset` through `h`'s stream (reopened where a read jumps). */
   const streamRead = async (h: Handle, offset: number, length: number): Promise<Uint8Array> => {
     if (length <= 0) return EMPTY_BYTES;
-    let r = h.reader;
-    if (r && offset >= r.size) return EMPTY_BYTES; // past the end: nothing to reopen for
+    let r: Reader | undefined = h.reader;
     const inChunk = (at: number) => !!r && at >= r.chunkAt && at < r.chunkAt + r.chunk.length;
+    if (r?.done && offset >= r.pos) return EMPTY_BYTES; // past the end: nothing to reopen for
     if (!r || (!inChunk(offset) && offset !== r.pos)) r = await openReader(h, offset);
-    if (!r) {
+    const whole = async () => {
       const f = h.file;
       const b = await load(f);
       return b.slice(Math.min(offset, f.size), Math.min(f.size, offset + length));
-    }
-    const end = Math.min(offset + length, r.size);
+    };
+    if (!r) return whole();
+    const end = offset + length;
     const parts: Uint8Array[] = [];
     let at = offset;
     while (at < end) {
       if (!inChunk(at)) {
-        if (at !== r.pos) break;
-        let chunk: Uint8Array;
-        try {
-          chunk = asBytes(await cap.call("readChunk", r.path, r.id, STREAM_CHUNK));
-        } catch (e) {
-          // The stream expired (idle 2 min) or the Workspace cell restarted: reopen where it was.
-          if (codeOf(e) !== "EBADF") throw e;
-          const again = await openReader(h, r.pos);
-          if (!again) break;
-          r = again;
-          chunk = asBytes(await cap.call("readChunk", r.path, r.id, STREAM_CHUNK));
+        if (at !== r.pos || r.done) break;
+        const got = await nextChunk(h, r);
+        if (!got) {
+          if (at === offset) return whole();
+          break;
         }
-        if (!chunk.length) break;
-        r.chunk = chunk;
-        r.chunkAt = r.pos;
-        r.pos += chunk.length;
+        r = got;
+        if (!r.chunk.length) break;
+        continue;
       }
       r.used = Date.now();
       const from = at - r.chunkAt;

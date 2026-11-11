@@ -380,17 +380,24 @@ export type FsRequest =
   | { op: "model"; action: ModelAction; metered?: boolean; usage?: ModelUsage }
   | { op: "call"; method: string; path: string; args?: unknown[] }
   | { op: "readdir"; path: string }
-  | { op: "move"; kind: "cp" | "mv"; path: string; dst: string; opts?: unknown };
+  | { op: "move"; kind: "cp" | "mv"; path: string; dst: string; opts?: unknown }
+  /** A files-RPC call (webrun-files-rpc), answered by the Workspace's server for the token. */
+  | { op: "rpc"; method: string; args?: unknown[] };
 
-/** Stream methods, and how many arguments each takes after the path (the owner comes last). */
-const STREAM_METHODS: Record<string, number> = {
-  openRead: 1,
-  readChunk: 2,
-  closeRead: 1,
-  openWrite: 1,
-  writeChunk: 2,
-  commitWrite: 1,
-  abortWrite: 1,
+/**
+ * The store's stream methods: the operation each needs, and how many arguments it takes after
+ * the path (the owner comes last). Only the owner cell calls them (FsGate.stream, from the
+ * GuardedFilesApi the files-RPC server reads and writes through); holders stream through the
+ * files RPC, never through `call`.
+ */
+const STREAM_METHODS: Record<string, { op: Op; n: number }> = {
+  openRead: { op: "read", n: 1 },
+  readChunk: { op: "read", n: 2 },
+  closeRead: { op: "read", n: 1 },
+  openWrite: { op: "write", n: 1 },
+  writeChunk: { op: "write", n: 2 },
+  commitWrite: { op: "write", n: 1 },
+  abortWrite: { op: "write", n: 1 },
 };
 
 /**
@@ -429,13 +436,6 @@ export class FsGate {
     if (!op) throw fsError("ENOSYS", `method not available '${method}'`);
     if (method === "readdir") return this.readdir(p);
     if (method === "readdirStat") return this.readdirStat(p);
-    // Releasing a stream needs no right: it only gives back what its owner holds (a revoked or
-    // read-only capability can still close what it opened). Owner and path still have to match.
-    if (method === "closeRead" || method === "abortWrite") {
-      // biome-ignore lint/suspicious/noExplicitAny: dispatch over the store's stream methods
-      const fn = (this.#store as any)[method] as (...a: unknown[]) => Promise<unknown>;
-      return fn.call(this.#store, normalise(p), args[0], this.#token);
-    }
     const path = await this.#authorize(op, p);
     const opts = (args[0] ?? {}) as { recursive?: boolean };
     if (
@@ -443,19 +443,9 @@ export class FsGate {
       method === "writeFileBuffer" ||
       method === "appendFile" ||
       method === "appendFileBuffer" ||
-      method === "openWrite" ||
-      method === "commitWrite" ||
       (method === "mkdir" && opts.recursive)
     ) {
       await this.#requireParents(path);
-    }
-    // Streams: every chunk is authorized again (above), and a stream belongs to the token that
-    // opened it, so its id is useless to any other capability.
-    if (Object.hasOwn(STREAM_METHODS, method)) {
-      // biome-ignore lint/suspicious/noExplicitAny: dispatch over the store's stream methods
-      const fn = (this.#store as any)[method] as (...a: unknown[]) => Promise<unknown>;
-      const n = STREAM_METHODS[method] as number;
-      return fn.call(this.#store, path, ...args.slice(0, n), this.#token);
     }
     if (method === "rm" && opts.recursive && (await this.#store.exists(path))) {
       for (const e of await this.#store.entries(path)) await this.#require("write", e.path);
@@ -463,6 +453,25 @@ export class FsGate {
     // biome-ignore lint/suspicious/noExplicitAny: dispatch over the store's method table
     const fn = (this.#store as any)[method] as (...a: unknown[]) => Promise<unknown>;
     return fn.call(this.#store, path, ...args);
+  }
+
+  /**
+   * A store stream call, for the owner cell only (not on any capability's surface). Every chunk
+   * is authorized again, so a revocation or a mode change stops a stream between two chunks,
+   * and a stream belongs to the token that opened it: its id is useless to any other.
+   */
+  async stream(method: string, p: string, ...args: unknown[]): Promise<unknown> {
+    const spec = Object.hasOwn(STREAM_METHODS, method) ? STREAM_METHODS[method] : undefined;
+    if (!spec) throw fsError("ENOSYS", `stream method not available '${method}'`);
+    // biome-ignore lint/suspicious/noExplicitAny: dispatch over the store's stream methods
+    const fn = (this.#store as any)[method] as (...a: unknown[]) => Promise<unknown>;
+    // Releasing a stream needs no right: it only gives back what its owner holds (a revoked or
+    // read-only capability can still close what it opened). Owner and path still have to match.
+    if (method === "closeRead" || method === "abortWrite")
+      return fn.call(this.#store, normalise(p), args[0], this.#token);
+    const path = await this.#authorize(spec.op, p);
+    if (method === "openWrite" || method === "commitWrite") await this.#requireParents(path);
+    return fn.call(this.#store, path, ...args.slice(0, spec.n), this.#token);
   }
 
   /** readdir on an ancestor of a right only shows the children the token may reach. */

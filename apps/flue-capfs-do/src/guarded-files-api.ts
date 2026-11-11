@@ -1,56 +1,59 @@
-// A @statewalker/webrun-files FilesApi over a capability: what a holder (an agent, a tool, a
-// sub-agent) uses to read and write files of any size as streams. Content moves in chunks over
-// the capability's own transport (an RPC stub, or the token through Workspace.fsCall), because
-// neither carries a ReadableStream on every runtime: Durable Object RPC refuses streams on cellb
-// and celld. A stream is a server-side id; every chunk is an ordinary capability call,
-// authorized again, so a revocation stops a stream between two chunks.
+// The owner side of streaming: a @statewalker/webrun-files FilesApi over the store, as one
+// capability (token) may use it. Every operation goes through FsGate, in the owner cell: each
+// path is authorized, and a stream is authorized again on every block it reads or writes, so a
+// revocation or a mode change stops it between two blocks. The Workspace serves it to holders
+// with a webrun-files-rpc server per token (src/files-rpc.ts); holders use the files-RPC client.
 //
-//   read(path)   openRead → readChunk … (empty chunk: the end) → closeRead
-//   write(path)  openWrite → writeChunk … → commitWrite (abortWrite on failure); the file
-//                changes at commit, all at once
+//   read(path)   store openRead → readChunk … (empty block: the end) → closeRead
+//   write(path)  store openWrite → writeChunk … → commitWrite (abortWrite when the content
+//                fails or is aborted); the file changes at commit, all at once
+//
+// FilesApi semantics: a missing file (or a directory) reads as nothing; `move`/`copy` take the
+// exact new path and replace what is there; `remove` and `mkdir` are recursive.
 
 import type { FilesApi, ListOptions, ReadOptions } from "@statewalker/webrun-files";
 import { type FileInfo, type FileStats, listInPathOrder } from "@statewalker/webrun-files";
-import type { Cap } from "./caps.ts";
-import type { DirEntryStat } from "./sql-fs.ts";
-
-/** Bytes per chunk: one store block. */
-export const CHUNK_BYTES = 1024 * 1024;
+import type { FsGate } from "./authority.ts";
+import { BLOCK_BYTES, type DirEntryStat } from "./sql-fs.ts";
 
 const codeOf = (e: unknown) =>
   (e as { code?: string })?.code ?? /^(E[A-Z]+):/.exec(String((e as Error)?.message ?? e))?.[1];
-const toBytes = (v: unknown) => (v instanceof Uint8Array ? v : new Uint8Array(v as ArrayBuffer));
+const toBytes = (v: unknown) =>
+  v instanceof Uint8Array
+    ? v
+    : ArrayBuffer.isView(v)
+      ? new Uint8Array(v.buffer, v.byteOffset, v.byteLength)
+      : new Uint8Array(v as ArrayBuffer);
 const norm = (p: string) => `/${String(p).split("/").filter(Boolean).join("/")}`;
 const join = (dir: string, name: string) => (dir === "/" ? `/${name}` : `${dir}/${name}`);
 
-export class CapFilesApi implements FilesApi {
-  #cap: Cap;
-  constructor(cap: Cap) {
-    this.#cap = cap;
+export class GuardedFilesApi implements FilesApi {
+  #gate: FsGate;
+  constructor(gate: FsGate) {
+    this.#gate = gate;
   }
 
   async *read(path: string, options: ReadOptions = {}): AsyncIterable<Uint8Array> {
     const p = norm(path);
     let id: string;
     try {
-      ({ id } = (await this.#cap.call("openRead", p, {
+      ({ id } = (await this.#gate.stream("openRead", p, {
         start: options.start,
         length: options.length,
       })) as { id: string });
     } catch (e) {
-      // FilesApi: a file that does not exist (or a directory) reads as nothing.
       if (codeOf(e) === "ENOENT" || codeOf(e) === "EISDIR") return;
       throw e;
     }
     try {
       for (;;) {
         options.signal?.throwIfAborted();
-        const chunk = toBytes(await this.#cap.call("readChunk", p, id, CHUNK_BYTES));
-        if (!chunk.length) return;
-        yield chunk;
+        const block = toBytes(await this.#gate.stream("readChunk", p, id, BLOCK_BYTES));
+        if (!block.length) return;
+        yield block;
       }
     } finally {
-      await this.#cap.call("closeRead", p, id).catch(() => {});
+      await this.#gate.stream("closeRead", p, id).catch(() => {});
     }
   }
 
@@ -59,24 +62,22 @@ export class CapFilesApi implements FilesApi {
     content: Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
   ): Promise<void> {
     const p = norm(path);
-    const { id } = (await this.#cap.call("openWrite", p, {})) as { id: string };
+    const { id } = (await this.#gate.stream("openWrite", p, {})) as { id: string };
     try {
       for await (const chunk of content as AsyncIterable<Uint8Array>) {
         const b = toBytes(chunk);
-        for (let at = 0; at < b.length; at += CHUNK_BYTES) {
-          // Exactly these bytes: RPC copies a view's whole buffer.
-          await this.#cap.call("writeChunk", p, id, b.slice(at, at + CHUNK_BYTES));
-        }
+        for (let at = 0; at < b.length; at += BLOCK_BYTES)
+          await this.#gate.stream("writeChunk", p, id, b.subarray(at, at + BLOCK_BYTES));
       }
-      await this.#cap.call("commitWrite", p, id);
+      await this.#gate.stream("commitWrite", p, id);
     } catch (e) {
-      await this.#cap.call("abortWrite", p, id).catch(() => {});
+      await this.#gate.stream("abortWrite", p, id).catch(() => {});
       throw e;
     }
   }
 
   async mkdir(path: string): Promise<void> {
-    await this.#cap.call("mkdir", norm(path), { recursive: true });
+    await this.#gate.call("mkdir", norm(path), { recursive: true });
   }
 
   async *list(path: string, options: ListOptions = {}): AsyncIterable<FileInfo> {
@@ -86,7 +87,7 @@ export class CapFilesApi implements FilesApi {
     const children = async (dir: string): Promise<FileInfo[]> => {
       let entries: DirEntryStat[];
       try {
-        entries = (await this.#cap.call("readdirStat", dir)) as DirEntryStat[];
+        entries = await this.#gate.readdirStat(dir);
       } catch {
         return []; // a directory the token cannot list shows as empty
       }
@@ -107,7 +108,7 @@ export class CapFilesApi implements FilesApi {
 
   async stats(path: string): Promise<FileStats | undefined> {
     try {
-      const s = (await this.#cap.call("stat", norm(path))) as {
+      const s = (await this.#gate.call("stat", norm(path))) as {
         isDirectory: boolean;
         size: number;
         mtime: string;
@@ -127,14 +128,11 @@ export class CapFilesApi implements FilesApi {
 
   async remove(path: string): Promise<boolean> {
     if (!(await this.exists(path))) return false;
-    await this.#cap.call("rm", norm(path), { recursive: true });
+    await this.#gate.call("rm", norm(path), { recursive: true });
     return true;
   }
 
-  /**
-   * `target` is the exact new path (FilesApi), not a directory to move into as with `mv`: what is
-   * at `target` is replaced.
-   */
+  /** `target` is the exact new path (not a directory to move into, as with `mv`). */
   async move(source: string, target: string): Promise<boolean> {
     return this.#transfer("mv", source, target);
   }
@@ -148,8 +146,8 @@ export class CapFilesApi implements FilesApi {
     const to = norm(target);
     if (!(await this.exists(from))) return false;
     if (from === to) return true;
-    if (await this.exists(to)) await this.#cap.call("rm", to, { recursive: true });
-    await this.#cap.move(kind, from, to, { recursive: true });
+    if (await this.exists(to)) await this.#gate.call("rm", to, { recursive: true });
+    await this.#gate.move(kind, from, to, { recursive: true });
     return true;
   }
 }

@@ -63,7 +63,7 @@ export type Task =
   | ({ kind: "agent" } & AgentLoopRequest)
   /** A bash script in a Wasmer sandbox whose /workspace is the capability (cellb only). */
   | ({ kind: "wasmer" } & WasmerRunRequest)
-  /** Streams a file through CapFilesApi (chunks over the capability). */
+  /** Streams a file through the files-RPC client (chunks over the capability). */
   | ({ kind: "stream" } & StreamTask);
 
 interface WorkerLoader {

@@ -156,7 +156,7 @@ export default class extends WorkerEntrypoint {
 
 for (const transport of TRANSPORTS) {
   describe(`transport=${transport}`, () => {
-    test("files of any size stream in chunks over the capability (CapFilesApi)", async () => {
+    test("files of any size stream in chunks over the capability (files RPC)", async () => {
       const ws = freshWs();
       await seed(ws, SEED);
       const { token } = await session(ws, "alice", ["/proj"]);

@@ -9,7 +9,8 @@ const E = (code, m) => Object.assign(new Error(`${code}: ${m}`), { code });
 function fakeCap(entries = {}) {
   const files = new Map([["/", null], ["/ro", null], ...Object.entries(entries)]);
   const calls = [];
-  // Read streams as the store keeps them: a snapshot of the bytes, a position, an owner-free id.
+  // Files-RPC read streams (webrun-files-rpc): a snapshot of the bytes from `start`, read as
+  // chunks of 1 MiB keyed by their number.
   const streams = new Map();
   let streamLimit = Number.POSITIVE_INFINITY;
   const bytesOf = (v) => (typeof v === "string" ? Buffer.from(v, "utf8") : Buffer.from(v));
@@ -60,26 +61,6 @@ function fakeCap(entries = {}) {
         case "readFile":
           if (!files.has(path)) throw E("ENOENT", path);
           return files.get(path);
-        case "openRead": {
-          if (!files.has(path)) throw E("ENOENT", path);
-          if (streams.size >= streamLimit) throw E("EMFILE", "too many open streams");
-          const b = bytesOf(files.get(path));
-          const id = `s${streams.size + 1}-${Math.random()}`;
-          const start = Math.min(Number(args[0]?.start ?? 0), b.length);
-          streams.set(id, { path, b, pos: start });
-          return { id, size: b.length };
-        }
-        case "readChunk": {
-          const st = streams.get(args[0]);
-          if (!st || st.path !== path) throw E("EBADF", String(args[0]));
-          const n = Math.min(Number(args[1] ?? 1 << 20), 1 << 20);
-          const out = new Uint8Array(st.b.subarray(st.pos, st.pos + n));
-          st.pos += out.length;
-          return out;
-        }
-        case "closeRead":
-          streams.delete(args[0]);
-          return;
         // The store keeps bytes: here UTF-8 content is kept as a string (easy to assert on),
         // anything else as a Buffer.
         case "readFileBuffer": {
@@ -109,6 +90,32 @@ function fakeCap(entries = {}) {
           if (files.get(path) === null && !args[0]?.recursive) throw E("EISDIR", path);
           for (const k of kids(path)) files.delete(k);
           files.delete(path);
+          return;
+      }
+      throw E("ENOSYS", method);
+    },
+    async rpc(method, args) {
+      calls.push(`${method} ${args[0]}`);
+      const CHUNK = 1 << 20;
+      switch (method) {
+        case "openRead": {
+          if (streams.size >= streamLimit) throw E("TOO_MANY_STREAMS", "too many open streams");
+          const b = files.has(args[0]) ? bytesOf(files.get(args[0]) ?? "") : Buffer.alloc(0);
+          const id = `s${streams.size + 1}-${Math.random()}`.replace(".", "");
+          streams.set(id, { b, start: Math.min(Number(args[1]?.start ?? 0), b.length) });
+          return { streamId: id };
+        }
+        case "readChunk": {
+          const st = streams.get(args[0]);
+          if (!st) throw E("UNKNOWN_STREAM", String(args[0]));
+          const from = st.start + args[1] * CHUNK;
+          return {
+            data: new Uint8Array(st.b.subarray(from, from + CHUNK)),
+            done: from + CHUNK >= st.b.length,
+          };
+        }
+        case "closeRead":
+          streams.delete(args[0]);
           return;
       }
       throw E("ENOSYS", method);
@@ -469,14 +476,16 @@ test("streamed reads recover: an expired stream reopens, a rename closes it, han
 });
 
 test("streamed reads: a full stream table frees the least recently used reader; closing mid-open leaks nothing", async () => {
-  const cap = fakeCap({ "/x": "x".repeat(100), "/y": "y".repeat(100), "/z": "z".repeat(100) });
+  // Larger than a chunk: a stream stays open until its file is read to the end.
+  const n = (1 << 20) + 100;
+  const cap = fakeCap({ "/x": "x".repeat(n), "/y": "y".repeat(n), "/z": "z".repeat(n) });
   const fs = capHostFs(cap);
   cap.limitStreams(2);
   const ids = [];
-  for (const n of ["x", "y", "z"]) {
-    const { value } = await fs.handle("open", [n, ...RW]);
+  for (const name of ["x", "y", "z"]) {
+    const { value } = await fs.handle("open", [name, ...RW]);
     ids.push(value);
-    assert.equal(dec((await fs.handle("read", [value, 0, 3])).value), n.repeat(3));
+    assert.equal(dec((await fs.handle("read", [value, 0, 3])).value), name.repeat(3));
   }
   assert.equal(cap.streams.size, 2, "x's reader made room for z's");
   assert.ok(!cap.calls.includes("readFileBuffer /z"), "z still streams");

@@ -124,8 +124,8 @@ Tasks:
 - `{kind: "agent", prompt, instructions?, maxTurns?, timeoutMs?, session?, cwd?}` runs an LLM
   agent whose tools are Flue's (read, write, edit, grep, glob, bash) over the capability (see
   [Agent loop](#agent-loop)).
-- `{kind: "stream", op: "write" | "read", path, …}` streams a file through `CapFilesApi` in chunks
-  over the capability (see [Streaming](#streaming-files-of-any-size)).
+- `{kind: "stream", op: "write" | "read", path, …}` streams a file through the files-RPC client
+  in chunks over the capability (see [Streaming](#streaming-files-of-any-size)).
 - `{kind: "wasmer", script, packages?, cwd?, env?, timeoutMs?}` runs a bash script in a Wasmer
   sandbox whose `/workspace` is the capability (see [Wasmer](#wasmer)); `{kind: "agent", …,
   sandbox: "wasmer"}` runs Flue's tools on such a sandbox.
@@ -530,8 +530,8 @@ capability. Open files are buffered (one buffer per path, shared by its handles)
 flush or close. WASIX drops what close returns, so nothing may fail there silently: creating or
 truncating a file is written through at open, the write right on an existing file is asked at the
 first write (WASIX opens files read-write even to read them). Binary content is stored byte for
-byte. A file that is only read streams: each handle reads it through a chunk stream of its own
-([Streaming](#streaming-files-of-any-size)), holding one chunk (1 MiB) at a time, so `cat`, `rg`
+byte. A file that is only read streams: each handle reads it through a files-RPC read stream of
+its own ([Streaming](#streaming-files-of-any-size)), holding one chunk (1 MiB) at a time, so `cat`, `rg`
 or `wc` read a file of any size; a read elsewhere reopens the stream there, and so does a stream
 the Workspace cell dropped (idle, or restarted). A rename or a truncation closes the file's streams;
 with no room for one more stream the least recently used one is closed to make room. A file that is written
@@ -653,9 +653,12 @@ Limits and notes:
 
 ### Streaming files of any size
 
-The capability's FilesApi streams: `CapFilesApi` (`src/cap-files-api.ts`) is a
-`@statewalker/webrun-files` `FilesApi` over any capability, whose `read(path, {start, length})`
-yields chunks and whose `write(path, chunks)` takes an (async) iterable of them.
+A holder streams files through the capability with
+[`@statewalker/webrun-files-rpc`](../../packages/webrun-files-rpc): `capFiles(cap)`
+(`src/files-rpc.ts`) is a `@statewalker/webrun-files` `FilesApi` whose `read(path, {start,
+length})` yields chunks and whose `write(path, chunks)` takes an (async) iterable of them. It is
+the package's client; the capability carries its calls (`cap.rpc(method, args)`), and the
+Workspace answers them with the package's server.
 
 **Why chunks with ids, not streams.** Measured from the Worker to the Workspace cell:
 
@@ -668,32 +671,43 @@ yields chunks and whose `write(path, chunks)` takes an (async) iterable of them.
 Streams over the capability's RPC are not portable, and the capability is an RPC object handed
 from cell to cell and into tool isolates, not an HTTP endpoint. (`@statewalker/webrun-files-http`
 could serve a FilesApi over the Durable Object's `fetch`, which streams everywhere, but it would
-need a second, token-checking HTTP surface beside the capability.) So content moves as chunks,
-each an ordinary capability call, through every transport unchanged: the stub, the token
-(`Workspace.fsCall`) and the tool isolates' `FILES` entrypoint.
+need a second, token-checking HTTP surface beside the capability.) So content moves as chunks keyed
+by (streamId, chunkId), each an ordinary capability call, through every transport unchanged: the
+stub (`FilteredFiles.rpc`), the token (`Workspace.fsCall` with `{op: "rpc"}`) and the tool
+isolates' `FILES` entrypoint (`rpc`).
 
-**Protocol** (`call(method, path, …)`, authorized like any call; `read` for reads, `write` for
-writes, missing parents at open and commit):
+**How it fits together.**
 
-| Call | Returns |
-|---|---|
-| `openRead(path, {start?, length?})` | `{id, size}`; the content as it is now (held until closed) |
-| `readChunk(path, id, maxBytes?)` | the next chunk (at most 1 MiB); an empty one at the end |
-| `closeRead(path, id)` | |
-| `openWrite(path, {append?})` | `{id}`; nothing changes yet |
-| `writeChunk(path, id, bytes)` | `{size}` so far; a chunk is at most 1 MiB |
-| `commitWrite(path, id)` | `{size}`; the file has the new content, at once (an append fails with `ESTALE` if the file changed since it was opened) |
-| `abortWrite(path, id)` | |
+```
+holder                                   Workspace cell (owner)
+capFiles(cap) = newFilesRpcClient ──► cap.rpc(method, args) ──► FilesRpcHub
+                                                                  └ a newFilesRpcServer per token
+                                                                     └ GuardedFilesApi (FsGate)
+                                                                        └ SqlFs streams, blocks
+```
 
-- **Every chunk is a capability call:** authorized again, so a revocation or a mode switch stops
-  a stream between two chunks.
-- **A stream id belongs to the token that opened it, and to its path:** another capability, or
-  another path, gets `EBADF`. Closing or aborting needs no right, so a revoked capability can
-  still release what it holds.
-- **Streams are bounded:** a stream holds no content in memory (chunks go to blocks at once). One
-  unused for 2 minutes is closed and an unfinished write dropped (idle streams are looked for every
-  10 seconds while the cell is used, and at its start). At most 32 streams per capability and 256
-  per Workspace cell; a file is at most 1 GiB. A missing or short block is `EIO`, never zeros.
+- **The calls** are the package's: `stats`, `exists`, `mkdir`, `remove`, `move`, `copy`, `list`
+  (paged), `openRead`/`readChunk(streamId, chunkId)`/`closeRead`,
+  `openWrite`/`writeChunk(streamId, chunkId, bytes)`/`closeWrite(streamId, chunks)`/`abortWrite`.
+  Nothing else of the server (`sweep`, `close`) is reachable (`ENOSYS`). Chunks are 1 MiB (one
+  store block); the client keeps two requests in flight each way.
+- **`GuardedFilesApi`** (`src/guarded-files-api.ts`) is the FilesApi the server serves: the store
+  as one token may use it. Every operation goes through `FsGate`; a read or write stream is
+  authorized again on every block, so a revocation or a mode switch stops it between two blocks.
+  A write shows at its end, all at once; a write that fails or is aborted changes nothing.
+- **A stream belongs to the capability that opened it.** The Workspace keeps one files-RPC server
+  per token (`src/files-rpc-hub.ts`), made only for a token of this workspace, so a stream id (which
+  the client chooses) means nothing to another capability's server (`UNKNOWN_STREAM`). Closing or
+  aborting needs no right, so a revoked capability can still release what it holds.
+- **Bounds:** 16 open streams per capability (`TOO_MANY_STREAMS`), 64 servers per Workspace cell
+  (the least recently used, idle ones first, are closed); the store allows 32 streams per owner and
+  256 in all (`EMFILE`). A read stream holds the chunk asked, two ahead and two behind; a write at
+  most four chunks not yet written. A stream unused for 2 minutes is closed and an unfinished write
+  dropped (looked for on files-RPC calls, at most every 5 seconds). A file is at most 1 GiB; a
+  missing or short block is `EIO`, never zeros.
+- **Not in the protocol:** appends (the store's append streams remain for the owner cell;
+  holders append with `appendFile`/`appendFileBuffer`). The store's stream methods are not on the
+  capability's `call` any more (`ENOSYS`); `FsGate.stream` calls them in the owner cell.
 
 **Storage.** A file's content is BLOB blocks of at most 1 MiB in `fs_blocks`, each one row under
 the Durable Object row limit, under an immutable content id the entry points at. A rename or a copy
@@ -708,7 +722,7 @@ blocks when first streamed or appended to. (`@statewalker/webrun-files-sqlite`'s
 operation touches is authorized against them.)
 
 The `stream` task (`{kind: "stream", op: "write", path, size, seed?, chunk?}` and
-`{kind: "stream", op: "read", path, start?, length?}`) streams a file through `CapFilesApi` with the
+`{kind: "stream", op: "read", path, start?, length?}`) streams a file through `capFiles` with the
 run's capability and answers with the byte count, the chunk count and a SHA-256: the transfer,
 observable end to end on every runtime.
 
@@ -720,6 +734,9 @@ src/sql-fs.ts       the store: a file system on ctx.storage.sql
 src/policy.ts       method → operation map, modes, authority and attenuation blocks
 src/path.ts         normalisation ("/.." is "/"), exact prefixes, error codes in messages
 src/caps.ts         holder side: StubCap, TokenCap, ToolFiles (what a tool isolate gets)
+src/files-rpc.ts    holder side of streaming: capFiles(cap), the webrun-files-rpc client over a capability
+src/files-rpc-hub.ts  owner side: a webrun-files-rpc server per token, in the Workspace
+src/guarded-files-api.ts  the FilesApi those servers serve: the store through FsGate
 src/capfs.ts        just-bash IFileSystem over a capability; /dev/null sink; safeExec
 src/agent.ts        Agent DO: bash, Flue tools, Worker Loader tools, delegation chain
 src/flue-compat.ts  `rg` shim so Flue's grep tool works on just-bash
