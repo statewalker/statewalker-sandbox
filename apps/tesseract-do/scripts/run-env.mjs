@@ -260,6 +260,7 @@ console.log(
 );
 const failed = (code) => code !== 0;
 let code = await runTests("e2e/scenario.test.mjs");
+if (!failed(code)) code = await runTests("e2e/pdf.test.mjs");
 await stopRuntime(child);
 child = undefined;
 if (!failed(code)) {

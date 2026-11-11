@@ -35,3 +35,47 @@ export async function withPrecompiledWasm<T>(
     WebAssembly.instantiate = original;
   }
 }
+
+const MARKER = "\0precompiled-wasm:";
+const markerPrefix = new TextEncoder().encode(MARKER);
+const registry = new Map<string, WebAssembly.Module>();
+let installed = false;
+
+function markerName(source: unknown): string | null {
+  const bytes =
+    source instanceof Uint8Array
+      ? source
+      : source instanceof ArrayBuffer
+        ? new Uint8Array(source)
+        : ArrayBuffer.isView(source)
+          ? new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+          : null;
+  if (!bytes || bytes.length <= markerPrefix.length) return null;
+  for (let i = 0; i < markerPrefix.length; i++) if (bytes[i] !== markerPrefix[i]) return null;
+  return new TextDecoder().decode(bytes.subarray(markerPrefix.length));
+}
+
+/**
+ * For libraries that fetch their wasm and instantiate the bytes (pdf.js's JBIG2, JPEG 2000 and
+ * ICC decoders): `markerFor(name)` gives bytes to hand them instead of the file, and
+ * `WebAssembly.instantiate` answers those bytes from the precompiled module registered under
+ * `name`. Any other call goes to the runtime unchanged. Installed once per isolate.
+ */
+export function registerPrecompiledWasm(modules: Record<string, WebAssembly.Module>) {
+  for (const [name, module] of Object.entries(modules)) registry.set(name, module);
+  if (!installed) {
+    installed = true;
+    const original = WebAssembly.instantiate;
+    WebAssembly.instantiate = (async (source: unknown, imports?: WebAssembly.Imports) => {
+      const name = markerName(source);
+      const module = name === null ? undefined : registry.get(name);
+      if (!module)
+        return (original as (s: unknown, i?: WebAssembly.Imports) => unknown)(source, imports);
+      return { module, instance: await original(module, imports) };
+    }) as typeof WebAssembly.instantiate;
+  }
+  return {
+    markerFor: (name: string) => new TextEncoder().encode(MARKER + name),
+    has: (name: string) => registry.has(name),
+  };
+}

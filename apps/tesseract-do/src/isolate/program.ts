@@ -4,7 +4,7 @@
 // out-of-memory here leaves the cell running. scripts/build-isolate.mjs bundles this file into
 // src/isolate/program.gen.js (the code and the wasm's SHA-256).
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { decodeImage } from "../decode.ts";
+import { type RawImage, toSource } from "../decode.ts";
 import {
   createEngine,
   type Engine,
@@ -31,11 +31,11 @@ export default class OcrIsolate extends WorkerEntrypoint {
     await engine;
   }
 
-  async ocr(lang: string, image: ArrayBuffer, options: RecognizeOptions) {
+  async ocr(lang: string, image: ArrayBuffer | RawImage, options: RecognizeOptions) {
     const engine = engines.get(lang);
     if (!engine) throw new Error(`ENOENT: no engine for '${lang}' in this isolate`);
     const ready = await engine;
-    const source = decodeImage(new Uint8Array(image));
+    const source = toSource(image);
     const result = recognize(ready, source, options);
     return {
       ...result,

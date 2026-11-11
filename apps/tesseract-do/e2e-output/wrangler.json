@@ -19,7 +19,7 @@
       "meanConfidence": 0.582,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 1.2,
-      "seconds": 0.564,
+      "seconds": 0.474,
       "model": "fetch"
     },
     "baiona_gray.png": {
@@ -29,7 +29,7 @@
       "meanConfidence": 0.512,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 0.4,
-      "seconds": 0.268,
+      "seconds": 0.169,
       "model": "memory"
     },
     "baiona_colormapped.png": {
@@ -39,7 +39,7 @@
       "meanConfidence": 0.591,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 0.4,
-      "seconds": 0.189,
+      "seconds": 0.193,
       "model": "memory"
     },
     "baiona_alpha.png": {
@@ -49,7 +49,7 @@
       "meanConfidence": 0.582,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 1.7,
-      "seconds": 0.203,
+      "seconds": 0.206,
       "model": "memory"
     }
   },
@@ -60,7 +60,7 @@
     "meanConfidence": 0.935,
     "wasmMemoryMiB": 27.8,
     "decodedMiB": 2.2,
-    "seconds": 1.502,
+    "seconds": 1.309,
     "model": "memory"
   },
   "linn.png": {
@@ -70,7 +70,7 @@
     "meanConfidence": 0.944,
     "wasmMemoryMiB": 58.1,
     "decodedMiB": 1,
-    "seconds": 7.686,
+    "seconds": 5.961,
     "model": "fetch",
     "recall": 0.993
   },
@@ -81,12 +81,12 @@
     "meanConfidence": 0.905,
     "wasmMemoryMiB": 68.4,
     "decodedMiB": 1.4,
-    "seconds": 3.707,
+    "seconds": 2.844,
     "model": "fetch"
   },
   "engine reuse": {
-    "first": 1.584,
-    "second": 1.5
+    "first": 1.375,
+    "second": 1.339
   },
   "model downloads (first run)": {
     "eng.traineddata": 3,
@@ -96,7 +96,7 @@
   },
   "after restart": {
     "model": "sqlite",
-    "seconds": 4.494,
+    "seconds": 3.164,
     "wasmMemoryMiB": 68.4
   },
   "linn.png (isolate)": {
@@ -106,8 +106,21 @@
     "meanConfidence": 0.944,
     "wasmMemoryMiB": 58.1,
     "decodedMiB": 1,
-    "seconds": 7.687,
+    "seconds": 5.75,
     "model": "fetch",
     "recall": 0.993
+  },
+  "pdf multicolumn.pdf": {
+    "blocks": 14,
+    "seconds": 0.333
+  },
+  "pdf GeoTopo.pdf (6 pages)": {
+    "blocks": 64,
+    "seconds": 0.308
+  },
+  "pdf linn.pdf": {
+    "recall": 0.99,
+    "words": 722,
+    "seconds": 6.301
   }
 }

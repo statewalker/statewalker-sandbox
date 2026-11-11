@@ -19,7 +19,7 @@
       "meanConfidence": 0.582,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 1.2,
-      "seconds": 0.876,
+      "seconds": 0.779,
       "model": "fetch"
     },
     "baiona_gray.png": {
@@ -29,7 +29,7 @@
       "meanConfidence": 0.512,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 0.4,
-      "seconds": 0.33,
+      "seconds": 0.187,
       "model": "memory"
     },
     "baiona_colormapped.png": {
@@ -39,7 +39,7 @@
       "meanConfidence": 0.591,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 0.4,
-      "seconds": 0.254,
+      "seconds": 0.225,
       "model": "memory"
     },
     "baiona_alpha.png": {
@@ -49,7 +49,7 @@
       "meanConfidence": 0.582,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 1.7,
-      "seconds": 0.29,
+      "seconds": 0.252,
       "model": "memory"
     }
   },
@@ -60,7 +60,7 @@
     "meanConfidence": 0.935,
     "wasmMemoryMiB": 27.8,
     "decodedMiB": 2.2,
-    "seconds": 2.334,
+    "seconds": 1.286,
     "model": "memory"
   },
   "linn.png": {
@@ -70,7 +70,7 @@
     "meanConfidence": 0.944,
     "wasmMemoryMiB": 58.1,
     "decodedMiB": 1,
-    "seconds": 8.033,
+    "seconds": 5.771,
     "model": "fetch",
     "recall": 0.993
   },
@@ -81,12 +81,12 @@
     "meanConfidence": 0.905,
     "wasmMemoryMiB": 68.4,
     "decodedMiB": 1.4,
-    "seconds": 5.519,
+    "seconds": 3.354,
     "model": "fetch"
   },
   "engine reuse": {
-    "first": 2.078,
-    "second": 2.084
+    "first": 1.27,
+    "second": 1.202
   },
   "model downloads (first run)": {
     "eng.traineddata": 3,
@@ -96,7 +96,7 @@
   },
   "after restart": {
     "model": "sqlite",
-    "seconds": 4.28,
+    "seconds": 3.345,
     "wasmMemoryMiB": 68.4
   },
   "linn.png (isolate)": {
@@ -106,8 +106,21 @@
     "meanConfidence": 0.944,
     "wasmMemoryMiB": 58.1,
     "decodedMiB": 1,
-    "seconds": 8.96,
+    "seconds": 6.346,
     "model": "fetch",
     "recall": 0.993
+  },
+  "pdf multicolumn.pdf": {
+    "blocks": 14,
+    "seconds": 0.208
+  },
+  "pdf linn.pdf": {
+    "recall": 0.99,
+    "words": 722,
+    "seconds": 5.86
+  },
+  "pdf GeoTopo.pdf (6 pages)": {
+    "blocks": 64,
+    "seconds": 0.364
   }
 }

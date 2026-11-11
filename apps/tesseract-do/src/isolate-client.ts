@@ -7,6 +7,8 @@
  * (a crash, an out-of-memory) retires it, and the next call loads a fresh one. The Worker
  * Loader has no terminate: a retired isolate runs until its runtime ends it.
  */
+
+import type { RawImage } from "./decode.ts";
 import program from "./isolate/program.gen.js";
 import type { RecognizeOptions } from "./ocr.ts";
 
@@ -29,7 +31,7 @@ interface OcrIsolate {
   load(lang: string, model: Uint8Array): Promise<void>;
   ocr(
     lang: string,
-    image: ArrayBuffer,
+    image: ArrayBuffer | RawImage,
     options: RecognizeOptions,
   ): Promise<
     import("./ocr.ts").OcrResult & { bands: number; wasmMemoryBytes: number; decodedBytes: number }
@@ -67,7 +69,7 @@ export async function ocrInIsolate(
   env: { LOADER?: unknown; WASM_URL?: string },
   scope: string,
   lang: string,
-  image: ArrayBuffer,
+  image: ArrayBuffer | RawImage,
   options: RecognizeOptions,
   model: () => Promise<Uint8Array>,
 ) {

@@ -42,7 +42,34 @@ export const IMAGES = [
     attribution: "Project Gutenberg, Adventures of Huckleberry Finn, page 29",
   },
 ];
-const MODELS = ["eng", "nld", "fra"];
+const PYPDF = "https://raw.githubusercontent.com/py-pdf/sample-files/main";
+// PDFs for the /api/pdf scenario (licenses as in the pdf-portabletext corpus manifest).
+export const PDFS = [
+  { file: "linn.pdf", url: `${OCRMYPDF}/linn.pdf`, license: "GFDL-1.2-or-later OR CC-BY-SA-3.0" },
+  { file: "francais.pdf", url: `${OCRMYPDF}/francais.pdf`, license: "CC-BY-SA-4.0" },
+  {
+    file: "graph_ocred.pdf",
+    url: `${OCRMYPDF}/graph_ocred.pdf`,
+    license: "GFDL-1.2-or-later OR CC-BY-SA-3.0",
+  },
+  { file: "jbig2.pdf", url: `${OCRMYPDF}/jbig2.pdf`, license: "GFDL-1.2-or-later OR CC-BY-SA-3.0" },
+  {
+    file: "lichtenstein.pdf",
+    url: `${OCRMYPDF}/lichtenstein.pdf`,
+    license: "GFDL-1.2-or-later OR CC-BY-SA-3.0",
+  },
+  {
+    file: "multicolumn.pdf",
+    url: `${PYPDF}/026-latex-multicolumn/multicolumn.pdf`,
+    license: "CC-BY-SA-4.0",
+  },
+  {
+    file: "GeoTopo.pdf",
+    url: `${PYPDF}/009-pdflatex-geotopo/GeoTopo.pdf`,
+    license: "CC-BY-SA-4.0",
+  },
+];
+const MODELS = ["eng", "nld", "fra", "deu"];
 
 async function download(url, path) {
   if (existsSync(path)) return;
@@ -53,6 +80,7 @@ async function download(url, path) {
 }
 
 for (const { file } of IMAGES) await download(`${OCRMYPDF}/${file}`, join(dir, file));
+for (const { file, url } of PDFS) await download(url, join(dir, file));
 for (const lang of MODELS) {
   await download(`${TESSDATA}/${lang}.traineddata`, join(dir, "models", `${lang}.traineddata`));
 }
@@ -76,6 +104,7 @@ writeFileSync(
       `${i.file}\n  source: ${OCRMYPDF}/${i.file}\n  license: ${i.license}\n  attribution: ${i.attribution}\n`,
   ).join("\n") +
     "\nc03-29.jpg\n  the JPEG stream of c03-29.pdf (public domain)\n" +
+    PDFS.map((p) => `\n${p.file}\n  source: ${p.url}\n  license: ${p.license}\n`).join("") +
     `\nmodels/*.traineddata\n  source: ${TESSDATA}\n  license: Apache-2.0 (tesseract-ocr/tessdata_fast)\n`,
 );
 console.log(`fixtures ready in ${dir}`);

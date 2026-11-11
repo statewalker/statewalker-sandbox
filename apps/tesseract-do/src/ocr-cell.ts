@@ -11,7 +11,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import tesseractWasm from "../node_modules/tesseract-wasm/dist/tesseract-core.wasm";
-import { decodeImage } from "./decode.ts";
+import { type RawImage, toSource } from "./decode.ts";
 import { isolateOffered, ocrInIsolate } from "./isolate-client.ts";
 import {
   checkLang,
@@ -80,8 +80,9 @@ export class OcrCell extends DurableObject<Env> {
     initModelTable(this.#sql);
   }
 
+  /** OCR of an encoded image (PNG, JPEG) or of raw pixels (e.g. pdf.js's, see `RawImage`). */
   async ocr(
-    image: ArrayBuffer,
+    image: ArrayBuffer | RawImage,
     lang: string,
     options: RecognizeOptions & { engine?: OcrEngineKind } = {},
   ): Promise<CellOcrResult> {
@@ -102,7 +103,7 @@ export class OcrCell extends DurableObject<Env> {
       engine.catch(() => this.#engines.delete(lang));
     }
     const ready = await engine;
-    const source = decodeImage(new Uint8Array(image));
+    const source = toSource(image);
     const result = recognize(ready, source, options);
     return {
       ...result,
@@ -119,7 +120,7 @@ export class OcrCell extends DurableObject<Env> {
    * OCR in a Worker Loader isolate: the cell keeps only the encoded image and, while sending
    * it, the model; decoding and tesseract's memory are the isolate's.
    */
-  async #ocrInIsolate(image: ArrayBuffer, lang: string, options: RecognizeOptions) {
+  async #ocrInIsolate(image: ArrayBuffer | RawImage, lang: string, options: RecognizeOptions) {
     let modelSource: ModelSource = "memory";
     let modelBytes = 0;
     const r = await ocrInIsolate(

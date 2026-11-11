@@ -1339,12 +1339,18 @@ importers:
 
   apps/tesseract-do:
     dependencies:
+      '@statewalker/pdf-portabletext':
+        specifier: workspace:*
+        version: link:../../packages/pdf-portabletext
       fast-png:
         specifier: ^8.0.0
         version: 8.0.0
       jpeg-js:
         specifier: ^0.4.4
         version: 0.4.4
+      pdfjs-dist:
+        specifier: ^6.5.438
+        version: 6.5.438
       tesseract-wasm:
         specifier: ^0.11.0
         version: 0.11.0

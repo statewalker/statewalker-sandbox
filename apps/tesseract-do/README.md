@@ -15,6 +15,13 @@ in a Durable Object on all three runtimes with the same results as in a browser 
 recall on a 300 dpi two-column scan), within the platform's memory, CPU and size limits, once
 three obstacles are dealt with (below).
 
+It also converts whole **PDFs to PortableText** on the same runtimes (`POST /api/pdf`): pdf.js
+runs in the Worker without a Web Worker or canvas, the text layer is laid out by the converter
+library's canvas-free core (`@statewalker/pdf-portabletext/core`: headings, lists, tables,
+bold/italic, invisible OCR layers, column-aware reading order), and every raster image is OCR'd
+by the OCR cell of the document's language. JBIG2 and JPEG 2000 images decode through pdf.js's
+own wasm decoders, precompiled. See [PDF → PortableText](#pdf--portabletext).
+
 ## How to run it
 
 ```sh
@@ -26,20 +33,23 @@ pnpm --filter @statewalker/tesseract-do test:celld      # celld 0.6.0 in Docker 
 
 `scripts/run-env.mjs <wrangler|cellb|celld>` starts the runtime on a free port with fresh state,
 serves the models and `tesseract-core.wasm` from a local server that counts downloads, runs
-`e2e/scenario.test.mjs`, **restarts the runtime on the same state** and runs
-`e2e/durability.test.mjs`. Metrics of each run land in `e2e-output/<runtime>.json`.
+`e2e/scenario.test.mjs` (OCR) and `e2e/pdf.test.mjs` (PDF), **restarts the runtime on the same
+state** and runs `e2e/durability.test.mjs`. Metrics of each run land in `e2e-output/<runtime>.json`.
 
 Interactively: `pnpm dev:wrangler` (port 8787) or `pnpm dev:cellb` (8788), then
 
 ```sh
 curl --data-binary @fixtures/linn.png 'localhost:8787/api/ocr?lang=eng'
 curl --data-binary @fixtures/typewriter.png 'localhost:8787/api/ocr?lang=nld&engine=isolate'
+curl --data-binary @fixtures/multicolumn.pdf 'localhost:8787/api/pdf?lang=auto'
+curl --data-binary @fixtures/linn.pdf 'localhost:8787/api/pdf?lang=eng&stream=1'
 curl localhost:8787/api/runtime
 ```
 
 | Route | Does |
 | --- | --- |
 | `POST /api/ocr?lang=eng[&cell=…][&band=rows][&engine=cell\|isolate]` | OCR of the body (PNG or JPEG, ≤ 20 MB) → `{text, words[{text, confidence, bbox}], meanConfidence, bands, wasmMemoryMiB, decodedMiB, model, cell, engine}` |
+| `POST /api/pdf?lang=auto\|eng[&engine=cell\|isolate][&maxPages=n][&stream=1][&assets=inline]` | PDF (≤ 20 MB) → `{document}` (PortableText, the library's schema), with `assets=inline` also `{assets: {id: base64 PNG}}`; `stream=1`: NDJSON, one `page` event per page then `end` |
 | `GET /api/cells/:name` | the cell's loaded engines and the models in its SQLite |
 | `GET /api/runtime` | what the runtime allows: wasm compilation from bytes, Worker Loader, image APIs |
 
@@ -93,13 +103,52 @@ same banded or not (800-row bands: 43 MiB, 99.3% / 98.2%). In a Worker Loader is
 are identical. A warm engine skips about 0.4 s of model loading; after a restart the model comes
 from SQLite (no download).
 
+## PDF → PortableText
+
+`src/pdf/` converts a PDF in the Worker's request, page by page, releasing each page before the
+next (and, with `stream=1`, sending it at once):
+
+- **pdf.js in-thread**: its worker module is loaded into the same isolate (`globalThis.pdfjsWorker`),
+  with `isOffscreenCanvasSupported: false` and `isImageDecoderSupported: false`, so images come as
+  raw pixels from pdf.js's own decoders, and no FontFace.
+- **pdf.js's wasm decoders** (JBIG2, OpenJPEG, qcms) are normally fetched and compiled at runtime,
+  with JS fallbacks imported from a URL; neither works in a Worker. They are imported as compiled
+  modules, pdf.js's `BinaryDataFactory` hands it marker bytes instead of each file, and a
+  marker-keyed `WebAssembly.instantiate` shim answers with the matching module.
+- **Text**: the library core (`scanTextVisibility`, `extractTextRuns`, `layoutText`, `readingOrder`, …),
+  the same code as in the browser: headings, lists, tables, bold/italic, invisible OCR text dropped.
+- **Images**: raw pixels → PNG asset (fast-png) and, over RPC, OCR in the cell `ocr-<lang>`; the
+  words come back with boxes in image pixels and become `ocrBox` marks (`ocrWordsToBlocks`).
+- **Language**: `lang=auto` detects it from a text-only sample of the first pages (franc), else
+  English; every image of the document is read with that model.
+
+| PDF | Result | Time (wrangler / cellb / celld) |
+| --- | --- | --- |
+| multicolumn.pdf (LaTeX, 3 pages, a table) | 14 blocks, the 6×5 table with its header row | 0.3 / 0.3 / 0.2 s |
+| GeoTopo.pdf, 6 pages (German LaTeX) | language `de` detected, 64 blocks, bold kept | 0.3 / 0.4 / 0.4 s |
+| linn.pdf (one JBIG2 scan, 2550×3300) | 722 words, 99% recall against the transcript | 6.3 / 6.1 / 5.9 s |
+| lichtenstein.pdf (JPEG 2000 photo) | 512×512 image extracted | 0.2 s |
+| graph_ocred.pdf (chart + invisible OCR layer) | the layer dropped, the chart OCR'd once | 0.2 s |
+| francais.pdf (`lang=fra`) | "capharnaüm", "qualité" read with diacritics | 0.4 s |
+
+The same with `engine=isolate` (OCR in Worker Loader isolates). The bundle grows to 7.1 MB,
+2.0 MB gzipped (pdf.js and its worker, the four wasm modules, franc): within 3 MB Free and 10 MB
+Paid.
+
+Differences from the browser converter: no page rendering (no canvas), so pages drawn only as
+vectors are not OCR'd; images are stored as PNG (no original-JPEG passthrough); one language per
+document (no per-image re-run); raw images over 24 MB are not sent to OCR (RPC message size).
+Decoders matter more than expected: pdf.js's JPEG decoder and jpeg-js differ by 0.6 grey levels
+on average on the book page `c03-29`, and that is enough for Tesseract to segment its decorated
+first line differently (280 words from the PDF, 292 from the JPEG file).
+
 ## Platform limits, against what OCR needs
 
 | Limit (Cloudflare docs, Nov 2026) | Value | This prototype |
 | --- | --- | --- |
 | Memory per isolate, JS heap + wasm | 128 MB | wasm ≤ 68 MiB per engine with bands, plus a few MB of image in JS and one band of RGBA (≈ 15 MB at 3 MP) |
 | CPU per request (Durable Object invocation) | 30 s default, up to 300 000 ms (`limits.cpu_ms`, Paid) | 1.4–8 s per page here; `wrangler.production.jsonc` sets 120 000 ms |
-| Worker size | 3 MB Free / 10 MB Paid (after compression) | 2.1 MB, 807 KB gzip (the 1.8 MB wasm included) |
+| Worker size | 3 MB Free / 10 MB Paid (after compression) | OCR only: 2.1 MB, 807 KB gzip; with the PDF route: 7.1 MB, 2.0 MB gzip |
 | Request body | 100 MB (Free/Pro) | capped at 20 MB |
 | SQLite row / value (Durable Object) | 2 MB | models stored in 1 MiB chunks |
 | SQLite storage per Durable Object | 10 GB (Paid) | a model is 1–6 MB |
@@ -122,8 +171,8 @@ from SQLite (no download).
   the runtime ends it.
 - **Banding and reading order**: each band is laid out on its own. On the two-column scan the order
   was unaffected (98.6%), but a layout whose columns are much taller than a band can interleave.
-- **Formats**: PNG and JPEG only (no WebP, TIFF or PDF); PDF pages would need pdf.js without canvas
-  or a rasteriser.
+- **Formats**: `/api/ocr` takes PNG and JPEG (no WebP or TIFF); `/api/pdf` takes PDFs, whose images
+  pdf.js decodes (including JBIG2 and JPEG 2000).
 - **celld 0.6**: refuses the `limits` and `env` config keys (hence `wrangler.production.jsonc`),
   and `WebAssembly.compile(bytes)` never settles there (`/api/runtime` reports `"hangs"`); OCR is
   unaffected because its wasm is a module.
@@ -139,10 +188,11 @@ from SQLite (no download).
 | `src/worker.ts` | HTTP routes |
 | `src/ocr-cell.ts` | the `OcrCell` Durable Object: engines per language, model cache, both engines |
 | `src/ocr.ts` | engine creation and banded recognition |
-| `src/wasm-shim.ts` | `WebAssembly.instantiate(bytes)` answered from a compiled module |
+| `src/wasm-shim.ts` | `WebAssembly.instantiate(bytes)` answered from compiled modules (scoped for tesseract, marker-keyed for pdf.js) |
 | `src/decode.ts` | PNG / JPEG decoding to compact sources with RGBA rows on demand |
 | `src/models.ts` | model download and SQLite chunk cache |
 | `src/isolate/program.ts`, `src/isolate-client.ts` | OCR in a Worker Loader isolate (`pnpm build:isolate` generates `program.gen.js`) |
+| `src/pdf/pdfjs.ts`, `src/pdf/convert.ts` | pdf.js in-thread with precompiled decoders; PDF → PortableText with OCR in the cells |
 | `scripts/run-env.mjs`, `scripts/serve-cellb.mjs` | runtimes under test |
 | `scripts/fetch-fixtures.mjs` | test images (OCRmyPDF test resources, licenses in `fixtures/LICENSES.txt`) and models |
 | `e2e/`, `test/` | scenario and durability suites per runtime; unit tests (decoding, banding) |

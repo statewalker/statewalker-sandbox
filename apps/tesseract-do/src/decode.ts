@@ -33,6 +33,13 @@ export function sniff(bytes: Uint8Array): "png" | "jpeg" | null {
   return null;
 }
 
+/** Encoded bytes (PNG, JPEG) or raw pixels, as a pixel source. */
+export function toSource(image: ArrayBuffer | Uint8Array | RawImage): PixelSource {
+  if (image instanceof ArrayBuffer) return decodeImage(new Uint8Array(image));
+  if (image instanceof Uint8Array) return decodeImage(image);
+  return rawSource(image);
+}
+
 export function decodeImage(bytes: Uint8Array): PixelSource {
   const kind = sniff(bytes);
   if (kind === "jpeg") return jpegSource(bytes);
@@ -162,6 +169,51 @@ function pngSource(bytes: Uint8Array): PixelSource {
             src[i + 2] >> shift,
             channels === 4 ? src[i + 3] >> shift : 255,
           );
+        }
+      }
+      return { data: out, width, height: y1 - y0 };
+    },
+  };
+}
+
+/**
+ * Raw pixels as pdf.js hands them out without canvas (`kind` 1: 1-bit gray, packed rows,
+ * 1 = white; 2: RGB; 3: RGBA), or a stencil mask (packed rows, 0 = painted black, 1 = clear).
+ */
+export type RawImage = {
+  width: number;
+  height: number;
+  kind?: number;
+  data: Uint8Array | Uint8ClampedArray;
+  stencil?: boolean;
+};
+
+export function rawSource(raw: RawImage): PixelSource {
+  const { width, height, data } = raw;
+  if (width * height > MAX_PIXELS) throw new Error(`E2BIG: ${width}×${height} is too large`);
+  const packed = raw.stencil || raw.kind === 1;
+  const channels = packed ? 0 : raw.kind === 2 ? 3 : 4;
+  const expected = packed ? ((width + 7) >> 3) * height : width * height * channels;
+  if (data.length < expected) throw new Error("EINVAL: raw image data is too short");
+  const rowBytes = (width + 7) >> 3;
+  return {
+    width,
+    height,
+    bytes: data.byteLength,
+    rows(y0, y1) {
+      const out = new Uint8ClampedArray(width * (y1 - y0) * 4);
+      for (let y = y0; y < y1; y++) {
+        for (let x = 0; x < width; x++) {
+          const o = ((y - y0) * width + x) * 4;
+          if (packed) {
+            // Gray at 1 bpp: 1 is white. Stencil: 0 is painted, so black on white too.
+            const bit = (data[y * rowBytes + (x >> 3)] >> (7 - (x & 7))) & 1;
+            out[o] = out[o + 1] = out[o + 2] = bit ? 255 : 0;
+            out[o + 3] = 255;
+          } else {
+            const i = (y * width + x) * channels;
+            put(out, o, data[i], data[i + 1], data[i + 2], channels === 4 ? data[i + 3] : 255);
+          }
         }
       }
       return { data: out, width, height: y1 - y0 };
