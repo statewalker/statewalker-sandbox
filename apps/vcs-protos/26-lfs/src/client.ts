@@ -6,7 +6,11 @@
  *  - `lfsFetch`: objects already held are skipped; one download batch; each download goes into the
  *    store's incomplete parts and resumes from the bytes held with `Range: bytes=N-` (a server
  *    answering 200 instead restarts it); the whole is verified (SHA-256 and size) before the
- *    object becomes visible, and refused bytes are dropped.
+ *    object becomes visible, and refused bytes are dropped. One download per object at a time.
+ *
+ * The batch's answer must name exactly the objects asked for. Transfers carry the action's headers;
+ * unless the server marked the object `authenticated`, the client's own headers go with them too
+ * (git-lfs sends its credentials then).
  */
 import type { Pointer } from "./pointer.js";
 import type { LfsStore } from "./store.js";
@@ -27,6 +31,7 @@ interface Action {
 interface BatchObject {
   oid: string;
   size: number;
+  authenticated?: boolean;
   actions?: { download?: Action; upload?: Action; verify?: Action };
   error?: { code: number; message: string };
 }
@@ -56,8 +61,30 @@ async function batch(
   const out = (await res.json()) as { transfer?: string; objects?: BatchObject[] };
   if (out.transfer !== undefined && out.transfer !== "basic")
     throw new Error(`lfs batch: the server chose transfer ${out.transfer}, not basic`);
-  return out.objects ?? [];
+  // exactly the objects asked for, in the order asked
+  const byOid = new Map<string, BatchObject>();
+  const asked = new Set(objects.map((o) => o.oid));
+  for (const o of out.objects ?? []) {
+    if (!asked.has(o?.oid))
+      throw new Error(`lfs batch: the server answered for ${o?.oid}, not asked`);
+    byOid.set(o.oid, o);
+  }
+  return objects.map((o) => {
+    const answer = byOid.get(o.oid);
+    if (!answer) throw new Error(`lfs batch: the server's answer is missing ${o.oid}`);
+    return answer;
+  });
 }
+/** one entry per object id */
+function unique(objects: Pointer[]): Pointer[] {
+  const seen = new Map<string, Pointer>();
+  for (const o of objects) if (!seen.has(o.oid)) seen.set(o.oid, o);
+  return [...seen.values()];
+}
+const transferHeaders = (o: BatchObject, action: Action, opts: LfsClientOptions) => ({
+  ...(o.authenticated ? {} : opts.headers),
+  ...action.header,
+});
 function objectError(o: BatchObject): Error {
   const code = o.error?.code;
   return new Error(
@@ -69,13 +96,19 @@ function objectError(o: BatchObject): Error {
 async function* chunks(body: ReadableStream<Uint8Array> | null): AsyncGenerator<Uint8Array> {
   if (!body) return;
   const reader = body.getReader();
+  let done = false;
   try {
     for (;;) {
       const r = await reader.read();
-      if (r.done) return;
+      if (r.done) {
+        done = true;
+        return;
+      }
       yield r.value;
     }
   } finally {
+    // a consumer that stopped early: the rest of the body (and its connection) is released
+    if (!done) await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }
@@ -109,8 +142,9 @@ export async function lfsPush(
   const f = opts.fetch ?? fetch;
   const uploaded: string[] = [];
   const skipped: string[] = [];
-  if (!objects.length) return { uploaded, skipped };
-  for (const o of await batch(url, "upload", objects, opts)) {
+  const wanted = unique(objects);
+  if (!wanted.length) return { uploaded, skipped };
+  for (const o of await batch(url, "upload", wanted, opts)) {
     if (o.error) throw objectError(o);
     const up = o.actions?.upload;
     if (!up) {
@@ -119,24 +153,28 @@ export async function lfsPush(
     }
     const res = await f(up.href, {
       method: "PUT",
-      headers: { "content-type": "application/octet-stream", ...up.header },
+      headers: { "content-type": "application/octet-stream", ...transferHeaders(o, up, opts) },
       body: stream(counted(store.read(o.oid, { signal: opts.signal }), opts.stats)),
       signal: opts.signal,
       // @ts-expect-error a streamed request body needs duplex (fetch spec; Node and browsers)
       duplex: "half",
     });
     await res.body?.cancel();
-    if (res.status !== 200) throw new Error(`lfs upload ${o.oid}: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`lfs upload ${o.oid}: HTTP ${res.status}`);
     const verify = o.actions?.verify;
     if (verify) {
       const v = await f(verify.href, {
         method: "POST",
-        headers: { accept: LFS_JSON, "content-type": LFS_JSON, ...verify.header },
+        headers: {
+          accept: LFS_JSON,
+          "content-type": LFS_JSON,
+          ...transferHeaders(o, verify, opts),
+        },
         body: JSON.stringify({ oid: o.oid, size: o.size }),
         signal: opts.signal,
       });
       await v.body?.cancel();
-      if (v.status !== 200) throw new Error(`lfs verify ${o.oid}: HTTP ${v.status}`);
+      if (!v.ok) throw new Error(`lfs verify ${o.oid}: HTTP ${v.status}`);
     }
     uploaded.push(o.oid);
   }
@@ -152,47 +190,51 @@ export async function lfsFetch(
   const f = opts.fetch ?? fetch;
   const downloaded: string[] = [];
   const missing: Pointer[] = [];
-  for (const o of objects) if ((await store.size(o.oid)) !== o.size) missing.push(o);
+  for (const o of unique(objects)) if ((await store.size(o.oid)) !== o.size) missing.push(o);
   if (!missing.length) return { downloaded };
   for (const o of await batch(url, "download", missing, opts)) {
     if (o.error) throw objectError(o);
     const action = o.actions?.download;
     if (!action) throw new Error(`lfs object ${o.oid}: no download action`);
-    let held = await store.incomplete.size(o.oid);
-    if (held > o.size) {
-      await store.incomplete.remove(o.oid);
-      held = 0;
-    }
-    if (held < o.size) {
-      const headers: Record<string, string> = { ...action.header };
-      if (held > 0) headers.range = `bytes=${held}-`;
-      const res = await f(action.href, { headers, signal: opts.signal });
-      if (res.status === 206) {
-        const start = Number(/^bytes (\d+)-/.exec(res.headers.get("content-range") ?? "")?.[1]);
-        if (start !== held) {
-          await res.body?.cancel();
-          throw new Error(`lfs download ${o.oid}: the server resumed at ${start}, not ${held}`);
-        }
-      } else if (res.status === 200) {
-        // the whole object again: what was held is dropped
-        if (held > 0) await store.incomplete.remove(o.oid);
-      } else {
-        await res.body?.cancel();
-        if (res.status === 416) await store.incomplete.remove(o.oid);
-        throw new Error(`lfs download ${o.oid}: HTTP ${res.status}`);
-      }
-      await store.incomplete.append(o.oid, counted(chunks(res.body), opts.stats));
-      held = await store.incomplete.size(o.oid);
-      if (held < o.size)
-        throw new Error(
-          `lfs download ${o.oid}: ended at ${held} of ${o.size} bytes (kept to resume)`,
-        );
+    await store.incomplete.exclusive(o.oid, async () => {
+      // another download of it may have finished while this one waited
+      if ((await store.size(o.oid)) === o.size) return;
+      let held = await store.incomplete.size(o.oid);
       if (held > o.size) {
         await store.incomplete.remove(o.oid);
-        throw new Error(`lfs download ${o.oid}: more than ${o.size} bytes`);
+        held = 0;
       }
-    }
-    await store.incomplete.complete({ oid: o.oid, size: o.size });
+      if (held < o.size) {
+        const headers: Record<string, string> = transferHeaders(o, action, opts);
+        if (held > 0) headers.range = `bytes=${held}-`;
+        const res = await f(action.href, { headers, signal: opts.signal });
+        if (res.status === 206) {
+          const start = Number(/^bytes (\d+)-/.exec(res.headers.get("content-range") ?? "")?.[1]);
+          if (start !== held) {
+            await res.body?.cancel();
+            throw new Error(`lfs download ${o.oid}: the server resumed at ${start}, not ${held}`);
+          }
+        } else if (res.status === 200) {
+          // the whole object again: what was held is dropped
+          if (held > 0) await store.incomplete.remove(o.oid);
+        } else {
+          await res.body?.cancel();
+          if (res.status === 416) await store.incomplete.remove(o.oid);
+          throw new Error(`lfs download ${o.oid}: HTTP ${res.status}`);
+        }
+        await store.incomplete.append(o.oid, counted(chunks(res.body), opts.stats));
+        held = await store.incomplete.size(o.oid);
+        if (held < o.size)
+          throw new Error(
+            `lfs download ${o.oid}: ended at ${held} of ${o.size} bytes (kept to resume)`,
+          );
+        if (held > o.size) {
+          await store.incomplete.remove(o.oid);
+          throw new Error(`lfs download ${o.oid}: more than ${o.size} bytes`);
+        }
+      }
+      await store.incomplete.complete({ oid: o.oid, size: o.size });
+    });
     downloaded.push(o.oid);
   }
   return { downloaded };

@@ -10,14 +10,25 @@
  *    visible (422 on a mismatch);
  *  - `POST …/info/lfs/verify`: 200 when the object is held with that size, 404 otherwise.
  *
- * `authorize` decides each batch (401 with `LFS-Authenticate` when credentials are needed, 403
- * when they do not allow the operation). With `transferAuth`, actions carry headers scoped to their
- * object and transfers are checked against them; without it, transfers go through `authorize`.
+ * `authorize` decides each batch before anything in it is answered (401 with `LFS-Authenticate`
+ * when credentials are needed, 403 when they do not allow the operation). With `transferAuth`,
+ * actions carry headers scoped to their object, objects are marked `authenticated`, and transfers
+ * are checked against those headers; without it, nothing is marked and transfers go through
+ * `authorize` (git-lfs then sends its credentials with them). A batch is bounded in bytes and
+ * objects; `maxObjectSize` bounds objects (batch 422, PUT 413); `GET` follows RFC 9110's single
+ * ranges (suffix included, unusable ones ignored) with the oid as a strong ETag for `If-Range`.
  */
 import type { LfsStore } from "./store.js";
 
 export type LfsOperation = "download" | "upload";
 export interface LfsServerOptions {
+  /** the URL clients reach this repository at (behind a proxy); default: the request's */
+  publicUrl?: string;
+  /** objects larger are refused (batch 422, PUT 413) */
+  maxObjectSize?: number;
+  /** bounds on a batch request: bytes of its body (1 MiB) and objects (1000) */
+  maxBatchBytes?: number;
+  maxBatchObjects?: number;
   /** per batch: true, or a refusal (401: credentials needed; 403: not allowed) */
   authorize?: (
     req: Request,
@@ -82,21 +93,72 @@ function stream(source: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
 async function* body(req: Request): AsyncGenerator<Uint8Array> {
   if (!req.body) return;
   const reader = req.body.getReader();
+  let done = false;
   try {
     for (;;) {
       const r = await reader.read();
-      if (r.done) return;
+      if (r.done) {
+        done = true;
+        return;
+      }
       yield r.value;
     }
   } finally {
+    // stopped early (a refusal, a limit): the rest of the body is released
+    if (!done) await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
+}
+
+/** the body as text, refused past `max` bytes */
+async function boundedText(req: Request, max: number): Promise<string | undefined> {
+  const parts: Uint8Array[] = [];
+  let n = 0;
+  for await (const c of body(req)) {
+    n += c.length;
+    if (n > max) return undefined;
+    parts.push(c);
+  }
+  const all = new Uint8Array(n);
+  let at = 0;
+  for (const p of parts) {
+    all.set(p, at);
+    at += p.length;
+  }
+  return new TextDecoder().decode(all);
+}
+const isSize = (v: unknown): v is number =>
+  typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+
+/**
+ * RFC 9110 for one representation: `bytes=a-b`, `bytes=a-`, `bytes=-n` (the last n bytes) → the
+ * range; past the end → "unsatisfiable"; anything else (other units, several ranges, a malformed
+ * or reversed range) → ignored (the whole representation is sent).
+ */
+function byteRange(
+  header: string | null,
+  size: number,
+): { start: number; end: number } | "unsatisfiable" | undefined {
+  if (!header) return undefined;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m || (!m[1] && !m[2])) return undefined;
+  if (!m[1]) {
+    const n = Number(m[2]);
+    if (n === 0) return "unsatisfiable";
+    return { start: Math.max(0, size - n), end: size - 1 };
+  }
+  const start = Number(m[1]);
+  if (m[2] && Number(m[2]) < start) return undefined; // reversed: not a valid range
+  if (start >= size) return "unsatisfiable";
+  return { start, end: m[2] ? Math.min(Number(m[2]), size - 1) : size - 1 };
 }
 
 export function lfsHandler(
   store: LfsStore,
   opts: LfsServerOptions = {},
 ): (req: Request) => Promise<Response> {
+  const maxBatchBytes = opts.maxBatchBytes ?? 1 << 20;
+  const maxBatchObjects = opts.maxBatchObjects ?? 1000;
   const allow = async (req: Request, op: LfsOperation) =>
     opts.authorize ? opts.authorize(req, op) : true;
   /** a transfer: the action's scoped headers, or the batch's authorization */
@@ -107,46 +169,67 @@ export function lfsHandler(
         : { status: 401 as const, message: "this transfer is not authorized" };
     return allow(req, op);
   };
+  const tooLarge = (size: number) => opts.maxObjectSize !== undefined && size > opts.maxObjectSize;
 
   return async (req) => {
     const url = new URL(req.url);
     const m = LFS_PATH.exec(url.pathname);
     if (!m) return json(404, { message: "not an LFS request" });
-    const base = `${url.origin}${m[1]}/info/lfs`;
+    const base = opts.publicUrl
+      ? `${opts.publicUrl.replace(/\/+$/, "")}/info/lfs`
+      : `${url.origin}${m[1]}/info/lfs`;
     const path = m[2] as string;
     try {
       if (path === "/objects/batch" && req.method === "POST") {
-        const input = (await req.json().catch(() => undefined)) as
-          | {
-              operation?: string;
-              objects?: { oid?: unknown; size?: unknown }[];
-              hash_algo?: string;
-            }
-          | undefined;
+        const text = await boundedText(req, maxBatchBytes);
+        if (text === undefined)
+          return json(413, { message: `a batch request is limited to ${maxBatchBytes} bytes` });
+        let input: { operation?: unknown; objects?: unknown; hash_algo?: unknown } | undefined;
+        try {
+          const parsed = JSON.parse(text) as unknown;
+          if (parsed && typeof parsed === "object") input = parsed as typeof input;
+        } catch {}
         const op = input?.operation;
+        // authorized before anything about the request is answered (an unknown operation is
+        // asked about as the least one)
+        const ok = await allow(req, op === "upload" ? "upload" : "download");
+        if (ok !== true) return refusal(ok);
         if (!input || (op !== "download" && op !== "upload") || !Array.isArray(input.objects))
           return json(422, { message: "a batch needs an operation and objects" });
         if (input.hash_algo !== undefined && input.hash_algo !== "sha256")
-          return json(409, { message: `hash algorithm ${input.hash_algo} is not supported` });
-        const ok = await allow(req, op);
-        if (ok !== true) return refusal(ok);
+          return json(409, {
+            message: `hash algorithm ${String(input.hash_algo)} is not supported`,
+          });
+        if (input.objects.length > maxBatchObjects)
+          return json(413, { message: `a batch is limited to ${maxBatchObjects} objects` });
+        // the actions' own headers authorize their transfers: only then are they "authenticated"
+        const authenticated = opts.transferAuth ? { authenticated: true } : {};
+        const action = async (href: string, oid: string) => ({
+          href,
+          header: opts.transferAuth ? await opts.transferAuth.headers(op, oid) : undefined,
+          expires_in: 3600,
+        });
         const objects = [];
-        for (const o of input.objects) {
-          const oid = o.oid;
-          const size = o.size;
-          if (
-            typeof oid !== "string" ||
-            !OID.test(oid) ||
-            typeof size !== "number" ||
-            !Number.isSafeInteger(size) ||
-            size < 0
-          ) {
+        for (const raw of input.objects as unknown[]) {
+          const o = (raw && typeof raw === "object" ? raw : {}) as {
+            oid?: unknown;
+            size?: unknown;
+          };
+          const { oid, size } = o;
+          if (typeof oid !== "string" || !OID.test(oid) || !isSize(size)) {
             objects.push({ oid, size, error: { code: 422, message: "invalid object id or size" } });
+            continue;
+          }
+          if (tooLarge(size)) {
+            objects.push({
+              oid,
+              size,
+              error: { code: 422, message: `over the limit of ${opts.maxObjectSize} bytes` },
+            });
             continue;
           }
           const held = await store.size(oid);
           const href = `${base}/objects/${oid}`;
-          const header = opts.transferAuth ? await opts.transferAuth.headers(op, oid) : undefined;
           if (op === "download") {
             if (held === undefined)
               objects.push({ oid, size, error: { code: 404, message: "object does not exist" } });
@@ -160,18 +243,18 @@ export function lfsHandler(
               objects.push({
                 oid,
                 size,
-                authenticated: true,
-                actions: { download: { href, header, expires_in: 3600 } },
+                ...authenticated,
+                actions: { download: await action(href, oid) },
               });
-          } else if (held === size) objects.push({ oid, size, authenticated: true });
+          } else if (held === size) objects.push({ oid, size });
           else
             objects.push({
               oid,
               size,
-              authenticated: true,
+              ...authenticated,
               actions: {
-                upload: { href, header, expires_in: 3600 },
-                verify: { href: `${base}/verify`, header, expires_in: 3600 },
+                upload: await action(href, oid),
+                verify: await action(`${base}/verify`, oid),
               },
             });
         }
@@ -184,36 +267,30 @@ export function lfsHandler(
         if (ok !== true) return refusal(ok);
         const size = await store.size(oid);
         if (size === undefined) return json(404, { message: "object does not exist" });
-        const range = req.headers.get("range");
-        let start = 0;
-        let end = size - 1;
-        let status = 200;
-        if (range) {
-          const r = /^bytes=(\d+)-(\d*)$/.exec(range.trim());
-          if (!r)
-            return json(
-              416,
-              { message: "only one byte range is supported" },
-              { "content-range": `bytes */${size}` },
-            );
-          start = Number(r[1]);
-          if (r[2]) end = Math.min(Number(r[2]), size - 1);
-          // end ≤ size - 1, so a start past the end is caught here too
-          if (end < start)
-            return json(
-              416,
-              { message: "range not satisfiable" },
-              { "content-range": `bytes */${size}` },
-            );
-          status = 206;
-        }
+        // content-addressed: the oid is a strong validator
+        const etag = `"${oid}"`;
+        const ifRange = req.headers.get("if-range");
+        const range =
+          ifRange === null || ifRange === etag
+            ? byteRange(req.headers.get("range"), size)
+            : undefined;
+        if (range === "unsatisfiable")
+          return json(
+            416,
+            { message: "range not satisfiable" },
+            { "content-range": `bytes */${size}` },
+          );
+        const start = range?.start ?? 0;
+        const end = range?.end ?? size - 1;
+        const status = range ? 206 : 200;
         const headers: Record<string, string> = {
           "content-type": "application/octet-stream",
           "content-length": String(end - start + 1),
           "accept-ranges": "bytes",
+          etag,
         };
-        if (status === 206) headers["content-range"] = `bytes ${start}-${end}/${size}`;
-        if (req.method === "HEAD") return new Response(null, { status, headers });
+        if (range) headers["content-range"] = `bytes ${start}-${end}/${size}`;
+        if (req.method === "HEAD" || size === 0) return new Response(null, { status, headers });
         return new Response(
           stream(slice(store.read(oid, { start, signal: req.signal }), end - start + 1)),
           { status, headers },
@@ -224,24 +301,33 @@ export function lfsHandler(
         const ok = await allowTransfer(req, "upload", oid);
         if (ok !== true) return refusal(ok);
         const length = req.headers.get("content-length");
+        if (length !== null && !/^\d+$/.test(length))
+          return json(400, { message: `invalid Content-Length ${JSON.stringify(length)}` });
+        const size = length === null ? undefined : Number(length);
+        if (size !== undefined && tooLarge(size))
+          return json(413, { message: `over the limit of ${opts.maxObjectSize} bytes` });
         try {
-          await store.put(body(req), { oid, size: length ? Number(length) : undefined });
+          await store.put(body(req), { oid, size }, { maxSize: opts.maxObjectSize });
         } catch (e) {
-          if ((e as Error).name === "ObjectIdMismatchError")
-            return json(422, { message: (e as Error).message });
+          const name = (e as Error).name;
+          if (name === "ObjectIdMismatchError") return json(422, { message: (e as Error).message });
+          if (name === "LfsTooLargeError") return json(413, { message: (e as Error).message });
           throw e;
         }
         return new Response(null, { status: 200 });
       }
       if (path === "/verify" && req.method === "POST") {
-        const input = (await req.json().catch(() => undefined)) as
-          | { oid?: string; size?: number }
-          | undefined;
-        if (!input || typeof input.oid !== "string" || !OID.test(input.oid))
-          return json(422, { message: "invalid object id" });
-        const ok = await allowTransfer(req, "upload", input.oid);
+        const text = await boundedText(req, 4096);
+        let input: { oid?: unknown; size?: unknown } | undefined;
+        try {
+          input = text === undefined ? undefined : (JSON.parse(text) as typeof input);
+        } catch {}
+        const oid = input?.oid;
+        if (typeof oid !== "string" || !OID.test(oid) || !isSize(input?.size))
+          return json(422, { message: "invalid object id or size" });
+        const ok = await allowTransfer(req, "upload", oid);
         if (ok !== true) return refusal(ok);
-        return (await store.size(input.oid)) === input.size
+        return (await store.size(oid)) === input?.size
           ? json(200, {})
           : json(404, { message: "object does not exist" });
       }

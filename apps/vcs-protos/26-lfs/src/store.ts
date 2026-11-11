@@ -3,9 +3,12 @@
  * (`lfs/objects/<oid[0:2]>/<oid[2:4]>/<oid>`): native git-lfs in a git-files repository reads what
  * we store and we read what it stored. Every write is streamed into `lfs/tmp/`, hashed (SHA-256)
  * and counted on the way, and renamed into place only when it matches what was expected — no
- * object becomes visible unverified. An interrupted download keeps its bytes as parts under
- * `lfs/incomplete/<oid>/` (written so that a failing source still leaves what arrived, on every
- * backend), resumed from their total and verified as a whole on completion.
+ * object becomes visible unverified, and a rename that fails is a failure. An interrupted download
+ * keeps its bytes as parts under `lfs/incomplete/<oid>/`, each named by its offset and written so
+ * that a failing source still leaves what arrived, on every backend. What counts as held is the
+ * chain of parts from offset 0 without a gap or an overlap; parts outside it are dropped. One
+ * download per object at a time within a process (`exclusive`); a failed verification drops the
+ * parts, any other failure keeps them for the next attempt.
  */
 import type { FilesApi } from "@statewalker/webrun-files";
 import { createSha256, toHex } from "../../03-sha256-blake3/src/hashes.js";
@@ -16,10 +19,11 @@ export interface LfsStore {
   has(oid: string): Promise<boolean>;
   size(oid: string): Promise<number | undefined>;
   read(oid: string, opts?: { start?: number; signal?: AbortSignal }): AsyncIterable<Uint8Array>;
-  /** streamed, verified (SHA-256, and size when given), then visible */
+  /** streamed, verified (SHA-256, and size when given), then visible; `maxSize` bounds it */
   put(
     source: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
     expect?: { oid: string; size?: number },
+    opts?: { maxSize?: number },
   ): Promise<Pointer>;
   /** bytes held for an interrupted download */
   incomplete: {
@@ -28,12 +32,20 @@ export interface LfsStore {
     /** verifies what is held and makes it visible */
     complete(expect: Pointer): Promise<void>;
     remove(oid: string): Promise<void>;
+    /** runs `fn` with no other `exclusive` call on the same object in this process */
+    exclusive<T>(oid: string, fn: () => Promise<T>): Promise<T>;
   };
 }
 
 export class LfsVerifyError extends Error {
   override name = "ObjectIdMismatchError";
 }
+export class LfsTooLargeError extends Error {
+  override name = "LfsTooLargeError";
+}
+
+/** per FilesApi, per object: the tail of the queue of `exclusive` calls */
+const queues = new WeakMap<FilesApi, Map<string, Promise<unknown>>>();
 
 const OID = /^[0-9a-f]{64}$/;
 const randomId = () => toHex(crypto.getRandomValues(new Uint8Array(8)));
@@ -48,7 +60,7 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
     if (!OID.test(oid)) throw new Error(`invalid lfs oid ${JSON.stringify(oid)}`);
     return at(`lfs/incomplete/${oid}`);
   };
-  const parts = async (oid: string) => {
+  const allParts = async (oid: string) => {
     const dir = partsDir(oid);
     if (!(await files.exists(dir))) return [];
     const out: { path: string; offset: number; size: number }[] = [];
@@ -61,11 +73,24 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
     }
     return out.sort((a, b) => a.offset - b.offset);
   };
+  /** the parts chained from offset 0, and the others (after a gap, or overlapping) */
+  const parts = async (oid: string) => {
+    const chain: { path: string; offset: number; size: number }[] = [];
+    const stray: string[] = [];
+    let end = 0;
+    for (const p of await allParts(oid)) {
+      if (p.offset === end && (p.size > 0 || chain.length === 0)) {
+        chain.push(p);
+        end += p.size;
+      } else stray.push(p.path);
+    }
+    return { chain, stray, end };
+  };
   const size = async (oid: string) => {
     const st = await files.stats(objectPath(oid));
     return st?.kind === "file" ? (st.size ?? 0) : undefined;
   };
-  const put: LfsStore["put"] = async (source, expect) => {
+  const put: LfsStore["put"] = async (source, expect, opts = {}) => {
     const tmp = at(`lfs/tmp/${randomId()}`);
     const h = createSha256();
     let n = 0;
@@ -73,6 +98,8 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
       for await (const c of source) {
         h.update(c);
         n += c.length;
+        if (opts.maxSize !== undefined && n > opts.maxSize)
+          throw new LfsTooLargeError(`lfs object over the limit of ${opts.maxSize} bytes`);
         if (expect?.size !== undefined && n > expect.size)
           throw new LfsVerifyError(`lfs object ${expect.oid}: more than its ${expect.size} bytes`);
         yield c;
@@ -85,15 +112,20 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
         throw new LfsVerifyError(
           `lfs object hashed to ${oid} (${n} bytes), expected ${expect.oid} (${expect.size} bytes)`,
         );
-      if ((await size(oid)) === n) await files.remove(tmp);
-      else await files.move(tmp, objectPath(oid));
+      if (
+        (await size(oid)) !== n &&
+        !(await files.move(tmp, objectPath(oid))) &&
+        (await size(oid)) !== n
+      )
+        throw new Error(`lfs object ${oid}: could not be moved into place`);
+      await files.remove(tmp).catch(() => false);
       return { oid, size: n };
     } catch (e) {
       await files.remove(tmp).catch(() => false);
       throw e;
     }
   };
-  const held = async (oid: string) => (await parts(oid)).reduce((s, p) => s + p.size, 0);
+  const held = async (oid: string) => (await parts(oid)).end;
   return {
     has: async (oid) => OID.test(oid) && (await size(oid)) !== undefined,
     size,
@@ -102,7 +134,8 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
     incomplete: {
       size: held,
       async append(oid, source) {
-        const offset = await held(oid);
+        const { end: offset, stray } = await parts(oid);
+        for (const p of stray) await files.remove(p).catch(() => false);
         let failure: unknown;
         let n = 0;
         // the source's failure ends the write normally: what arrived stays on every backend
@@ -121,18 +154,36 @@ export function lfsStore(files: FilesApi, root: string): LfsStore {
         return n;
       },
       async complete(expect) {
-        const list = await parts(expect.oid);
+        const { chain } = await parts(expect.oid);
         async function* all() {
-          for (const p of list) yield* files.read(p.path);
+          for (const p of chain) yield* files.read(p.path);
         }
         try {
           await put(all(), expect);
-        } finally {
-          await files.remove(partsDir(expect.oid)).catch(() => false);
+        } catch (e) {
+          // bytes that do not verify are dropped; a failure to read them is not theirs
+          if (e instanceof LfsVerifyError)
+            await files.remove(partsDir(expect.oid)).catch(() => false);
+          throw e;
         }
+        await files.remove(partsDir(expect.oid)).catch(() => false);
       },
       async remove(oid) {
         await files.remove(partsDir(oid)).catch(() => false);
+      },
+      async exclusive(oid, fn) {
+        const byOid = queues.get(files) ?? new Map<string, Promise<unknown>>();
+        queues.set(files, byOid);
+        const key = `${root}\0${oid}`;
+        const before = byOid.get(key) ?? Promise.resolve();
+        const run = before.then(fn, fn);
+        const tail = run.catch(() => undefined);
+        byOid.set(key, tail);
+        try {
+          return await run;
+        } finally {
+          if (byOid.get(key) === tail) byOid.delete(key);
+        }
       },
     },
   };
