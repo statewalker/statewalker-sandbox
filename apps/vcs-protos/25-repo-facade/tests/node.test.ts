@@ -101,6 +101,7 @@ describe("R1 open and init", () => {
     expect(git(d, ["rev-parse", "--is-bare-repository"]).toString().trim()).toBe("true");
     expect(git(d, ["symbolic-ref", "HEAD"]).toString().trim()).toBe("refs/heads/main");
     expect(git(d, ["config", "--get", "core.repositoryformatversion"]).toString().trim()).toBe("0");
+    expect(git(d, ["config", "--get", "core.bare"]).toString().trim()).toBe("true");
     const c = await v.commit({ files: { "a.txt": enc.encode("a\n") }, message: "first\n" });
     expect(rev(d, "refs/heads/main")).toBe(c);
     git(d, ["fsck", "--strict"]);
@@ -132,6 +133,11 @@ describe("R2 config", () => {
     expect(text).toContain("; a comment kept\n");
     expect(text).toContain('\tlg = "log --oneline # not a comment"\n');
     expect(git(d, ["config", "--get", "user.name"]).toString().trim()).toBe("Grace Hopper");
+    // an edit replaces the value, it does not add a second one
+    expect(git(d, ["config", "--get-all", "remote.origin.url"]).toString()).toBe(
+      "https://example.com/y.git\n",
+    );
+    expect(v.config.getAll("remote.origin.url")).toEqual(["https://example.com/y.git"]);
     expect(git(d, ["config", "--get", "remote.origin.url"]).toString().trim()).toBe(
       "https://example.com/y.git",
     );
@@ -282,7 +288,7 @@ describe("R5 hooks", () => {
       hooks: {
         referenceTransaction: async (state, updates) => {
           events.push(`${state}:${updates.map((u) => u.name).join(",")}`);
-          return state === "prepared" ? refuse : undefined;
+          return state === "prepared" && refuse !== "pre-commit" ? refuse : undefined;
         },
         preCommit: async () => (refuse === "pre-commit" ? "no commits now" : undefined),
         commitMsg: async (m) => `${m.trim()}\n\nSigned-off-by: hook\n`,
@@ -308,11 +314,13 @@ describe("R5 hooks", () => {
     expect(rev(d, "refs/heads/main")).toBe(c);
     expect(events).toEqual(["prepared:refs/heads/main", "aborted:refs/heads/main"]);
     refuse = "pre-commit";
+    events.length = 0;
     await expectCode(
       v.commit({ files: { "b.txt": enc.encode("b\n") }, message: "two\n" }),
       "CONFLICT",
     );
     expect(rev(d, "refs/heads/main")).toBe(c);
+    expect(events).toEqual([]); // refused before any ref transaction
     refuse = undefined;
     // fetch updates refs through the hooks
     const src = repoWithHistory(3);
