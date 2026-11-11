@@ -967,6 +967,7 @@ class OrtMerge {
           theirs: name2,
           markerSize: 7 + extraMarkerSize,
           virtualAncestor: this.depth > 0,
+          afterOidShortcuts: true,
         },
         this.opts,
       );

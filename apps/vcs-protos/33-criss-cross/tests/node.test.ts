@@ -530,6 +530,7 @@ describe("C2–C3 recursive merges", () => {
     ]);
     expect(r.wrong.slice(0, 2)).toEqual([]);
     expect(r.wrong.length).toBe(0);
+    expect(r.recursive).toBeGreaterThan(150); // 200 with these seeds
   }, 900_000);
 });
 

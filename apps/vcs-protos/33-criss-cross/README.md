@@ -1,7 +1,7 @@
 # 33 — Can merge-ort's recursive merges (criss-cross histories) be reproduced exactly?
 
 Plan id **X13** (single diff and merge engine), slice **X13f: criss-cross merges**. Status: **answered — yes: git's merge bases and merge-ort's recursive merge match git on 511
-histories, more than 200 of them with several merge bases**.
+histories; 200 of the 500 random ones have several merge bases**.
 
 ## Question
 
@@ -52,7 +52,7 @@ Yes. `src/recursive.ts` (about 220 lines, no `node:` imports) and the inner-merg
   distinct commit dates and all equal.
 - **C2:** 11 hand-made criss-cross merges give `git merge-tree --write-tree`'s tree ids, conflicted
   entries and messages.
-- **C3:** 500 random histories do the same. More than 200 of them have several merge bases.
+- **C3:** 500 random histories do the same. 200 of them have several merge bases.
 - **C4:** X13b–X13e's suites still pass.
 
 **Merge bases** (`get_merge_bases`, commit-reach.c, without a commit-graph):
@@ -97,6 +97,25 @@ in the virtual base" shows the nested markers.
 | F12 | Directory renames in inner merges | survived; killed by a C2 case added afterwards |
 | F13 | Inner rename markers not longer | survived; killed by a C2 case added afterwards |
 
+### Review (#103)
+
+A separate review built git 2.56 from its release tarball and compared both versions with the port:
+- 6,100 random histories through `merge-tree`, and 24,400 commit pairs through `merge-base --all`.
+  The histories had 2–5 lines, repeated criss-crosses and 3–5-parent merges. Dates were equal,
+  random or out of order (children older than parents). Trees had renames, directory renames, D/F,
+  binary files, symlinks and empty files.
+- 14,400 merge-base pairs on DAGs of up to 7 parents.
+
+| Finding | Fix |
+|---|---|
+| An empty file against a binary file: `mergeContent` took its same-content shortcuts before the binary check. A two-way merge's base is empty, so an empty side looked unchanged and the binary side won cleanly. git's `ll_xdl_merge` checks for binary first. This was wrong at depth 0 too, and inner merges then built the wrong virtual base | merge-ort's callers (which already took the oid shortcuts in `handle_content_merge`) skip them in `mergeContent`; C2 cases at depth 0 and in the ancestors |
+| Commits were loaded whole and eagerly (the full ancestry before any walk, and again on every call): a linear history of 8,000 commits took 5.4 s against git's 8 ms | Each commit is parsed when a walk first reaches it (`repo_parse_commit`), and the graph is kept per repository |
+| C2 never checked that its cases have several bases, and C3 never asserted its recursive count | C2b asserts two or more bases per hand-made criss-cross; C3 asserts its recursive merges (200) |
+
+It found no other differences. 2.56 rewrote `paint_down_to_common` (an `ENQUEUED` flag, per-side
+counters, a final stable sort), and without a commit-graph that gives 2.43's order. Not modelled: the
+base label (`ancestor_name`) appears only in diff3 and zdiff3 output, which the port does not write.
+
 ## Promotion grades
 
 | File | Grade | Why |
@@ -108,5 +127,5 @@ in the virtual base" shows the nested markers.
 1. Commit-graph generation numbers (`compare_commits_by_gen_then_commit_date`,
    `remove_redundant_with_gen`). Results are the same, but walks are faster on big histories.
 2. Octopus merges; `-X` options; submodules.
-3. **Performance**: the queue is a linear scan, while git uses a heap. The walk is O(n²) on long
-   histories.
+3. **Performance**: the queue is a linear scan, where git uses a heap. That only matters for very
+   wide walks: the review found commit loading dominant, and it is now lazy.

@@ -31,6 +31,11 @@ export interface ContentMergeLabels {
   markerSize?: number;
   /** an inner merge of merge bases (`virtual_ancestor`): binary files keep the base, cleanly */
   virtualAncestor?: boolean;
+  /**
+   * the caller already took merge-ort's oid shortcuts (handle_content_merge), so this is
+   * ll_xdl_merge: binary is checked first. Matters for two-way merges, whose base is empty
+   */
+  afterOidShortcuts?: boolean;
 }
 
 const MARKER_SIZE = 7;
@@ -336,9 +341,11 @@ export function mergeContent(
   opts: XdOptions = {},
 ): ContentMergeResult {
   // merge-ort's trivial merges (handle_content_merge), before anything looks at the bytes
-  if (same(ours, theirs) || same(ours, base))
-    return { content: theirs, conflicts: 0, binary: false };
-  if (same(theirs, base)) return { content: ours, conflicts: 0, binary: false };
+  if (!labels.afterOidShortcuts) {
+    if (same(ours, theirs) || same(ours, base))
+      return { content: theirs, conflicts: 0, binary: false };
+    if (same(theirs, base)) return { content: ours, conflicts: 0, binary: false };
+  }
   const tooLarge = [base, ours, theirs].some((b) => b.length > MAX_XDIFF_SIZE);
   if (tooLarge || isBinary(base) || isBinary(ours) || isBinary(theirs))
     return labels.virtualAncestor

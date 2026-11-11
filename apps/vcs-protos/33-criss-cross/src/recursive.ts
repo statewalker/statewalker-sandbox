@@ -10,9 +10,10 @@ import type { Repository } from "../../17-repository/src/object-store.js";
 import type { TreeMergeOptions, TreeMergeResult } from "../../29-merge/src/merge-trees.js";
 import { mergeOrt } from "../../31-ort/src/ort.js";
 
-/** a commit as the walk sees it: real (with an id) or virtual (a merged merge base) */
+/** a commit as the walk sees it: real (with an id, parsed on first visit) or virtual */
 interface Node {
   id?: string;
+  parsed: boolean;
   tree: string;
   date: number;
   parents: Node[];
@@ -25,23 +26,38 @@ const STALE = 4;
 const RESULT = 8;
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+/** the commits of a repository, each parsed when a walk first reaches it (repo_parse_commit) */
 class Graph {
-  private nodes = new Map<string, Promise<Node>>();
+  private nodes = new Map<string, Node>();
   constructor(readonly repo: Repository) {}
 
-  get(id: string): Promise<Node> {
+  node(id: string): Node {
     let n = this.nodes.get(id);
     if (!n) {
-      n = (async () => {
-        const c = await readCommit(this.repo, id);
-        const node: Node = { id, tree: c.tree, date: c.committer.when, parents: [], flags: 0 };
-        node.parents = await Promise.all(c.parents.map((p) => this.get(p)));
-        return node;
-      })();
+      n = { id, parsed: false, tree: "", date: 0, parents: [], flags: 0 };
       this.nodes.set(id, n);
     }
     return n;
   }
+
+  async parse(n: Node): Promise<Node> {
+    if (n.parsed) return n;
+    const c = await readCommit(this.repo, n.id as string);
+    n.tree = c.tree;
+    n.date = c.committer.when;
+    n.parents = c.parents.map((p) => this.node(p));
+    n.parsed = true;
+    return n;
+  }
+}
+const graphs = new WeakMap<Repository, Graph>();
+function graphOf(repo: Repository): Graph {
+  let g = graphs.get(repo);
+  if (!g) {
+    g = new Graph(repo);
+    graphs.set(repo, g);
+  }
+  return g;
 }
 
 /** git's prio_queue of commits: newest date first, then insertion order */
@@ -86,7 +102,7 @@ function clearMarks(starts: Node[]) {
 }
 
 /** paint_down_to_common */
-function paintDownToCommon(one: Node, twos: Node[]): Node[] {
+async function paintDownToCommon(g: Graph, one: Node, twos: Node[]): Promise<Node[]> {
   const queue = new Queue();
   const result: Node[] = [];
   one.flags |= PARENT1;
@@ -108,6 +124,7 @@ function paintDownToCommon(one: Node, twos: Node[]): Node[] {
     }
     for (const p of c.parents) {
       if ((p.flags & flags) === flags) continue;
+      await g.parse(p);
       p.flags |= flags;
       queue.put(p);
     }
@@ -116,16 +133,16 @@ function paintDownToCommon(one: Node, twos: Node[]): Node[] {
 }
 
 /** merge_bases_many */
-function mergeBasesMany(one: Node, twos: Node[]): Node[] {
+async function mergeBasesMany(g: Graph, one: Node, twos: Node[]): Promise<Node[]> {
   if (twos.includes(one)) return [one];
-  const list = paintDownToCommon(one, twos);
+  const list = await paintDownToCommon(g, one, twos);
   const result: Node[] = [];
   for (const c of list) if (!(c.flags & STALE)) insertByDate(result, c);
   return result;
 }
 
 /** remove_redundant_no_gen: drop candidates that are ancestors of other candidates */
-function removeRedundant(array: Node[]): Node[] {
+async function removeRedundant(g: Graph, array: Node[]): Promise<Node[]> {
   const redundant = array.map(() => false);
   for (let i = 0; i < array.length; i++) {
     if (redundant[i]) continue;
@@ -137,7 +154,7 @@ function removeRedundant(array: Node[]): Node[] {
       work.push(array[j] as Node);
     }
     const ai = array[i] as Node;
-    paintDownToCommon(ai, work);
+    await paintDownToCommon(g, ai, work);
     if (ai.flags & PARENT2) redundant[i] = true;
     work.forEach((w, k) => {
       if (w.flags & PARENT1) redundant[index[k] as number] = true;
@@ -148,15 +165,15 @@ function removeRedundant(array: Node[]): Node[] {
 }
 
 /** get_merge_bases_many_0 for two commits */
-function getMergeBases(one: Node, two: Node): Node[] {
-  const result = mergeBasesMany(one, [two]);
+async function getMergeBases(g: Graph, one: Node, two: Node): Promise<Node[]> {
+  const result = await mergeBasesMany(g, one, [two]);
   if (one === two) return result;
   if (result.length < 2) {
     clearMarks([one, two]);
     return result;
   }
   clearMarks([one, two]);
-  const kept = removeRedundant(result);
+  const kept = await removeRedundant(g, result);
   const out: Node[] = [];
   for (const c of kept) insertByDate(out, c);
   return out;
@@ -164,12 +181,14 @@ function getMergeBases(one: Node, two: Node): Node[] {
 
 /** `git merge-base --all a b`, in git's order */
 export async function mergeBases(repo: Repository, a: string, b: string): Promise<string[]> {
-  const g = new Graph(repo);
-  return getMergeBases(await g.get(a), await g.get(b)).map((n) => n.id as string);
+  const g = graphOf(repo);
+  const bases = await getMergeBases(g, await g.parse(g.node(a)), await g.parse(g.node(b)));
+  return bases.map((n) => n.id as string);
 }
 
 /** merge_ort_internal */
 async function mergeOrtInternal(
+  g: Graph,
   repo: Repository,
   bases: Node[] | undefined,
   h1: Node,
@@ -177,13 +196,20 @@ async function mergeOrtInternal(
   opts: TreeMergeOptions,
   depth: number,
 ): Promise<TreeMergeResult> {
-  const list = bases ?? getMergeBases(h1, h2).reverse();
+  const list = bases ?? (await getMergeBases(g, h1, h2)).reverse();
   // no common ancestor: a virtual one with the empty tree
   if (!list.length) await repo.objects.put("tree", new Uint8Array(0));
-  let merged: Node = list.shift() ?? { tree: EMPTY_TREE, date: 0, parents: [], flags: 0 };
+  let merged: Node = list.shift() ?? {
+    parsed: true,
+    tree: EMPTY_TREE,
+    date: 0,
+    parents: [],
+    flags: 0,
+  };
   for (let next = list.shift(); next; next = list.shift()) {
     const prev = merged;
     const inner = await mergeOrtInternal(
+      g,
       repo,
       undefined,
       prev,
@@ -191,7 +217,7 @@ async function mergeOrtInternal(
       { ...opts, ours: "Temporary merge branch 1", theirs: "Temporary merge branch 2" },
       depth + 1,
     );
-    merged = { tree: inner.tree, date: 0, parents: [prev, next], flags: 0 };
+    merged = { parsed: true, tree: inner.tree, date: 0, parents: [prev, next], flags: 0 };
   }
   return mergeOrt(repo, merged.tree, h1.tree, h2.tree, opts, depth);
 }
@@ -203,11 +229,11 @@ export async function mergeCommits(
   theirs: string,
   opts: TreeMergeOptions & { allowUnrelated?: boolean },
 ): Promise<TreeMergeResult> {
-  const g = new Graph(repo);
-  const h1 = await g.get(ours);
-  const h2 = await g.get(theirs);
-  const bases = getMergeBases(h1, h2);
+  const g = graphOf(repo);
+  const h1 = await g.parse(g.node(ours));
+  const h2 = await g.parse(g.node(theirs));
+  const bases = await getMergeBases(g, h1, h2);
   if (!bases.length && !opts.allowUnrelated)
     throw new Error("refusing to merge unrelated histories");
-  return mergeOrtInternal(repo, bases.reverse(), h1, h2, opts, 0);
+  return mergeOrtInternal(g, repo, bases.reverse(), h1, h2, opts, 0);
 }
