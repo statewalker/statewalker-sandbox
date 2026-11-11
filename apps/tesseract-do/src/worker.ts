@@ -1,12 +1,15 @@
 /**
  * HTTP surface of the OCR prototype.
  *
- *   POST /api/ocr?lang=eng[&cell=name][&band=rows]   body: a PNG or JPEG image → OCR result (JSON)
+ *   POST /api/ocr?lang=eng[&cell=name][&band=rows][&engine=cell|isolate]
+ *        body: a PNG or JPEG image → OCR result (JSON)
  *   GET  /api/cells/:name                the cell's engines and stored models
  *   GET  /api/runtime                    what this runtime allows (wasm compilation, loader, …)
  *
  * Without `cell`, the image goes to the cell of its language (`ocr-<lang>`). `band` sets the
  * rows read at a time (0: the whole image at once; default: about 3 megapixels per band).
+ * `engine=isolate` runs recognition in a Worker Loader isolate instead of the cell's own (needs
+ * WASM_URL).
  */
 import { type CellOcrResult, type Env, OcrCell } from "./ocr-cell.ts";
 
@@ -56,6 +59,7 @@ export default {
             (globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent ?? null,
           compileWasmFromBytes: await canCompileWasmBytes(),
           workerLoader: !!env.LOADER,
+          isolateEngine: !!env.LOADER && !!env.WASM_URL,
           imageApis: Object.fromEntries(
             ["OffscreenCanvas", "ImageData", "createImageBitmap"].map((name) => [
               name,
@@ -82,7 +86,11 @@ export default {
           return json({ error: "EINVAL: send a PNG or JPEG image (at most 20 MB)" }, 400);
         const stub = env.OCR.get(env.OCR.idFromName(cell));
         const band = url.searchParams.get("band");
-        const options = band === null ? {} : { bandHeight: Math.max(0, Number(band) || 0) };
+        const engine = url.searchParams.get("engine") === "isolate" ? "isolate" : "cell";
+        const options = {
+          engine: engine as "cell" | "isolate",
+          ...(band === null ? {} : { bandHeight: Math.max(0, Number(band) || 0) }),
+        };
         const result: CellOcrResult = await stub.ocr(image, lang, options);
         return json({ ...result, cellName: cell });
       }

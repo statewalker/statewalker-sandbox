@@ -23,3 +23,13 @@ test("models survive a restart in the cell's SQLite", async () => {
     wasmMemoryMiB: r.wasmMemoryMiB,
   });
 });
+
+test("after a restart an OCR isolate gets the model from the cell's SQLite", async () => {
+  const before = await modelHits();
+  const r = await ocr("c03-29.jpg", { cell: "ocr-eng-isolate", engine: "isolate" });
+  assert.equal(r.isolate.modelSent, true);
+  assert.equal(r.model.source, "sqlite");
+  assert.ok(r.text.includes("Miss Watson"));
+  const after = await modelHits();
+  assert.equal(after["eng.traineddata"] ?? 0, before["eng.traineddata"] ?? 0, "no new download");
+});

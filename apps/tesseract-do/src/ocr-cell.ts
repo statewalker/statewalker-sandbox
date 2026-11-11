@@ -12,6 +12,7 @@
 import { DurableObject } from "cloudflare:workers";
 import tesseractWasm from "../node_modules/tesseract-wasm/dist/tesseract-core.wasm";
 import { decodeImage } from "./decode.ts";
+import { isolateOffered, ocrInIsolate } from "./isolate-client.ts";
 import {
   checkLang,
   initModelTable,
@@ -34,13 +35,21 @@ export interface Env {
   LOADER?: unknown;
   /** Directory URL of `<lang>.traineddata` files. */
   MODEL_BASE_URL?: string;
+  /** Where tesseract-core.wasm is, for OCR in Worker Loader isolates (`engine: "isolate"`). */
+  WASM_URL?: string;
 }
+
+/** Where recognition runs: in the cell's own isolate, or in a Worker Loader isolate. */
+export type OcrEngineKind = "cell" | "isolate";
 
 export const DEFAULT_MODEL_BASE_URL =
   "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/4.1.0/";
 
 export type CellOcrResult = OcrResult & {
   lang: string;
+  engine: OcrEngineKind;
+  /** For `engine: "isolate"`: the isolate's id, and whether the model had to be sent to it. */
+  isolate?: { id: string; modelSent: boolean };
   cell: { bootId: string; requests: number };
   model: { source: ModelSource; bytes: number };
   /** Bands the image was read in. */
@@ -74,10 +83,11 @@ export class OcrCell extends DurableObject<Env> {
   async ocr(
     image: ArrayBuffer,
     lang: string,
-    options: RecognizeOptions = {},
+    options: RecognizeOptions & { engine?: OcrEngineKind } = {},
   ): Promise<CellOcrResult> {
     checkLang(lang);
     this.#requests++;
+    if (options.engine === "isolate") return this.#ocrInIsolate(image, lang, options);
     let modelSource: ModelSource = "memory";
     let engine = this.#engines.get(lang);
     if (!engine) {
@@ -97,10 +107,45 @@ export class OcrCell extends DurableObject<Env> {
     return {
       ...result,
       lang,
+      engine: "cell",
       cell: { bootId: bootId(), requests: this.#requests },
       model: { source: modelSource, bytes: this.#modelBytes.get(lang) ?? 0 },
       wasmMemoryMiB: mib(wasmMemoryBytes(ready)),
       decodedMiB: mib(source.bytes),
+    };
+  }
+
+  /**
+   * OCR in a Worker Loader isolate: the cell keeps only the encoded image and, while sending
+   * it, the model; decoding and tesseract's memory are the isolate's.
+   */
+  async #ocrInIsolate(image: ArrayBuffer, lang: string, options: RecognizeOptions) {
+    let modelSource: ModelSource = "memory";
+    let modelBytes = 0;
+    const r = await ocrInIsolate(
+      this.env,
+      this.ctx.id.toString(),
+      lang,
+      image,
+      options,
+      async () => {
+        const base = this.env.MODEL_BASE_URL || DEFAULT_MODEL_BASE_URL;
+        const model = await loadModel(this.#sql, lang, base);
+        modelSource = model.source;
+        modelBytes = model.bytes.byteLength;
+        return model.bytes;
+      },
+    );
+    const { wasmMemoryBytes, decodedBytes, modelSent, isolateId, ...result } = r;
+    return {
+      ...result,
+      lang,
+      engine: "isolate" as const,
+      isolate: { id: isolateId, modelSent },
+      cell: { bootId: bootId(), requests: this.#requests },
+      model: { source: modelSource, bytes: modelBytes },
+      wasmMemoryMiB: mib(wasmMemoryBytes),
+      decodedMiB: mib(decodedBytes),
     };
   }
 
@@ -109,6 +154,7 @@ export class OcrCell extends DurableObject<Env> {
       bootId: bootId(),
       requests: this.#requests,
       enginesLoaded: [...this.#engines.keys()],
+      isolateOffered: isolateOffered(this.env),
       models: storedModels(this.#sql),
     };
   }

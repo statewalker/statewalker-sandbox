@@ -74,11 +74,29 @@ test("the engine stays loaded in its cell between requests", async () => {
   recordMetric("engine reuse", { first: first.seconds, second: second.seconds });
 });
 
+test("OCR in a Worker Loader isolate: same text, no engine in the cell", async () => {
+  const cell = "ocr-eng-isolate";
+  const first = await ocr("linn.png", { cell, engine: "isolate" });
+  const second = await ocr("c03-29.jpg", { cell, engine: "isolate" });
+  assert.equal(first.engine, "isolate");
+  assert.equal(first.isolate.modelSent, true, "a new isolate gets the model");
+  assert.equal(second.isolate.modelSent, false, "the isolate keeps its engine");
+  assert.equal(second.isolate.id, first.isolate.id);
+  const rec = recall(fixture("linn.txt").toString(), first.text);
+  assert.ok(rec > 0.95, `recall ${rec}`);
+  assert.ok(second.text.includes("Miss Watson"));
+  const stats = await getJson(`/api/cells/${cell}`);
+  assert.deepEqual(stats.enginesLoaded, [], "the cell itself holds no engine");
+  recordMetric("linn.png (isolate)", { ...summary(first), recall: Math.round(rec * 1000) / 1000 });
+});
+
 test("each model was downloaded once per cell", async () => {
   const hits = await modelHits();
   recordMetric("model downloads (first run)", hits);
   assert.ok(hits["eng.traineddata"] >= 1);
   assert.equal(hits["nld.traineddata"], 1);
+  // The wasm for isolates is fetched once per cell isolate (one here, or one per isolate hosting cells).
+  assert.ok(hits["tesseract-core.wasm"] >= 1);
 });
 
 test("bad input is refused", async () => {

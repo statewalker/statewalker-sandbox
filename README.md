@@ -48,6 +48,7 @@ pnpm-workspace.yaml   workspace globs and the dependency catalog
 | [openai-proxy.app](apps/openai-proxy.app) | OpenAI v1 HTTP proxy in front of a local llama.cpp server |
 | [byok-config-prototype](apps/byok-config-prototype) | Throwaway UI prototype for editing an LLM connections config file |
 | [pdf-portabletext-prototype](apps/pdf-portabletext-prototype) | Demo UI and openly licensed test corpus for `@statewalker/pdf-portabletext` |
+| [tesseract-do](apps/tesseract-do) | Tesseract OCR inside Durable Objects: one Worker project on wrangler, cellb and celld, with the platform limits measured |
 
 Each folder has a README with its own run instructions.
 

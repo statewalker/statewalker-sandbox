@@ -13,6 +13,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildIsolate, wasmPath } from "./build-isolate.mjs";
 
 const env = process.argv[2];
 const dir = fileURLToPath(new URL("..", import.meta.url));
@@ -33,7 +34,11 @@ if (!existsSync(join(dir, "fixtures/models/eng.traineddata"))) {
   process.exit(2);
 }
 
-// The model server: fixtures/models over HTTP, counting requests per file.
+// The OCR isolate's code is generated before the runtime builds the project.
+await buildIsolate({ quiet: true });
+
+// The model server: fixtures/models (and tesseract-core.wasm for OCR isolates) over HTTP,
+// counting requests per file.
 const hits = {};
 const modelServer = createHttpServer((req, res) => {
   const name = decodeURIComponent(new URL(req.url, "http://x").pathname.slice(1));
@@ -42,8 +47,8 @@ const modelServer = createHttpServer((req, res) => {
     res.end(JSON.stringify(hits));
     return;
   }
-  const file = join(dir, "fixtures/models", name);
-  if (!/^[\w-]+\.traineddata$/.test(name) || !existsSync(file)) {
+  const file = name === "tesseract-core.wasm" ? wasmPath : join(dir, "fixtures/models", name);
+  if (!/^[\w-]+\.(traineddata|wasm)$/.test(name) || !existsSync(file)) {
     res.writeHead(404);
     res.end();
     return;
@@ -55,7 +60,7 @@ const modelServer = createHttpServer((req, res) => {
 const modelPort = await freePort();
 await new Promise((r) => modelServer.listen(modelPort, "127.0.0.1", r));
 const MODEL_BASE_URL = `http://127.0.0.1:${modelPort}/`;
-const VARS = [`MODEL_BASE_URL=${MODEL_BASE_URL}`];
+const VARS = [`MODEL_BASE_URL=${MODEL_BASE_URL}`, `WASM_URL=${MODEL_BASE_URL}tesseract-core.wasm`];
 
 const DEV_VARS_MARK = "# written by scripts/run-env.mjs for a test run (removed when it ends)";
 let ownDevVars = false;
