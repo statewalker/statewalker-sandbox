@@ -206,6 +206,15 @@ r.append("|".join(sorted(os.listdir("/workspace"))))
       );
       assert.equal(back.value, "[256, 0, 255]");
       assert.deepEqual(back.written, []);
+      // A file that starts with a byte-order mark is not seen as changed (nor rewritten without it).
+      await admin(`/api/w/${ws}/seed`, { files: { "/proj/bom.txt": "\uFEFFbom" } });
+      const bom = ok(
+        await py(ws, token, "stub", {
+          code: "len(open('/workspace/proj/bom.txt', encoding='utf-8').read())",
+        }),
+      );
+      assert.deepEqual(bom.written, []);
+      assert.equal((await files(ws))["/proj/bom.txt"], "\uFEFFbom");
       const slow = await py(ws, token, "stub", { code: "while True:\n    pass", timeoutMs: 1500 });
       assert.equal(slow.ok, false);
       assert.equal(slow.code, "ETIMEDOUT");

@@ -9,7 +9,7 @@
 // EISDIR, ENOTEMPTY, ENOTSUP).
 
 import type { Cap } from "../caps.ts";
-import type { DirEntryStat } from "../sql-fs.ts";
+import { type DirEntryStat, MAX_FILE_BYTES as STORE_MAX_FILE_BYTES } from "../sql-fs.ts";
 
 export type HostFsReply = { value: unknown } | { error: { code: string; message: string } };
 
@@ -40,7 +40,8 @@ interface Handle {
 const encoder = new TextEncoder();
 /** At most this many open files per sandbox; at most this many bytes per file in memory. */
 const MAX_HANDLES = 256;
-const MAX_FILE_BYTES = 16 * 1024 * 1024;
+/** The store's limit: a larger file would only fail at close, which WASIX does not report. */
+const MAX_FILE_BYTES = STORE_MAX_FILE_BYTES;
 /**
  * Metadata (stat, "no such file", listings) is cached per sandbox for one command at most:
  * the kernel clears it before each command, so a write made between commands (a Flue tool, an

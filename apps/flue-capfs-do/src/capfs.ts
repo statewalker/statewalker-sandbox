@@ -2,7 +2,7 @@
 // `ls`, `cat`, `grep -r`, `find`, redirects, `cp`/`mv` — and Flue's read/write/edit/grep/glob/
 // bash tools — run on the filtered file system. There is no other file system underneath.
 
-import { asBytes, bytesToString, encodingOf, isUtf8, stringToBytes } from "./bytes.ts";
+import { asBytes, bytesToString, encodingOf, isUtf8, ownBytes, stringToBytes } from "./bytes.ts";
 import type { Cap } from "./caps.ts";
 import { fsError, normalise } from "./path.ts";
 import { bytesArg, type DirEntryStat } from "./sql-fs.ts";
@@ -13,7 +13,7 @@ import { bytesArg, type DirEntryStat } from "./sql-fs.ts";
  */
 function content(d: unknown, o: unknown): { text: string } | { bytes: Uint8Array } {
   const b = asBytes(d);
-  if (b) return { bytes: b };
+  if (b) return { bytes: ownBytes(b) };
   const e = encodingOf(o);
   if (e === undefined || isUtf8(e)) return { text: String(d ?? "") };
   return { bytes: stringToBytes(String(d ?? ""), e) };

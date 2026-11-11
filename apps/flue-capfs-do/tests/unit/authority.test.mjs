@@ -457,3 +457,22 @@ test("binary content is stored byte for byte as a BLOB, and writing it needs the
   await denied(gate(ro).call("appendFileBuffer", "/p1/bin", new Uint8Array([1])));
   await assert.rejects(gate().call("writeFileBuffer", "/p1/s", "text"), (e) => e.code === "EINVAL");
 });
+
+test("a file is at most 2,000,000 bytes, text or binary (EFBIG)", async () => {
+  const { gate, store } = await setup();
+  await gate().call("writeFileBuffer", "/p1/max", new Uint8Array(2_000_000));
+  await assert.rejects(
+    gate().call("writeFileBuffer", "/p1/big", new Uint8Array(2_000_001)),
+    (e) => e.code === "EFBIG",
+  );
+  await assert.rejects(
+    gate().call("writeFile", "/p1/big", "x".repeat(2_000_001)),
+    (e) => e.code === "EFBIG",
+  );
+  await assert.rejects(
+    gate().call("appendFileBuffer", "/p1/max", new Uint8Array(1)),
+    (e) => e.code === "EFBIG",
+  );
+  assert.equal((await store.stat("/p1/max")).size, 2_000_000);
+  assert.equal(await store.exists("/p1/big"), false);
+});

@@ -272,8 +272,14 @@ async function syncIn(cap: Cap, root: string) {
   };
   try {
     const st = (await cap.call("stat", root)) as { isFile?: boolean };
-    if (st.isFile) files[root] = toContent(toBytes(await cap.call("readFileBuffer", root)));
-    else await walk(root);
+    if (st.isFile) {
+      const b = toBytes(await cap.call("readFileBuffer", root));
+      if (b.length > LIMITS.bytes) truncated = true;
+      else {
+        files[root] = toContent(b);
+        bytes = b.length;
+      }
+    } else await walk(root);
   } catch {
     await walk(root); // an ancestor of the rights may be listable without being stat-able
   }

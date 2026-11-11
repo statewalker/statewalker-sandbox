@@ -9,6 +9,7 @@
 // readFileBuffer returns the bytes; readFile decodes them as UTF-8 (invalid sequences of a
 // binary file read as U+FFFD there).
 
+import { asBytes } from "./bytes.ts";
 import { dirname, fsError, join } from "./path.ts";
 
 interface SqlLike {
@@ -63,14 +64,19 @@ const enc = new TextEncoder();
 const dec = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
 const bytesOf = (data: Row["data"]): Uint8Array =>
   data == null ? new Uint8Array() : data instanceof Uint8Array ? data : new Uint8Array(data);
-/** Bytes as the ArrayBuffer SQL bindings take (exactly the view's bytes). */
+/**
+ * A file's content is one BLOB, and SQLite-backed Durable Objects keep a BLOB (a row) under
+ * 2 MB: larger files are refused here, with EFBIG, on every runtime.
+ */
+export const MAX_FILE_BYTES = 2_000_000;
+
 /** Bytes as they arrive over RPC: a Uint8Array, any ArrayBuffer view, or an ArrayBuffer. */
 export function bytesArg(d: unknown): Uint8Array {
-  if (d instanceof Uint8Array) return d;
-  if (ArrayBuffer.isView(d)) return new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
-  if (d instanceof ArrayBuffer) return new Uint8Array(d);
-  throw fsError("EINVAL", "binary content must be a Uint8Array or an ArrayBuffer");
+  const b = asBytes(d);
+  if (!b) throw fsError("EINVAL", "binary content must be a Uint8Array or an ArrayBuffer");
+  return b;
 }
+/** Bytes as the ArrayBuffer SQL bindings take (exactly the view's bytes). */
 const toBlob = (b: Uint8Array): ArrayBuffer =>
   (b.byteOffset === 0 && b.byteLength === b.buffer.byteLength
     ? b.buffer
@@ -102,6 +108,8 @@ export class SqlFs {
   }
   /** The column is declared TEXT; TEXT affinity never converts a BLOB, so the bytes stay. */
   #put(path: string, kind: "file" | "dir", bytes: Uint8Array | null, mode?: number) {
+    if (bytes && bytes.length > MAX_FILE_BYTES)
+      throw fsError("EFBIG", `file too large '${path}': at most ${MAX_FILE_BYTES} bytes`);
     this.#sql.exec(
       `INSERT INTO fs_entries (path, parent, kind, data, mode, mtime) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET kind = excluded.kind, data = excluded.data, mtime = excluded.mtime`,

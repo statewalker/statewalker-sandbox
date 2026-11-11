@@ -115,6 +115,8 @@ test("binary files are stored byte for byte (seed, just-bash, a tool over RPC)",
   const all = Buffer.from(Array.from({ length: 256 }, (_, i) => i)).toString("base64");
   await seed(ws, { "/b/seed.bin": { $b64: all } });
   const b64 = () => admin(`/api/w/${ws}/files?encoding=base64`);
+  const bad = await http(`/api/w/${ws}/seed`, { files: { "/b/n": 5 } }, { admin: true });
+  assert.equal(bad.status, 400, "a seed value is a string or { $b64 }");
   assert.equal((await b64())["/b/seed.bin"], all);
   const { token } = await session(ws, "alice", ["/b"]);
   const r = await sh(

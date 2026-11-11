@@ -17,7 +17,7 @@ import {
   type ModelUsage,
 } from "./authority.ts";
 import { bytesToString, stringToBytes } from "./bytes.ts";
-import { normalise } from "./path.ts";
+import { fsError, normalise } from "./path.ts";
 import { SqlFs } from "./sql-fs.ts";
 
 /**
@@ -98,9 +98,11 @@ export class Workspace extends DurableObject {
   }
   /** Seed files without rights checks (admin import): text, or `{ $b64 }` for binary content. */
   async seed(files: Record<string, string | { $b64: string }>) {
-    for (const [p, content] of Object.entries(files)) {
+    for (const [p, content] of Object.entries(files ?? {})) {
       if (typeof content === "string") await this.#store.writeFile(normalise(p), content);
-      else await this.#store.writeFileBuffer(normalise(p), stringToBytes(content.$b64, "base64"));
+      else if (content && typeof content === "object" && typeof content.$b64 === "string")
+        await this.#store.writeFileBuffer(normalise(p), stringToBytes(content.$b64, "base64"));
+      else throw fsError("EINVAL", `seed '${p}': a value is a string or { $b64 }`);
     }
     return Object.keys(files).length;
   }

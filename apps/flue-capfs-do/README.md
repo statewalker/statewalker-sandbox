@@ -631,6 +631,17 @@ Every writer sends bytes as bytes:
 - Wasmer: open files are read and saved as bytes.
 - Flue's tools on Wasmer: `writeFile(Uint8Array)` and `readFileBuffer`.
 
+Limits and notes:
+- **Size:** a file is one BLOB, and SQLite-backed Durable Objects keep a BLOB under 2 MB, so the
+  store refuses larger files on every runtime (`EFBIG`, HTTP 413). Wasmer refuses them at the write.
+- **Approved tool bundles:** the `node:fs` shim is inlined into every tool bundle, so bundles
+  built after this change hash differently. Approve them again; bundles already approved still
+  run (their shim writes text only).
+- **Python's live `capfs` module** (`read_text`, `write_text`, …) is text-only: a binary file
+  read there comes back with U+FFFD. Files under `/workspace` are synced as bytes.
+- **just-bash's `printf`** writes `\377` as the character U+00FF (UTF-8 `c3 bf`), as on just-bash's
+  own in-memory file system; `cat`, `cp`, redirects of binary data and `base64 -d` are byte-exact.
+
 ```
 src/worker.ts       gateway: routes, admin guard, opens the capability for stub transport
 src/workspace.ts    Workspace DO (owner cell): store + Authority; FilteredFiles RpcTarget; fsCall

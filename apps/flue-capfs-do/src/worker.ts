@@ -66,6 +66,7 @@ const STATUS: Record<string, number> = {
   EPERM: 403,
   ENOENT: 404,
   EINVAL: 400,
+  EFBIG: 413,
   ENOSYS: 501,
 };
 

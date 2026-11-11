@@ -174,7 +174,8 @@ function setRun(id) {
   ns.destroy?.();
 }
 
-const utf8 = new TextDecoder("utf-8", { fatal: true });
+// A leading U+FEFF is text: dropping it would make every BOM file look changed.
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 function writeWorkspace(files) {
   const FS = pyodide.FS;

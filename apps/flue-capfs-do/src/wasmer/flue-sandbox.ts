@@ -3,6 +3,7 @@
 // capability directly. Flue's tools (read, write, edit, grep, glob, bash) then work as they do on
 // just-bash, with the same rights. Paths are guest paths: /workspace/x is the capability's /x.
 
+import { ownBytes } from "../bytes.ts";
 import type { Cap } from "../caps.ts";
 import type { WasmerSession } from "./kernel.ts";
 
@@ -48,7 +49,7 @@ export function flueSandboxOnWasmer(session: WasmerSession, cap: Cap) {
     // Text as UTF-8, bytes byte for byte.
     writeFile: async (p: string, c: string | Uint8Array) => {
       if (typeof c === "string") await cap.call("writeFile", capPath(p), c);
-      else await cap.call("writeFileBuffer", capPath(p), c);
+      else await cap.call("writeFileBuffer", capPath(p), ownBytes(c));
     },
     stat: async (p: string) => {
       const s = (await cap.call("stat", capPath(p))) as {

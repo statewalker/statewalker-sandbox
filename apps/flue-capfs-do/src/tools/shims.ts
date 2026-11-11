@@ -18,7 +18,7 @@ export const PROCESS_GLOBAL = "__capfs_process";
 export const FS_SHIM = String.raw`
 let files;
 export function __bindFiles(f) { files = f; }
-const ERRNO = { EACCES: -13, ENOENT: -2, EEXIST: -17, EISDIR: -21, ENOTDIR: -20, ENOTEMPTY: -39, EINVAL: -22, ENOSYS: -38, EPERM: -1, EIO: -5 };
+const ERRNO = { EFBIG: -27, EACCES: -13, ENOENT: -2, EEXIST: -17, EISDIR: -21, ENOTDIR: -20, ENOTEMPTY: -39, EINVAL: -22, ENOSYS: -38, EPERM: -1, EIO: -5 };
 const err = (e, syscall, path) => {
   const m = String((e && e.message) || e);
   const x = new Error(m);
@@ -51,6 +51,7 @@ function encode(bytes, enc) {
       }
       return s;
     }
+    case "base64url": return encode(bytes, "base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     default: throw err("EINVAL: unsupported encoding '" + enc + "'");
   }
 }
@@ -63,17 +64,21 @@ const toBuffer = (u) => new ToolBuffer(u.buffer, u.byteOffset, u.length);
 /** A string in a byte encoding as the bytes it stands for. */
 function decode(s, enc) {
   switch (norm(enc)) {
-    case "latin1": case "binary": return Uint8Array.from(s, (c) => c.charCodeAt(0) & 255);
-    case "ascii": return Uint8Array.from(s, (c) => c.charCodeAt(0) & 127);
-    case "hex": { const out = []; for (let i = 0; i + 1 < s.length; i += 2) { const b = parseInt(s.slice(i, i + 2), 16); if (Number.isNaN(b)) break; out.push(b); } return Uint8Array.from(out); }
-    case "base64": return Uint8Array.from(atob(s.replace(/[^A-Za-z0-9+/=]/g, "")), (c) => c.charCodeAt(0));
+    case "latin1": case "binary": case "ascii": return Uint8Array.from(s, (c) => c.charCodeAt(0) & 255);
+    case "hex": { const out = []; for (let i = 0; i + 1 < s.length; i += 2) { const pair = s.slice(i, i + 2); if (!/^[0-9a-fA-F]{2}$/.test(pair)) break; out.push(parseInt(pair, 16)); } return Uint8Array.from(out); }
+    case "base64": case "base64url": {
+      let c = s.replace(/-/g, "+").replace(/_/g, "/").replace(/[^A-Za-z0-9+/]/g, "");
+      if (c.length % 4 === 1) c = c.slice(0, -1);
+      return Uint8Array.from(atob(c + "=".repeat((4 - (c.length % 4)) % 4)), (x) => x.charCodeAt(0));
+    }
     default: throw err("EINVAL: unsupported encoding '" + enc + "'");
   }
 }
 /** What is stored: a UTF-8 string as text; bytes (or a string in a byte encoding) byte for byte. */
 function content(d, enc) {
   if (typeof d === "string") return norm(enc) === "utf8" ? { text: d } : { bytes: decode(d, enc) };
-  if (ArrayBuffer.isView(d)) return { bytes: new Uint8Array(d.buffer, d.byteOffset, d.byteLength) };
+  // Exactly the view's bytes: RPC would otherwise copy its whole buffer (a wasm heap, a pool).
+  if (ArrayBuffer.isView(d)) return { bytes: new Uint8Array(d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength)) };
   if (d instanceof ArrayBuffer) return { bytes: new Uint8Array(d) };
   throw err("EINVAL: data must be a string, a TypedArray or an ArrayBuffer");
 }

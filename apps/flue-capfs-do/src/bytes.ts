@@ -1,7 +1,15 @@
 // Strings and bytes in the encodings file APIs take (Node's BufferEncoding, as just-bash uses
 // it): "utf8" text, "latin1"/"binary" (one char per byte), "ascii", "base64" and "hex".
 
-export type Encoding = "utf8" | "utf-8" | "ascii" | "binary" | "latin1" | "base64" | "hex";
+export type Encoding =
+  | "utf8"
+  | "utf-8"
+  | "ascii"
+  | "binary"
+  | "latin1"
+  | "base64"
+  | "base64url"
+  | "hex";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
@@ -23,6 +31,28 @@ export const isUtf8 = (e: unknown) => {
   return n === "utf8" || n === "utf-8";
 };
 
+/**
+ * Exactly a view's bytes, for sending over RPC: structured clone copies a view's whole
+ * ArrayBuffer, so a small view of a large buffer (a wasm heap, a pooled Buffer) is copied out.
+ */
+export const ownBytes = (b: Uint8Array): Uint8Array =>
+  b.byteOffset === 0 && b.byteLength === b.buffer.byteLength ? b : b.slice();
+
+/** Base64 as Node decodes it: URL-safe characters too, anything else skipped, no padding needed. */
+export function fromBase64(s: string): Uint8Array {
+  let clean = s
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .replace(/[^A-Za-z0-9+/]/g, "");
+  if (clean.length % 4 === 1) clean = clean.slice(0, -1);
+  clean += "=".repeat((4 - (clean.length % 4)) % 4);
+  try {
+    return Uint8Array.from(atob(clean), (c) => c.charCodeAt(0));
+  } catch {
+    throw Object.assign(new Error("EINVAL: invalid base64"), { code: "EINVAL" });
+  }
+}
+
 /** Bytes of a Uint8Array, any ArrayBuffer view or an ArrayBuffer; undefined for anything else. */
 export function asBytes(d: unknown): Uint8Array | undefined {
   if (d instanceof Uint8Array) return d;
@@ -40,19 +70,19 @@ export function stringToBytes(s: string, encoding?: unknown): Uint8Array {
     case "latin1":
     case "binary":
       return Uint8Array.from(s, (c) => c.charCodeAt(0) & 0xff);
-    case "ascii":
-      return Uint8Array.from(s, (c) => c.charCodeAt(0) & 0x7f);
+    case "ascii": // Node encodes ascii as latin1 (it masks only when decoding)
+      return Uint8Array.from(s, (c) => c.charCodeAt(0) & 0xff);
     case "base64":
-      return Uint8Array.from(atob(s.replace(/[^A-Za-z0-9+/=]/g, "")), (c) => c.charCodeAt(0));
+    case "base64url":
+      return fromBase64(s);
     case "hex": {
-      const clean = s.length % 2 ? s.slice(0, -1) : s;
-      const out = new Uint8Array(clean.length / 2);
-      for (let i = 0; i < out.length; i++) {
-        const b = Number.parseInt(clean.slice(i * 2, i * 2 + 2), 16);
-        if (Number.isNaN(b)) return out.subarray(0, i);
-        out[i] = b;
+      const out: number[] = [];
+      for (let i = 0; i + 1 < s.length; i += 2) {
+        const pair = s.slice(i, i + 2);
+        if (!/^[0-9a-fA-F]{2}$/.test(pair)) break;
+        out.push(Number.parseInt(pair, 16));
       }
-      return out;
+      return Uint8Array.from(out);
     }
     default:
       throw Object.assign(new Error(`EINVAL: unknown encoding '${String(encoding)}'`), {
@@ -82,6 +112,11 @@ export function bytesToString(b: Uint8Array, encoding?: unknown): string {
     }
     case "base64":
       return btoa(bytesToString(b, "latin1"));
+    case "base64url":
+      return btoa(bytesToString(b, "latin1"))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
     case "hex":
       return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
     default:
