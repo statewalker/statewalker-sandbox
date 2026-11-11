@@ -169,6 +169,15 @@ function renameCorpus(n: number, seed: number): Case[] {
         }
         const p = pick(files);
         const [mode, c] = m.get(p) as [string, string];
+        const theirRename = s === 1 ? [...(renamesOf[0] as Map<string, string>)] : [];
+        if (theirRename.length && rand() < 0.15) {
+          // the other side renamed a file here: edit its source and add another file at its target
+          const [from, to] = pick(theirRename);
+          const old = m.get(from);
+          if (old) m.set(from, [old[0], edit(old[1] as string)]);
+          m.set(to, ["100644", content()]);
+          continue;
+        }
         if (r < 0.45) {
           // a rename, maybe to where the other side renamed the same file, maybe edited
           const other = renamesOf[1 - s]?.get(p);

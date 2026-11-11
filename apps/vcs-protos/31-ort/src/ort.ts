@@ -1,16 +1,846 @@
 /**
- * X13d — merge-ort, ported along its own structure, with renames (no directory renames).
+ * X13d — merge-ort ported along its own structure (merge-ort.c, git v2.43.0), with renames and
+ * without directory renames:
+ * - `collect_merge_info`: a walk of the three trees, one entry per path (resolved early when it
+ *   can be), rename sources and destinations collected, directories one side left alone deferred
+ *   and then resolved whole (`handle_deferred_entries`), and the redo after renames;
+ * - `detect_and_process_renames`: X13c's rename detection over ort's relevant sources, then
+ *   `process_renames`;
+ * - `process_entries`: paths bottom-up, directories written once their contents are done,
+ *   `process_entry` for every conflicted path.
  */
 
+import { readTree, writeTree } from "../../17-repository/src/commands.js";
+import type { TreeEntry } from "../../17-repository/src/git-format.js";
 import type { Repository } from "../../17-repository/src/object-store.js";
-import type { TreeMergeOptions, TreeMergeResult } from "../../29-merge/src/merge-trees.js";
+import {
+  type ConflictEntry,
+  comparePaths,
+  type MergeMessage,
+  type TreeMergeOptions,
+  type TreeMergeResult,
+} from "../../29-merge/src/merge-trees.js";
+import { mergeContent } from "../../29-merge/src/xmerge.js";
+import { findRenames } from "../../30-renames/src/renames.js";
 
+const S_IFMT = 0o170000;
+const S_IFDIR = 0o040000;
+const S_IFREG = 0o100000;
+const S_IFLNK = 0o120000;
+const S_IFGITLINK = 0o160000;
+const NULL_OID = "0".repeat(40);
+
+interface Version {
+  /** 0 for none */
+  mode: number;
+  oid: string;
+}
+const none = (): Version => ({ mode: 0, oid: NULL_OID });
+const sameVersion = (a: Version, b: Version) => a.mode === b.mode && a.oid === b.oid;
+const isReg = (mode: number) => (mode & S_IFMT) === S_IFREG;
+
+/** merged_info: what a path resolved to */
+interface Merged {
+  result: Version;
+  isNull: boolean;
+  clean: boolean;
+}
+/** conflict_info */
+interface Conflict extends Merged {
+  conflict: true;
+  stages: [Version, Version, Version];
+  pathnames: [string, string, string];
+  filemask: number;
+  dirmask: number;
+  matchMask: number;
+  dfConflict: boolean;
+  pathConflict: boolean;
+}
+type Info = Merged | Conflict;
+
+/** a diff_filepair of ort's rename detection */
+interface FilePair {
+  status: "A" | "D" | "R";
+  one?: { path: string; v: Version };
+  two?: { path: string; v: Version };
+  /** the side it came from (process_renames' `score`) */
+  side?: 1 | 2;
+}
+const onePath = (p: FilePair) => (p.one?.path ?? p.two?.path) as string;
+const twoPath = (p: FilePair) => (p.two?.path ?? p.one?.path) as string;
+
+/** `canon_mode` */
+function canonMode(mode: number): number {
+  switch (mode & S_IFMT) {
+    case S_IFREG:
+      return mode & 0o100 ? 0o100755 : 0o100644;
+    case S_IFDIR:
+      return S_IFDIR;
+    case S_IFLNK:
+      return S_IFLNK;
+    default:
+      return S_IFGITLINK;
+  }
+}
+
+/** `sort_dirs_next_to_their_children`: as if every path ended in "/" */
+const utf8 = new TextEncoder();
+function sortDirsNextToChildren(a: string, b: string): number {
+  const x = utf8.encode(a);
+  const y = utf8.encode(b);
+  let i = 0;
+  while (i < x.length && i < y.length && x[i] === y[i]) i++;
+  const c1 = i < x.length ? (x[i] as number) : 0x2f;
+  const c2 = i < y.length ? (y[i] as number) : 0x2f;
+  if (c1 === c2) return i < x.length ? 1 : -1;
+  return c1 - c2;
+}
+
+const dirOf = (path: string) => {
+  const at = path.lastIndexOf("/");
+  return at < 0 ? "" : path.slice(0, at);
+};
+const baseOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+
+class OrtMerge {
+  paths = new Map<string, Info>();
+  conflicted = new Map<string, Conflict>();
+  messages = new Map<string, MergeMessage[]>();
+  // rename_info, per side (index 1 and 2)
+  pairs: FilePair[][] = [[], [], []];
+  relevant: Set<string>[] = [new Set(), new Set(), new Set()];
+  cachedPairs: Map<string, string | null>[] = [new Map(), new Map(), new Map()];
+  cachedTargetNames: Set<string>[] = [new Set(), new Set(), new Set()];
+  deferred: Map<string, number>[] = [new Map(), new Map(), new Map()];
+  trivialOkay = [true, true, true];
+  targetDirs: Set<string>[] = [new Set(), new Set(), new Set()];
+  dirRenameMask = 0;
+  /** redo_after_renames: 0, 1 (wanted), 2 (restart with cached renames) */
+  redo = 0;
+  trees = new Map<string, Map<string, Version>>();
+
+  constructor(
+    readonly repo: Repository,
+    readonly opts: TreeMergeOptions,
+  ) {}
+
+  reset() {
+    this.paths = new Map();
+    this.conflicted = new Map();
+    this.messages = new Map();
+    this.pairs = [[], [], []];
+    this.relevant = [new Set(), new Set(), new Set()];
+    this.deferred = [new Map(), new Map(), new Map()];
+    this.trivialOkay = [true, true, true];
+    this.targetDirs = [new Set(), new Set(), new Set()];
+    this.dirRenameMask = 0;
+  }
+
+  async entries(oid: string | undefined): Promise<Map<string, Version>> {
+    if (!oid) return new Map();
+    const known = this.trees.get(oid);
+    if (known) return known;
+    const m = new Map<string, Version>();
+    for (const e of (await readTree(this.repo, oid)) as TreeEntry[])
+      m.set(e.name, { mode: canonMode(Number.parseInt(e.mode, 8)), oid: e.oid });
+    this.trees.set(oid, m);
+    return m;
+  }
+
+  pathMsg(primary: string, others: string[], text: string) {
+    const list = this.messages.get(primary) ?? [];
+    this.messages.set(primary, list);
+    list.push({ paths: [primary, ...others], text: `${text}\n` });
+  }
+
+  // ─── collect_merge_info ───────────────────────────────────────────────────────────────
+
+  /** traverse_trees over one directory of the three trees (the wrapper when dir_rename_mask asks) */
+  async traverse(dir: string, trees: (string | undefined)[]) {
+    const levels = await Promise.all(trees.map((t) => this.entries(t)));
+    const names = [...new Set(levels.flatMap((l) => [...l.keys()]))].sort(comparePaths);
+    const rows = names.map((name) => levels.map((l) => l.get(name)));
+    if (this.dirRenameMask !== 0 && this.dirRenameMask !== 7) {
+      // traverse_trees_wrapper_callback: a file added on the side that kept the directory
+      for (const row of rows) {
+        const filemask = row.reduce(
+          (m, e, i) => m | (e && (e.mode & S_IFMT) !== S_IFDIR ? 1 << i : 0),
+          0,
+        );
+        if (filemask && filemask === this.dirRenameMask) this.dirRenameMask = 7;
+      }
+    }
+    for (const [k, name] of names.entries())
+      await this.callback(dir, name, rows[k] as (Version | undefined)[]);
+  }
+
+  async callback(dir: string, name: string, row: (Version | undefined)[]) {
+    const names = row.map((e) => e ?? none());
+    const isDir = (i: number) => !!row[i] && ((row[i] as Version).mode & S_IFMT) === S_IFDIR;
+    let mask = 0;
+    let dirmask = 0;
+    for (let i = 0; i < 3; i++) {
+      if (row[i]) mask |= 1 << i;
+      if (isDir(i)) dirmask |= 1 << i;
+    }
+    const filemask = mask & ~dirmask;
+    const prevDirRenameMask = this.dirRenameMask;
+    const mbaseNull = !(mask & 1);
+    const n0 = names[0] as Version;
+    const n1 = names[1] as Version;
+    const n2 = names[2] as Version;
+    const side1MatchesBase = !!(mask & 2) && !mbaseNull && sameVersion(n0, n1);
+    const side2MatchesBase = !!(mask & 4) && !mbaseNull && sameVersion(n0, n2);
+    const sidesMatch = !!(mask & 2) && !!(mask & 4) && sameVersion(n1, n2);
+    const dfConflict = filemask !== 0 && dirmask !== 0;
+    let matchMask = 0;
+    if (side1MatchesBase) matchMask = side2MatchesBase ? 7 : 3;
+    else if (side2MatchesBase) matchMask = 5;
+    else if (sidesMatch) matchMask = 6;
+    const fullpath = dir ? `${dir}/${name}` : name;
+
+    const resolved = (v: Version, isNull: boolean) =>
+      this.paths.set(fullpath, { result: { ...v }, isNull, clean: true });
+    if (side1MatchesBase && side2MatchesBase) return void resolved(n0, mbaseNull);
+    if (sidesMatch && filemask === 7) return void resolved(n1, false);
+    if (side1MatchesBase && filemask === 7) return void resolved(n2, false);
+    if (side2MatchesBase && filemask === 7) return void resolved(n1, false);
+
+    this.collectRenameInfo(names, fullpath, filemask, dirmask, matchMask);
+
+    const ci: Conflict = {
+      conflict: true,
+      result: none(),
+      isNull: dirmask !== 0,
+      clean: false,
+      stages: [{ ...n0 }, { ...n1 }, { ...n2 }],
+      pathnames: [fullpath, fullpath, fullpath],
+      filemask,
+      dirmask,
+      matchMask,
+      dfConflict,
+      pathConflict: false,
+    };
+    this.paths.set(fullpath, ci);
+
+    if (dirmask) {
+      let side = side1MatchesBase ? 2 : side2MatchesBase ? 1 : 0;
+      if (filemask === 0 && (dirmask === 2 || dirmask === 4)) {
+        // defer recursing into new directories too
+        ci.matchMask = 7 - dirmask;
+        side = dirmask / 2;
+      }
+      if (
+        this.dirRenameMask !== 7 &&
+        side !== 0 &&
+        this.trivialOkay[side] &&
+        !this.targetDirs[side]?.has(fullpath)
+      ) {
+        this.deferred[side]?.set(fullpath, this.dirRenameMask);
+        this.dirRenameMask = prevDirRenameMask;
+        return;
+      }
+      ci.matchMask &= filemask;
+      await this.traverse(
+        fullpath,
+        [0, 1, 2].map((i) => (isDir(i) ? (row[i] as Version).oid : undefined)),
+      );
+      this.dirRenameMask = prevDirRenameMask;
+    }
+  }
+
+  collectRenameInfo(
+    names: Version[],
+    fullpath: string,
+    filemask: number,
+    dirmask: number,
+    matchMask: number,
+  ) {
+    if (this.dirRenameMask !== 7 && (dirmask === 3 || dirmask === 5))
+      this.dirRenameMask = dirmask & ~1;
+    if (filemask === 0 || filemask === 7) return;
+    for (const side of [1, 2] as const) {
+      const sideMask = 1 << side;
+      if (filemask & 1 && !(filemask & sideMask))
+        this.addPair(names, fullpath, side, false, matchMask & filemask);
+      if (!(filemask & 1) && filemask & sideMask)
+        this.addPair(names, fullpath, side, true, matchMask & filemask);
+    }
+  }
+
+  addPair(names: Version[], path: string, side: 1 | 2, isAdd: boolean, matchMask: number) {
+    if (isAdd) {
+      if (this.cachedTargetNames[side]?.has(path)) return;
+      this.pairs[side]?.push({ status: "A", two: { path, v: { ...(names[side] as Version) } } });
+      return;
+    }
+    const contentRelevant = matchMask === 0;
+    const locationRelevant = this.dirRenameMask === 7;
+    if (contentRelevant || locationRelevant) this.relevant[side]?.add(path);
+    if (this.cachedPairs[side]?.has(path)) return;
+    this.pairs[side]?.push({ status: "D", one: { path, v: { ...(names[0] as Version) } } });
+  }
+
+  async handleDeferredEntries() {
+    const before = this.paths.size;
+    let after = 0;
+    for (const side of [1, 2] as const) {
+      let okay = true;
+      const cached = this.cachedPairs[side] as Map<string, string | null>;
+      for (const src of this.relevant[side] as Set<string>) {
+        if (!cached.has(src)) {
+          okay = false;
+          break;
+        }
+        const target = cached.get(src);
+        if (!target || this.paths.has(target)) continue;
+        // the directories down to a rename target must be walked
+        for (let d = dirOf(target); d; d = dirOf(d)) {
+          if (this.targetDirs[side]?.has(d)) break;
+          this.targetDirs[side]?.add(d);
+        }
+      }
+      this.trivialOkay[side] = okay;
+      const copy = this.deferred[side] as Map<string, number>;
+      this.deferred[side] = new Map();
+      for (const [path, mask] of copy) {
+        const ci = this.paths.get(path) as Conflict;
+        if (okay && !this.targetDirs[side]?.has(path)) {
+          this.resolveTrivialDirectoryMerge(ci, side);
+          continue;
+        }
+        // as merge-ort fills the descriptors: a side equal to another reuses its (maybe empty) tree
+        const own = (i: number) => (ci.dirmask & (1 << i) ? ci.stages[i]?.oid : undefined);
+        const t0 = own(0);
+        const t1 = ci.matchMask === 3 ? t0 : own(1);
+        const t2 = ci.matchMask === 5 ? t0 : ci.matchMask === 6 ? t1 : own(2);
+        const trees = [t0, t1, t2];
+        ci.matchMask &= ci.filemask;
+        this.dirRenameMask = mask;
+        await this.traverse(path, trees);
+      }
+      for (const path of (this.deferred[side] as Map<string, number>).keys())
+        this.resolveTrivialDirectoryMerge(this.paths.get(path) as Conflict, side);
+      if (!okay || after) after = this.paths.size;
+    }
+    if (after) {
+      if (Math.floor(after / before) >= 3) this.redo = 1;
+    } else if (this.redo === 2) this.redo = 0;
+  }
+
+  resolveTrivialDirectoryMerge(ci: Conflict, side: 1 | 2) {
+    ci.result = { ...ci.stages[side] };
+    ci.isNull = ci.stages[side].oid === NULL_OID;
+    ci.matchMask = 0;
+    ci.clean = true;
+  }
+
+  async collectMergeInfo(trees: (string | undefined)[]) {
+    await this.traverse("", trees);
+    await this.handleDeferredEntries();
+  }
+
+  // ─── renames ──────────────────────────────────────────────────────────────────────────
+
+  possibleSideRenames(side: 1 | 2) {
+    return (this.pairs[side]?.length ?? 0) > 0 && (this.relevant[side]?.size ?? 0) > 0;
+  }
+
+  async detectRegularRenames(side: 1 | 2): Promise<boolean> {
+    const relevant = this.relevant[side] as Set<string>;
+    for (const p of this.cachedPairs[side]?.keys() ?? []) relevant.delete(p);
+    if (!this.possibleSideRenames(side)) return false;
+    const pairs = this.pairs[side] as FilePair[];
+    const found = await findRenames(
+      this.repo,
+      pairs.map((p) => ({
+        path: onePath(p),
+        old: p.status === "D" && p.one ? entryOf(p.one.v) : undefined,
+        new: p.status === "A" && p.two ? entryOf(p.two.v) : undefined,
+      })),
+      { score: 50, limit: 7000, renameEmpty: false, relevant },
+    );
+    const used = new Set([...found.values()].map((r) => r.src));
+    const out: FilePair[] = [];
+    pairs.forEach((p, i) => {
+      const r = found.get(i);
+      if (r) out.push({ status: "R", one: (pairs[r.src] as FilePair).one, two: p.two });
+      else if (!used.has(i)) out.push(p);
+    });
+    this.pairs[side] = out;
+    return true;
+  }
+
+  possiblyCacheNewPair(p: FilePair, side: 1 | 2) {
+    if (!this.relevant[side]?.has(onePath(p))) return;
+    if (p.status === "D") this.cachedPairs[side]?.set(onePath(p), null);
+    else if (p.status === "R") {
+      this.cachedPairs[side]?.set(onePath(p), twoPath(p));
+      this.cachedTargetNames[side]?.add(twoPath(p));
+    }
+  }
+
+  async detectAndProcessRenames(): Promise<boolean> {
+    const possible =
+      this.possibleSideRenames(1) ||
+      this.possibleSideRenames(2) ||
+      (this.cachedPairs[1]?.size ?? 0) > 0 ||
+      (this.cachedPairs[2]?.size ?? 0) > 0;
+    if (!possible) return true;
+    if (this.opts.detectRenames === false) {
+      this.redo = 0;
+      return true;
+    }
+    let detectionRun = false;
+    for (const side of [1, 2] as const)
+      detectionRun = (await this.detectRegularRenames(side)) || detectionRun;
+    if (this.redo && detectionRun) {
+      for (const side of [1, 2] as const)
+        for (const p of this.pairs[side] as FilePair[]) this.possiblyCacheNewPair(p, side);
+      this.redo = 2;
+      return true;
+    }
+    // use_cached_pairs
+    for (const side of [1, 2] as const)
+      for (const [from, to] of this.cachedPairs[side] as Map<string, string | null>)
+        this.pairs[side]?.push(
+          to
+            ? { status: "R", one: { path: from, v: none() }, two: { path: to, v: none() } }
+            : { status: "D", one: { path: from, v: none() } },
+        );
+    const combined: FilePair[] = [];
+    for (const side of [1, 2] as const)
+      for (const p of this.pairs[side] as FilePair[])
+        if (p.status === "R") combined.push({ ...p, side });
+    combined.sort((a, b) => comparePaths(onePath(a), onePath(b)));
+    return this.processRenames(combined);
+  }
+
+  async processRenames(renames: FilePair[]): Promise<boolean> {
+    let cleanMerge = true;
+    for (let i = 0; i < renames.length; i++) {
+      const pair = renames[i] as FilePair;
+      const oldpath = onePath(pair);
+      const newpath = twoPath(pair);
+      const oldinfo = this.paths.get(oldpath);
+      const newinfo = this.paths.get(newpath);
+      if (!oldinfo || oldinfo.clean) continue;
+      const next = renames[i + 1];
+      if (next && onePath(next) === oldpath) {
+        const pathnames: [string, string, string] = [oldpath, newpath, twoPath(next)];
+        const base = this.paths.get(pathnames[0]) as Conflict;
+        const side1 = this.paths.get(pathnames[1]) as Conflict;
+        const side2 = this.paths.get(pathnames[2]) as Conflict;
+        if (pathnames[1] === pathnames[2]) {
+          // rename/rename(1to1): both sides renamed the same way
+          side1.stages[0] = { ...base.stages[0] };
+          side1.filemask |= 1;
+          base.isNull = true;
+          base.clean = true;
+          i++;
+          continue;
+        }
+        // rename/rename(1to2)
+        const merged = await this.handleContentMerge(
+          oldpath,
+          base.stages[0],
+          side1.stages[1],
+          side2.stages[2],
+          pathnames,
+          1,
+        );
+        if (!merged.clean) cleanMerge = false;
+        const wasBinaryBlob = !merged.clean && sameVersion(merged.result, side1.stages[1]);
+        side1.stages[1] = { ...merged.result };
+        side2.stages[2] = wasBinaryBlob ? { ...side2.stages[2] } : { ...merged.result };
+        side1.pathConflict = true;
+        side2.pathConflict = true;
+        base.pathConflict = true;
+        this.pathMsg(
+          pathnames[0],
+          [pathnames[1], pathnames[2]],
+          `CONFLICT (rename/rename): ${pathnames[0]} renamed to ${pathnames[1]} in ${this.opts.ours} and to ${pathnames[2]} in ${this.opts.theirs}.`,
+        );
+        i++;
+        continue;
+      }
+      const oi = oldinfo as Conflict;
+      const ni = newinfo as Conflict;
+      const targetIndex = pair.side as 1 | 2;
+      const otherSourceIndex = (3 - targetIndex) as 1 | 2;
+      const oldSidemask = 1 << otherSourceIndex;
+      const sourceDeleted = oi.filemask === 1;
+      let collision = (ni.filemask & oldSidemask) !== 0;
+      const typeChanged =
+        !sourceDeleted &&
+        isReg(oi.stages[otherSourceIndex].mode) !== isReg(ni.stages[targetIndex].mode);
+      if (typeChanged && collision) collision = false;
+      const renameBranch = targetIndex === 1 ? this.opts.ours : this.opts.theirs;
+      const deleteBranch = targetIndex === 1 ? this.opts.theirs : this.opts.ours;
+      if (collision && !sourceDeleted) {
+        // rename/add or rename/rename(2to1)
+        const pathnames: [string, string, string] = [oldpath, oldpath, oldpath];
+        pathnames[targetIndex] = newpath;
+        const base = this.paths.get(pathnames[0]) as Conflict;
+        const side1 = this.paths.get(pathnames[1]) as Conflict;
+        const side2 = this.paths.get(pathnames[2]) as Conflict;
+        const merged = await this.handleContentMerge(
+          oldpath,
+          base.stages[0],
+          side1.stages[1],
+          side2.stages[2],
+          pathnames,
+          1,
+        );
+        ni.stages[targetIndex] = { ...merged.result };
+        if (!merged.clean)
+          this.pathMsg(
+            newpath,
+            [oldpath],
+            `CONFLICT (rename involved in collision): rename of ${oldpath} -> ${newpath} has content conflicts AND collides with another path; this may result in nested conflict markers.`,
+          );
+      } else if (collision && sourceDeleted) {
+        ni.pathConflict = true;
+        this.pathMsg(
+          newpath,
+          [oldpath],
+          `CONFLICT (rename/delete): ${oldpath} renamed to ${newpath} in ${renameBranch}, but deleted in ${deleteBranch}.`,
+        );
+      } else {
+        ni.stages[0] = { ...oi.stages[0] };
+        ni.filemask |= 1;
+        ni.pathnames[0] = oldpath;
+        if (typeChanged) {
+          oi.stages[0] = none();
+          oi.filemask &= 6;
+        } else if (sourceDeleted) {
+          ni.pathConflict = true;
+          this.pathMsg(
+            newpath,
+            [oldpath],
+            `CONFLICT (rename/delete): ${oldpath} renamed to ${newpath} in ${renameBranch}, but deleted in ${deleteBranch}.`,
+          );
+        } else {
+          ni.stages[otherSourceIndex] = { ...oi.stages[otherSourceIndex] };
+          ni.filemask |= oldSidemask;
+          ni.pathnames[otherSourceIndex] = oldpath;
+        }
+      }
+      if (!typeChanged) {
+        oi.isNull = true;
+        oi.clean = true;
+      }
+    }
+    return cleanMerge;
+  }
+
+  // ─── content merges ───────────────────────────────────────────────────────────────────
+
+  async blob(oid: string): Promise<Uint8Array> {
+    if (oid === NULL_OID) return new Uint8Array(0);
+    const o = await this.repo.objects.get(oid);
+    if (!o) throw new Error(`missing blob ${oid}`);
+    const parts: Uint8Array[] = [];
+    let n = 0;
+    for await (const c of o.content) {
+      parts.push(c);
+      n += c.length;
+    }
+    const out = new Uint8Array(n);
+    let at = 0;
+    for (const p of parts) {
+      out.set(p, at);
+      at += p.length;
+    }
+    return out;
+  }
+
+  /** handle_content_merge (no submodules) */
+  async handleContentMerge(
+    path: string,
+    o: Version,
+    a: Version,
+    b: Version,
+    pathnames: [string, string, string],
+    extraMarkerSize: number,
+  ): Promise<{ result: Version; clean: boolean }> {
+    let clean = true;
+    const result = none();
+    if (a.mode === b.mode || a.mode === o.mode) result.mode = b.mode;
+    else {
+      result.mode = a.mode;
+      clean = b.mode === o.mode;
+    }
+    if (a.oid === b.oid || a.oid === o.oid) result.oid = b.oid;
+    else if (b.oid === o.oid) result.oid = a.oid;
+    else if (isReg(a.mode)) {
+      const twoWay = (o.mode & S_IFMT) !== (a.mode & S_IFMT);
+      const samePaths = pathnames[0] === pathnames[1] && pathnames[1] === pathnames[2];
+      const name1 = samePaths ? this.opts.ours : `${this.opts.ours}:${pathnames[1]}`;
+      const name2 = samePaths ? this.opts.theirs : `${this.opts.theirs}:${pathnames[2]}`;
+      const r = mergeContent(
+        twoWay ? new Uint8Array(0) : await this.blob(o.oid),
+        await this.blob(a.oid),
+        await this.blob(b.oid),
+        { ours: name1, theirs: name2, markerSize: 7 + extraMarkerSize },
+        this.opts,
+      );
+      if (r.binary)
+        this.pathMsg(
+          path,
+          [],
+          `warning: Cannot merge binary files: ${path} (${name1} vs. ${name2})`,
+        );
+      result.oid = await this.repo.objects.put("blob", r.content);
+      clean &&= r.conflicts === 0;
+      this.pathMsg(path, [], `Auto-merging ${path}`);
+    } else if ((a.mode & S_IFMT) === S_IFGITLINK) {
+      throw new Error(`submodule merges are out of scope (${path})`);
+    } else {
+      // symlinks: ours, conflicted
+      clean = false;
+      result.oid = a.oid;
+    }
+    return { result, clean };
+  }
+
+  // ─── process_entries ──────────────────────────────────────────────────────────────────
+
+  children = new Map<string, TreeEntry[]>();
+
+  record(path: string, mi: Merged) {
+    if (mi.isNull) return;
+    const dir = dirOf(path);
+    const list = this.children.get(dir) ?? [];
+    this.children.set(dir, list);
+    list.push({ mode: mi.result.mode.toString(8), name: baseOf(path), oid: mi.result.oid });
+  }
+
+  /** write_completed_directory for one directory: its tree, or nothing when it came out empty */
+  async completeDirectory(path: string, mi: Merged) {
+    const kids = this.children.get(path);
+    this.children.delete(path);
+    if (!kids?.length) {
+      mi.isNull = true;
+      return;
+    }
+    mi.isNull = false;
+    mi.result = { mode: S_IFDIR, oid: await writeTree(this.repo, kids) };
+  }
+
+  uniquePath(path: string, branch: string): string {
+    const base = `${path}~${branch.replace(/\//g, "_")}`;
+    let p = base;
+    for (let suffix = 0; this.paths.has(p); suffix++) p = `${base}_${suffix}`;
+    return p;
+  }
+
+  async processEntries(): Promise<string> {
+    const plist = [...this.paths.keys()].sort(sortDirsNextToChildren);
+    for (let k = plist.length - 1; k >= 0; k--) {
+      const path = plist[k] as string;
+      const mi = this.paths.get(path) as Info;
+      if (mi.clean) this.record(path, mi);
+      else {
+        const ci = mi as Conflict;
+        if (ci.dirmask) await this.completeDirectory(path, ci);
+        await this.processEntry(path, ci);
+      }
+    }
+    return writeTree(this.repo, this.children.get("") ?? []);
+  }
+
+  async processEntry(entryPath: string, entry: Conflict) {
+    let path = entryPath;
+    let ci = entry;
+    let dfFileIndex = 0;
+    if (ci.dirmask) {
+      this.record(path, ci);
+      if (ci.filemask === 0) return;
+    }
+    if (ci.dfConflict && ci.result.mode === 0) {
+      // the directory is no longer in the way, but a file needs the place
+      ci.dfConflict = false;
+      ci.clean = false;
+      ci.isNull = false;
+      ci.matchMask &= ~ci.dirmask;
+      ci.dirmask = 0;
+      for (let i = 0; i < 3; i++) if (!(ci.filemask & (1 << i))) ci.stages[i] = none();
+    } else if (ci.dfConflict && ci.result.mode !== 0) {
+      // the directory stays: the file moves to path~branch
+      if (ci.filemask === 1) {
+        ci.filemask = 0;
+        return;
+      }
+      const moved: Conflict = {
+        ...ci,
+        result: { ...ci.result },
+        stages: [{ ...ci.stages[0] }, { ...ci.stages[1] }, { ...ci.stages[2] }],
+        pathnames: [...ci.pathnames] as [string, string, string],
+      };
+      moved.matchMask &= ~moved.dirmask;
+      moved.dirmask = 0;
+      for (let i = 0; i < 3; i++) if (!(moved.filemask & (1 << i))) moved.stages[i] = none();
+      dfFileIndex = ci.dirmask & 2 ? 2 : 1;
+      const branch = dfFileIndex === 1 ? this.opts.ours : this.opts.theirs;
+      const oldPath = path;
+      path = this.uniquePath(path, branch);
+      this.paths.set(path, moved);
+      this.pathMsg(
+        path,
+        [oldPath],
+        `CONFLICT (file/directory): directory in the way of ${oldPath} from ${branch}; moving it to ${path} instead.`,
+      );
+      ci.filemask = 0;
+      ci = moved;
+    }
+
+    if (ci.matchMask) {
+      ci.clean = !ci.dfConflict && !ci.pathConflict;
+      if (ci.matchMask === 6) ci.result = { ...ci.stages[1] };
+      else {
+        const othermask = 7 & ~ci.matchMask;
+        const side = othermask === 4 ? 2 : 1;
+        ci.result = { ...ci.stages[side] };
+        ci.isNull = !ci.result.mode;
+        if (ci.isNull) ci.clean = true;
+      }
+    } else if (ci.filemask >= 6 && (ci.stages[1].mode & S_IFMT) !== (ci.stages[2].mode & S_IFMT)) {
+      // distinct types: one or both move aside
+      const oMode = ci.stages[0].mode;
+      const aMode = ci.stages[1].mode;
+      const bMode = ci.stages[2].mode;
+      let renameA = false;
+      let renameB = false;
+      if (isReg(aMode)) renameA = true;
+      else if (isReg(bMode)) renameB = true;
+      else renameA = renameB = true;
+      const aPath = renameA ? this.uniquePath(path, this.opts.ours) : undefined;
+      let bPath = renameB ? this.uniquePath(path, this.opts.theirs) : undefined;
+      if (renameA && renameB)
+        this.pathMsg(
+          path,
+          [aPath as string, bPath as string],
+          `CONFLICT (distinct types): ${path} had different types on each side; renamed both of them so each can be recorded somewhere.`,
+        );
+      else
+        this.pathMsg(
+          path,
+          [(renameA ? aPath : bPath) as string],
+          `CONFLICT (distinct types): ${path} had different types on each side; renamed one of them so each can be recorded somewhere.`,
+        );
+      ci.clean = false;
+      const b: Conflict = {
+        ...ci,
+        result: { ...ci.stages[2] },
+        stages: [{ ...ci.stages[0] }, none(), { ...ci.stages[2] }],
+        pathnames: [...ci.pathnames] as [string, string, string],
+        filemask: 5,
+      };
+      if ((bMode & S_IFMT) !== (oMode & S_IFMT)) {
+        b.stages[0] = none();
+        b.filemask = 4;
+      }
+      ci.result = { ...ci.stages[1] };
+      ci.stages[2] = none();
+      ci.filemask = 3;
+      if ((aMode & S_IFMT) !== (oMode & S_IFMT)) {
+        ci.stages[0] = none();
+        ci.filemask = 2;
+      }
+      if (renameA) this.paths.set(aPath as string, ci);
+      if (!renameB) bPath = path;
+      this.paths.set(bPath as string, b);
+      if (renameA && renameB) this.paths.delete(path);
+      this.conflicted.set(bPath as string, b);
+      this.record(bPath as string, b);
+      if (aPath) path = aPath;
+    } else if (ci.filemask >= 6) {
+      const merged = await this.handleContentMerge(
+        path,
+        ci.stages[0],
+        ci.stages[1],
+        ci.stages[2],
+        ci.pathnames,
+        0,
+      );
+      ci.clean = merged.clean && !ci.dfConflict && !ci.pathConflict;
+      ci.result = { ...merged.result };
+      ci.isNull = merged.result.mode === 0;
+      if (merged.clean && ci.dfConflict) {
+        ci.filemask = 1 << dfFileIndex;
+        ci.stages[dfFileIndex as 1 | 2] = { ...merged.result };
+      }
+      if (!merged.clean) {
+        const reason = ci.filemask === 6 ? "add/add" : "content";
+        this.pathMsg(path, [], `CONFLICT (${reason}): Merge conflict in ${path}`);
+      }
+    } else if (ci.filemask === 3 || ci.filemask === 5) {
+      const side = ci.filemask === 5 ? 2 : 1;
+      ci.result = { ...ci.stages[side] };
+      ci.clean = false;
+      const modifyBranch = side === 1 ? this.opts.ours : this.opts.theirs;
+      const deleteBranch = side === 1 ? this.opts.theirs : this.opts.ours;
+      if (!(ci.pathConflict && ci.stages[0].oid === ci.stages[side].oid))
+        this.pathMsg(
+          path,
+          [],
+          `CONFLICT (modify/delete): ${path} deleted in ${deleteBranch} and modified in ${modifyBranch}.  Version ${modifyBranch} of ${path} left in tree.`,
+        );
+    } else if (ci.filemask === 2 || ci.filemask === 4) {
+      const side = ci.filemask === 4 ? 2 : 1;
+      ci.result = { ...ci.stages[side] };
+      ci.clean = !ci.dfConflict && !ci.pathConflict;
+    } else if (ci.filemask === 1) {
+      ci.isNull = true;
+      ci.result = none();
+      ci.clean = !ci.pathConflict;
+    }
+    if (!ci.clean) this.conflicted.set(path, ci);
+    this.record(path, ci);
+  }
+
+  // ─── merge_ort_nonrecursive_internal ──────────────────────────────────────────────────
+
+  async run(trees: (string | undefined)[]): Promise<TreeMergeResult> {
+    let clean: boolean;
+    for (;;) {
+      await this.collectMergeInfo(trees);
+      clean = await this.detectAndProcessRenames();
+      if (this.redo !== 2) break;
+      this.reset();
+    }
+    const tree = await this.processEntries();
+    const conflicts: ConflictEntry[] = [];
+    for (const path of [...this.conflicted.keys()].sort(comparePaths)) {
+      const ci = this.conflicted.get(path) as Conflict;
+      for (let i = 0; i < 3; i++)
+        if (ci.filemask & (1 << i))
+          conflicts.push({
+            mode: (ci.stages[i] as Version).mode.toString(8),
+            oid: (ci.stages[i] as Version).oid,
+            stage: (i + 1) as 1 | 2 | 3,
+            path,
+          });
+    }
+    const messages: MergeMessage[] = [];
+    for (const path of [...this.messages.keys()].sort(comparePaths))
+      messages.push(...(this.messages.get(path) as MergeMessage[]));
+    return { tree, clean: clean && this.conflicted.size === 0, conflicts, messages };
+  }
+}
+
+function entryOf(v: Version) {
+  return { mode: v.mode.toString(8), oid: v.oid };
+}
+
+/** `git merge-tree --write-tree` of `ours` and `theirs` over `base` (no base: unrelated histories) */
 export async function mergeOrt(
-  _repo: Repository,
-  _base: string | undefined,
-  _ours: string,
-  _theirs: string,
-  _opts: TreeMergeOptions,
+  repo: Repository,
+  base: string | undefined,
+  ours: string,
+  theirs: string,
+  opts: TreeMergeOptions,
 ): Promise<TreeMergeResult> {
-  throw new Error("not implemented");
+  return new OrtMerge(repo, opts).run([base, ours, theirs]);
 }
