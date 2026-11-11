@@ -1,0 +1,36 @@
+{
+  "name": "@statewalker/tesseract-do",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PROTOTYPE \u2014 Tesseract OCR (tesseract-wasm) inside Durable Objects. One Worker project, run on wrangler (workerd), cellb and celld.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/tesseract-do"
+  },
+  "scripts": {
+    "test": "pnpm run test:unit && pnpm run test:wrangler && pnpm run test:cellb",
+    "test:unit": "node --test test/*.test.mjs",
+    "test:wrangler": "node scripts/run-env.mjs wrangler",
+    "test:cellb": "node scripts/run-env.mjs cellb",
+    "test:celld": "node scripts/run-env.mjs celld",
+    "dev:wrangler": "wrangler dev",
+    "dev:cellb": "node scripts/serve-cellb.mjs",
+    "fixtures": "NODE_USE_ENV_PROXY=1 node scripts/fetch-fixtures.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fast-png": "^8.0.0",
+    "jpeg-js": "^0.4.4",
+    "tesseract-wasm": "^0.11.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@statewalker/cellb": "0.8.1",
+    "esbuild": "0.28.2",
+    "typescript": "catalog:",
+    "wrangler": "4.158.0"
+  }
+}
