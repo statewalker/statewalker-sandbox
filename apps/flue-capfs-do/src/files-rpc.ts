@@ -4,8 +4,11 @@
 // as chunks keyed by (streamId, chunkId), each an ordinary capability call: Durable Object RPC
 // carries no ReadableStream on cellb and celld, but it carries bytes.
 
-import type { FilesApi } from "@statewalker/webrun-files";
-import { type FilesRpc, newFilesRpcClient } from "@statewalker/webrun-files-rpc";
+import {
+  type FilesRpc,
+  type FilesRpcClient,
+  newFilesRpcClient,
+} from "@statewalker/webrun-files-rpc";
 
 /** The files-RPC methods a capability carries (and nothing else of the server). */
 export const FILES_RPC_METHODS = [
@@ -40,8 +43,11 @@ export function capFilesRpc(cap: RpcCarrier): FilesRpc {
   return rpc as unknown as FilesRpc;
 }
 
-/** A FilesApi over a capability: files of any size, read and written as streams of chunks. */
-export function capFiles(cap: RpcCarrier): FilesApi {
+/**
+ * A FilesApi over a capability: files of any size, read, written and appended to (`append`) as
+ * streams of chunks.
+ */
+export function capFiles(cap: RpcCarrier): FilesRpcClient {
   return newFilesRpcClient({
     rpc: capFilesRpc(cap),
     chunkSize: RPC_CHUNK_BYTES,

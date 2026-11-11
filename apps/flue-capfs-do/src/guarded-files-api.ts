@@ -7,12 +7,17 @@
 //   read(path)   store openRead → readChunk … (empty block: the end) → closeRead
 //   write(path)  store openWrite → writeChunk … → commitWrite (abortWrite when the content
 //                fails or is aborted); the file changes at commit, all at once
+//   append(path) the same with the store's append stream: the commit rewrites only the file's
+//                last block (in place when the file alone owns its content), and fails with
+//                ESTALE if the file changed since the append began (webrun-files-rpc's
+//                AppendableFilesApi: the files-RPC server appends through it)
 //
 // FilesApi semantics: a missing file (or a directory) reads as nothing; `move`/`copy` take the
 // exact new path and replace what is there; `remove` and `mkdir` are recursive.
 
-import type { FilesApi, ListOptions, ReadOptions } from "@statewalker/webrun-files";
+import type { ListOptions, ReadOptions } from "@statewalker/webrun-files";
 import { type FileInfo, type FileStats, listInPathOrder } from "@statewalker/webrun-files";
+import type { AppendableFilesApi } from "@statewalker/webrun-files-rpc";
 import type { FsGate } from "./authority.ts";
 import { normalise } from "./path.ts";
 import { BLOCK_BYTES, type DirEntryStat } from "./sql-fs.ts";
@@ -29,7 +34,7 @@ const toBytes = (v: unknown) =>
 const norm = (p: string) => normalise(p);
 const join = (dir: string, name: string) => (dir === "/" ? `/${name}` : `${dir}/${name}`);
 
-export class GuardedFilesApi implements FilesApi {
+export class GuardedFilesApi implements AppendableFilesApi {
   #gate: FsGate;
   constructor(gate: FsGate) {
     this.#gate = gate;
@@ -63,8 +68,23 @@ export class GuardedFilesApi implements FilesApi {
     path: string,
     content: Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
   ): Promise<void> {
+    return this.#write(path, content, false);
+  }
+
+  async append(
+    path: string,
+    content: Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
+  ): Promise<void> {
+    return this.#write(path, content, true);
+  }
+
+  async #write(
+    path: string,
+    content: Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
+    append: boolean,
+  ): Promise<void> {
     const p = norm(path);
-    const { id } = (await this.#gate.stream("openWrite", p, {})) as { id: string };
+    const { id } = (await this.#gate.stream("openWrite", p, { append })) as { id: string };
     try {
       for await (const chunk of content as AsyncIterable<Uint8Array>) {
         const b = toBytes(chunk);

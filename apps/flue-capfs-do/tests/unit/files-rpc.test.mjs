@@ -291,3 +291,41 @@ test("move and copy onto another spelling of the same path keep the file", async
     assert.equal((await collect(files().read("/p1/a"))).toString(), "1", other);
   }
 });
+
+test("append: through the store's append stream, in place, within the rights", async () => {
+  const { files, s, token, blocks } = await setup();
+  const data = pattern(3 * BLOCK_BYTES + 10);
+  await files().write("/p1/log", [data]);
+  const contentOf = () =>
+    Number(s.exec("SELECT content FROM fs_entries WHERE path = '/p1/log'").toArray()[0].content);
+  const before = contentOf();
+  const n = blocks();
+  await files().append("/p1/log", [pattern(100, 2), pattern(BLOCK_BYTES, 3)]);
+  assert.equal(contentOf(), before, "appended in place: the same content id");
+  assert.equal(blocks(), n + 1, "one more block, the last one rewritten");
+  const all = Buffer.concat([data, pattern(100, 2), pattern(BLOCK_BYTES, 3)]);
+  assert.ok((await collect(files().read("/p1/log"))).equals(all));
+  // A file that does not exist is created; a directory and a read-only capability are refused.
+  await files().append("/p1/new", [new TextEncoder().encode("x")]);
+  assert.equal((await collect(files().read("/p1/new"))).toString(), "x");
+  await assert.rejects(files().append("/proj/x", [pattern(1)]), code("EISDIR"));
+  const ro = Biscuit.fromBase64(token)
+    .attenuate(attenuationBlock({ readOnly: true }))
+    .toBase64();
+  await assert.rejects(files(ro).append("/p1/log", [pattern(1)]), code("EACCES"));
+  await assert.rejects(files().append("/p10/b", [pattern(1)]), code("EACCES"));
+});
+
+test("append: a file changed while it is appended to fails with ESTALE and keeps the change", async () => {
+  const { store, auth, token } = await setup();
+  const { GuardedFilesApi } = await import("../../src/guarded-files-api.ts");
+  const guarded = new GuardedFilesApi(new FsGate(store, auth, token));
+  await store.writeFile("/p1/f", "abc");
+  async function* chunks() {
+    yield new TextEncoder().encode("1");
+    await store.appendFile("/p1/f", "2"); // another writer, mid-append
+    yield new TextEncoder().encode("3");
+  }
+  await assert.rejects(guarded.append("/p1/f", chunks()), code("ESTALE"));
+  assert.equal(await store.readFile("/p1/f"), "abc2");
+});
