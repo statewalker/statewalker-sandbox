@@ -11,7 +11,7 @@ import { writeTree } from "../../17-repository/src/commands.js";
 import type { TreeEntry } from "../../17-repository/src/git-format.js";
 import type { Repository } from "../../17-repository/src/object-store.js";
 import { filesRepository } from "../../17-repository/src/repository.js";
-import { type DiffEntry, diffTrees, type RenameOptions } from "../src/renames.js";
+import { type DiffEntry, diffTrees, type RenameOptions, spanHashes } from "../src/renames.js";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -64,8 +64,28 @@ interface Case {
   renameEmpty?: boolean;
 }
 
+/**
+ * Whether this git drops the bytes after a file's last LF from similarity (2.43 does, 2.56 counts
+ * them): "aaaa\nxxxx\ncccc" against "aaaa\nbbbb\ncccc" scores 35% without "cccc", 64% with it.
+ */
+const legacyHashChars = (() => {
+  const d = mkdtempSync(join(tmpdir(), "x13c-probe-"));
+  dirs.push(d);
+  const git = (args: string[], input?: string) =>
+    execFileSync("git", args, { cwd: d, env: gitEnv, input }).toString().trim();
+  git(["init", "-q", "--bare"]);
+  const a = git(["hash-object", "-w", "--stdin"], "aaaa\nbbbb\ncccc");
+  const b = git(["hash-object", "-w", "--stdin"], "aaaa\nxxxx\ncccc");
+  const ta = git(["mktree"], `100644 blob ${a}\tone\n`);
+  const tb = git(["mktree"], `100644 blob ${b}\ttwo\n`);
+  const out = git(["diff-tree", "-r", "-M20%", ta, tb]);
+  if (/R035/.test(out)) return true;
+  if (/R064/.test(out)) return false;
+  throw new Error(`unexpected similarity probe: ${out}`);
+})();
+
 const show = (e: DiffEntry) =>
-  `${e.oldMode} ${e.newMode} ${e.oldOid.slice(0, 7)} ${e.newOid.slice(0, 7)} ${e.status}${e.score ?? ""} ${e.oldPath}${e.newPath !== e.oldPath ? ` ${e.newPath}` : ""}`;
+  `${e.oldMode} ${e.newMode} ${e.oldOid} ${e.newOid} ${e.status}${e.score ?? ""} ${e.oldPath}${e.newPath !== e.oldPath ? ` ${e.newPath}` : ""}`;
 
 function parseRaw(out: string): DiffEntry[] {
   const tok = out.split("\0");
@@ -111,6 +131,7 @@ async function compare(cases: Case[]) {
       score: c.score ?? 50,
       limit: c.limit ?? 1000,
       renameEmpty: c.renameEmpty ?? true,
+      legacyHashChars,
     };
     const ours = await diffTrees(repo, a, b, opts);
     renames += git.filter((e) => e.status === "R").length;
@@ -265,7 +286,8 @@ function corpus(n: number, seed: number, opts: { limits?: boolean } = {}): Case[
       rand() < 0.5 ? `${pick(vocab)} ${pick(vocab)}` : `unique ${seed}-${uid++} ${pick(vocab)}`,
     );
     if (rand() < 0.1) ls.push("x".repeat(70 + Math.floor(rand() * 100)));
-    let s = ls.join("\n") + (n && rand() < 0.9 ? "\n" : "");
+    // 40% without a final newline: git 2.56 counts the bytes after the last LF, 2.43 drops them
+    let s = ls.join("\n") + (n && rand() < 0.6 ? "\n" : "");
     if (rand() < 0.05) s = s.replaceAll("\n", "\r\n");
     return s;
   };
@@ -349,6 +371,7 @@ describe("R2/R3 random diffs", () => {
     const r = await compare(corpus(300, 32, { limits: true }));
     expect(r.wrong.slice(0, 2)).toEqual([]);
     expect(r.wrong.length).toBe(0);
+    expect(r.renames).toBeGreaterThan(50);
   }, 300_000);
 });
 
@@ -419,6 +442,47 @@ describe("R5 cases for mutants the corpora missed", () => {
   it("each case equal to git", async () => {
     const r = await compare(cases);
     expect(r.wrong).toEqual([]);
+  });
+});
+
+describe("R6 cases from the review", () => {
+  const body = lines(20);
+  it("legacy modes are canonical, as git's canon_mode", async () => {
+    const r = await compare([
+      {
+        name: "exact rename of a 100664 file",
+        a: f([["p", "100664", body]]),
+        b: f([["q", "100664", body]]),
+      },
+      {
+        name: "100664 to 100644 is no change",
+        a: f([["p", "100664", body]]),
+        b: f([["p", "100644", body]]),
+      },
+      {
+        name: "inexact rename of a 100664 file",
+        a: f([["p", "100664", body]]),
+        b: f([["q", "100644", `${body}more\n`]]),
+      },
+    ]);
+    expect(r.wrong).toEqual([]);
+  });
+
+  it("files without a final newline", async () => {
+    const r = await compare([
+      {
+        name: "the bytes after the last LF",
+        a: f([["old.txt", "100644", `aaa\nbbb\n${"x".repeat(40)}`]]),
+        b: f([["new.txt", "100644", `ccc\nddd\n${"x".repeat(40)}`]]),
+      },
+    ]);
+    expect(r.wrong).toEqual([]);
+  });
+
+  it("hash_chars counts the bytes after the last chunk, except in legacy mode (git 2.43)", () => {
+    const data = new TextEncoder().encode("ab\ncd");
+    expect([...spanHashes(data).count].sort()).toEqual([2, 3]);
+    expect([...spanHashes(data, true).count]).toEqual([3]);
   });
 });
 
