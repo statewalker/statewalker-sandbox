@@ -77,27 +77,57 @@ holds (X8b's receive-pack between its connectivity check and its ref update is t
 | SQL | two packs and loose rows → one pack, no loose rows, the dangling row removed, the log the same |
 
 - **Store additions**: X4's `GitObjects.remove`, X6r's `ObjectDatabase.readers()`, and X16a's
-  optional `ObjectStore.gc` (`GcAccess`: the gc directory, packs with their ids, loose ids,
-  `removeLoose`, `removePacks` — idx before pack, then the pack database reopened).
+  optional `ObjectStore.gc` (`GcAccess`: the gc directory and the repository root, packs with
+  their ids, kept packs, loose ids, `removeLoose`, `removePacks` — idx before pack, companions
+  too, then the pack database reopened — and `refresh`); the store leaves freshen markers once gc
+  is in use, and a read failing on a pack removed by another handle rescans and retries.
 - **Cost**: two walks (mark and re-mark) and one repack per run; memory holds the reachable set
   and the ledger (an object id each).
 
 ## Verified
 
-All 7 Node tests pass (`pnpm test 24-gc`); X4's, X6r's and X16a's suites pass with the additions
-(69 tests together). The tests were written first (red commit).
+All 16 Node tests pass (`pnpm test 24-gc`: R1–R7 and 9 from the review of #87); 09–23's suites pass
+with the store changes (178 tests together). The tests were written first (red commit).
 
 ### Mutation check
 
 | Mutation | Caught by |
 |---|---|
 | G1 no re-mark before the sweep | R4 (the resurrected commit) |
-| G2 packs written during the run swept too | — equivalent: an object written during gc is not in the ledger, so it can only go if the new pack holds it (the snapshot rule is defense in depth) |
+| G2 packs written during the run swept too | — not caught; first recorded as equivalent, which the review showed wrong: the ledger is keyed by id, so an old id written again during gc is in it. Freshen markers now protect such ids (H6); the snapshot rule remains a second guard |
 | G3 grace ignored | R2 |
 | G4 leases not checked | R5 |
 | G5 a writer does not wait for a running sweep | R5 |
 | G6 reflogs not roots | R3 |
 | G7 a pack removed although some of its objects may not go | R2 (a young unreachable packed commit) |
+| H1 the flag removed without its owner's token | — equivalent: a second sweep returns `deferred` before it can reach the removal; the token check is a second guard (a flag taken over after expiry) |
+| H2 another live sweep does not defer | #87: second sweep |
+| H3 the flag not renewed | #87: renewal |
+| H4 a lease not renewed | #87: renewal |
+| H5 no recent-object closure | #87: recent objects |
+| H6 freshen markers ignored | #87: written again |
+| H7 the ledger keeps deleted ids | — equivalent for safety: a re-added object leaves a freshen marker that restarts it; the cleanup bounds the ledger's size |
+| H8 no worktree roots | #87: worktrees |
+| H9 `.keep` packs deleted | #87: `.keep` |
+| H10 shallow commits not passed to the walk | #87: shallow |
+| H11 stale handles do not retry | #87: stale handle |
+| H12 index objects not roots | #87: worktrees (the staged blob) |
+
+### Review of #87
+
+| Finding | Resolution |
+|---|---|
+| Any second sweep removed the shared flag: a waiting writer ran mid-deletion and lost its object | The flag is owned (a token): another live sweep's flag defers a sweep; only its owner removes it |
+| The flag and leases expired after 10 minutes, unrenewed | Renewed every third of their TTL while held |
+| Objects reachable from unexpired unreachable objects were deleted (git keeps them: `add_unseen_recent_objects_to_traversal`) | Their closure is protected (a walk tolerant of missing objects) |
+| An object written again kept its old grace (git freshens) | The store leaves freshen markers under `gc/fresh` (a loose id, or a pack) once gc is in use; the ledger restarts them; the sweep honours markers written since |
+| Ledger entries of deleted objects remained: a re-added object went at once | The sweep drops them |
+| Linked worktrees' HEADs, reflogs and indexes were not roots | Roots, with the blobs and cache-tree trees of every index (v2/v3; v4 refused, not guessed) |
+| `.keep` packs deleted; `.rev`/`.bitmap` left orphaned | Kept packs are never removed; a pack goes with its companions |
+| A handle opened before another handle's gc could not read the removed packs' objects | Reads rescan and retry when the pack set changed (a corrupt copy in an unchanged set stays refused — the first version of this fix forgot X6r's bad-copy marks and failed X6d's test); gc refreshes its view each step |
+| Shallow repositories could never be collected | The shallow file bounds the walk |
+| R6's crash after "sweep" tested nothing; no crash inside a phase | A crash after the second deletion of a sweep is resumed to the one-shot result |
+| Writers do not take leases; very large repositories; concurrent gc runs sharing state | Open threads |
 
 ## Promotion grades
 
