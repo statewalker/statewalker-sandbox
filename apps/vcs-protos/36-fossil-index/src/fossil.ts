@@ -8,15 +8,19 @@
  *   them for a root commit): adds, edits, deletes, mode changes, a file that became a directory;
  * - `fossil_text`: an FTS5 trigram index of the messages (case-sensitive, as `git log --grep`).
  *
- * `pathHistory(path)` is `git log --all --no-merges -- <path>` (the path as a file or a directory)
- * and `searchMessages(text)` is `git log --all --no-merges -F --grep=<text>`, newest first. The
- * same answers come from walking the objects (`walkPathHistory`, `walkSearch`).
+ * `pathHistory(path)` is `git log --all --full-history --no-merges -- <path>` (a literal path, as a
+ * file or a directory) and `searchMessages(text)` is `git log --all --no-merges -F --grep=<text>`.
+ * Both list newest first, by committer date and then by id: git's order wherever dates are distinct
+ * and fall from child to parent. The same answers come from walking the objects
+ * (`walkPathHistory`, `walkSearch`). Refs to annotated tags are peeled; refs to other objects are
+ * skipped, as `git log --all` does.
  */
 
 import type { Db } from "@statewalker/db-api";
 import type { RefDb } from "../../10-ref-transactions/src/ref-db.js";
 import { sqlRefDb } from "../../10-ref-transactions/src/sql-ref-db.js";
 import { readCommit, readTree } from "../../17-repository/src/commands.js";
+import { parseTagTarget } from "../../17-repository/src/git-format.js";
 import type { ObjectStore, Repository } from "../../17-repository/src/object-store.js";
 import { sqlRepository } from "../../17-repository/src/sql-repository.js";
 
@@ -75,12 +79,16 @@ async function changedPaths(
   out: string[],
 ): Promise<void> {
   if (a === b) return;
-  const left = new Map((a ? await read(a) : []).map((e) => [e.name, e]));
-  const right = new Map((b ? await read(b) : []).map((e) => [e.name, e]));
-  for (const name of new Set([...left.keys(), ...right.keys()])) {
-    const x = left.get(name);
-    const y = right.get(name);
+  // keyed by the name's bytes: two names that are not UTF-8 may decode alike
+  const key = (e: { name: string; nameBytes?: Uint8Array }) =>
+    e.nameBytes ? `\0${Array.from(e.nameBytes).join(",")}` : e.name;
+  const left = new Map((a ? await read(a) : []).map((e) => [key(e), e]));
+  const right = new Map((b ? await read(b) : []).map((e) => [key(e), e]));
+  for (const k of new Set([...left.keys(), ...right.keys()])) {
+    const x = left.get(k);
+    const y = right.get(k);
     if (x && y && x.oid === y.oid && x.mode === y.mode) continue;
+    const name = (x ?? y)?.name as string;
     const path = prefix ? `${prefix}/${name}` : name;
     const xt = x && isTree(x.mode);
     const yt = y && isTree(y.mode);
@@ -119,7 +127,11 @@ async function* commitsFrom(
     return t;
   };
   const seen = new Set<string>();
-  const stack = [...tips];
+  const stack: string[] = [];
+  for (const t of tips) {
+    const c = await peelToCommit(repo, t);
+    if (c) stack.push(c);
+  }
   while (stack.length) {
     const oid = stack.pop() as string;
     if (seen.has(oid)) continue;
@@ -137,6 +149,53 @@ async function* commitsFrom(
     stack.push(...c.parents);
   }
 }
+
+/** a ref's commit: annotated tags followed, anything else (a blob, a tree) none */
+async function peelToCommit(repo: Repo, oid: string): Promise<string | undefined> {
+  for (let i = 0; i < 16; i++) {
+    const o = await repo.objects.get(oid);
+    if (!o) return undefined;
+    if (o.type === "commit") {
+      await o.content[Symbol.asyncIterator]().return?.();
+      return oid;
+    }
+    if (o.type !== "tag") {
+      await o.content[Symbol.asyncIterator]().return?.();
+      return undefined;
+    }
+    const parts: Uint8Array[] = [];
+    for await (const c of o.content) parts.push(c);
+    const bytes = new Uint8Array(parts.reduce((n, c) => n + c.length, 0));
+    let at = 0;
+    for (const c of parts) {
+      bytes.set(c, at);
+      at += c.length;
+    }
+    oid = parseTagTarget(bytes).object;
+  }
+  return undefined;
+}
+
+/**
+ * A pathspec as git reads it, for literal paths: `./` and a trailing `/` or `/.` dropped, `.` the
+ * whole tree (""). Glob characters and `:(magic)` are refused rather than matched literally (git's
+ * `--literal-pathspecs` would read them as names); so is an empty pathspec, which git rejects.
+ */
+export function literalPath(pathspec: string): string {
+  if (pathspec === "") throw new Error("empty pathspec");
+  if (/[*?[\\]/.test(pathspec) || pathspec.startsWith(":"))
+    throw new Error(`${pathspec}: pathspec magic and globs are not supported (literal paths only)`);
+  let p = pathspec;
+  while (p.startsWith("./")) p = p.slice(2);
+  if (p === ".") p = "";
+  while (p.endsWith("/.")) p = p.slice(0, -2);
+  while (p.endsWith("/")) p = p.slice(0, -1);
+  return p === "." ? "" : p;
+}
+
+/** newest first by committer date, then by id: one order for the index and the walk */
+const byOrder = (a: { date: number; oid: string }, b: { date: number; oid: string }) =>
+  b.date - a.date || (a.oid < b.oid ? -1 : a.oid > b.oid ? 1 : 0);
 
 // ---------------------------------------------------------------- the index
 
@@ -195,33 +254,49 @@ export async function fossilIndex(
     async indexCommits(tx, tips) {
       await index.write(tx, await index.prepare(tips));
     },
-    async pathHistory(path) {
-      const [exact, lo, hi] = SPAN(path);
-      const rows = await db.query<{ oid: string }>(
-        `SELECT c.oid FROM fossil_commit c
-           WHERE c.merge = 0 AND c.oid IN (
-             SELECT oid FROM fossil_change WHERE path = ? OR (path >= ? AND path < ?))
-           ORDER BY c.date DESC`,
-        [exact, lo, hi],
-      );
+    async pathHistory(pathspec) {
+      const path = literalPath(pathspec);
+      const rows = path
+        ? await db.query<{ oid: string }>(
+            `SELECT c.oid FROM fossil_commit c
+               WHERE c.merge = 0 AND c.oid IN (
+                 SELECT oid FROM fossil_change WHERE path = ? OR (path >= ? AND path < ?))
+               ORDER BY c.date DESC, c.oid`,
+            SPAN(path),
+          )
+        : await db.query<{ oid: string }>(
+            `SELECT c.oid FROM fossil_commit c
+               WHERE c.merge = 0 AND c.oid IN (SELECT oid FROM fossil_change)
+               ORDER BY c.date DESC, c.oid`,
+          );
       return rows.map((r) => r.oid);
     },
     async searchMessages(text) {
-      const rows =
-        text.length >= 3
-          ? await db.query<{ oid: string }>(
-              `SELECT c.oid FROM fossil_commit c
-                 WHERE c.merge = 0 AND instr(c.message, ?) > 0 AND c.oid IN (
-                   SELECT oid FROM fossil_text WHERE fossil_text MATCH ?)
-                 ORDER BY c.date DESC`,
-              [text, `"${text.replace(/"/g, '""')}"`],
-            )
-          : await db.query<{ oid: string }>(
-              `SELECT oid FROM fossil_commit WHERE merge = 0 AND instr(message, ?) > 0
-                 ORDER BY date DESC`,
-              [text],
-            );
-      return rows.map((r) => r.oid);
+      // git splits the pattern into lines, any of which may match; an empty line matches all
+      const parts = [...new Set(text.split("\n"))];
+      if (parts.includes(""))
+        return (
+          await db.query<{ oid: string }>(
+            "SELECT oid FROM fossil_commit WHERE merge = 0 ORDER BY date DESC, oid",
+          )
+        ).map((r) => r.oid);
+      const found = new Map<string, { oid: string; date: number }>();
+      for (const part of parts) {
+        const rows =
+          [...part].length >= 3 // trigrams are of characters, not UTF-16 units
+            ? await db.query<{ oid: string; date: number }>(
+                `SELECT c.oid, c.date FROM fossil_commit c
+                   WHERE c.merge = 0 AND instr(c.message, ?) > 0 AND c.oid IN (
+                     SELECT oid FROM fossil_text WHERE fossil_text MATCH ?)`,
+                [part, `"${part.replace(/"/g, '""')}"`],
+              )
+            : await db.query<{ oid: string; date: number }>(
+                "SELECT oid, date FROM fossil_commit WHERE merge = 0 AND instr(message, ?) > 0",
+                [part],
+              );
+        for (const r of rows) found.set(r.oid, { oid: r.oid, date: Number(r.date) });
+      }
+      return [...found.values()].sort(byOrder).map((r) => r.oid);
     },
   };
   return index;
@@ -270,20 +345,24 @@ async function allCommits(repo: Repository): Promise<CommitInfo[]> {
   if (head) tips.push(head);
   const out: CommitInfo[] = [];
   for await (const c of commitsFrom(repo, tips, async () => false)) out.push(c);
-  return out.sort((a, b) => b.date - a.date);
+  return out.sort(byOrder);
 }
 
-/** `git log --all --no-merges -- <path>` by walking the objects */
-export async function walkPathHistory(repo: Repository, path: string): Promise<string[]> {
+/** `git log --all --full-history --no-merges -- <path>` by walking the objects */
+export async function walkPathHistory(repo: Repository, pathspec: string): Promise<string[]> {
+  const path = literalPath(pathspec);
   const under = `${path}/`;
   return (await allCommits(repo))
-    .filter((c) => !c.merge && c.changes.some((p) => p === path || p.startsWith(under)))
+    .filter(
+      (c) => !c.merge && c.changes.some((p) => path === "" || p === path || p.startsWith(under)),
+    )
     .map((c) => c.oid);
 }
 
 /** `git log --all --no-merges -F --grep=<text>` by walking the objects */
 export async function walkSearch(repo: Repository, text: string): Promise<string[]> {
+  const parts = text.split("\n");
   return (await allCommits(repo))
-    .filter((c) => !c.merge && c.message.includes(text))
+    .filter((c) => !c.merge && parts.some((part) => c.message.includes(part)))
     .map((c) => c.oid);
 }

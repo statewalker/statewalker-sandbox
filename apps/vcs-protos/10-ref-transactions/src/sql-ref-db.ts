@@ -34,9 +34,12 @@ type Row = { oid: string | null; symref: string | null };
 
 export interface SqlRefDbOptions {
   /**
-   * Runs inside a successful batch's transaction, after its writes and before COMMIT, with the
-   * applied updates: whatever it writes through `tx` commits with the refs; if it throws, the batch
-   * rolls back and `batch` rejects. X9's indexes use it.
+   * Runs inside a successful batch's transaction, after its ref and reflog writes and before
+   * COMMIT; never for a rejected batch. Whatever it writes through `tx` commits with the refs; if
+   * it throws, the batch rolls back and `batch` rejects. `updates` has one entry per command, under
+   * the dereferenced name (a symbolic ref's target), no-op updates included; `old` is the value
+   * before the batch, `undefined` when the ref did not exist (unlike a command's `old: null`).
+   * X9's indexes use it.
    */
   beforeCommit?(
     tx: Db,

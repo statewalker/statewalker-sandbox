@@ -1,6 +1,6 @@
 # 36 — Can SQL indexes give Fossil-like history queries, in the same transaction as the refs?
 
-Plan id **X9** (Fossil-like capabilities). Status: **answered — yes: path history and message search from SQL tables equal git's on 40 random histories, the rows commit with the ref update or not at all, and each query answers in under 5 ms on 100,000 commits over 50,000 files**.
+Plan id **X9** (Fossil-like capabilities). Status: **answered — yes: path history and message search from SQL tables equal git's on 40 random histories, the rows commit with the ref update or not at all, and each query answers in under 5 ms on 100,000 commits over 50,000 files**. Limits: literal paths, git's order only where commit dates are distinct and fall from child to parent, and answers stay as they were after a ref is deleted or rewound (no unindexing yet); building the rows through our objects runs at about 370 commits a second.
 
 ## Question
 
@@ -24,6 +24,7 @@ over 50,000 files.
 | F2 | **Search.** `searchMessages(text)` equals `git log --all --no-merges --format=%H -F --grep=<text>` (case-sensitive, fixed string), for words, phrases, substrings shorter and longer than three characters, from the index (FTS5 trigram) and by walking. |
 | F3 | **Same transaction.** The index rows of newly reachable commits are written inside the ref batch's transaction (`sqlRefDb`'s new `beforeCommit` hook): a failing indexer leaves neither the ref change nor any index row; a rejected batch writes no index row; each commit is indexed once however many refs reach it. |
 | F4 | **Speed.** 100,000 commits over 50,000 files (indexed once): a path history and a search each answer in under 100 ms. |
+| F6 | Added after review: refs to annotated tags (peeled) and to a blob (skipped); pathspec forms `d/`, `./d`, `d/.`, `.` as git reads them, and globs, `:(magic)` and the empty pathspec refused; search text with newlines (any of its lines; an empty line matches all); text of three UTF-16 units but two characters kept off the trigram index; equal commit dates give the index and the walk one order. |
 | F5 | **Portable.** `src/` has no `node:` imports; the SQL is plain SQLite (FTS5 trigram, available in node:sqlite, sqlite-wasm and Durable Objects). |
 
 ## Scope
@@ -33,13 +34,16 @@ over 50,000 files.
   (F1 first said `--no-merges` alone; the first run showed that git still simplifies through merges
   then, hiding commits on a side a merge discarded, so the criterion was corrected to the command
   that means "every non-merge commit that changed the path".)
-- Commit dates in the corpora are distinct, so the order is by committer date alone.
+- Order: newest first by committer date, then by commit id, the same for the index and the walk.
+  It is git's order wherever dates are distinct and fall from child to parent (the corpora's); with
+  skewed or equal dates git's walk (a parent never before its child) can differ.
+- Literal paths only: globs and pathspec magic are refused, not matched literally.
 - Commits are indexed when a ref batch makes them reachable; deleting a ref does not unindex.
 
 ## Answer
 
 Yes. `src/fossil.ts` (about 290 lines, no `node:` imports) adds three tables to X16a's SQL
-repository and a `beforeCommit` hook to X5's `sqlRefDb`. All 7 tests pass:
+repository and a `beforeCommit` hook to X5's `sqlRefDb`. All 12 tests pass:
 
 - **F1, path history.** On 40 random histories (branches, merges, adds, edits, deletes, files
   becoming directories), every path and directory prefix gives the same commits, in the same
@@ -101,3 +105,16 @@ build them through our objects.
 3. Indexing speed: X6r's deeper tree reads on fast-import packs.
 4. Search across all refs only: per-branch answers need reachability (a commit-graph's generation
    numbers would bound the walk).
+
+### Review
+
+| Finding | Fix |
+|---|---|
+| A ref to an annotated tag (or to a blob) made every batch throw | tags peeled, other objects skipped (F6) |
+| Order with skewed or equal dates matched neither git nor the other method | one order (date, then id) for both; the limit stated (F6, Scope) |
+| Pathspecs taken literally: `d/`, `./d`, `.` found nothing, `a*` only itself | git's forms normalised; globs, magic and the empty pathspec refused (F6) |
+| Search text with newlines matched as one string | split into lines, any of which matches (F6) |
+| `"é😀"` (three UTF-16 units) sent to the trigram index | characters counted (F6) |
+| Tree names that are not UTF-8 could collide | entries keyed by their bytes |
+| Stale answers after a ref is deleted or rewound | stated in the status line; an open thread |
+| Docs: `--full-history` in the source, `beforeCommit`'s `updates` | corrected |
