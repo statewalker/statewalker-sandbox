@@ -92,7 +92,8 @@ async function changedPaths(
 }
 
 export type IndexRows = CommitInfo[];
-interface CommitInfo {
+/** one commit's rows: its date, whether it is a merge, its message, the paths it changed */
+export interface CommitInfo {
   oid: string;
   date: number;
   merge: boolean;
