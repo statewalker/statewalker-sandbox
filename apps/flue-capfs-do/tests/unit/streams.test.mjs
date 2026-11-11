@@ -41,6 +41,11 @@ const collect = async (it) => {
   return Buffer.concat(parts);
 };
 const code = (c) => (e) => e.code === c || String(e.message).startsWith(`${c}:`);
+/** Sends `bytes` in chunks of at most one block, as CapFilesApi does. */
+async function writeAll(gate, path, id, bytes) {
+  for (let at = 0; at < bytes.length; at += BLOCK_BYTES)
+    await gate.call("writeChunk", path, id, bytes.slice(at, at + BLOCK_BYTES));
+}
 
 test("a 5 MB file streams in and out in chunks; ranges; whole-file calls stop at 16 MiB", async () => {
   const { gate, cap, s } = await setup();
@@ -93,14 +98,14 @@ test("a write shows only at commit; abort, expiry and a restart leave no blocks"
   await gate().call("writeFile", "/p1/f", "old");
   const before = blocks();
   const { id } = await gate().call("openWrite", "/p1/f", {});
-  await gate().call("writeChunk", "/p1/f", id, pattern(BLOCK_BYTES + 10));
+  await writeAll(gate(), "/p1/f", id, pattern(BLOCK_BYTES + 10));
   assert.equal(await gate().call("readFile", "/p1/f"), "old", "not before commit");
   await gate().call("abortWrite", "/p1/f", id);
   assert.equal(blocks(), before);
   await assert.rejects(gate().call("writeChunk", "/p1/f", id, new Uint8Array(1)), code("EBADF"));
   // Expiry: an idle stream is dropped with its blocks.
   const w = await gate().call("openWrite", "/p1/g", {});
-  await gate().call("writeChunk", "/p1/g", w.id, pattern(BLOCK_BYTES * 2));
+  await writeAll(gate(), "/p1/g", w.id, pattern(BLOCK_BYTES * 2));
   t.mock.timers.tick(STREAM_IDLE_MS + 1);
   await gate().call("openWrite", "/p1/h", {}); // any stream call sweeps
   assert.equal(blocks(), before);
@@ -108,7 +113,7 @@ test("a write shows only at commit; abort, expiry and a restart leave no blocks"
   assert.equal(await store.exists("/p1/g"), false);
   // A restart drops blocks of writes that never committed.
   const x = await gate().call("openWrite", "/p1/x", {});
-  await gate().call("writeChunk", "/p1/x", x.id, pattern(BLOCK_BYTES * 2));
+  await writeAll(gate(), "/p1/x", x.id, pattern(BLOCK_BYTES * 2));
   assert.ok(blocks() > before);
   new SqlFs(s);
   assert.equal(blocks(), before);
@@ -223,4 +228,105 @@ test("CapFilesApi: list in path order (recursive, after), stats, exists, mkdir, 
   assert.equal(await files.remove("/proj/nope"), false);
   assert.equal(await files.remove("/proj/d"), true);
   assert.equal(await files.exists("/proj/d/z.txt"), false);
+});
+
+test("appends change the last block in place when the file alone owns its content", async () => {
+  const { gate, cap, s } = await setup();
+  const files = new CapFilesApi(cap());
+  await files.write("/p1/log", [pattern(3 * BLOCK_BYTES + 10)]);
+  const contentOf = () =>
+    Number(s.exec("SELECT content FROM fs_entries WHERE path = '/p1/log'").toArray()[0].content);
+  const rows = () =>
+    Number(
+      s.exec("SELECT count(*) AS n FROM fs_blocks WHERE content = ?", contentOf()).toArray()[0].n,
+    );
+  const before = contentOf();
+  for (let i = 0; i < 5; i++) await gate().call("appendFile", "/p1/log", "x");
+  assert.equal(contentOf(), before, "no copy");
+  assert.equal(rows(), 4);
+  // An append stream commits in place too.
+  const w = await gate().call("openWrite", "/p1/log", { append: true });
+  await gate().call("writeChunk", "/p1/log", w.id, pattern(BLOCK_BYTES, 9));
+  await gate().call("commitWrite", "/p1/log", w.id);
+  assert.equal(contentOf(), before);
+  const expect = Buffer.concat([
+    pattern(3 * BLOCK_BYTES + 10),
+    Buffer.from("xxxxx"),
+    pattern(BLOCK_BYTES, 9),
+  ]);
+  assert.ok((await collect(files.read("/p1/log"))).equals(expect));
+  // A file sharing its content with a copy, or held by a reader, is appended to in a copy.
+  await files.copy("/p1/log", "/proj/copy");
+  await gate().call("appendFile", "/p1/log", "!");
+  assert.notEqual(contentOf(), before);
+  assert.ok((await collect(files.read("/proj/copy"))).equals(expect), "the copy keeps its content");
+});
+
+test("an append stream fails at commit if the file changed meanwhile (ESTALE)", async () => {
+  const { gate } = await setup();
+  await gate().call("writeFile", "/p1/f", "abc");
+  const w = await gate().call("openWrite", "/p1/f", { append: true });
+  await gate().call("writeChunk", "/p1/f", w.id, new TextEncoder().encode("1"));
+  await gate().call("appendFile", "/p1/f", "2");
+  await assert.rejects(gate().call("commitWrite", "/p1/f", w.id), code("ESTALE"));
+  assert.equal(await gate().call("readFile", "/p1/f"), "abc2");
+});
+
+test("bounds: one block per chunk, 32 streams per capability, no pin left by EMFILE", async () => {
+  const { gate, auth, blocks } = await setup();
+  await gate().call("writeFile", "/p1/f", "x");
+  const w = await gate().call("openWrite", "/p1/w", {});
+  await assert.rejects(
+    gate().call("writeChunk", "/p1/w", w.id, new Uint8Array(BLOCK_BYTES + 1)),
+    code("EINVAL"),
+  );
+  await gate().call("abortWrite", "/p1/w", w.id);
+  const ids = [];
+  for (let i = 0; i < 32; i++) ids.push((await gate().call("openRead", "/p1/f", {})).id);
+  await assert.rejects(gate().call("openRead", "/p1/f", {}), code("EMFILE"));
+  // Another capability still has room.
+  const other = auth.startSession("bob", ["/p1"]).token;
+  const o = await gate(other).call("openRead", "/p1/f", {});
+  await gate(other).call("closeRead", "/p1/f", o.id);
+  for (const id of ids) await gate().call("closeRead", "/p1/f", id);
+  const n = blocks();
+  await gate().call("rm", "/p1/f");
+  assert.equal(blocks(), n - 1, "the file's block went with it: no pin was left behind");
+});
+
+test("a revoked capability can still release its streams", async () => {
+  const { gate, auth, session, blocks } = await setup();
+  await gate().call("writeFile", "/p1/f", "x");
+  const n = blocks();
+  const r = await gate().call("openRead", "/p1/f", {});
+  const w = await gate().call("openWrite", "/p1/g", {});
+  await gate().call("writeChunk", "/p1/g", w.id, new Uint8Array(10));
+  auth.revoke(session);
+  await assert.rejects(gate().call("readChunk", "/p1/f", r.id, 1), code("EACCES"));
+  await gate().call("closeRead", "/p1/f", r.id);
+  await gate().call("abortWrite", "/p1/g", w.id);
+  assert.equal(blocks(), n);
+});
+
+test("a missing or short block is an error, never zeros", async () => {
+  const { gate, cap, s } = await setup();
+  await new CapFilesApi(cap()).write("/p1/b", [pattern(2 * BLOCK_BYTES + 5)]);
+  s.exec(
+    "DELETE FROM fs_blocks WHERE idx = 1 AND content = (SELECT content FROM fs_entries WHERE path = '/p1/b')",
+  );
+  const { id } = await gate().call("openRead", "/p1/b", { start: BLOCK_BYTES });
+  await assert.rejects(gate().call("readChunk", "/p1/b", id, 10), code("EIO"));
+});
+
+test("CapFilesApi: move and copy take the exact target; a directory reads as nothing", async () => {
+  const { cap } = await setup();
+  const files = new CapFilesApi(cap());
+  await files.write("/proj/x.txt", [new TextEncoder().encode("x")]);
+  await files.mkdir("/proj/d");
+  assert.equal(await files.move("/proj/x.txt", "/proj/d"), true);
+  assert.equal((await files.stats("/proj/d")).kind, "file", "replaced, not moved into");
+  assert.equal(await files.exists("/proj/d/x.txt"), false);
+  assert.equal(await files.copy("/proj/d", "/proj/e"), true);
+  assert.equal((await collect(files.read("/proj/e"))).toString(), "x");
+  assert.equal((await collect(files.read("/proj/x"))).length, 0, "a directory reads as nothing");
 });

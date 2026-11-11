@@ -64,8 +64,7 @@ type ReadStream = {
   kind: "read";
   path: string;
   owner: string;
-  content: number | null;
-  legacy?: Uint8Array;
+  content: number;
   pos: number;
   end: number;
   at: number;
@@ -74,10 +73,14 @@ type WriteStream = {
   kind: "write";
   path: string;
   owner: string;
+  /** Where the written bytes go; nobody sees it before the commit. */
   content: number;
-  /** The next block's index, and the bytes not yet making a whole block. */
-  next: number;
-  tail: Uint8Array;
+  /**
+   * Appending: the content the file had when opened. The staged blocks continue it (from the
+   * block holding its last partial bytes); the commit fails if the file changed since.
+   */
+  base: { content: number; size: number } | null;
+  /** The file's size so far, base included (nothing is held in memory but these numbers). */
   size: number;
   at: number;
 };
@@ -100,8 +103,11 @@ export const MAX_WHOLE_FILE_BYTES = 16 * 1024 * 1024;
 export const MAX_FILE_BYTES = 1024 * 1024 * 1024;
 /** An open stream not used for this long is closed (an unfinished write is dropped). */
 export const STREAM_IDLE_MS = 2 * 60_000;
-/** Open streams per Workspace cell. */
+/** Open streams per Workspace cell, and per capability (one holder cannot take them all). */
 const MAX_STREAMS = 256;
+const MAX_STREAMS_PER_OWNER = 32;
+/** How often idle streams are looked for, whatever calls the store gets. */
+const SWEEP_EVERY_MS = 10_000;
 const EMPTY = new Uint8Array();
 const concat = (a: Uint8Array, b: Uint8Array) => {
   if (!a.length) return b;
@@ -127,6 +133,7 @@ const toBlob = (b: Uint8Array): ArrayBuffer =>
 export class SqlFs {
   #sql: SqlLike;
   #streams = new Map<string, ReadStream | WriteStream>();
+  #swept = 0;
   /** Content ids open readers hold: not dropped while held. */
   #pins = new Map<number, number>();
   constructor(sql: SqlLike) {
@@ -161,6 +168,7 @@ export class SqlFs {
   }
 
   #get(path: string): Row | undefined {
+    if (this.#streams.size && Date.now() - this.#swept > SWEEP_EVERY_MS) this.#sweep();
     if (path === "/")
       return {
         id: 0,
@@ -223,13 +231,21 @@ export class SqlFs {
         last,
       )
       .toArray();
+    // Every block of the range, each long enough: anything else is damage, never zeros.
+    if (rows.length !== last - first + 1)
+      throw fsError(
+        "EIO",
+        `content ${content}: ${last - first + 1 - rows.length} block(s) missing`,
+      );
     const out = new Uint8Array(end - start);
     for (const r of rows) {
       const b = bytesOf(r.data as Row["data"]);
       const blockStart = Number(r.idx) * BLOCK_BYTES;
       const from = Math.max(start, blockStart);
-      const to = Math.min(end, blockStart + b.length);
-      if (to > from) out.set(b.subarray(from - blockStart, to - blockStart), from - start);
+      const to = Math.min(end, blockStart + BLOCK_BYTES);
+      if (b.length < to - blockStart)
+        throw fsError("EIO", `content ${content}: block ${String(r.idx)} is short`);
+      out.set(b.subarray(from - blockStart, to - blockStart), from - start);
     }
     return out;
   }
@@ -279,35 +295,44 @@ export class SqlFs {
     );
     if (old !== null && old !== content) this.#release(old);
   }
-  /** A new content id holding a copy of `row`'s content, but for its last partial block. */
-  #copyForAppend(row: Row | undefined): {
-    content: number;
-    next: number;
-    tail: Uint8Array;
-    size: number;
-  } {
+  /** A row from before blocks gets its content as blocks (same file, same mtime). */
+  #migrate(row: Row): Row {
+    if (row.kind !== "file" || row.content !== null) return row;
+    const b = bytesOf(row.data);
     const content = this.#newContent();
-    if (!row || row.kind !== "file") return { content, next: 0, tail: EMPTY, size: 0 };
-    const size = this.#sizeOf(row);
-    if (row.content === null) {
-      const b = bytesOf(row.data);
-      const whole = b.length - (b.length % BLOCK_BYTES);
-      const next = this.#putBlocks(content, b.subarray(0, whole));
-      return { content, next, tail: b.slice(whole), size };
-    }
-    const full = Math.floor(size / BLOCK_BYTES);
+    this.#putBlocks(content, b);
+    this.#sql.exec(
+      "UPDATE fs_entries SET data = NULL, content = ?, size = ? WHERE path = ?",
+      content,
+      b.length,
+      row.path,
+    );
+    return { ...row, data: null, content, size: b.length };
+  }
+  /** Whether `content` may be changed in place: one entry refers to it and no reader holds it. */
+  #ownedBy(content: number): boolean {
+    if (this.#pins.get(content)) return false;
+    const n = Number(
+      this.#sql.exec("SELECT count(*) AS n FROM fs_entries WHERE content = ?", content).toArray()[0]
+        ?.n ?? 0,
+    );
+    return n <= 1;
+  }
+  /** Copies `from`'s blocks below index `below` into `to` (a shared or held file is not changed). */
+  #copyBlocks(from: number, to: number, below: number) {
     this.#sql.exec(
       "INSERT INTO fs_blocks (content, idx, data) SELECT ?, idx, data FROM fs_blocks WHERE content = ? AND idx < ?",
-      content,
-      row.content,
-      full,
+      to,
+      from,
+      below,
     );
-    return {
-      content,
-      next: full,
-      tail: this.#readBlocks(row.content, full * BLOCK_BYTES, size),
-      size,
-    };
+  }
+  /** Writes `bytes` at offset `at` of `content`'s blocks, rewriting the block `at` falls in. */
+  #putAt(content: number, at: number, bytes: Uint8Array) {
+    const idx = Math.floor(at / BLOCK_BYTES);
+    const off = at % BLOCK_BYTES;
+    const head = off ? this.#readBlocks(content, idx * BLOCK_BYTES, at) : EMPTY;
+    this.#putBlocks(content, concat(head, bytes), idx);
   }
   #must(path: string): Row {
     const row = this.#get(path);
@@ -382,22 +407,38 @@ export class SqlFs {
     this.#ensureParents(path);
     this.#put(path, "file", bytes);
   }
-  /** Appends without reading the file whole: its full blocks are shared into a new content id. */
+  /**
+   * Appends in place (only the last partial block is rewritten) when the file alone refers to its
+   * content and no reader holds it; otherwise into a copy, so other copies and readers keep theirs.
+   */
   #append(path: string, more: Uint8Array) {
-    const row = this.#get(path);
-    if (row?.kind === "dir")
+    const found = this.#get(path);
+    if (found?.kind === "dir")
       throw fsError("EISDIR", `illegal operation on a directory, append '${path}'`);
     if (more.length > MAX_WHOLE_FILE_BYTES)
       throw fsError("EFBIG", `too much to append whole '${path}': write it as a stream`);
-    this.#ensureParents(path);
-    const c = this.#copyForAppend(row);
-    const size = c.size + more.length;
-    if (size > MAX_FILE_BYTES) {
-      this.#release(c.content);
+    if (!found) return this.#write(path, more);
+    const row = this.#migrate(found);
+    const base = row.content as number;
+    const old = this.#sizeOf(row);
+    const size = old + more.length;
+    if (size > MAX_FILE_BYTES)
       throw fsError("EFBIG", `file too large '${path}': at most ${MAX_FILE_BYTES} bytes`);
+    if (this.#ownedBy(base)) {
+      this.#putAt(base, old, more);
+      this.#sql.exec(
+        "UPDATE fs_entries SET size = ?, mtime = ? WHERE path = ?",
+        size,
+        Date.now(),
+        path,
+      );
+      return;
     }
-    this.#putBlocks(c.content, concat(c.tail, more), c.next);
-    this.#setEntry(path, "file", c.content, size);
+    const content = this.#newContent();
+    const full = Math.floor(old / BLOCK_BYTES);
+    this.#copyBlocks(base, content, full);
+    this.#putBlocks(content, concat(this.#readBlocks(base, full * BLOCK_BYTES, old), more), full);
+    this.#setEntry(path, "file", content, size);
   }
   async exists(path: string): Promise<boolean> {
     return this.#get(path) !== undefined;
@@ -556,11 +597,13 @@ export class SqlFs {
   // A stream is identified by a random id and bound to its owner (the capability that opened
   // it) and its path: chunk calls must name both. Reads see the content as it was when opened
   // (its blocks are held until closed). Writes go to a new content id, which becomes the file's
-  // only at commit; until then nobody sees it, and an aborted, expired or never-committed write
-  // leaves nothing behind.
+  // only at commit; until then nobody sees it. What a stream holds in memory is a few numbers:
+  // written bytes go to blocks at once. An aborted, expired or never-committed write is dropped
+  // (idle streams are looked for every few seconds, and at the cell's start).
 
   #sweep() {
     const now = Date.now();
+    this.#swept = now;
     for (const [id, s] of this.#streams) if (now - s.at > STREAM_IDLE_MS) this.#drop(id, s);
   }
   #drop(id: string, s: ReadStream | WriteStream) {
@@ -568,11 +611,10 @@ export class SqlFs {
     if (s.kind === "read") this.#unpin(s.content);
     else this.#release(s.content);
   }
-  #pin(content: number | null) {
-    if (content !== null) this.#pins.set(content, (this.#pins.get(content) ?? 0) + 1);
+  #pin(content: number) {
+    this.#pins.set(content, (this.#pins.get(content) ?? 0) + 1);
   }
-  #unpin(content: number | null) {
-    if (content === null) return;
+  #unpin(content: number) {
     const n = (this.#pins.get(content) ?? 1) - 1;
     if (n > 0) this.#pins.set(content, n);
     else {
@@ -580,12 +622,17 @@ export class SqlFs {
       this.#release(content);
     }
   }
-  #open(s: ReadStream | WriteStream): string {
+  /** Room for one more stream of `owner` (checked before anything is held or written). */
+  #room(owner: string) {
     this.#sweep();
     if (this.#streams.size >= MAX_STREAMS) throw fsError("EMFILE", "too many open streams");
-    const id = crypto.randomUUID();
-    this.#streams.set(id, s);
-    return id;
+    let mine = 0;
+    for (const s of this.#streams.values()) if (s.owner === owner) mine++;
+    if (mine >= MAX_STREAMS_PER_OWNER)
+      throw fsError(
+        "EMFILE",
+        `too many open streams for this capability (${MAX_STREAMS_PER_OWNER})`,
+      );
   }
   #stream<K extends "read" | "write">(
     kind: K,
@@ -607,24 +654,19 @@ export class SqlFs {
     opts: { start?: number; length?: number } | undefined,
     owner: string,
   ): Promise<{ id: string; size: number }> {
-    const row = this.#must(path);
-    if (row.kind === "dir")
+    const found = this.#must(path);
+    if (found.kind === "dir")
       throw fsError("EISDIR", `illegal operation on a directory, read '${path}'`);
+    this.#room(owner);
+    const row = this.#migrate(found);
     const size = this.#sizeOf(row);
     const start = Math.min(Math.max(0, Math.floor(Number(opts?.start) || 0)), size);
     const length = opts?.length === undefined ? size : Math.max(0, Math.floor(Number(opts.length)));
     const end = Math.min(size, start + length);
-    this.#pin(row.content);
-    const id = this.#open({
-      kind: "read",
-      path,
-      owner,
-      content: row.content,
-      legacy: row.content === null ? bytesOf(row.data).slice() : undefined,
-      pos: start,
-      end,
-      at: Date.now(),
-    });
+    const content = row.content as number;
+    this.#pin(content);
+    const id = crypto.randomUUID();
+    this.#streams.set(id, { kind: "read", path, owner, content, pos: start, end, at: Date.now() });
     return { id, size };
   }
   /** The next chunk (at most `max` bytes, at most one block); an empty chunk at the end. */
@@ -636,10 +678,7 @@ export class SqlFs {
       s.end - s.pos,
     );
     if (n <= 0) return EMPTY;
-    const out =
-      s.content !== null
-        ? this.#readBlocks(s.content, s.pos, s.pos + n)
-        : (s.legacy as Uint8Array).slice(s.pos, s.pos + n);
+    const out = this.#readBlocks(s.content, s.pos, s.pos + n);
     s.pos += n;
     return out;
   }
@@ -654,15 +693,27 @@ export class SqlFs {
     opts: { append?: boolean } | undefined,
     owner: string,
   ): Promise<{ id: string }> {
-    const row = this.#get(path);
-    if (row?.kind === "dir")
+    const found = this.#get(path);
+    if (found?.kind === "dir")
       throw fsError("EISDIR", `illegal operation on a directory, write '${path}'`);
-    const c = opts?.append
-      ? this.#copyForAppend(row)
-      : { content: this.#newContent(), next: 0, tail: EMPTY, size: 0 };
-    const id = this.#open({ kind: "write", path, owner, ...c, at: Date.now() });
+    this.#room(owner);
+    const content = this.#newContent();
+    let base: WriteStream["base"] = null;
+    let size = 0;
+    if (opts?.append && found) {
+      const row = this.#migrate(found);
+      base = { content: row.content as number, size: this.#sizeOf(row) };
+      size = base.size;
+      // The staged blocks continue the base: its last partial block is their first.
+      const full = Math.floor(size / BLOCK_BYTES);
+      if (size % BLOCK_BYTES)
+        this.#putBlock(content, full, this.#readBlocks(base.content, full * BLOCK_BYTES, size));
+    }
+    const id = crypto.randomUUID();
+    this.#streams.set(id, { kind: "write", path, owner, content, base, size, at: Date.now() });
     return { id };
   }
+  /** Writes a chunk (at most one block) straight to the stream's blocks. */
   async writeChunk(
     path: string,
     id: unknown,
@@ -671,16 +722,12 @@ export class SqlFs {
   ): Promise<{ size: number }> {
     const s = this.#stream("write", id, owner, path);
     const b = bytesArg(data);
+    if (b.length > BLOCK_BYTES) throw fsError("EINVAL", `a chunk is at most ${BLOCK_BYTES} bytes`);
     if (s.size + b.length > MAX_FILE_BYTES) {
       this.#drop(String(id), s);
       throw fsError("EFBIG", `file too large '${path}': at most ${MAX_FILE_BYTES} bytes`);
     }
-    let tail = concat(s.tail, b.slice());
-    while (tail.length >= BLOCK_BYTES) {
-      this.#putBlock(s.content, s.next++, tail.subarray(0, BLOCK_BYTES));
-      tail = tail.slice(BLOCK_BYTES);
-    }
-    s.tail = tail;
+    this.#putAt(s.content, s.size, b);
     s.size += b.length;
     return { size: s.size };
   }
@@ -689,9 +736,36 @@ export class SqlFs {
     const s = this.#stream("write", id, owner, path);
     this.#streams.delete(String(id));
     try {
-      if (s.tail.length) this.#putBlock(s.content, s.next++, s.tail);
-      if (this.#get(path)?.kind === "dir")
+      const cur = this.#get(path);
+      if (cur?.kind === "dir")
         throw fsError("EISDIR", `illegal operation on a directory, write '${path}'`);
+      if (s.base) {
+        // An append continues the content it was opened on: not one changed since.
+        if (cur?.content !== s.base.content || this.#sizeOf(cur) !== s.base.size)
+          throw fsError("ESTALE", `'${path}' changed while it was being appended to`);
+        const full = Math.floor(s.base.size / BLOCK_BYTES);
+        if (this.#ownedBy(s.base.content)) {
+          // In place: the base's last partial block and after are replaced by the staged ones.
+          this.#sql.exec(
+            "DELETE FROM fs_blocks WHERE content = ? AND idx >= ?",
+            s.base.content,
+            full,
+          );
+          this.#sql.exec(
+            "UPDATE fs_blocks SET content = ? WHERE content = ?",
+            s.base.content,
+            s.content,
+          );
+          this.#sql.exec(
+            "UPDATE fs_entries SET size = ?, mtime = ? WHERE path = ?",
+            s.size,
+            Date.now(),
+            path,
+          );
+          return { size: s.size };
+        }
+        this.#copyBlocks(s.base.content, s.content, full);
+      }
       this.#ensureParents(path);
       this.#setEntry(path, "file", s.content, s.size);
       return { size: s.size };

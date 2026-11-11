@@ -38,8 +38,8 @@ export class CapFilesApi implements FilesApi {
         length: options.length,
       })) as { id: string });
     } catch (e) {
-      // FilesApi: a file that does not exist reads as nothing.
-      if (codeOf(e) === "ENOENT") return;
+      // FilesApi: a file that does not exist (or a directory) reads as nothing.
+      if (codeOf(e) === "ENOENT" || codeOf(e) === "EISDIR") return;
       throw e;
     }
     try {
@@ -131,15 +131,25 @@ export class CapFilesApi implements FilesApi {
     return true;
   }
 
+  /**
+   * `target` is the exact new path (FilesApi), not a directory to move into as with `mv`: what is
+   * at `target` is replaced.
+   */
   async move(source: string, target: string): Promise<boolean> {
-    if (!(await this.exists(source))) return false;
-    await this.#cap.move("mv", norm(source), norm(target));
-    return true;
+    return this.#transfer("mv", source, target);
   }
 
   async copy(source: string, target: string): Promise<boolean> {
-    if (!(await this.exists(source))) return false;
-    await this.#cap.move("cp", norm(source), norm(target), { recursive: true });
+    return this.#transfer("cp", source, target);
+  }
+
+  async #transfer(kind: "cp" | "mv", source: string, target: string): Promise<boolean> {
+    const from = norm(source);
+    const to = norm(target);
+    if (!(await this.exists(from))) return false;
+    if (from === to) return true;
+    if (await this.exists(to)) await this.#cap.call("rm", to, { recursive: true });
+    await this.#cap.move(kind, from, to, { recursive: true });
     return true;
   }
 }

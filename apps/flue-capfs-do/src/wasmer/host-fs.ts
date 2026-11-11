@@ -40,6 +40,8 @@ interface Handle {
 const encoder = new TextEncoder();
 /** At most this many open files per sandbox; at most this many bytes per file in memory. */
 const MAX_HANDLES = 256;
+/** What all open files of a sandbox may hold in memory together. */
+const MAX_OPEN_BYTES = 64 * 1024 * 1024;
 /** What the store takes whole: a larger file would only fail at close, which WASIX does not report. */
 const MAX_FILE_BYTES = MAX_WHOLE_FILE_BYTES;
 /**
@@ -170,6 +172,8 @@ export function capHostFs(cap: Cap) {
           : new Uint8Array();
         if (bytes.length > MAX_FILE_BYTES)
           throw err("EFBIG", `${f.path}: files are at most ${MAX_FILE_BYTES} bytes here`);
+        if (held() + bytes.length > MAX_OPEN_BYTES)
+          throw err("ENOMEM", `open files hold at most ${MAX_OPEN_BYTES} bytes together`);
         if (!f.bytes) {
           f.bytes = bytes;
           f.size = bytes.length;
@@ -202,13 +206,21 @@ export function capHostFs(cap: Cap) {
     f.writable.catch(() => (f.writable = undefined));
     return f.writable;
   };
+  const held = () => {
+    let n = 0;
+    for (const f of files.values()) n += f.bytes?.length ?? 0;
+    return n;
+  };
   /** Room for `length` bytes, growing the capacity by doubling. */
   const reserve = (f: OpenFile, length: number) => {
     if (length > MAX_FILE_BYTES)
       throw err("EFBIG", `${f.path}: files are at most ${MAX_FILE_BYTES} bytes here`);
     const b = f.bytes as Uint8Array;
     if (length <= b.length) return b;
-    const out = new Uint8Array(Math.min(MAX_FILE_BYTES, Math.max(length, b.length * 2, 4096)));
+    const capacity = Math.min(MAX_FILE_BYTES, Math.max(length, b.length * 2, 4096));
+    if (held() - b.length + capacity > MAX_OPEN_BYTES)
+      throw err("ENOMEM", `open files hold at most ${MAX_OPEN_BYTES} bytes together`);
+    const out = new Uint8Array(capacity);
     out.set(b.subarray(0, f.size));
     f.bytes = out;
     return out;

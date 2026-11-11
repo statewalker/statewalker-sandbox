@@ -11,7 +11,7 @@ export type StreamTask =
   | { op: "read"; path: string; start?: number; length?: number };
 
 /** At most this many bytes per task (a demonstration, not a bulk copy). */
-const MAX_TASK_BYTES = 64 * 1024 * 1024;
+const MAX_TASK_BYTES = 16 * 1024 * 1024;
 
 /** The bytes a `write` produces: the same generator the tests use. */
 export function* patternChunks(size: number, seed: number, chunk: number): Generator<Uint8Array> {

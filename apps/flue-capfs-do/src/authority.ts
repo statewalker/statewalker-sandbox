@@ -429,6 +429,13 @@ export class FsGate {
     if (!op) throw fsError("ENOSYS", `method not available '${method}'`);
     if (method === "readdir") return this.readdir(p);
     if (method === "readdirStat") return this.readdirStat(p);
+    // Releasing a stream needs no right: it only gives back what its owner holds (a revoked or
+    // read-only capability can still close what it opened). Owner and path still have to match.
+    if (method === "closeRead" || method === "abortWrite") {
+      // biome-ignore lint/suspicious/noExplicitAny: dispatch over the store's stream methods
+      const fn = (this.#store as any)[method] as (...a: unknown[]) => Promise<unknown>;
+      return fn.call(this.#store, normalise(p), args[0], this.#token);
+    }
     const path = await this.#authorize(op, p);
     const opts = (args[0] ?? {}) as { recursive?: boolean };
     if (

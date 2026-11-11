@@ -675,23 +675,29 @@ writes, missing parents at open and commit):
 | `readChunk(path, id, maxBytes?)` | the next chunk (at most 1 MiB); an empty one at the end |
 | `closeRead(path, id)` | |
 | `openWrite(path, {append?})` | `{id}`; nothing changes yet |
-| `writeChunk(path, id, bytes)` | `{size}` so far |
-| `commitWrite(path, id)` | `{size}`; the file has the new content, at once |
+| `writeChunk(path, id, bytes)` | `{size}` so far; a chunk is at most 1 MiB |
+| `commitWrite(path, id)` | `{size}`; the file has the new content, at once (an append fails with `ESTALE` if the file changed since it was opened) |
 | `abortWrite(path, id)` | |
 
 - **Every chunk is a capability call:** authorized again, so a revocation or a mode switch stops
   a stream between two chunks.
 - **A stream id belongs to the token that opened it, and to its path:** another capability, or
-  another path, gets `EBADF`.
-- **Streams are bounded:** a stream unused for 2 minutes is closed (an unfinished write leaves
-  nothing). At most 256 streams are open per Workspace cell; a file is at most 1 GiB.
+  another path, gets `EBADF`. Closing or aborting needs no right, so a revoked capability can
+  still release what it holds.
+- **Streams are bounded:** a stream holds no content in memory (chunks go to blocks at once). One
+  unused for 2 minutes is closed and an unfinished write dropped (idle streams are looked for every
+  10 seconds while the cell is used, and at its start). At most 32 streams per capability and 256
+  per Workspace cell; a file is at most 1 GiB. A missing or short block is `EIO`, never zeros.
 
 **Storage.** A file's content is BLOB blocks of at most 1 MiB in `fs_blocks`, each one row under
 the Durable Object row limit, under an immutable content id the entry points at. A rename or a copy
 shares the content id; an overwrite writes a new one and drops the old once no entry and no open
-reader refers to it. A write in progress fills a content id nobody sees until its commit. Blocks of
-writes that never committed are dropped when the cell starts. Rows from before blocks keep their
-content in `fs_entries.data` and are read from there. (`@statewalker/webrun-files-sqlite`'s
+reader refers to it. An append (`appendFile`, or an append stream at commit) rewrites only the last
+partial block, in place, when the file alone refers to its content and no reader holds it;
+otherwise it goes to a copy, so other copies and readers keep theirs. A write in progress fills a
+content id nobody sees until its commit. Blocks of writes that never committed are dropped when the
+cell starts. Rows from before blocks keep their content in `fs_entries.data` and are moved to
+blocks when first streamed or appended to. (`@statewalker/webrun-files-sqlite`'s
 `SqliteFilesApi` stores blocks the same way; this store keeps its own tables because every entry an
 operation touches is authorized against them.)
 
