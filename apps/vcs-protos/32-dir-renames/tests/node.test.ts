@@ -284,6 +284,36 @@ describe("E2–E4 directory renames", () => {
   });
 });
 
+/** the review's reproducers (#101), as base/ours/theirs path → [mode, content] */
+const reviewCases: Case[] = [
+  ["redo", "directory renames survive ort's redo after renames"],
+  ["mode-zero", "a file on ours split from a base directory: git's mode-0 stage 2"],
+  ["rename-into-itself", "a rename into itself that git 2.43 does not assert on"],
+  ["early-culling", "early culling changes which source the matrix pairs"],
+  ["other-side-collisions", "a path the other side's directory rename would collide with"],
+].map(([file, name]) => {
+  const json = JSON.parse(
+    readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "review-cases", `${file}.json`),
+      "utf8",
+    ),
+  ) as Record<"base" | "ours" | "theirs", Record<string, [string, string]>>;
+  const files = (m: Record<string, [string, string]>): Files => new Map(Object.entries(m));
+  return {
+    name: name as string,
+    base: files(json.base),
+    ours: files(json.ours),
+    theirs: files(json.theirs),
+  };
+});
+
+describe("E6 cases from the review", () => {
+  it("each equal to git merge-tree", async () => {
+    const r = await run(reviewCases);
+    expect(r.wrong).toEqual([]);
+  });
+});
+
 describe("E5 portable", () => {
   it("31-ort/src and 30-renames/src have no node: imports", () => {
     const here = dirname(fileURLToPath(import.meta.url));
