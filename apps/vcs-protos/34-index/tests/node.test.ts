@@ -1,0 +1,291 @@
+import { execFileSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { MemFilesApi } from "@statewalker/webrun-files-mem";
+import { NodeFilesApi } from "@statewalker/webrun-files-node";
+import { afterAll, describe, expect, it } from "vitest";
+import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-files.js";
+import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
+import { gitEnv } from "../../12-index-pack/src/git-repo.js";
+import { filesRepository } from "../../17-repository/src/repository.js";
+import { rng } from "../../29-merge/tests/tree-harness.js";
+import { type IndexFile, parseIndex, serializeIndex } from "../src/index-file.js";
+import { nodeStat } from "../src/node-stat.js";
+import { addAll, status, type Worktree } from "../src/worktree.js";
+
+const dirs: string[] = [];
+afterAll(() => {
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+const tmp = (p: string) => {
+  const d = mkdtempSync(join(tmpdir(), p));
+  dirs.push(d);
+  return d;
+};
+const git = (cwd: string, args: string[], input?: string) =>
+  execFileSync("git", args, { cwd, env: gitEnv, input }).toString();
+const write = (d: string, path: string, content: string) => {
+  mkdirSync(dirname(join(d, path)), { recursive: true });
+  writeFileSync(join(d, path), content);
+};
+/** a non-bare repository with core.fileMode=false and one commit */
+function initRepo(files: Record<string, string>): string {
+  const d = tmp("x14-");
+  git(d, ["init", "-q"]);
+  git(d, ["config", "core.fileMode", "false"]);
+  for (const [p, c] of Object.entries(files)) write(d, p, c);
+  git(d, ["add", "-A"]);
+  git(d, ["commit", "-qm", "base"]);
+  return d;
+}
+const indexTime = (d: string) => statSync(join(d, ".git/index")).mtimeMs;
+
+describe("W1 index files written by git, round trip", () => {
+  const scenarios: [string, (d: string) => void][] = [
+    ["version 2 after a commit (TREE)", () => {}],
+    [
+      "version 3: intent-to-add and skip-worktree",
+      (d) => {
+        write(d, "new", "n\n");
+        git(d, ["add", "-N", "new"]);
+        git(d, ["update-index", "--skip-worktree", "a"]);
+      },
+    ],
+    ["version 4", (d) => git(d, ["update-index", "--index-version", "4"])],
+    [
+      "conflict stages after a failed merge",
+      (d) => {
+        git(d, ["checkout", "-qb", "side"]);
+        write(d, "a", "side\n");
+        git(d, ["commit", "-qam", "side"]);
+        git(d, ["checkout", "-q", "-"]);
+        write(d, "a", "main\n");
+        git(d, ["commit", "-qam", "main"]);
+        try {
+          git(d, ["merge", "-q", "side"]);
+        } catch {}
+      },
+    ],
+    [
+      "REUC after resolving",
+      (d) => {
+        git(d, ["checkout", "-qb", "side"]);
+        write(d, "a", "side\n");
+        git(d, ["commit", "-qam", "side"]);
+        git(d, ["checkout", "-q", "-"]);
+        write(d, "a", "main\n");
+        git(d, ["commit", "-qam", "main"]);
+        try {
+          git(d, ["merge", "-q", "side"]);
+        } catch {}
+        write(d, "a", "resolved\n");
+        git(d, ["add", "a"]);
+      },
+    ],
+    [
+      "EOIE and IEOT",
+      (d) => {
+        write(d, "b", "b2\n");
+        git(d, [
+          "-c",
+          "index.recordEndOfIndexEntries=true",
+          "-c",
+          "index.recordOffsetTable=true",
+          "add",
+          "b",
+        ]);
+      },
+    ],
+  ];
+  for (const [name, setup] of scenarios)
+    it(name, () => {
+      const d = initRepo({ a: "a\n", b: "b\n", "dir/c": "c\n", "dir/sub/d": "d\n" });
+      setup(d);
+      const bytes = readFileSync(join(d, ".git/index"));
+      const idx = parseIndex(bytes);
+      expect(idx.entries.length).toBeGreaterThan(0);
+      expect(Buffer.from(serializeIndex(idx)).equals(bytes)).toBe(true);
+      const ls = git(d, ["ls-files", "--stage"]).trim().split("\n");
+      expect(
+        idx.entries.map((e) => `${e.mode.toString(8)} ${e.oid} ${e.stage}\t${e.path}`),
+      ).toEqual(ls);
+    });
+});
+
+async function openRepo(d: string) {
+  return filesRepository(new StreamingNodeFilesApi(join(d, ".git")), nodeRefFiles(join(d, ".git")));
+}
+const worktreeOf = (d: string): Worktree => ({
+  files: new NodeFilesApi({ rootDir: d }),
+  stat: nodeStat(d),
+});
+async function writeIndex(d: string, idx: IndexFile) {
+  writeFileSync(join(d, ".git/index"), serializeIndex(idx));
+}
+const head = (d: string) => git(d, ["rev-parse", "HEAD^{tree}"]).trim();
+
+describe("W2 our staging, read by git", () => {
+  it("git status is clean, ls-files and write-tree agree", async () => {
+    const d = initRepo({ a: "a\n", "dir/c": "c\n" });
+    write(d, "a", "a2\n");
+    write(d, "dir/new", "new\n");
+    rmSync(join(d, "dir/c"));
+    const repo = await openRepo(d);
+    await new Promise((r) => setTimeout(r, 5));
+    const before = parseIndex(readFileSync(join(d, ".git/index")));
+    const idx = await addAll(repo, worktreeOf(d), before, Date.now());
+    await writeIndex(d, idx);
+    expect(git(d, ["status", "--porcelain=v1", "--untracked-files=all"])).toBe(
+      "M  a\nD  dir/c\nA  dir/new\n",
+    );
+    const ours = idx.entries.map((e) => `${e.mode.toString(8)} ${e.oid} ${e.stage}\t${e.path}`);
+    git(d, ["add", "-A"]);
+    expect(git(d, ["ls-files", "--stage"]).trim().split("\n")).toEqual(ours);
+  });
+});
+
+/** random changes over a committed tree, some staged by git */
+function changeCorpus(n: number, seed: number) {
+  const rand = rng(seed);
+  const pick = <T>(xs: T[]) => xs[Math.floor(rand() * xs.length)] as T;
+  const names = ["a", "b", "c", "d/e", "d/f", "g/h/i"];
+  let uid = 0;
+  return Array.from({ length: n }, (_, i) => {
+    const base: Record<string, string> = {};
+    for (const p of names) if (rand() < 0.7) base[p] = `${p} ${seed}-${uid++}\n`;
+    const ops: ((d: string) => void)[] = [];
+    const k = 1 + Math.floor(rand() * 4);
+    for (let j = 0; j < k; j++) {
+      const p = pick(names);
+      const r = rand();
+      const stage = rand() < 0.3;
+      ops.push((d) => {
+        const full = join(d, p);
+        try {
+          if (r < 0.35) write(d, p, `edited ${uid++}\n`);
+          else if (r < 0.5) rmSync(full, { recursive: true, force: true });
+          else if (r < 0.65) write(d, `${p}.new`, `new ${uid++}\n`);
+          else if (r < 0.75) {
+            rmSync(full, { recursive: true, force: true });
+            write(d, `${p}/inner`, `inner ${uid++}\n`);
+          } else write(d, p, `${p} same size ${uid++ % 10}\n`);
+          if (stage) git(d, ["add", "-A", "--", "."]);
+        } catch {}
+      });
+    }
+    return { name: `#${i}`, base, ops };
+  });
+}
+
+describe("W3 status equal to git's", () => {
+  it("300 random working-tree changes", async () => {
+    const wrong: string[] = [];
+    for (const c of changeCorpus(300, 909)) {
+      const d = initRepo(c.base);
+      for (const op of c.ops) op(d);
+      const repo = await openRepo(d);
+      const idx = parseIndex(readFileSync(join(d, ".git/index")));
+      const r = await status(repo, worktreeOf(d), idx, head(d), indexTime(d));
+      const g = git(d, ["status", "--porcelain=v1", "--untracked-files=all", "--no-renames"])
+        .split("\n")
+        .filter(Boolean)
+        .sort();
+      if (JSON.stringify(g) !== JSON.stringify(r.lines))
+        wrong.push(`${c.name}\n  git:  ${JSON.stringify(g)}\n  ours: ${JSON.stringify(r.lines)}`);
+    }
+    expect(wrong.slice(0, 3)).toEqual([]);
+    expect(wrong.length).toBe(0);
+  }, 600_000);
+});
+
+describe("W4 nothing hashed for unchanged files", () => {
+  it("50,000 files in memory: a second status hashes nothing, one edit hashes one file", async () => {
+    const d = initRepo({ seed: "s\n" });
+    const repo = await openRepo(d);
+    const files = new MemFilesApi();
+    for (let i = 0; i < 50_000; i++) {
+      const p = `/d${i % 100}/f${i}`;
+      await files.write(p, [new TextEncoder().encode(`file ${i}\n`)]);
+    }
+    const wt: Worktree = { files };
+    await new Promise((r) => setTimeout(r, 5));
+    const t0 = Date.now();
+    const idx = await addAll(repo, wt, undefined, t0);
+    const first = await status(repo, wt, idx, undefined, t0);
+    const second = await status(repo, wt, first.index, undefined, t0);
+    expect(second.hashed).toBe(0);
+    await new Promise((r) => setTimeout(r, 5));
+    await files.write("/d7/f7", [new TextEncoder().encode("changed\n")]);
+    const third = await status(repo, wt, second.index, undefined, t0);
+    expect(third.hashed).toBe(1);
+    expect(third.lines).toContain("AM d7/f7");
+  }, 600_000);
+
+  it("on Node: a second status hashes nothing", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 2_000; i++) files[`d${i % 20}/f${i}`] = `file ${i}\n`;
+    const d = initRepo(files);
+    const repo = await openRepo(d);
+    const idx = parseIndex(readFileSync(join(d, ".git/index")));
+    const first = await status(repo, worktreeOf(d), idx, head(d), indexTime(d));
+    const second = await status(repo, worktreeOf(d), first.index, head(d), indexTime(d));
+    expect(first.lines).toEqual([]);
+    expect(second.hashed).toBe(0);
+  }, 300_000);
+});
+
+describe("W5 racy git", () => {
+  it("an edit within the index's timestamp is found, by us and by git", async () => {
+    const d = initRepo({ a: "aaaa\n", b: "bbbb\n" });
+    const repo = await openRepo(d);
+    // our index, written right after the files: entries racy
+    const idx = await addAll(
+      repo,
+      worktreeOf(d),
+      parseIndex(readFileSync(join(d, ".git/index"))),
+      Date.now(),
+    );
+    await writeIndex(d, idx);
+    const t = statSync(join(d, ".git/index")).mtime;
+    // same size, mtime set to the index's own timestamp
+    writeFileSync(join(d, "a"), "AAAA\n");
+    utimesSync(join(d, "a"), t, t);
+    const ours = await status(
+      repo,
+      worktreeOf(d),
+      parseIndex(readFileSync(join(d, ".git/index"))),
+      head(d),
+      indexTime(d),
+    );
+    expect(ours.lines).toEqual([" M a"]);
+    expect(git(d, ["status", "--porcelain=v1"])).toBe(" M a\n");
+  });
+
+  it("racy entries are smudged when we write the index (size 0)", async () => {
+    const d = initRepo({ a: "aaaa\n" });
+    const repo = await openRepo(d);
+    const now = Date.now() + 10_000; // every file is racy against this index
+    const idx = await addAll(repo, worktreeOf(d), undefined, now);
+    expect(idx.entries.find((e) => e.path === "a")?.size).toBe(0);
+  });
+});
+
+describe("W6 portable", () => {
+  it("src/ has no node: imports outside node-stat.ts", () => {
+    const src = join(dirname(fileURLToPath(import.meta.url)), "../src");
+    for (const file of readdirSync(src))
+      if (file !== "node-stat.ts")
+        expect(readFileSync(join(src, file), "utf8"), file).not.toMatch(/from "node:/);
+  });
+});
