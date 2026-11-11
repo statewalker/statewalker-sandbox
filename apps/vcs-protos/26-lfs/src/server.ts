@@ -198,7 +198,8 @@ export function lfsHandler(
             );
           start = Number(r[1]);
           if (r[2]) end = Math.min(Number(r[2]), size - 1);
-          if (start >= size || end < start)
+          // end ≤ size - 1, so a start past the end is caught here too
+          if (end < start)
             return json(
               416,
               { message: "range not satisfiable" },

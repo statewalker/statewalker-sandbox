@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { newNodeSqliteDb } from "@statewalker/db-sqlite-node";
+import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, describe, expect, it } from "vitest";
@@ -155,6 +156,8 @@ describe("R1 pointers and filters", () => {
       `${v}\noid sha256:${oid}\nsize 8\nzzz extra\n`,
       `${v}\noid sha256:${oid}\nsize 8\n${"x".repeat(1100)}\n`,
       `version https://hawser.github.com/spec/v1\noid sha256:${oid}\nsize 8\n`,
+      `version https://git-lfs.github.com/spec/v2\noid sha256:${oid}\nsize 8\n`,
+      `${v}\noid sha256:${oid}\nsize 8\n${" ".repeat(1100)}\ngarbage after the cutoff\n`,
       ` ${v}\noid sha256:${oid}\nsize 8\n`,
       `${v}\noid md5:${oid}\nsize 8\n`,
       `${v}\noid  sha256:${oid}\nsize 8\n`,
@@ -192,6 +195,10 @@ describe("R1 pointers and filters", () => {
         }),
       ),
     ).toBe(`${v}\next-0-foo sha256:${e1}\next-1-bar sha256:${e2}\noid sha256:${oid}\nsize 8\n`);
+    // git-lfs: nothing, an extension included, after size ("extra line")
+    expect(
+      parsePointer(enc.encode(`${v}\noid sha256:${oid}\nsize 8\next-0-foo sha256:${e1}\n`)),
+    ).toBeUndefined();
     const store = lfsStore(new StreamingNodeFilesApi(join(w, ".git")), "");
     for (const c of cases) {
       const r = spawnSync("git", [...LFS, "lfs", "smudge"], { cwd: w, env: gitEnv, input: c });
@@ -204,6 +211,10 @@ describe("R1 pointers and filters", () => {
         expect(dec.decode(out), JSON.stringify(c)).toBe(r.stdout.toString());
       }
     }
+    // a pointer whose size differs from the object's: refused
+    await expect(
+      collect(smudge(store, enc.encode(`${v}\noid sha256:${oid}\nsize 9\n`))),
+    ).rejects.toThrow();
   });
 });
 
@@ -241,8 +252,14 @@ describe("R2 the store in git-lfs's layout", () => {
     await expect(store.put([c], { oid: sha(b), size: c.length })).rejects.toThrow();
     await expect(store.put([c], { oid: sha(c), size: c.length + 1 })).rejects.toThrow();
     expect(await store.has(sha(c))).toBe(false);
-    const incomplete = join(w, ".git", "lfs", "incomplete");
-    expect(existsSync(incomplete) ? readdirSync(incomplete) : []).toEqual([]);
+    for (const sub of ["incomplete", "tmp"]) {
+      const dir = join(w, ".git", "lfs", sub);
+      // ours (git-lfs keeps its own files in lfs/tmp)
+      const ours = (existsSync(dir) ? readdirSync(dir) : []).filter((n) =>
+        sub === "tmp" ? /^[0-9a-f]{16}$/.test(n) : true,
+      );
+      expect(ours, sub).toEqual([]);
+    }
     // the SQL repository's files
     const sql = repoLfsStore(await sqlRepository(await newNodeSqliteDb()));
     const p = await sql.put([b.subarray(0, 60_000), b.subarray(60_000)]);
@@ -292,6 +309,7 @@ describe("R3 the server with native git-lfs", () => {
         { oid: "1".repeat(64), size: 5 },
         { oid: "xyz", size: 5 },
         { oid: "2".repeat(64), size: -1 },
+        { oid: sha(a), size: a.length + 1 },
       ],
     });
     expect(r.status).toBe(200);
@@ -306,7 +324,7 @@ describe("R3 the server with native git-lfs", () => {
     };
     expect(body.transfer).toBe("basic");
     expect(body.objects[0]?.actions?.download?.href).toBeTruthy();
-    expect(body.objects.slice(1).map((o) => o.error?.code)).toEqual([404, 422, 422]);
+    expect(body.objects.slice(1).map((o) => o.error?.code)).toEqual([404, 422, 422, 422]);
     const href = body.objects[0]?.actions?.download?.href as string;
     const full = await fetch(href);
     expect(full.status).toBe(200);
@@ -383,12 +401,19 @@ describe("R4 the client", () => {
       message: "lfs\n",
     });
     const { store, url } = await lfsServer();
+    const verified: string[] = [];
+    const spy = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const req = new Request(input, init);
+      if (new URL(req.url).pathname.endsWith("/info/lfs/verify")) verified.push(req.method);
+      return fetch(req);
+    }) as typeof fetch;
     const stats = { bytes: 0 };
-    expect(await lfsPush(url, sa, [{ oid: p.oid, size: p.size }], { stats })).toEqual({
+    expect(await lfsPush(url, sa, [{ oid: p.oid, size: p.size }], { stats, fetch: spy })).toEqual({
       uploaded: [p.oid],
       skipped: [],
     });
     expect(stats.bytes).toBe(content.length);
+    expect(verified).toEqual(["POST"]);
     await va.push(url, { refspecs: ["refs/heads/main:refs/heads/main"] });
     expect(await store.has(p.oid)).toBe(true);
     expect(await lfsPush(url, sa, [{ oid: p.oid, size: p.size }])).toEqual({
@@ -414,6 +439,13 @@ describe("R4 the client", () => {
       downloaded: [sha(other)],
     });
     expect(sha(await collect(fresh.read(sha(other))))).toBe(sha(other));
+    // held already: not asked for again
+    const none = (async () => {
+      throw new Error("no request expected");
+    }) as typeof fetch;
+    expect(
+      await lfsFetch(url, fresh, [{ oid: sha(other), size: other.length }], { fetch: none }),
+    ).toEqual({ downloaded: [] });
   }, 120_000);
 });
 
@@ -423,6 +455,8 @@ function tampered(mode: {
   ignoreRange?: boolean;
   flip?: boolean;
   short?: boolean;
+  /** asks the server for another range than the client did */
+  shiftRange?: boolean;
 }) {
   const seen: (string | null)[] = [];
   const f = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -433,6 +467,7 @@ function tampered(mode: {
     seen.push(req.headers.get("range"));
     const headers = new Headers(req.headers);
     if (mode.ignoreRange) headers.delete("range");
+    if (mode.shiftRange && headers.get("range")) headers.set("range", "bytes=1000-");
     const res = await fetch(new Request(req.url, { headers }));
     if (!res.body) return res;
     const reader = res.body.getReader();
@@ -482,6 +517,19 @@ describe("R5 resume and verify", () => {
     expect(stats.bytes).toBe(a.length - (3 << 20));
     expect(sha(await collect(local.read(obj.oid)))).toBe(obj.oid);
     expect(await local.incomplete.size(obj.oid)).toBe(0);
+    // a backend that drops a failed write still keeps what arrived (MemFilesApi does)
+    const mem = lfsStore(new MemFilesApi(), "repo");
+    await expect(
+      lfsFetch(url, mem, [obj], { fetch: tampered({ cutAfter: 2 << 20 }).f }),
+    ).rejects.toThrow();
+    expect(await mem.incomplete.size(obj.oid)).toBe(2 << 20);
+    // a 206 for another offset than asked: refused, what is held stays
+    await expect(
+      lfsFetch(url, mem, [obj], { fetch: tampered({ shiftRange: true }).f }),
+    ).rejects.toThrow(/resumed at 1000/);
+    expect(await mem.incomplete.size(obj.oid)).toBe(2 << 20);
+    await lfsFetch(url, mem, [obj]);
+    expect(sha(await collect(mem.read(obj.oid)))).toBe(obj.oid);
     // a server that ignores Range: the client starts over and still verifies
     const local2 = repoLfsStore(
       (await openRepository(filesSpec(join(tmp(), "l2.git")), { init: true })).repo,

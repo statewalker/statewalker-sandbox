@@ -10,7 +10,7 @@
 import type { FilesApi } from "@statewalker/webrun-files";
 import { createSha256, toHex } from "../../03-sha256-blake3/src/hashes.js";
 import type { Repository } from "../../17-repository/src/object-store.js";
-import { encodePointer, MAX_POINTER_SIZE, type Pointer, parsePointer } from "./pointer.js";
+import { encodePointer, type Pointer, parsePointer } from "./pointer.js";
 
 export interface LfsStore {
   has(oid: string): Promise<boolean>;
@@ -154,9 +154,13 @@ export async function clean(
   return { ...p, pointer: encodePointer(p) };
 }
 
-/** git lfs smudge: a pointer's content; anything else (an empty blob included) unchanged */
+/**
+ * git lfs smudge: a pointer's content (read from the blob's first 1024 bytes, as git-lfs does);
+ * anything else (an empty blob included) unchanged
+ */
 export async function* smudge(store: LfsStore, blob: Uint8Array): AsyncGenerator<Uint8Array> {
-  const p = blob.length <= MAX_POINTER_SIZE ? parsePointer(blob) : undefined;
+  // git-lfs reads a pointer from the first MAX_POINTER_SIZE bytes, whatever follows them
+  const p = parsePointer(blob);
   if (!p || p.size === 0) {
     yield blob;
     return;
