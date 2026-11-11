@@ -17,6 +17,7 @@ import {
   legacyCompaction,
   legacyHashChars,
   legacyPathInWay,
+  legacyRenameToSelf,
   rng,
   writeFilesWithModes,
 } from "../../29-merge/tests/tree-harness.js";
@@ -165,6 +166,7 @@ async function compareMerges(dags: Dag[]) {
       legacyCompaction,
       legacyHashChars,
       legacyPathInWay,
+      legacyRenameToSelf,
       allowUnrelated: true,
     });
     const show = (x: {
