@@ -24,3 +24,10 @@ export function nodeStat(root: string): (path: string) => Promise<StatInfo | und
     }
   };
 }
+
+/** a symlink's target, for its blob */
+export function nodeReadLink(_root: string): (path: string) => Promise<string> {
+  return async () => {
+    throw new Error("not implemented");
+  };
+}

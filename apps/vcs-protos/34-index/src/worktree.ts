@@ -31,6 +31,8 @@ export interface Worktree {
   files: FilesApi;
   /** a richer stat than the FilesApi's, where the platform has one */
   stat?: (path: string) => Promise<StatInfo | undefined>;
+  /** a symlink's target, where the platform has symlinks */
+  readLink?: (path: string) => Promise<string>;
 }
 export interface StatusResult {
   /** `git status --porcelain=v1 --untracked-files=all --no-renames` lines, sorted */
@@ -260,4 +262,9 @@ export async function status(
   for (const path of files.keys()) if (!inIndex.has(path)) lines.push(`?? ${path}`);
   lines.sort();
   return { lines, hashed, index: { ...index, entries: refreshed } };
+}
+
+/** smudges entries racily clean against the time the index is written (not implemented) */
+export function smudgeRacy(index: IndexFile, _writeTimestampMs: number): IndexFile {
+  return index;
 }

@@ -21,8 +21,8 @@ import { gitEnv } from "../../12-index-pack/src/git-repo.js";
 import { filesRepository } from "../../17-repository/src/repository.js";
 import { rng } from "../../29-merge/tests/tree-harness.js";
 import { type IndexFile, parseIndex, serializeIndex } from "../src/index-file.js";
-import { nodeStat } from "../src/node-stat.js";
-import { addAll, status, type Worktree } from "../src/worktree.js";
+import { nodeReadLink, nodeStat } from "../src/node-stat.js";
+import { addAll, smudgeRacy, status, type Worktree } from "../src/worktree.js";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -139,6 +139,7 @@ async function openRepo(d: string) {
 const worktreeOf = (d: string): Worktree => ({
   files: new NodeFilesApi({ rootDir: d }),
   stat: nodeStat(d),
+  readLink: nodeReadLink(d),
 });
 async function writeIndex(d: string, idx: IndexFile) {
   writeFileSync(join(d, ".git/index"), serializeIndex(idx));
@@ -209,8 +210,7 @@ describe("W3 status equal to git's", () => {
       const r = await status(repo, worktreeOf(d), idx, head(d), indexTime(d));
       const g = git(d, ["status", "--porcelain=v1", "--untracked-files=all", "--no-renames"])
         .split("\n")
-        .filter(Boolean)
-        .sort();
+        .filter(Boolean);
       if (JSON.stringify(g) !== JSON.stringify(r.lines))
         wrong.push(`${c.name}\n  git:  ${JSON.stringify(g)}\n  ours: ${JSON.stringify(r.lines)}`);
     }
@@ -296,8 +296,7 @@ describe("W7 cases for mutants the corpora missed", () => {
   const porcelain = (d: string) =>
     git(d, ["status", "--porcelain=v1", "--untracked-files=all", "--no-renames"])
       .split("\n")
-      .filter(Boolean)
-      .sort();
+      .filter(Boolean);
   const ourStatus = async (d: string) => {
     const repo = await openRepo(d);
     return status(
@@ -382,6 +381,194 @@ describe("W7 cases for mutants the corpora missed", () => {
     git(d, ["update-index", "--skip-worktree", "a"]);
     write(d, "a", "changed\n");
     expect((await ourStatus(d)).lines).toEqual(porcelain(d));
+  });
+});
+
+describe("W8 review cases", () => {
+  const porcelain = (d: string) =>
+    git(d, ["status", "--porcelain=v1", "--untracked-files=all", "--no-renames"])
+      .split("\n")
+      .filter(Boolean);
+  const ourStatus = async (d: string, wt = worktreeOf(d)) =>
+    status(
+      await openRepo(d),
+      wt,
+      parseIndex(readFileSync(join(d, ".git/index"))),
+      head(d),
+      indexTime(d),
+    );
+  /** the same setup in two repositories: `git add -A` in one, ours in the other */
+  async function addAllLikeGit(setup: (d: string) => void, files: Record<string, string>) {
+    const ours = initRepo(files);
+    const theirs = initRepo(files);
+    setup(ours);
+    setup(theirs);
+    await new Promise((r) => setTimeout(r, 5));
+    const repo = await openRepo(ours);
+    const idx = await addAll(
+      repo,
+      worktreeOf(ours),
+      parseIndex(readFileSync(join(ours, ".git/index"))),
+      Date.now(),
+    );
+    await writeIndex(ours, idx);
+    git(theirs, ["add", "-A"]);
+    const ls = (d: string) => [git(d, ["ls-files", "--stage"]), git(d, ["ls-files", "-v"])];
+    expect(ls(ours)).toEqual(ls(theirs));
+  }
+
+  it("git add -A keeps skip-worktree and assume-valid entries", async () => {
+    await addAllLikeGit(
+      (d) => {
+        git(d, ["update-index", "--skip-worktree", "a"]);
+        git(d, ["update-index", "--assume-unchanged", "b"]);
+        rmSync(join(d, "a"));
+        write(d, "b", "b changed\n");
+      },
+      { a: "a\n", b: "b\n", c: "c\n" },
+    );
+  });
+
+  it("an unmerged path staged without a stage 0: the default mode", async () => {
+    await addAllLikeGit(
+      (d) => {
+        const oid = (c: string) => git(d, ["hash-object", "-w", "--stdin"], c).trim();
+        const [o1, o2, o3] = [oid("1\n"), oid("2\n"), oid("3\n")];
+        git(
+          d,
+          ["update-index", "--index-info"],
+          `0 ${"0".repeat(40)}\tm\n100755 ${o1} 1\tm\n100644 ${o2} 2\tm\n100755 ${o3} 3\tm\n`,
+        );
+        write(d, "m", "resolved\n");
+      },
+      { a: "a\n" },
+    );
+  });
+
+  it("symlinks and gitlinks are kept by status and git add -A", async () => {
+    const setup = (d: string) => {
+      const sub = join(d, "sub");
+      mkdirSync(sub);
+      git(sub, ["init", "-q"]);
+      write(sub, "x", "x\n");
+      git(sub, ["add", "x"]);
+      git(sub, ["commit", "-qm", "sub"]);
+      execFileSync("ln", ["-s", "a", join(d, "l")]);
+      git(d, ["add", "sub", "l"]);
+      git(d, ["commit", "-qm", "links"]);
+    };
+    const d = initRepo({ a: "a\n" });
+    setup(d);
+    expect((await ourStatus(d)).lines).toEqual([]);
+    expect(porcelain(d)).toEqual([]);
+    rmSync(join(d, "l"));
+    execFileSync("ln", ["-s", "elsewhere", join(d, "l")]);
+    expect((await ourStatus(d)).lines).toEqual(porcelain(d));
+    await addAllLikeGit(setup, { a: "a\n" });
+  });
+
+  it("git's line order and quoted paths", async () => {
+    const d = initRepo({ a: "a\n", z: "z\n", "a b": "1\n", é: "2\n", 'q"x': "3\n", "t\tb": "4\n" });
+    write(d, "a", "a2\n");
+    git(d, ["add", "a"]);
+    write(d, "z", "z2\n");
+    write(d, "a b", "1b\n");
+    write(d, "é", "2b\n");
+    write(d, 'q"x', "3b\n");
+    write(d, "t\tb", "4b\n");
+    write(d, "m", "untracked\n");
+    write(d, "ü new", "untracked\n");
+    expect((await ourStatus(d)).lines).toEqual(porcelain(d));
+  });
+
+  it("intent-to-add over a path in HEAD", async () => {
+    const d = initRepo({ a: "a\n", b: "b\n" });
+    git(d, ["rm", "-q", "--cached", "b"]);
+    git(d, ["add", "-N", "b"]);
+    expect((await ourStatus(d)).lines).toEqual(porcelain(d));
+  });
+
+  it("the written version follows the entries' flags, as git's", () => {
+    const d = initRepo({ a: "a\n" });
+    write(d, "n", "n\n");
+    git(d, ["add", "-N", "n"]);
+    const v3 = parseIndex(readFileSync(join(d, ".git/index")));
+    expect(v3.version).toBe(3);
+    const down = parseIndex(serializeIndex({ ...v3, version: 2 }));
+    expect(down.version).toBe(3);
+    expect(down.entries.find((e) => e.path === "n")?.intentToAdd).toBe(true);
+    git(d, ["rm", "-q", "--cached", "n"]);
+    const plain = parseIndex(readFileSync(join(d, ".git/index")));
+    expect(plain.version).toBe(2);
+    const flagged = { ...plain, version: 3 as const };
+    expect(parseIndex(serializeIndex(flagged)).version).toBe(2);
+  });
+
+  it("names that are not UTF-8 round-trip byte for byte", () => {
+    const d = initRepo({ a: "a\n" });
+    writeFileSync(join(Buffer.from(d), Buffer.from([0x2f, 0x6c, 0xe9])), "latin1\n");
+    git(d, ["add", "-A"]);
+    const bytes = readFileSync(join(d, ".git/index"));
+    expect(Buffer.from(serializeIndex(parseIndex(bytes))).equals(bytes)).toBe(true);
+  });
+
+  it("a split index is refused, not read partially", () => {
+    const d = initRepo({ a: "a\n", b: "b\n" });
+    git(d, ["update-index", "--split-index"]);
+    expect(() => parseIndex(readFileSync(join(d, ".git/index")))).toThrow(/link/);
+  });
+
+  it("FilesApi only: a size change with the mtime restored", async () => {
+    const d = initRepo({ a: "aaaa\n" });
+    const wt: Worktree = { files: new NodeFilesApi({ rootDir: d }) };
+    await new Promise((r) => setTimeout(r, 5));
+    const idx = await addAll(await openRepo(d), wt, undefined, Date.now());
+    await writeIndex(d, idx);
+    const t = statSync(join(d, "a")).mtime;
+    writeFileSync(join(d, "a"), "longer content\n");
+    utimesSync(join(d, "a"), t, t);
+    const r = await status(await openRepo(d), wt, idx, head(d), indexTime(d));
+    expect(r.lines).toEqual([" M a"]);
+  });
+
+  it("FilesApi only: a smudged entry whose file is now empty, mtime restored", async () => {
+    const d = initRepo({ a: "aaaa\n" });
+    const wt: Worktree = { files: new NodeFilesApi({ rootDir: d }) };
+    const ts = statSync(join(d, "a")).mtimeMs - 1;
+    const idx = await addAll(await openRepo(d), wt, undefined, ts);
+    expect(idx.entries[0]?.size).toBe(0);
+    const t = statSync(join(d, "a")).mtime;
+    writeFileSync(join(d, "a"), "");
+    utimesSync(join(d, "a"), t, t);
+    const r = await status(await openRepo(d), wt, idx, head(d), ts + 10_000_000);
+    expect(r.lines).toEqual([" M a"]);
+  });
+
+  it("a refreshed index is smudged when written in the same instant", async () => {
+    const d = initRepo({ a: "aaaa\n" });
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(join(d, "a"), old, old);
+    git(d, ["update-index", "--refresh"]);
+    writeFileSync(join(d, "a"), "aaaa\n"); // same content, new mtime
+    const r = await ourStatus(d);
+    const at = statSync(join(d, "a")).mtimeMs;
+    const written = smudgeRacy(r.index, at);
+    expect(written.entries.find((e) => e.path === "a")?.size).toBe(0);
+    expect(smudgeRacy(r.index, at + 1000).entries.find((e) => e.path === "a")?.size).toBe(5);
+  });
+
+  it("a directory replaced by a file", async () => {
+    const d = initRepo({ "d/x": "x\n", "d/y": "y\n", a: "a\n" });
+    rmSync(join(d, "d"), { recursive: true });
+    write(d, "d", "now a file\n");
+    expect((await ourStatus(d)).lines).toEqual(porcelain(d));
+    await addAllLikeGit(
+      (r) => {
+        rmSync(join(r, "d"), { recursive: true });
+        write(r, "d", "now a file\n");
+      },
+      { "d/x": "x\n", "d/y": "y\n", a: "a\n" },
+    );
   });
 });
 
