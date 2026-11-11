@@ -19,16 +19,18 @@ export interface LfsClientOptions {
   fetch?: typeof fetch;
   headers?: Record<string, string>;
   signal?: AbortSignal;
-  /** bytes sent or received in transfer bodies */
-  stats?: { bytes: number };
+  /** bytes sent or received in transfer bodies (and `requests`: transfer requests made) */
+  stats?: { bytes: number; requests?: number };
+  /** X12: offer the `ranged` adapter; uploads in parts of this many bytes (default 4 MiB) */
+  chunkSize?: number;
 }
 
 const LFS_JSON = "application/vnd.git-lfs+json";
-interface Action {
+export interface Action {
   href: string;
   header?: Record<string, string>;
 }
-interface BatchObject {
+export interface BatchObject {
   oid: string;
   size: number;
   authenticated?: boolean;
@@ -36,19 +38,20 @@ interface BatchObject {
   error?: { code: number; message: string };
 }
 
-async function batch(
+/** One batch request: the transfer the server chose and its answer per object, as asked. */
+export async function lfsBatch(
   url: string,
   operation: "download" | "upload",
   objects: Pointer[],
-  opts: LfsClientOptions,
-): Promise<BatchObject[]> {
+  opts: LfsClientOptions = {},
+): Promise<{ transfer: "basic" | "ranged"; objects: BatchObject[] }> {
   const f = opts.fetch ?? fetch;
   const res = await f(`${url.replace(/\/+$/, "")}/info/lfs/objects/batch`, {
     method: "POST",
     headers: { accept: LFS_JSON, "content-type": LFS_JSON, ...opts.headers },
     body: JSON.stringify({
       operation,
-      transfers: ["basic"],
+      transfers: ["ranged", "basic"],
       objects: objects.map((o) => ({ oid: o.oid, size: o.size })),
       hash_algo: "sha256",
     }),
@@ -59,8 +62,9 @@ async function batch(
     throw new Error(`lfs batch ${operation}: HTTP ${res.status} ${msg}`.trim());
   }
   const out = (await res.json()) as { transfer?: string; objects?: BatchObject[] };
-  if (out.transfer !== undefined && out.transfer !== "basic")
-    throw new Error(`lfs batch: the server chose transfer ${out.transfer}, not basic`);
+  const transfer = out.transfer ?? "basic";
+  if (transfer !== "basic" && transfer !== "ranged")
+    throw new Error(`lfs batch: the server chose transfer ${transfer}, not offered`);
   // exactly the objects asked for, in the order asked
   const byOid = new Map<string, BatchObject>();
   const asked = new Set(objects.map((o) => o.oid));
@@ -69,11 +73,14 @@ async function batch(
       throw new Error(`lfs batch: the server answered for ${o?.oid}, not asked`);
     byOid.set(o.oid, o);
   }
-  return objects.map((o) => {
-    const answer = byOid.get(o.oid);
-    if (!answer) throw new Error(`lfs batch: the server's answer is missing ${o.oid}`);
-    return answer;
-  });
+  return {
+    transfer,
+    objects: objects.map((o) => {
+      const answer = byOid.get(o.oid);
+      if (!answer) throw new Error(`lfs batch: the server's answer is missing ${o.oid}`);
+      return answer;
+    }),
+  };
 }
 /** one entry per object id */
 function unique(objects: Pointer[]): Pointer[] {
@@ -81,7 +88,7 @@ function unique(objects: Pointer[]): Pointer[] {
   for (const o of objects) if (!seen.has(o.oid)) seen.set(o.oid, o);
   return [...seen.values()];
 }
-const transferHeaders = (o: BatchObject, action: Action, opts: LfsClientOptions) => ({
+export const transferHeaders = (o: BatchObject, action: Action, opts: LfsClientOptions) => ({
   ...(o.authenticated ? {} : opts.headers),
   ...action.header,
 });
@@ -144,25 +151,20 @@ export async function lfsPush(
   const skipped: string[] = [];
   const wanted = unique(objects);
   if (!wanted.length) return { uploaded, skipped };
-  for (const o of await batch(url, "upload", wanted, opts)) {
+  const { transfer, objects: answers } = await lfsBatch(url, "upload", wanted, opts);
+  for (const o of answers) {
     if (o.error) throw objectError(o);
     const up = o.actions?.upload;
     if (!up) {
       skipped.push(o.oid);
       continue;
     }
-    const res = await f(up.href, {
-      method: "PUT",
-      headers: { "content-type": "application/octet-stream", ...transferHeaders(o, up, opts) },
-      body: stream(counted(store.read(o.oid, { signal: opts.signal }), opts.stats)),
-      signal: opts.signal,
-      // @ts-expect-error a streamed request body needs duplex (fetch spec; Node and browsers)
-      duplex: "half",
-    });
-    await res.body?.cancel();
-    if (!res.ok) throw new Error(`lfs upload ${o.oid}: HTTP ${res.status}`);
+    // an empty object has no range to send
+    if (transfer === "ranged" && o.size > 0) await uploadRanged(f, store, o, up, opts);
+    else await uploadBasic(f, store, o, up, opts);
     const verify = o.actions?.verify;
     if (verify) {
+      count(opts);
       const v = await f(verify.href, {
         method: "POST",
         headers: {
@@ -181,6 +183,140 @@ export async function lfsPush(
   return { uploaded, skipped };
 }
 
+const count = (opts: LfsClientOptions) => {
+  if (opts.stats) opts.stats.requests = (opts.stats.requests ?? 0) + 1;
+};
+
+/** basic: the whole object in one streamed PUT */
+async function uploadBasic(
+  f: typeof fetch,
+  store: LfsStore,
+  o: BatchObject,
+  up: Action,
+  opts: LfsClientOptions,
+) {
+  count(opts);
+  const res = await f(up.href, {
+    method: "PUT",
+    headers: { "content-type": "application/octet-stream", ...transferHeaders(o, up, opts) },
+    body: stream(counted(store.read(o.oid, { signal: opts.signal }), opts.stats)),
+    signal: opts.signal,
+    // @ts-expect-error a streamed request body needs duplex (fetch spec; Node and browsers)
+    duplex: "half",
+  });
+  await res.body?.cancel();
+  if (!res.ok) throw new Error(`lfs upload ${o.oid}: HTTP ${res.status}`);
+}
+
+/** a chunk size: an integer from 1 byte to 64 MiB (default 4 MiB) */
+export function chunkSizeOf(n: number | undefined): number {
+  const size = n ?? 4 << 20;
+  if (!Number.isSafeInteger(size) || size < 1 || size > 64 << 20)
+    throw new Error(`invalid chunk size ${n}: from 1 byte to 64 MiB`);
+  return size;
+}
+
+/** "a-b,c-d" (inclusive) → [start, end) ranges */
+export function parseHeld(header: string | null): [number, number][] {
+  const out: [number, number][] = [];
+  for (const part of (header ?? "").split(",")) {
+    const m = /^\s*(\d+)-(\d+)\s*$/.exec(part);
+    if (m) out.push([Number(m[1]), Number(m[2]) + 1]);
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+}
+/** [0, size) without `held`, cut into pieces of at most `chunk` bytes */
+export function missingChunks(
+  size: number,
+  held: [number, number][],
+  chunk: number,
+): [number, number][] {
+  const gaps: [number, number][] = [];
+  let at = 0;
+  for (const [a, b] of held) {
+    if (a > at) gaps.push([at, Math.min(a, size)]);
+    at = Math.max(at, b);
+  }
+  if (at < size) gaps.push([at, size]);
+  const out: [number, number][] = [];
+  for (const [a, b] of gaps)
+    for (let s = a; s < b; s += chunk) out.push([s, Math.min(b, s + chunk)]);
+  return out;
+}
+/** the bytes [start, end) of an object, as one buffer (a part is at most a chunk) */
+async function readRange(
+  store: LfsStore,
+  oid: string,
+  start: number,
+  end: number,
+  signal?: AbortSignal,
+) {
+  const out = new Uint8Array(end - start);
+  let at = 0;
+  for await (const c of store.read(oid, { start, signal })) {
+    const take = Math.min(c.length, out.length - at);
+    out.set(c.subarray(0, take), at);
+    at += take;
+    if (at >= out.length) break;
+  }
+  if (at < out.length) throw new Error(`lfs object ${oid}: shorter than ${end} bytes`);
+  return out;
+}
+
+/**
+ * The `ranged` adapter (X12): what the server holds (`HEAD`, `x-lfs-held`), then each missing
+ * chunk as a `PUT` with `Content-Range` — short requests with known lengths (no streamed body:
+ * fine over HTTP/1.1 in browsers), resumable.
+ */
+async function uploadRanged(
+  f: typeof fetch,
+  store: LfsStore,
+  o: BatchObject,
+  up: Action,
+  opts: LfsClientOptions,
+) {
+  const headers = transferHeaders(o, up, opts);
+  const chunk = chunkSizeOf(opts.chunkSize);
+  count(opts);
+  const head = await f(up.href, {
+    method: "HEAD",
+    headers: { ...headers, "x-lfs-size": String(o.size) },
+    signal: opts.signal,
+  });
+  await head.body?.cancel();
+  if (head.status === 200) return; // the whole object is there already
+  if (head.status !== 404) throw new Error(`lfs upload ${o.oid}: HEAD answered ${head.status}`);
+  const held = parseHeld(head.headers.get("x-lfs-held"));
+  let chunks = missingChunks(o.size, held, chunk);
+  // everything is held but the object was not completed: the last part again completes it
+  if (!chunks.length) chunks = [[Math.max(0, o.size - chunk), o.size]];
+  let complete = false;
+  for (const [s, e] of chunks) {
+    const part = await readRange(store, o.oid, s, e, opts.signal);
+    count(opts);
+    const res = await f(up.href, {
+      method: "PUT",
+      headers: {
+        ...headers,
+        "content-type": "application/octet-stream",
+        "content-range": `bytes ${s}-${e - 1}/${o.size}`,
+      },
+      body: part as BodyInit,
+      signal: opts.signal,
+    });
+    await res.body?.cancel();
+    if (!res.ok) throw new Error(`lfs upload ${o.oid} [${s}, ${e}): HTTP ${res.status}`);
+    if (opts.stats) opts.stats.bytes += part.length;
+    complete = res.headers.get("x-lfs-complete") === "true";
+  }
+  if (!complete) {
+    count(opts);
+    const check = await f(up.href, { method: "HEAD", headers, signal: opts.signal });
+    await check.body?.cancel();
+    if (check.status !== 200) throw new Error(`lfs upload ${o.oid}: incomplete on the server`);
+  }
+}
+
 export async function lfsFetch(
   url: string,
   store: LfsStore,
@@ -192,7 +328,7 @@ export async function lfsFetch(
   const missing: Pointer[] = [];
   for (const o of unique(objects)) if ((await store.size(o.oid)) !== o.size) missing.push(o);
   if (!missing.length) return { downloaded };
-  for (const o of await batch(url, "download", missing, opts)) {
+  for (const o of (await lfsBatch(url, "download", missing, opts)).objects) {
     if (o.error) throw objectError(o);
     const action = o.actions?.download;
     if (!action) throw new Error(`lfs object ${o.oid}: no download action`);

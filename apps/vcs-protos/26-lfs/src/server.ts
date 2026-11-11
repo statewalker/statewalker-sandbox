@@ -18,6 +18,7 @@
  * objects; `maxObjectSize` bounds objects (batch 422, PUT 413); `GET` follows RFC 9110's single
  * ranges (suffix included, unusable ones ignored) with the oid as a strong ETag for `If-Range`.
  */
+import { createSha256, toHex } from "../../03-sha256-blake3/src/hashes.js";
 import type { LfsStore } from "./store.js";
 
 export type LfsOperation = "download" | "upload";
@@ -29,6 +30,16 @@ export interface LfsServerOptions {
   /** bounds on a batch request: bytes of its body (1 MiB) and objects (1000) */
   maxBatchBytes?: number;
   maxBatchObjects?: number;
+  /**
+   * X12's `ranged` transfer adapter, chosen when a client offers it: uploads as `PUT`s with
+   * `Content-Range`, `HEAD` reporting the held ranges (`x-lfs-held`). Default off.
+   */
+  ranged?: boolean;
+  /**
+   * ranged: who is uploading (a mesh peer's proven id). Each uploader's parts are kept apart, per
+   * declared size, so one uploader's bytes can never spoil another's. Default: one for everyone.
+   */
+  uploader?: (req: Request) => string;
   /** per batch: true, or a refusal (401: credentials needed; 403: not allowed) */
   authorize?: (
     req: Request,
@@ -171,6 +182,74 @@ export function lfsHandler(
   };
   const tooLarge = (size: number) => opts.maxObjectSize !== undefined && size > opts.maxObjectSize;
 
+  /** ranged: the parts of one uploader for one declared size */
+  const scopeOf = (req: Request, size: number) =>
+    toHex(
+      createSha256()
+        .update(new TextEncoder().encode(`${size}\0${opts.uploader?.(req) ?? ""}`))
+        .digest(),
+    ).slice(0, 32);
+  const heldHeader = (held: [number, number][]) => held.map(([a, b]) => `${a}-${b - 1}`).join(",");
+  const covers = (held: [number, number][], size: number) =>
+    held.length === 1 && held[0]?.[0] === 0 && held[0]?.[1] === size;
+  /** completes the object from a scope's parts when they cover it; true when it is there */
+  const completeIfCovered = async (oid: string, size: number, scope: string) =>
+    store.incomplete.exclusive(oid, async () => {
+      if ((await store.size(oid)) === size) return true;
+      if (!covers(await store.incomplete.ranges(oid, scope), size)) return false;
+      await store.incomplete.complete({ oid, size }, scope);
+      return true;
+    });
+  const completed = () =>
+    new Response(null, { status: 200, headers: { "x-lfs-complete": "true" } });
+
+  /**
+   * ranged: one part of an upload (`Content-Range: bytes a-b/size`). Kept with its uploader's
+   * other parts for that size, only when whole and exactly its range's length; a part overlapping
+   * what is held is refused (409) — unless the parts already cover the object, which is then
+   * completed (a client re-sending its last part finishes an upload whose completion was missed).
+   * The part that completes the coverage verifies the object (`x-lfs-complete`).
+   */
+  const putPart = async (req: Request, oid: string, contentRange: string): Promise<Response> => {
+    const m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange.trim());
+    const start = Number(m?.[1]);
+    const end = Number(m?.[2]);
+    const size = Number(m?.[3]);
+    const refuse = async (status: number, message: string) => {
+      await req.body?.cancel().catch(() => {});
+      return json(status, { message });
+    };
+    if (!m || !isSize(start) || !isSize(end) || !isSize(size) || end < start || end >= size)
+      return refuse(400, `invalid Content-Range ${JSON.stringify(contentRange)}`);
+    if (tooLarge(size)) return refuse(413, `over the limit of ${opts.maxObjectSize} bytes`);
+    const scope = scopeOf(req, size);
+    try {
+      if (await completeIfCovered(oid, size, scope)) {
+        await req.body?.cancel().catch(() => {});
+        return completed();
+      }
+      const held = await store.incomplete.ranges(oid, scope);
+      if (held.some(([a, b]) => a <= end && start < b))
+        return refuse(409, `bytes ${start}-${end} overlap what is held: ${heldHeader(held)}`);
+      try {
+        await store.incomplete.write(oid, start, body(req), { scope, length: end - start + 1 });
+      } catch (e) {
+        if ((e as Error).name === "LfsPartLengthError")
+          return json(400, { message: (e as Error).message });
+        throw e;
+      }
+      if (await completeIfCovered(oid, size, scope)) return completed();
+      return new Response(null, {
+        status: 200,
+        headers: { "x-lfs-held": heldHeader(await store.incomplete.ranges(oid, scope)) },
+      });
+    } catch (e) {
+      if ((e as Error).name === "ObjectIdMismatchError")
+        return json(422, { message: (e as Error).message });
+      throw e;
+    }
+  };
+
   return async (req) => {
     const url = new URL(req.url);
     const m = LFS_PATH.exec(url.pathname);
@@ -184,7 +263,9 @@ export function lfsHandler(
         const text = await boundedText(req, maxBatchBytes);
         if (text === undefined)
           return json(413, { message: `a batch request is limited to ${maxBatchBytes} bytes` });
-        let input: { operation?: unknown; objects?: unknown; hash_algo?: unknown } | undefined;
+        let input:
+          | { operation?: unknown; objects?: unknown; hash_algo?: unknown; transfers?: unknown }
+          | undefined;
         try {
           const parsed = JSON.parse(text) as unknown;
           if (parsed && typeof parsed === "object") input = parsed as typeof input;
@@ -258,15 +339,39 @@ export function lfsHandler(
               },
             });
         }
-        return json(200, { transfer: "basic", objects, hash_algo: "sha256" });
+        const transfer =
+          opts.ranged && Array.isArray(input.transfers) && input.transfers.includes("ranged")
+            ? "ranged"
+            : "basic";
+        return json(200, { transfer, objects, hash_algo: "sha256" });
       }
       const obj = /^\/objects\/([0-9a-f]{64})$/.exec(path);
       if (obj && (req.method === "GET" || req.method === "HEAD")) {
         const oid = obj[1] as string;
-        const ok = await allowTransfer(req, "download", oid);
+        let ok = await allowTransfer(req, "download", oid);
+        // ranged: an uploader asks with HEAD (and `x-lfs-size`) what of its parts is held
+        let uploadOnly = false;
+        if (ok !== true && opts.ranged && req.method === "HEAD") {
+          ok = await allowTransfer(req, "upload", oid);
+          uploadOnly = ok === true;
+        }
         if (ok !== true) return refusal(ok);
         const size = await store.size(oid);
-        if (size === undefined) return json(404, { message: "object does not exist" });
+        if (size === undefined) {
+          if (!opts.ranged) return json(404, { message: "object does not exist" });
+          const declared = req.headers.get("x-lfs-size");
+          const held =
+            declared !== null && /^\d+$/.test(declared) && isSize(Number(declared))
+              ? await store.incomplete.ranges(oid, scopeOf(req, Number(declared)))
+              : [];
+          return json(
+            404,
+            { message: "object does not exist" },
+            { "x-lfs-held": heldHeader(held) },
+          );
+        }
+        // an uploader learns that the object is there, not what it holds
+        if (uploadOnly) return new Response(null, { status: 200 });
         // content-addressed: the oid is a strong validator
         const etag = `"${oid}"`;
         const ifRange = req.headers.get("if-range");
@@ -300,6 +405,8 @@ export function lfsHandler(
         const oid = obj[1] as string;
         const ok = await allowTransfer(req, "upload", oid);
         if (ok !== true) return refusal(ok);
+        const contentRange = req.headers.get("content-range");
+        if (opts.ranged && contentRange !== null) return putPart(req, oid, contentRange);
         const length = req.headers.get("content-length");
         if (length !== null && !/^\d+$/.test(length))
           return json(400, { message: `invalid Content-Length ${JSON.stringify(length)}` });
