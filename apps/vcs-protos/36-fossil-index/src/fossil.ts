@@ -14,13 +14,21 @@
  */
 
 import type { Db } from "@statewalker/db-api";
+import type { RefDb } from "../../10-ref-transactions/src/ref-db.js";
 import { sqlRefDb } from "../../10-ref-transactions/src/sql-ref-db.js";
 import { readCommit, readTree } from "../../17-repository/src/commands.js";
 import type { ObjectStore, Repository } from "../../17-repository/src/object-store.js";
 import { sqlRepository } from "../../17-repository/src/sql-repository.js";
 
 export interface FossilIndex {
-  /** indexes the commits reachable from `tips` that are not indexed yet, through `tx` */
+  /**
+   * The rows of the commits reachable from `tips` that are not indexed yet. Reads objects, so it
+   * runs outside the ref transaction (a SQL object store shares the transaction's database).
+   */
+  prepare(tips: string[]): Promise<IndexRows>;
+  /** writes prepared rows through `tx`, skipping commits indexed since they were prepared */
+  write(tx: Db, rows: IndexRows): Promise<void>;
+  /** `prepare` then `write`, for a store outside the index's database */
   indexCommits(tx: Db, tips: string[]): Promise<void>;
   pathHistory(path: string): Promise<string[]>;
   searchMessages(text: string): Promise<string[]>;
@@ -83,6 +91,7 @@ async function changedPaths(
   }
 }
 
+export type IndexRows = CommitInfo[];
 interface CommitInfo {
   oid: string;
   date: number;
@@ -121,6 +130,26 @@ async function* commitsFrom(
 
 // ---------------------------------------------------------------- the index
 
+async function insertRows(tx: Db, rows: CommitInfo[]) {
+  if (!rows.length) return;
+  await tx.query(
+    `INSERT INTO fossil_commit (oid, date, merge, message) VALUES ${rows.map(() => "(?, ?, ?, ?)").join(", ")}`,
+    rows.flatMap((c) => [c.oid, c.date, c.merge ? 1 : 0, c.message]),
+  );
+  await tx.query(
+    `INSERT INTO fossil_text (oid, message) VALUES ${rows.map(() => "(?, ?)").join(", ")}`,
+    rows.flatMap((c) => [c.oid, c.message]),
+  );
+  const changes = rows.flatMap((c) => c.changes.map((p) => [p, c.oid]));
+  for (let i = 0; i < changes.length; i += 400) {
+    const part = changes.slice(i, i + 400);
+    await tx.query(
+      `INSERT OR IGNORE INTO fossil_change (path, oid) VALUES ${part.map(() => "(?, ?)").join(", ")}`,
+      part.flat(),
+    );
+  }
+}
+
 const SPAN = (path: string) => [path, `${path}/`, `${path}0`]; // '0' follows '/'
 
 export async function fossilIndex(
@@ -130,39 +159,29 @@ export async function fossilIndex(
 ): Promise<FossilIndex> {
   for (const s of SCHEMA) await db.exec(s);
   const repo: Repo = { objects };
-  return {
-    async indexCommits(tx, tips) {
-      let done = 0;
-      const commits: CommitInfo[] = [];
-      const flush = async () => {
-        if (!commits.length) return;
-        const rows = commits.splice(0);
-        await tx.query(
-          `INSERT INTO fossil_commit (oid, date, merge, message) VALUES ${rows.map(() => "(?, ?, ?, ?)").join(", ")}`,
-          rows.flatMap((c) => [c.oid, c.date, c.merge ? 1 : 0, c.message]),
-        );
-        await tx.query(
-          `INSERT INTO fossil_text (oid, message) VALUES ${rows.map(() => "(?, ?)").join(", ")}`,
-          rows.flatMap((c) => [c.oid, c.message]),
-        );
-        const changes = rows.flatMap((c) => c.changes.map((p) => [p, c.oid]));
-        for (let i = 0; i < changes.length; i += 400) {
-          const part = changes.slice(i, i + 400);
-          await tx.query(
-            `INSERT OR IGNORE INTO fossil_change (path, oid) VALUES ${part.map(() => "(?, ?)").join(", ")}`,
-            part.flat(),
-          );
-        }
-      };
+  const index: FossilIndex = {
+    async prepare(tips) {
+      const out: CommitInfo[] = [];
       const known = async (oid: string) =>
-        (await tx.query("SELECT 1 FROM fossil_commit WHERE oid = ?", [oid])).length > 0;
-      for await (const c of commitsFrom(repo, tips, known)) {
-        if (opts.failAfter !== undefined && done++ >= opts.failAfter)
+        (await db.query("SELECT 1 FROM fossil_commit WHERE oid = ?", [oid])).length > 0;
+      for await (const c of commitsFrom(repo, tips, known)) out.push(c);
+      return out;
+    },
+    async write(tx, prepared) {
+      const fresh: CommitInfo[] = [];
+      for (const c of prepared)
+        if (!(await tx.query("SELECT 1 FROM fossil_commit WHERE oid = ?", [c.oid])).length)
+          fresh.push(c);
+      for (let i = 0; i < fresh.length; i += 200) {
+        if (opts.failAfter !== undefined && i + 200 > opts.failAfter)
           throw new Error("fossil: indexing failed (test hook)");
-        commits.push(c);
-        if (commits.length >= 200) await flush();
+        await insertRows(tx, fresh.slice(i, i + 200));
       }
-      await flush();
+      if (opts.failAfter !== undefined && fresh.length > opts.failAfter)
+        throw new Error("fossil: indexing failed (test hook)");
+    },
+    async indexCommits(tx, tips) {
+      await index.write(tx, await index.prepare(tips));
     },
     async pathHistory(path) {
       const [exact, lo, hi] = SPAN(path);
@@ -193,22 +212,40 @@ export async function fossilIndex(
       return rows.map((r) => r.oid);
     },
   };
+  return index;
 }
 
-/** X16a's `sqlRepository` whose ref batches index the commits they make reachable */
+/**
+ * X16a's `sqlRepository` whose ref batches index the commits they make reachable: the rows are
+ * prepared before the batch (reading objects) and written by the batch's `beforeCommit` hook, in
+ * its transaction. Batches go through one at a time, so each hook writes its own batch's rows.
+ */
 export async function indexedSqlRepository(
   db: Db,
   opts: { failAfter?: number } = {},
 ): Promise<{ repo: Repository; index: FossilIndex }> {
   const base = await sqlRepository(db);
   const index = await fossilIndex(db, base.objects, opts);
-  const refs = await sqlRefDb(db, "refdb_", {
-    beforeCommit: (tx, updates) =>
-      index.indexCommits(
-        tx,
-        updates.flatMap((u) => (u.new ? [u.new] : [])),
-      ),
+  let pending: IndexRows = [];
+  const inner = await sqlRefDb(db, "refdb_", {
+    beforeCommit: (tx) => index.write(tx, pending),
   });
+  let queue: Promise<unknown> = Promise.resolve();
+  const refs: RefDb = {
+    ...inner,
+    batch(commands, o) {
+      const run = queue.then(async () => {
+        pending = await index.prepare(commands.flatMap((c) => (c.new ? [c.new] : [])));
+        try {
+          return await inner.batch(commands, o);
+        } finally {
+          pending = [];
+        }
+      });
+      queue = run.catch(() => {});
+      return run;
+    },
+  };
   return { repo: { objects: base.objects, refs }, index };
 }
 

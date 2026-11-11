@@ -124,9 +124,9 @@ async function loadSql(d: string) {
 }
 const lines = (s: string) => s.split("\n").filter(Boolean);
 
-const SEEDS = Array.from({ length: 40 }, (_, i) => 900 + i);
+const SEEDS = Array.from({ length: Number(process.env.X9_SEEDS ?? 40) }, (_, i) => 900 + i);
 
-describe("F1 path history equals git log --all --no-merges -- <path>", () => {
+describe("F1 path history equals git log --all --full-history --no-merges -- <path>", () => {
   it("40 random histories, every path and directory, indexed and walked", async () => {
     const wrong: string[] = [];
     let checked = 0;
@@ -134,7 +134,9 @@ describe("F1 path history equals git log --all --no-merges -- <path>", () => {
       const d = history(seed);
       const { repo, index } = await loadSql(d);
       for (const path of allPaths(d)) {
-        const want = lines(git(d, ["log", "--all", "--no-merges", "--format=%H", "--", path]));
+        const want = lines(
+          git(d, ["log", "--all", "--full-history", "--no-merges", "--format=%H", "--", path]),
+        );
         const indexed = await index.pathHistory(path);
         const walked = await walkPathHistory(repo, path);
         checked++;
@@ -230,11 +232,12 @@ describe("F4 speed: 100,000 commits over 50,000 files", () => {
     const file = (i: number) => `d${Math.floor(i / 1000)}/e${Math.floor(i / 20) % 50}/f${i % 20}`;
     const parts: string[] = [];
     let t = 1_500_000_000;
-    const commit = (msg: string, ops: string, from: boolean) =>
-      `commit refs/heads/main\ncommitter C <c@x> ${t++} +0000\ndata ${Buffer.byteLength(msg)}\n${msg}\n${from ? "" : ""}${ops}\n`;
+    // each commit continues the branch: fast-import starts from its current tip
+    const commit = (msg: string, ops: string) =>
+      `commit refs/heads/main\ncommitter C <c@x> ${t++} +0000\ndata ${Buffer.byteLength(msg)}\n${msg}\n${ops}\n`;
     let ops = "";
     for (let i = 0; i < 50_000; i++) ops += `M 100644 inline ${file(i)}\ndata 2\n${i % 10}\n\n`;
-    parts.push(commit("import the tree", ops, false));
+    parts.push(commit("import the tree", ops));
     for (let c = 1; c < 100_000; c++) {
       const i = Math.floor(rand() * 50_000);
       const word = WORDS[c % WORDS.length] as string;
@@ -243,7 +246,6 @@ describe("F4 speed: 100,000 commits over 50,000 files", () => {
         commit(
           `${word} ${file(i)} change ${c}`,
           `M 100644 inline ${file(i)}\ndata ${body.length}\n${body}`,
-          true,
         ),
       );
     }
