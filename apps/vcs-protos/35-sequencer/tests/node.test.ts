@@ -18,6 +18,8 @@ import { NodeFilesApi } from "@statewalker/webrun-files-node";
 import { afterAll, describe, expect, it } from "vitest";
 import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-files.js";
 import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
+import { filesRefDb } from "../../10-ref-transactions/src/files-ref-db.js";
+import { runRefContract } from "../../10-ref-transactions/src/ref-contract.js";
 import { gitEnv } from "../../12-index-pack/src/git-repo.js";
 import type { Person } from "../../17-repository/src/git-format.js";
 import { filesRepository } from "../../17-repository/src/repository.js";
@@ -145,6 +147,25 @@ const legacyAutoMerge = (() => {
   git(d, ["cherry-pick", "side"]);
   return existsSync(join(d, ".git/AUTO_MERGE"));
 })();
+/** does this git leave REBASE_HEAD after a rebase that stopped on its last pick (2.43 does)? */
+const legacyRebaseHead = (() => {
+  const d = tmp("x15q-");
+  git(d, ["init", "-q", "-b", "main"]);
+  write(d, "a", "1\n");
+  git(d, ["add", "a"]);
+  git(d, ["commit", "-qm", "a"]);
+  git(d, ["checkout", "-qb", "side"]);
+  write(d, "a", "side\n");
+  git(d, ["commit", "-qam", "side"]);
+  git(d, ["checkout", "-q", "main"]);
+  write(d, "a", "main\n");
+  git(d, ["commit", "-qam", "main"]);
+  git(d, ["checkout", "-q", "side"]);
+  gitMay(d, ["rebase", "main"]);
+  git(d, ["add", "-A"]);
+  git(d, ["rebase", "--continue"]);
+  return existsSync(join(d, ".git/REBASE_HEAD"));
+})();
 const twin = (d: string) => {
   const t = tmp("x15t-");
   cpSync(d, t, { recursive: true });
@@ -169,6 +190,7 @@ async function session(d: string): Promise<Session> {
     committer,
     mergeOptions,
     legacyAutoMerge,
+    legacyRebaseHead,
   };
 }
 
@@ -194,6 +216,7 @@ const STATE = [
     "interactive",
     "drop_redundant_commits",
     "no-reschedule-failed-exec",
+    "rewritten-list",
   ].map((f) => `rebase-merge/${f}`),
 ];
 function worktreeFiles(d: string, at = d, out: Record<string, string> = {}) {
@@ -522,6 +545,159 @@ describe("S8 hand-made cases for mutants the corpora missed", () => {
   });
 });
 
+describe("S9 review cases", () => {
+  const repo = (base: Record<string, string>) => {
+    const d = tmp("x15r-");
+    git(d, ["init", "-q", "-b", "main"]);
+    git(d, ["config", "core.fileMode", "false"]);
+    for (const [p, c] of Object.entries(base)) write(d, p, c);
+    git(d, ["add", "-A"]);
+    git(d, ["commit", "-qm", "base"]);
+    return d;
+  };
+  const commitAll = (d: string, msg: string) => {
+    git(d, ["add", "-A"]);
+    git(d, ["commit", "-qm", msg]);
+  };
+  /** our operation and git's refuse alike, leaving the same state */
+  async function refusesAlike(
+    a: string,
+    gitArgs: string[],
+    ours: (s: Session) => Promise<unknown>,
+  ) {
+    const b = twin(a);
+    expect(gitMay(a, gitArgs)).toBe(false);
+    await expect(ours(await session(b))).rejects.toThrow(/untracked/);
+    expect(snapshot(b)).toEqual(snapshot(a));
+  }
+
+  it("untracked files a merge, cherry-pick or rebase would overwrite: refused, as git does", async () => {
+    const make = () => {
+      const a = repo({ a: "a\n" });
+      git(a, ["checkout", "-qb", "side"]);
+      write(a, "new", "theirs\n");
+      commitAll(a, "side: new");
+      git(a, ["checkout", "-q", "main"]);
+      write(a, "b", "b\n");
+      commitAll(a, "main: b");
+      write(a, "new", "mine, untracked\n");
+      return a;
+    };
+    await refusesAlike(make(), ["merge", "side"], (s) => merge(s, "refs/heads/side"));
+    await refusesAlike(make(), ["cherry-pick", "side"], (s) => cherryPick(s, "refs/heads/side"));
+    const r = make();
+    rmSync(join(r, "new"));
+    git(r, ["checkout", "-q", "main"]);
+    git(r, ["checkout", "-qb", "topic"]);
+    write(r, "c", "c\n");
+    commitAll(r, "topic: c");
+    write(r, "new", "mine, untracked\n");
+    await refusesAlike(r, ["rebase", "side"], (s) => rebase(s, "refs/heads/side"));
+  });
+
+  it("a branch with merge commits is refused rather than rebased wrongly", async () => {
+    const a = repo({ a: "a\n" });
+    git(a, ["checkout", "-qb", "topic"]);
+    write(a, "t1", "1\n");
+    commitAll(a, "t1");
+    git(a, ["checkout", "-qb", "sub", "main"]);
+    write(a, "t2", "2\n");
+    commitAll(a, "t2");
+    git(a, ["checkout", "-q", "topic"]);
+    git(a, ["merge", "-q", "--no-ff", "-m", "merge sub", "sub"]);
+    git(a, ["checkout", "-q", "main"]);
+    write(a, "m", "m\n");
+    commitAll(a, "m");
+    git(a, ["checkout", "-q", "topic"]);
+    const before = snapshot(a);
+    await expect(rebase(await session(a), "refs/heads/main")).rejects.toThrow(/merge/);
+    expect(snapshot(a)).toEqual(before);
+  });
+
+  it("merge messages: a remote-tracking branch, a commit id, a lightweight tag, a detached HEAD, a short name", async () => {
+    const make = () => {
+      const a = repo({ a: "a\n" });
+      git(a, ["checkout", "-qb", "side"]);
+      write(a, "s", "s\n");
+      commitAll(a, "side");
+      git(a, ["checkout", "-q", "main"]);
+      write(a, "m", "m\n");
+      commitAll(a, "main");
+      git(a, ["update-ref", "refs/remotes/origin/side", "side"]);
+      git(a, ["tag", "v1", "side"]);
+      return a;
+    };
+    const id = (d: string) => git(d, ["rev-parse", "side"]).trim();
+    const cases: [string, (d: string) => string, (d: string) => void][] = [
+      ["remote-tracking", () => "origin/side", () => {}],
+      ["commit id", (d) => id(d), () => {}],
+      ["lightweight tag", () => "v1", () => {}],
+      ["detached HEAD", () => "side", (d) => git(d, ["checkout", "-q", "--detach"])],
+      ["short name", () => "side", () => {}],
+    ];
+    for (const [name, rev, setup] of cases) {
+      const a = make();
+      setup(a);
+      const b = twin(a);
+      git(a, ["merge", "-q", "--no-edit", rev(a)]);
+      await merge(await session(b), rev(b));
+      expect(snapshot(b), name).toEqual(snapshot(a));
+    }
+    const t = make();
+    git(t, ["tag", "-a", "-m", "annotated", "v2", "side"]);
+    await expect(merge(await session(t), "v2")).rejects.toThrow(/annotated/);
+  });
+
+  it("messages without a final newline or with CRLF: the conflict list as git appends it", async () => {
+    for (const message of ["subject\n\nbody", "subj\r\n\r\nbody\r\n", "one line"]) {
+      const a = repo({ f: "1\n2\n3\n" });
+      write(a, "f", "1\nS\n3\n");
+      git(a, ["add", "-A"]);
+      const tree = git(a, ["write-tree"]).trim();
+      const pick = execFileSync("git", ["commit-tree", tree, "-p", "HEAD"], {
+        cwd: a,
+        env,
+        input: message,
+      })
+        .toString()
+        .trim();
+      git(a, ["reset", "-q", "--hard"]);
+      write(a, "f", "1\nM\n3\n");
+      commitAll(a, "main");
+      git(a, ["branch", "side", pick]);
+      const b = twin(a);
+      gitMay(a, ["cherry-pick", pick]);
+      await cherryPick(await session(b), pick);
+      expect(snapshot(b), JSON.stringify(message)).toEqual(snapshot(a));
+      const a2 = twin(a);
+      const b2 = twin(a);
+      git(a2, ["cherry-pick", "--abort"]);
+      git(b2, ["cherry-pick", "--abort"]);
+      git(a2, ["checkout", "-q", "side"]);
+      git(b2, ["checkout", "-q", "side"]);
+      gitMay(a2, ["rebase", "main"]);
+      await rebase(await session(b2), "refs/heads/main");
+      expect(snapshot(b2), `rebase ${JSON.stringify(message)}`).toEqual(snapshot(a2));
+      for (const d of [a, b]) {
+        resolve(d);
+        git(d, ["commit", "-q", "--no-edit"]);
+      }
+      expect(snapshot(b), `commit ${JSON.stringify(message)}`).toEqual(snapshot(a));
+    }
+  });
+
+  it("filesRefFiles meets X5's ref contract, also through subFiles", async () => {
+    for (const make of [
+      async () => filesRefDb(filesRefFiles(new MemFilesApi())),
+      async () => filesRefDb(filesRefFiles(subFiles(new MemFilesApi(), "/.git"))),
+    ]) {
+      const r = await runRefContract(make);
+      expect(r.failed).toEqual([]);
+      expect(r.cases).toBeGreaterThan(10);
+    }
+  }, 60_000);
+});
+
 /** copies a directory into a FilesApi */
 async function load(files: MemFilesApi, d: string, at = d) {
   for (const e of readdirSync(at, { withFileTypes: true })) {
@@ -540,6 +716,7 @@ async function memSession(files: MemFilesApi): Promise<Session> {
     committer,
     mergeOptions,
     legacyAutoMerge,
+    legacyRebaseHead,
   };
 }
 

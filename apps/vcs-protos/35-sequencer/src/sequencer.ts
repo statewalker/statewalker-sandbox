@@ -42,6 +42,8 @@ export interface Session {
    * clean cherry-pick (or rebase pick) leaves it behind
    */
   legacyAutoMerge?: boolean;
+  /** (stub) */
+  legacyRebaseHead?: boolean;
 }
 export interface OpResult {
   status: "clean" | "fast-forward" | "up-to-date" | "conflict" | "stopped" | "done";
