@@ -227,6 +227,8 @@ class OrtMerge {
   constructor(
     readonly repo: Repository,
     readonly opts: TreeMergeOptions,
+    /** call_depth: 0 for the merge itself, deeper for merges of merge bases */
+    readonly depth = 0,
   ) {}
 
   reset() {
@@ -255,6 +257,7 @@ class OrtMerge {
   }
 
   pathMsg(primary: string, others: string[], text: string) {
+    if (this.depth) return; // inner merges report nothing
     const list = this.messages.get(primary) ?? [];
     this.messages.set(primary, list);
     list.push({ paths: [primary, ...others], text: `${text}\n` });
@@ -557,7 +560,9 @@ class OrtMerge {
     // directory renames (merge.directoryRenames=conflict, merge-tree's default)
     let clean = true;
     this.dirRenameClean = true;
-    for (const side of [1, 2] as const) clean = this.provisionalDirectoryRenames(side) && clean;
+    // no directory renames in inner merges
+    if (!this.depth)
+      for (const side of [1, 2] as const) clean = this.provisionalDirectoryRenames(side) && clean;
     this.handleDirectoryLevelConflicts();
     const collisions: Map<string, string[]>[] = [new Map(), new Map(), new Map()];
     for (const side of [1, 2] as const)
@@ -822,7 +827,7 @@ class OrtMerge {
           side1.stages[1],
           side2.stages[2],
           pathnames,
-          1,
+          1 + 2 * this.depth,
         );
         if (!merged.clean) cleanMerge = false;
         const wasBinaryBlob = !merged.clean && sameVersion(merged.result, side1.stages[1]);
@@ -865,7 +870,7 @@ class OrtMerge {
           side1.stages[1],
           side2.stages[2],
           pathnames,
-          1,
+          1 + 2 * this.depth,
         );
         ni.stages[targetIndex] = { ...merged.result };
         if (!merged.clean)
@@ -957,7 +962,13 @@ class OrtMerge {
         twoWay ? new Uint8Array(0) : await this.blob(o.oid),
         await this.blob(a.oid),
         await this.blob(b.oid),
-        { ours: name1, theirs: name2, markerSize: 7 + extraMarkerSize },
+        {
+          ours: name1,
+          theirs: name2,
+          markerSize: 7 + extraMarkerSize,
+          virtualAncestor: this.depth > 0,
+          afterOidShortcuts: true,
+        },
         this.opts,
       );
       if (r.binary)
@@ -971,6 +982,11 @@ class OrtMerge {
       this.pathMsg(path, [], `Auto-merging ${path}`);
     } else if ((a.mode & S_IFMT) === S_IFGITLINK) {
       throw new Error(`submodule merges are out of scope (${path})`);
+    } else if (this.depth) {
+      // symlinks in an inner merge: the base's, conflicted
+      clean = false;
+      result.mode = o.mode;
+      result.oid = o.oid;
     } else {
       // symlinks: ours, conflicted
       clean = false;
@@ -1081,6 +1097,15 @@ class OrtMerge {
         if (ci.isNull) ci.clean = true;
       }
     } else if (ci.filemask >= 6 && (ci.stages[1].mode & S_IFMT) !== (ci.stages[2].mode & S_IFMT)) {
+      if (this.depth) {
+        // an inner merge keeps the merge base's version
+        ci.clean = false;
+        ci.result = { ...ci.stages[0] };
+        ci.isNull = ci.result.mode === 0;
+        if (!ci.clean) this.conflicted.set(path, ci);
+        this.record(path, ci);
+        return;
+      }
       // distinct types: one or both move aside
       const oMode = ci.stages[0].mode;
       const aMode = ci.stages[1].mode;
@@ -1137,7 +1162,7 @@ class OrtMerge {
         ci.stages[1],
         ci.stages[2],
         ci.pathnames,
-        0,
+        this.depth * 2,
       );
       ci.clean = merged.clean && !ci.dfConflict && !ci.pathConflict;
       ci.result = { ...merged.result };
@@ -1152,7 +1177,8 @@ class OrtMerge {
       }
     } else if (ci.filemask === 3 || ci.filemask === 5) {
       const side = ci.filemask === 5 ? 2 : 1;
-      ci.result = { ...ci.stages[side] };
+      // an inner merge keeps the merge base's version
+      ci.result = { ...ci.stages[this.depth ? 0 : side] };
       ci.clean = false;
       const modifyBranch = side === 1 ? this.opts.ours : this.opts.theirs;
       const deleteBranch = side === 1 ? this.opts.theirs : this.opts.ours;
@@ -1216,6 +1242,8 @@ export async function mergeOrt(
   ours: string,
   theirs: string,
   opts: TreeMergeOptions,
+  /** call_depth: deeper than 0 for merges of merge bases (X13f) */
+  depth = 0,
 ): Promise<TreeMergeResult> {
-  return new OrtMerge(repo, opts).run([base, ours, theirs]);
+  return new OrtMerge(repo, opts, depth).run([base, ours, theirs]);
 }

@@ -39,6 +39,7 @@ then tests written first (red), then the implementation (green), then findings.
 | `30-renames` | X13c — **git's rename detection, exactly: diffcore-rename (exact renames and their tie-breaks, the basename pass, the 4-candidate matrix, the rename limit) and diffcore-delta's similarity; identical to `git diff-tree -M` on 1,318 diffs** | Can git's rename detection be reproduced exactly, for diff and for merge-ort? |
 | `31-ort` | X13d — **merge-ort ported along its own structure, renames included (rename/delete, rename/rename 1to1 and 1to2, rename/add and 2to1 collisions, rename vs type change, ort's relevant sources and redo); identical to `git merge-tree` on 3,328 merges** | Can merge-ort's renames be reproduced exactly? |
 | `32-dir-renames` | X13e — **merge-ort's directory renames: dir_rename_count, basename guesses, early culling, provisional renames and splits, collisions and paths in the way, file location; identical to `git merge-tree` on 1,011 directory-rename merges** | Can merge-ort's directory renames be reproduced exactly? |
+| `33-criss-cross` | X13f — **criss-cross merges: git's merge bases (paint_down_to_common by date, remove_redundant) and merge-ort's recursive merge (virtual bases, inner-merge rules); identical to git on 511 histories** | Can merge-ort's recursive merges be reproduced exactly? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.
