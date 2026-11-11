@@ -1,0 +1,284 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterAll, describe, expect, it } from "vitest";
+import { StreamingNodeFilesApi } from "../../09-git-objects/src/node-streaming-files.js";
+import { nodeRefFiles } from "../../10-ref-transactions/src/adapters/node.js";
+import { gitEnv } from "../../12-index-pack/src/git-repo.js";
+import { writeTree } from "../../17-repository/src/commands.js";
+import { encodeCommit, type TreeEntry } from "../../17-repository/src/git-format.js";
+import type { Repository } from "../../17-repository/src/object-store.js";
+import { filesRepository } from "../../17-repository/src/repository.js";
+import { type ConflictEntry, type MergeMessage, mergeTrees } from "../src/merge-trees.js";
+
+const dirs: string[] = [];
+afterAll(() => {
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+const enc = new TextEncoder();
+const who = { name: "A", email: "a@example.com", when: 1800000000, tz: "+0000" };
+const gitVersion = execFileSync("git", ["--version"], { env: gitEnv })
+  .toString()
+  .match(/(\d+)\.(\d+)/)
+  ?.slice(1)
+  .map(Number) ?? [0, 0];
+const legacyCompaction = (gitVersion[0] as number) * 1000 + (gitVersion[1] as number) < 2054;
+
+/** a side: path → [mode, content] */
+type Files = Map<string, [string, string]>;
+
+async function writeFilesWithModes(repo: Repository, files: Files): Promise<string> {
+  type Dir = Map<string, Dir | [string, string]>;
+  const root: Dir = new Map();
+  for (const [path, v] of files) {
+    const parts = path.split("/");
+    let dir = root;
+    for (const p of parts.slice(0, -1)) {
+      let next = dir.get(p);
+      if (!next) {
+        next = new Map();
+        dir.set(p, next);
+      }
+      if (!(next instanceof Map)) throw new Error(`${path} under a file`);
+      dir = next;
+    }
+    dir.set(parts[parts.length - 1] as string, v);
+  }
+  const write = async (dir: Dir): Promise<string> => {
+    const entries: TreeEntry[] = [];
+    for (const [name, v] of dir) {
+      if (v instanceof Map) entries.push({ mode: "40000", name, oid: await write(v) });
+      else
+        entries.push({ mode: v[0], name, oid: await repo.objects.put("blob", enc.encode(v[1])) });
+    }
+    return writeTree(repo, entries);
+  };
+  return write(root);
+}
+
+interface Case {
+  name: string;
+  base: Files;
+  ours: Files;
+  theirs: Files;
+}
+interface GitTreeResult {
+  clean: boolean;
+  tree: string;
+  conflicts: ConflictEntry[];
+  messages: MergeMessage[];
+}
+
+async function compareTrees(cases: Case[]) {
+  const d = mkdtempSync(join(tmpdir(), "x13b-"));
+  dirs.push(d);
+  execFileSync("git", ["init", "-q", "--bare", d], { env: gitEnv });
+  const repo = await filesRepository(new StreamingNodeFilesApi(d), nodeRefFiles(d));
+  const lines: string[] = [];
+  const meta: { base: string; ours: string; theirs: string; oc: string; tc: string }[] = [];
+  for (const [i, c] of cases.entries()) {
+    const base = await writeFilesWithModes(repo, c.base);
+    const ours = await writeFilesWithModes(repo, c.ours);
+    const theirs = await writeFilesWithModes(repo, c.theirs);
+    const commit = (tree: string, parents: string[], m: string) =>
+      repo.objects.put(
+        "commit",
+        encodeCommit({ tree, parents, author: who, committer: who, message: m }),
+      );
+    const bc = await commit(base, [], `base ${i}\n`);
+    const oc = await commit(ours, [bc], `ours ${i}\n`);
+    const tc = await commit(theirs, [bc], `theirs ${i}\n`);
+    lines.push(`${oc} ${tc}`);
+    meta.push({ base, ours, theirs, oc, tc });
+  }
+  const out = execFileSync("git", ["merge-tree", "--write-tree", "-Xno-renames", "--stdin"], {
+    cwd: d,
+    env: gitEnv,
+    input: `${lines.join("\n")}\n`,
+    maxBuffer: 1 << 28,
+  }).toString();
+  const tok = out.split("\0");
+  let at = 0;
+  const next = () => {
+    if (at >= tok.length) throw new Error("merge-tree output ended early");
+    return tok[at++] as string;
+  };
+  const results: GitTreeResult[] = [];
+  for (let k = 0; k < cases.length; k++) {
+    const status = next();
+    if (status !== "0" && status !== "1") throw new Error(`merge-tree: status ${status}`);
+    const tree = next();
+    if (!/^[0-9a-f]{40}$/.test(tree)) throw new Error(`merge-tree: tree ${tree}`);
+    const conflicts: ConflictEntry[] = [];
+    const messages: MergeMessage[] = [];
+    if (status === "0") {
+      for (let t = next(); t !== ""; t = next()) {
+        const m = /^(\d+) ([0-9a-f]{40}) (\d)\t(.*)$/s.exec(t);
+        if (!m) throw new Error(`merge-tree: entry ${t}`);
+        conflicts.push({
+          mode: m[1] as string,
+          oid: m[2] as string,
+          stage: Number(m[3]) as 1 | 2 | 3,
+          path: m[4] as string,
+        });
+      }
+      for (let t = next(); t !== ""; t = next()) {
+        const n = Number(t);
+        const paths = Array.from({ length: n }, next);
+        next(); // the message type
+        messages.push({ paths, text: next() });
+      }
+    } else if (next() !== "") throw new Error("merge-tree: a clean merge with more output");
+    results.push({ clean: status === "1", tree, conflicts, messages });
+  }
+  const wrong: string[] = [];
+  for (const [i, c] of cases.entries()) {
+    const m = meta[i] as (typeof meta)[number];
+    const g = results[i] as GitTreeResult;
+    const r = await mergeTrees(repo, m.base, m.ours, m.theirs, {
+      ours: m.oc,
+      theirs: m.tc,
+      legacyCompaction,
+    });
+    const show = (x: {
+      clean: boolean;
+      tree: string;
+      conflicts: ConflictEntry[];
+      messages: MergeMessage[];
+    }) =>
+      JSON.stringify({
+        clean: x.clean,
+        tree: x.tree,
+        conflicts: x.conflicts.map((e) => `${e.mode} ${e.oid.slice(0, 7)} ${e.stage} ${e.path}`),
+        // merge-tree prints no messages for a clean merge
+        messages: (x.clean ? [] : x.messages).map(
+          (e) =>
+            `[${e.paths.join(",")}] ${e.text.replaceAll(m.oc, "OURS").replaceAll(m.tc, "THEIRS").trim()}`,
+        ),
+      });
+    const gs = show(g);
+    const rs = show(r);
+    if (gs !== rs)
+      wrong.push(
+        `${c.name}\n  git:  ${gs}\n  ours: ${rs}\n  base ${JSON.stringify([...c.base])}\n  ours ${JSON.stringify([...c.ours])}\n  theirs ${JSON.stringify([...c.theirs])}`,
+      );
+  }
+  return {
+    wrong,
+    kinds: results.flatMap((g) =>
+      g.messages.map((e) => /^CONFLICT \(([^)]+)\)/.exec(e.text)?.[1] ?? ""),
+    ),
+  };
+}
+
+function rng(seed: number) {
+  let x = seed >>> 0 || 1;
+  return () => {
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    return (x >>> 0) / 0x100000000;
+  };
+}
+
+/** random trees over a small universe of paths: files, executables, symlinks; dirs replaced by files and back */
+function corpus(n: number, seed: number): Case[] {
+  const rand = rng(seed);
+  const pick = <T>(xs: T[]) => xs[Math.floor(rand() * xs.length)] as T;
+  const names = ["a", "b", "c", "d"];
+  const randomPath = () => {
+    const depth = 1 + Math.floor(rand() * 3);
+    return Array.from({ length: depth }, () => pick(names)).join("/");
+  };
+  // new files get content of their own: a deleted file's content never reappears elsewhere, so
+  // git detects no renames (merge-tree in git 2.43 ignores -Xno-renames)
+  let uid = 0;
+  const content = () => `fresh ${seed}-${uid++}\n`;
+  /** an edit of an existing file: lines shared with its base, for content merges */
+  const edited = (c: string) => {
+    const lines = c.split("\n").filter(Boolean);
+    const ls = lines.length < 3 ? [...lines, "two", "three"] : [...lines];
+    const k = Math.floor(rand() * ls.length);
+    ls[k] = rand() < 0.5 ? `${ls[k]} edited ${uid++}` : (ls[k] as string);
+    if (rand() < 0.3) ls.splice(k, 0, `inserted ${uid++}`);
+    return `${ls.join("\n")}\n`;
+  };
+  const mode = () => (rand() < 0.75 ? "100644" : rand() < 0.6 ? "100755" : "120000");
+  /** adds `path` unless it collides with a file/directory already there */
+  const put = (f: Files, path: string, v: [string, string]) => {
+    for (const p of f.keys()) if (p.startsWith(`${path}/`) || path.startsWith(`${p}/`)) return;
+    f.set(path, v);
+  };
+  const mutate = (base: Files): Files => {
+    const f = new Map(base);
+    const ops = 1 + Math.floor(rand() * 3);
+    for (let k = 0; k < ops; k++) {
+      const keys = [...f.keys()];
+      const r = rand();
+      if (r < 0.3 && keys.length) {
+        const p = pick(keys);
+        const [m, c] = f.get(p) as [string, string];
+        f.set(p, [m, edited(c)]);
+      } else if (r < 0.45 && keys.length) f.delete(pick(keys));
+      else if (r < 0.55 && keys.length) {
+        const p = pick(keys);
+        const [m, c] = f.get(p) as [string, string];
+        f.set(p, [m === "100644" ? "100755" : m === "100755" ? "100644" : "100644", c]);
+      } else if (r < 0.7 && keys.length) {
+        // a file becomes a directory, or the reverse
+        const p = pick(keys);
+        f.delete(p);
+        put(f, `${p}/${pick(names)}`, [mode(), content()]);
+      } else if (r < 0.8 && keys.length) {
+        const p = pick(keys);
+        const parent = p.split("/").slice(0, -1).join("/");
+        if (parent) {
+          for (const q of [...f.keys()]) if (q.startsWith(`${parent}/`)) f.delete(q);
+          put(f, parent, [mode(), content()]);
+        }
+      } else put(f, randomPath(), [mode(), content()]);
+    }
+    return f;
+  };
+  const cases: Case[] = [];
+  for (let i = 0; i < n; i++) {
+    const base: Files = new Map();
+    const count = Math.floor(rand() * 6);
+    for (let k = 0; k < count; k++) put(base, randomPath(), [mode(), content()]);
+    cases.push({ name: `#${i}`, base, ours: mutate(base), theirs: mutate(base) });
+  }
+  return cases;
+}
+
+describe("T1 tree merges without renames, as git merge-tree -Xno-renames", () => {
+  let kinds: string[] = [];
+  it("T1: 400 random tree merges: tree ids, conflicted entries and messages", async () => {
+    const r = await compareTrees(corpus(400, 101));
+    kinds = r.kinds;
+    expect(r.wrong.slice(0, 2)).toEqual([]);
+    expect(r.wrong.length).toBe(0);
+  }, 300_000);
+
+  it("T1b: 1000 random tree merges from another seed", async () => {
+    const r = await compareTrees(corpus(1000, 7));
+    kinds.push(...r.kinds);
+    expect(r.wrong.slice(0, 2)).toEqual([]);
+    expect(r.wrong.length).toBe(0);
+  }, 600_000);
+
+  it("T2: the corpus reaches every conflict kind in scope", () => {
+    const count = (k: string) => kinds.filter((x) => x === k).length;
+    for (const k of ["content", "add/add", "modify/delete", "distinct types", "file/directory"])
+      expect(count(k), k).toBeGreaterThan(0);
+  });
+});
+
+describe("T3 portable", () => {
+  it("merge-trees.ts has no node: imports", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(join(here, "../src/merge-trees.ts"), "utf8");
+    expect(src).not.toMatch(/from "node:/);
+  });
+});
