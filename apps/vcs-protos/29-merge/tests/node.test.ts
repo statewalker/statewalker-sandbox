@@ -343,3 +343,42 @@ describe("M6c the classic algorithm's heuristics (edit cost past 256)", () => {
     expect(wrong.map((w) => w.split("\n")[0])).toEqual([]);
   }, 600_000);
 });
+
+describe("M6d the classic algorithm's discards (lines that cannot match amid lines that match often)", () => {
+  it("4000 merges: frequent lines plus lines unique to one side, small and large", async () => {
+    const rand = rng(7);
+    let uid = 0;
+    const common = ["x", "y", "z"];
+    const pool = () => (rand() < 0.4 ? `u${uid++}` : (common[Math.floor(rand() * 3)] as string));
+    const editWith = (lines: string[], n: number) => {
+      const out = [...lines];
+      for (let k = 0; k < n; k++) {
+        const at = Math.floor(rand() * (out.length + 1));
+        const kind = rand();
+        if (kind < 0.35)
+          out.splice(at, 0, ...Array.from({ length: 1 + Math.floor(rand() * 3) }, pool));
+        else if (kind < 0.7) out.splice(at, 1 + Math.floor(rand() * 3));
+        else
+          out.splice(
+            at,
+            1 + Math.floor(rand() * 2),
+            ...Array.from({ length: 1 + Math.floor(rand() * 3) }, pool),
+          );
+      }
+      return out;
+    };
+    const cases: Case[] = [];
+    for (let i = 0; i < 4000; i++) {
+      const big = rand() < 0.5;
+      const n = big ? 200 + Math.floor(rand() * 400) : 5 + Math.floor(rand() * 30);
+      const base = Array.from({ length: n }, () => common[Math.floor(rand() * 3)] as string);
+      const e = big ? 30 : 3;
+      const ours = editWith(base, 1 + Math.floor(rand() * e));
+      const theirs = editWith(base, 1 + Math.floor(rand() * e));
+      const j = (l: string[]) => enc.encode(l.length ? `${l.join("\n")}\n` : "");
+      cases.push({ name: `discards #${i}`, base: j(base), ours: j(ours), theirs: j(theirs) });
+    }
+    const wrong = await compare(cases);
+    expect(wrong.map((w) => w.split("\n")[0])).toEqual([]);
+  }, 900_000);
+});
