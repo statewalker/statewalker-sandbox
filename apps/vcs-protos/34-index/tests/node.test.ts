@@ -275,8 +275,9 @@ describe("W5 racy git", () => {
   it("racy entries are smudged when we write the index (size 0)", async () => {
     const d = initRepo({ a: "aaaa\n" });
     const repo = await openRepo(d);
-    const now = Date.now() + 10_000; // every file is racy against this index
-    const idx = await addAll(repo, worktreeOf(d), undefined, now);
+    // an index timestamp not newer than the file's mtime: the entry is racy (is_racy_timestamp)
+    const ts = statSync(join(d, "a")).mtimeMs - 1;
+    const idx = await addAll(repo, worktreeOf(d), undefined, ts);
     expect(idx.entries.find((e) => e.path === "a")?.size).toBe(0);
   });
 });
