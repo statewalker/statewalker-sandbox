@@ -110,7 +110,17 @@ describe("W1 index files written by git, round trip", () => {
   ];
   for (const [name, setup] of scenarios)
     it(name, () => {
-      const d = initRepo({ a: "a\n", b: "b\n", "dir/c": "c\n", "dir/sub/d": "d\n" });
+      const names: Record<string, string> = {
+        a: "a\n",
+        b: "b\n",
+        "dir/c": "c\n",
+        "dir/sub/d": "d\n",
+      };
+      // names of every length from 1 to 20 (each padding), and long shared prefixes (version 4's varint)
+      for (let n = 1; n <= 20; n++) names[`len/${"x".repeat(n)}`] = `${n}\n`;
+      names[`long/${"p".repeat(150)}/one`] = "1\n";
+      names[`long/${"q".repeat(200)}`] = "2\n";
+      const d = initRepo(names);
       setup(d);
       const bytes = readFileSync(join(d, ".git/index"));
       const idx = parseIndex(bytes);
@@ -279,6 +289,99 @@ describe("W5 racy git", () => {
     const ts = statSync(join(d, "a")).mtimeMs - 1;
     const idx = await addAll(repo, worktreeOf(d), undefined, ts);
     expect(idx.entries.find((e) => e.path === "a")?.size).toBe(0);
+  });
+});
+
+describe("W7 cases for mutants the corpora missed", () => {
+  const porcelain = (d: string) =>
+    git(d, ["status", "--porcelain=v1", "--untracked-files=all", "--no-renames"])
+      .split("\n")
+      .filter(Boolean)
+      .sort();
+  const ourStatus = async (d: string) => {
+    const repo = await openRepo(d);
+    return status(
+      repo,
+      worktreeOf(d),
+      parseIndex(readFileSync(join(d, ".git/index"))),
+      head(d),
+      indexTime(d),
+    );
+  };
+
+  it("racy: same size, same mtime as the entry, the index written in that instant", async () => {
+    const d = initRepo({ a: "aaaa\n" });
+    const t = statSync(join(d, "a")).mtime;
+    writeFileSync(join(d, "a"), "AAAA\n");
+    utimesSync(join(d, "a"), t, t);
+    utimesSync(join(d, ".git/index"), t, t);
+    expect((await ourStatus(d)).lines).toEqual([" M a"]);
+    expect(porcelain(d)).toEqual([" M a"]);
+  });
+
+  it("a same-size edit with the mtime restored: only ctime tells", async () => {
+    const d = initRepo({ a: "aaaa\n" });
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(join(d, "a"), old, old);
+    git(d, ["update-index", "--refresh"]); // the entry records the old mtime; the index is newer
+    await new Promise((r) => setTimeout(r, 20));
+    writeFileSync(join(d, "a"), "AAAA\n");
+    utimesSync(join(d, "a"), old, old);
+    // only ctime's nanoseconds changed: we compare them; a git built without USE_NSEC (Ubuntu's)
+    // compares seconds and misses this edit, so git is not asserted here
+    expect((await ourStatus(d)).lines).toEqual([" M a"]);
+  });
+
+  it("a size change with the mtime kept", async () => {
+    const d = initRepo({ a: "aaaa\n" });
+    await new Promise((r) => setTimeout(r, 20));
+    const t = statSync(join(d, "a")).mtime;
+    writeFileSync(join(d, "a"), "longer content\n");
+    utimesSync(join(d, "a"), t, t);
+    expect((await ourStatus(d)).lines).toEqual([" M a"]);
+    expect(porcelain(d)).toEqual([" M a"]);
+  });
+
+  it("in memory: a same-size edit found by its mtime", async () => {
+    const d = initRepo({ seed: "s\n" });
+    const repo = await openRepo(d);
+    const files = new MemFilesApi();
+    await files.write("/f", [new TextEncoder().encode("one\n")]);
+    const wt: Worktree = { files };
+    await new Promise((r) => setTimeout(r, 5));
+    const t0 = Date.now();
+    const idx = await addAll(repo, wt, undefined, t0);
+    await new Promise((r) => setTimeout(r, 5));
+    await files.write("/f", [new TextEncoder().encode("two\n")]);
+    expect((await status(repo, wt, idx, undefined, t0)).lines).toEqual(["AM f"]);
+  });
+
+  it("a touched file is hashed once, then its stat data is refreshed", async () => {
+    const d = initRepo({ a: "aaaa\n" });
+    await new Promise((r) => setTimeout(r, 20));
+    const later = new Date(Date.now() - 5000);
+    utimesSync(join(d, "a"), later, later);
+    const repo = await openRepo(d);
+    const first = await status(
+      repo,
+      worktreeOf(d),
+      parseIndex(readFileSync(join(d, ".git/index"))),
+      head(d),
+      indexTime(d),
+    );
+    expect(first.hashed).toBe(1);
+    const second = await status(repo, worktreeOf(d), first.index, head(d), indexTime(d));
+    expect(second.hashed).toBe(0);
+    expect(second.lines).toEqual([]);
+  });
+
+  it("intent-to-add and skip-worktree entries, as git reports them", async () => {
+    const d = initRepo({ a: "a\n", b: "b\n" });
+    write(d, "new", "n\n");
+    git(d, ["add", "-N", "new"]);
+    git(d, ["update-index", "--skip-worktree", "a"]);
+    write(d, "a", "changed\n");
+    expect((await ourStatus(d)).lines).toEqual(porcelain(d));
   });
 });
 
