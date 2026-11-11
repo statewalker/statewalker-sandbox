@@ -13,6 +13,9 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    env:
+      # apps/vcs-protos/28-gitea runs Gitea (a pinned release, SHA-256 checked) as a test oracle
+      GITEA_CACHE_DIR: /home/runner/.cache/gitea-1.22.6
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -21,6 +24,10 @@ jobs:
           node-version: "24"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.GITEA_CACHE_DIR }}
+          key: gitea-1.22.6-linux-amd64
       # The browser suites (vitest browser mode in fm-protos and mvc-blueprint-*,
       # httpeers-stack's two-browser e2e) launch real browsers through the one
       # Playwright version in the lockfile. A fresh runner has none installed.
