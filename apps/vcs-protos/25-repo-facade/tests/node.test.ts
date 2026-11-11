@@ -415,6 +415,7 @@ describe("R7 inside a Durable Object", () => {
         error?: string;
         log?: string[];
         gc?: string;
+        reachable?: number;
         head?: unknown;
       };
       expect(r.error).toBeUndefined();
@@ -521,6 +522,9 @@ describe("review #88", () => {
     expect(c.get("a.k")).toBe("q");
     expect(c.get("a.j")).toBe("1");
     expect(() => c.set("a.k", "x\ry")).toThrow();
+    c = new GitConfig("[a]\r\n\tk = one \\\r\n two\r\n\tj = 1\r\n");
+    expect(c.get("a.k")).toBe("one  two");
+    expect(c.get("a.j")).toBe("1");
     // F7 names git rejects
     for (const k of ["user.full name", "a_b.k", "a.1k", "nodot"])
       expect(() => new GitConfig("").set(k, "x"), k).toThrow(/invalid key/);
@@ -658,6 +662,7 @@ describe("review #88", () => {
       [new Error("http://h/abortive.git does not speak protocol v2"), "PROTOCOL"],
       [new Error("http://h/lockdown.git: HTTP 503"), "PROTOCOL"],
       [new TypeError("fetch failed"), "PROTOCOL"],
+      [new Error("http://h/corrupt.git does not speak protocol v2"), "PROTOCOL"],
       [new Error("the server does not offer fetch"), "PROTOCOL"],
       [new Error(`no object ${"c".repeat(40)}`), "NOT_FOUND"],
       [new Error("refs/heads/main.lock exists"), "LOCKED"],

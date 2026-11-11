@@ -28,7 +28,7 @@ import { filesRepository, sqlRepository } from "../../17-repository/src/reposito
 import { fetchFrom } from "../../21-smart-http/src/client.js";
 import { push as pushTo } from "../../22-receive-pack/src/client.js";
 import { gitHandler } from "../../22-receive-pack/src/server.js";
-import { acquireLease, gc as runGc } from "../../24-gc/src/gc.js";
+import { acquireLease, type GcStats, gc as runGc } from "../../24-gc/src/gc.js";
 import { GitConfig } from "./config.js";
 
 export type VcsErrorCode =
@@ -54,34 +54,37 @@ export class VcsError extends Error {
   }
 }
 
+const URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/\S+/gi;
 /** Maps any layer's error to a code (a VcsError is returned as it is). */
 export function toVcsError(e: unknown): VcsError {
   if (e instanceof VcsError) return e;
   const err = e instanceof Error ? e : new Error(String(e));
   const name = err.name;
-  const msg = err.message;
+  // a URL or path in a message says nothing about the failure ("lockdown.git", "abort-test")
+  const msg = err.message.replace(URL_RE, "<url>");
   const code = ((): VcsErrorCode => {
-    if (name === "AbortError" || name === "TimeoutError" || /\babort/i.test(msg)) return "ABORTED";
-    if (/over the limit|exceeds the limit|too large/i.test(msg)) return "LIMIT";
-    if (/does not support|unsupported|not supported/i.test(msg)) return "UNSUPPORTED";
+    if (name === "AbortError" || name === "TimeoutError") return "ABORTED";
+    // a store's limit, whatever layer reports it (index-pack's PackError among them)
+    if (/over the limit|exceeds the limit/i.test(msg)) return "LIMIT";
+    if (["CorruptObjectError", "PackError", "DeltaError", "ObjectIdMismatchError"].includes(name))
+      return "CORRUPT";
+    if (name === "PktError") return "PROTOCOL";
+    if (err instanceof TypeError && /fetch failed|network|connect/i.test(msg)) return "PROTOCOL";
     if (
-      name === "PktError" ||
-      /HTTP \d{3}|remote:|does not speak|protocol|pkt-line|packet/i.test(msg)
-    )
-      return "PROTOCOL";
-    if (
-      name === "PackError" ||
-      name === "DeltaError" ||
-      /corrupt|hashes to|checksum|CRC|not a pack|trailer/i.test(msg)
+      /hash(es|ed) to|id mismatch|corrupt|checksum|CRC|not a pack|trailer|zlib|truncated/i.test(msg)
     )
       return "CORRUPT";
-    if (/\block/i.test(msg)) return "LOCKED";
+    if (/too large/i.test(msg)) return "LIMIT";
+    if (/does not support|unsupported|not supported/i.test(msg)) return "UNSUPPORTED";
+    if (/HTTP \d{3}|remote:|does not speak|does not offer|protocol|pkt-line|packet/i.test(msg))
+      return "PROTOCOL";
+    if (/\.lock\b|\blocked\b/i.test(msg)) return "LOCKED";
     if (/stale|mismatch|fast-forward|declined|refused|conflict/i.test(msg)) return "CONFLICT";
     if (/invalid|funny|bad ref/i.test(msg)) return "INVALID";
-    if (/missing|not found|does not match any|no such/i.test(msg)) return "NOT_FOUND";
+    if (/missing|not found|does not match any|no such|^no object/i.test(msg)) return "NOT_FOUND";
     return "INTERNAL";
   })();
-  return new VcsError(code, msg, { cause: e });
+  return new VcsError(code, err.message, { cause: e });
 }
 
 /** A ref transaction's rejection as a code. */
@@ -148,7 +151,11 @@ export interface Vcs {
     url: string,
     opts: { refspecs: string[]; signal?: AbortSignal; fetch?: typeof fetch },
   ): Promise<{ ref: string; ok: boolean; reason?: string }[]>;
-  gc(opts?: { graceMs?: number; signal?: AbortSignal }): Promise<void>;
+  /** X18's gc: `deferred` when a writer's lease or another sweep made it stop */
+  gc(opts?: {
+    graceMs?: number;
+    signal?: AbortSignal;
+  }): Promise<{ deferred: boolean; stats: GcStats }>;
   installPack(source: AsyncIterable<Uint8Array>, opts?: { signal?: AbortSignal }): Promise<string>;
   /** git's smart HTTP for this repository (hooks and gc leases on received pushes) */
   serve(): (req: Request) => Promise<Response>;
@@ -212,10 +219,17 @@ function raced<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
   });
 }
 
-/** A RefDb whose batches run the reference-transaction hook. */
-function hookedRefs(inner: RefDb, hooks: Hooks): RefDb {
+/**
+ * A RefDb whose batches run the reference-transaction hook (git's: the named ref and, through a
+ * symbolic ref, its target; errors of the committed/aborted calls ignored, as git ignores those
+ * hooks' status) and stop once `signal` has fired.
+ */
+function hookedRefs(inner: RefDb, hooks: Hooks, signal?: AbortSignal): RefDb {
   const rt = hooks.referenceTransaction;
-  if (!rt) return inner;
+  if (!rt && !signal) return inner;
+  const tell = async (state: "committed" | "aborted", updates: RefUpdate[]) => {
+    await rt?.(state, updates).catch(() => undefined);
+  };
   return {
     read: (n) => inner.read(n),
     resolve: (n) => inner.resolve(n),
@@ -223,16 +237,30 @@ function hookedRefs(inner: RefDb, hooks: Hooks): RefDb {
     setSymref: (n, t, e) => inner.setSymref(n, t, e),
     reflog: (n) => inner.reflog(n),
     async batch(commands, o) {
+      signal?.throwIfAborted();
       const updates: RefUpdate[] = [];
-      for (const c of commands)
-        updates.push({
-          name: c.name,
-          old: c.old !== undefined ? c.old : ((await inner.resolve(c.name)) ?? null),
-          new: c.new,
-        });
-      const refusal = await rt("prepared", updates);
-      if (refusal) {
-        await rt("aborted", updates);
+      for (const c of commands) {
+        const current = (await inner.resolve(c.name)) ?? null;
+        updates.push({ name: c.name, old: c.old !== undefined ? c.old : current, new: c.new });
+        if (c.noDeref) continue;
+        let target = c.name;
+        for (let depth = 0; depth < 5; depth++) {
+          const v = await inner.read(target);
+          if (!v || !("symref" in v)) break;
+          target = v.symref;
+        }
+        if (target !== c.name)
+          updates.push({ name: target, old: c.old !== undefined ? c.old : current, new: c.new });
+      }
+      let refusal: string | undefined;
+      try {
+        refusal = await rt?.("prepared", updates);
+      } catch (e) {
+        refusal = String(e);
+      }
+      if (refusal || signal?.aborted) {
+        await tell("aborted", updates);
+        signal?.throwIfAborted();
         return {
           ok: false,
           rejected: commands.map((c) => ({ name: c.name, reason: "hook" as never })),
@@ -242,13 +270,24 @@ function hookedRefs(inner: RefDb, hooks: Hooks): RefDb {
       try {
         res = await inner.batch(commands, o);
       } catch (e) {
-        await rt("aborted", updates);
+        await tell("aborted", updates);
         throw e;
       }
-      await rt(res.ok ? "committed" : "aborted", updates);
+      await tell(res.ok ? "committed" : "aborted", updates);
       return res;
     },
   };
+}
+
+/** Runs `f`; its error as a VcsError (ABORTED, whatever the error, once `signal` has fired). */
+async function wrap<T>(f: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  try {
+    return await f();
+  } catch (e) {
+    if (signal?.aborted && !(e instanceof VcsError && e.code === "ABORTED"))
+      throw new VcsError("ABORTED", `aborted: ${String(signal.reason)}`, { cause: signal.reason });
+    throw toVcsError(e);
+  }
 }
 
 type Spec = { files: FilesApi; refFiles: RefFiles } | { db: Db };
@@ -278,33 +317,64 @@ async function open(spec: Spec, opts: OpenOptions): Promise<Vcs> {
     for await (const c of files.read(configPath)) parts.push(c);
     return dec.decode(new Uint8Array(await new Blob(parts as BlobPart[]).arrayBuffer()));
   };
-  const writeConfig = async (text: string) => {
-    // git's config.lock, renamed over the file
-    const tmp = `${configPath}.lock`;
-    await files.write(tmp, [enc.encode(text)]);
-    await files.move(tmp, configPath);
+  const lockPath = `${configPath}.lock`;
+  /** git's config.lock: taken (or LOCKED), written, renamed over the file */
+  const writeConfig = async (edit: (text: string) => string) => {
+    if (await files.exists(lockPath))
+      throw new VcsError("LOCKED", `${lockPath} exists: another process is editing the config`);
+    await files.write(lockPath, [enc.encode("")]);
+    try {
+      await files.write(lockPath, [enc.encode(edit(await readConfig()))]);
+      await files.move(lockPath, configPath);
+    } catch (e) {
+      await files.remove(lockPath).catch(() => false);
+      throw e;
+    }
   };
   if (opts.init) {
     if (!(await base.refs.read("HEAD"))) await base.refs.setSymref("HEAD", `refs/heads/${branch}`);
     if (!(await files.exists(configPath)))
       await writeConfig(
-        "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n",
+        () => "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n",
       );
-    if ("files" in spec)
-      for (const d of ["objects/pack", "objects/info", "refs/heads", "refs/tags"])
-        await files.mkdir(access.root ? `${access.root}/${d}` : d).catch(() => {});
+    if ("files" in spec) {
+      const at = (d: string) => (access.root ? `${access.root}/${d}` : d);
+      for (const d of ["objects/pack", "objects/info", "refs/heads", "refs/tags", "hooks", "info"])
+        await files.mkdir(at(d)).catch(() => {});
+      // git's default template (its hook samples are left out: they are inert)
+      for (const [f, text] of [
+        [
+          "description",
+          "Unnamed repository; edit this file 'description' to name the repository.\n",
+        ],
+        [
+          "info/exclude",
+          "# git ls-files --others --exclude-from=.git/info/exclude\n# Lines that start with '#' are comments.\n# For a project mostly in C, the following would be a good set of\n# exclude patterns (uncomment them if you want to use them):\n# *.[oa]\n# *~\n",
+        ],
+      ] as const)
+        if (!(await files.exists(at(f)))) await files.write(at(f), [enc.encode(text)]);
+    }
   }
-  const cfg = new GitConfig(await readConfig());
+  let cfg = new GitConfig(await readConfig());
   const config: Config = {
     get: (k) => cfg.get(k),
     getAll: (k) => cfg.getAll(k),
-    async set(k, v) {
-      cfg.set(k, v);
-      await writeConfig(cfg.text());
-    },
+    set: (k, v) =>
+      wrap(() =>
+        writeConfig((text) => {
+          // edited on the file as it is now: other writers' changes are kept
+          const fresh = new GitConfig(text);
+          fresh.set(k, v);
+          cfg = fresh;
+          return fresh.text();
+        }),
+      ),
     text: () => cfg.text(),
   };
   const repo: Repository = { objects: base.objects, refs: hookedRefs(base.refs, hooks) };
+  /** the repository for one operation: its ref updates stop once `signal` has fired */
+  const scoped = (signal?: AbortSignal): Repository =>
+    signal ? { objects: base.objects, refs: hookedRefs(base.refs, hooks, signal) } : repo;
   const now = opts.now ?? Date.now;
   const identity = (): Person => {
     const name = cfg.get("user.name") ?? opts.identity?.name;
@@ -313,13 +383,8 @@ async function open(spec: Spec, opts: OpenOptions): Promise<Vcs> {
       throw new VcsError("INVALID", "no identity: set user.name and user.email, or pass one");
     return { name, email, when: Math.floor(now() / 1000), tz: "+0000" };
   };
-  const wrap = async <T>(f: () => Promise<T>): Promise<T> => {
-    try {
-      return await f();
-    } catch (e) {
-      throw toVcsError(e);
-    }
-  };
+  // gc runs one at a time: an aborted run is left to stop at its next check before the next starts
+  let gcChain: Promise<unknown> = Promise.resolve();
 
   return {
     repo,
@@ -327,48 +392,62 @@ async function open(spec: Spec, opts: OpenOptions): Promise<Vcs> {
     commit: (o) =>
       wrap(async () => {
         o.signal?.throwIfAborted();
-        const head = await repo.refs.read("HEAD");
-        const ref = o.ref ?? (head && "symref" in head ? head.symref : `refs/heads/${branch}`);
+        const r = scoped(o.signal);
+        const head = await r.refs.read("HEAD");
+        // git commits onto HEAD: its branch, or HEAD itself when detached
+        const detached = !o.ref && head !== undefined && "oid" in head;
+        const ref =
+          o.ref ??
+          (head && "symref" in head ? head.symref : detached ? "HEAD" : `refs/heads/${branch}`);
         const author = o.author ?? identity();
-        const lease = await acquireLease(repo, { signal: o.signal });
+        const lease = await acquireLease(r, { signal: o.signal });
         try {
-          const tip = await repo.refs.resolve(ref);
+          const tip = await r.refs.resolve(ref);
           const parents = o.parents ?? (tip ? [tip] : []);
           for (const p of parents)
-            if (!(await repo.objects.has(p)))
+            if (!(await r.objects.has(p)))
               throw new VcsError("NOT_FOUND", `parent ${p} is missing`);
-          const tree = o.tree ?? (await writeFiles(repo, o.files ?? {}));
+          const tree = o.tree ?? (await writeFiles(r, o.files ?? {}));
           o.signal?.throwIfAborted();
           const refused = await hooks.preCommit?.({ ref, tree });
           if (refused) throw new VcsError("CONFLICT", `pre-commit declined: ${refused}`);
-          const message = (await hooks.commitMsg?.(o.message)) ?? o.message;
+          let message = o.message;
+          try {
+            message = (await hooks.commitMsg?.(o.message)) ?? o.message;
+          } catch (e) {
+            throw new VcsError("CONFLICT", `commit-msg declined: ${String(e)}`, { cause: e });
+          }
           o.signal?.throwIfAborted();
-          const oid = await repo.objects.put(
+          const oid = await r.objects.put(
             "commit",
             encodeCommit({ tree, parents, author, committer: author, message }),
           );
-          o.signal?.throwIfAborted();
-          const res = await repo.refs.batch([{ name: ref, old: tip ?? null, new: oid }], {
-            message: `commit: ${message.split("\n")[0]}`,
-          });
+          const res = await r.refs.batch(
+            [{ name: ref, old: tip ?? null, new: oid, noDeref: detached || undefined }],
+            { message: `commit: ${message.split("\n")[0]}` },
+          );
           if (!res.ok) throw rejectionError(res);
-          await hooks.postCommit?.(oid);
+          // git ignores post-commit's status: the commit is made
+          await Promise.resolve(hooks.postCommit?.(oid)).catch(() => undefined);
           return oid;
         } finally {
           await lease.release();
         }
-      }),
+      }, o.signal),
     log: (ref) => wrap(() => readLog(repo, ref)),
     updateRefs: (commands, o) =>
       wrap(async () => {
-        o?.signal?.throwIfAborted();
-        const res = await repo.refs.batch(commands);
+        const res = await scoped(o?.signal).refs.batch(commands);
         if (!res.ok) throw rejectionError(res);
-      }),
+      }, o?.signal),
     fetch: (url, o = {}) =>
       wrap(async () => {
         const r = await raced(
-          fetchFrom(url, repo, { refspecs: o.refspecs, signal: o.signal, fetch: o.fetch }),
+          fetchFrom(url, scoped(o.signal), {
+            refspecs: o.refspecs,
+            signal: o.signal,
+            fetch: o.fetch,
+          }),
           o.signal,
         );
         if (r.rejected.length)
@@ -376,23 +455,29 @@ async function open(spec: Spec, opts: OpenOptions): Promise<Vcs> {
             "CONFLICT",
             `refs not updated: ${r.rejected.map((x) => `${x.name} (${x.reason})`).join(", ")}`,
           );
-      }),
+      }, o.signal),
     push: (url, o) =>
-      wrap(() =>
-        raced(
-          pushTo(url, repo, { refspecs: o.refspecs, signal: o.signal, fetch: o.fetch }),
-          o.signal,
-        ),
+      wrap(
+        () =>
+          raced(
+            pushTo(url, repo, { refspecs: o.refspecs, signal: o.signal, fetch: o.fetch }),
+            o.signal,
+          ),
+        o.signal,
       ),
     gc: (o = {}) =>
       wrap(async () => {
-        await raced(runGc(repo, { graceMs: o.graceMs, signal: o.signal }), o.signal);
-      }),
+        o.signal?.throwIfAborted();
+        const run = gcChain.then(() => runGc(repo, { graceMs: o.graceMs, signal: o.signal }));
+        gcChain = run.catch(() => undefined);
+        const step = await raced(run, o.signal);
+        return { deferred: step.deferred === true, stats: step.stats };
+      }, o.signal),
     installPack: (source, o = {}) =>
       wrap(async () => {
         o.signal?.throwIfAborted();
         return (await repo.objects.installPack(abortable(source, o.signal))).packId;
-      }),
+      }, o.signal),
     serve() {
       const handler = gitHandler(repo);
       return async (req) => {
@@ -400,13 +485,17 @@ async function open(spec: Spec, opts: OpenOptions): Promise<Vcs> {
         if (req.method !== "POST" || !url.pathname.endsWith("/git-receive-pack"))
           return handler(req);
         // a received push holds gc's lease until its response (the report) has been sent
-        const lease = await acquireLease(repo);
+        const lease = await acquireLease(repo, { signal: req.signal });
         let released = false;
         const release = async () => {
           if (released) return;
           released = true;
+          req.signal.removeEventListener("abort", onGone);
           await lease.release();
         };
+        // a client gone before reading the report does not hold the lease
+        const onGone = () => void release();
+        req.signal.addEventListener("abort", onGone, { once: true });
         let res: Response;
         try {
           res = await handler(req);

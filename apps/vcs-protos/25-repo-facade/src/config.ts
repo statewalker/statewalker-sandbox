@@ -1,53 +1,98 @@
 /**
- * git's config format (Documentation/config.txt "Syntax"): sections `[name]` and `[name "sub"]`,
+ * git's config format (Documentation/config.txt "Syntax"; parsing as git's config.c
+ * `parse_value`): sections `[name]` and `[name "sub"]` (and the deprecated `[name.sub]`),
  * `key = value` (or a bare `key`: true), `#`/`;` comments, quoted values with `\"`, `\\`, `\n`,
- * `\t`, `\b` escapes, a trailing `\` continuing the value. Names are case-insensitive, subsections
- * not. An edit replaces one line (or adds one): everything else — comments, layout, order — stays
- * byte for byte, as `git config` does.
+ * `\t`, `\b` escapes, a `\` at the end of a line (outside a comment) continuing the value, each
+ * unquoted whitespace character read as one space and trailing ones dropped, CRLF line ends.
+ * Section and key names are case-insensitive, subsections not.
+ *
+ * An edit replaces one line (or adds one after the section's last key): everything else —
+ * comments, layout, order — stays byte for byte, as `git config` does. Like git, `set` refuses a
+ * name git cannot read back and a key that has several values.
  */
 interface Entry {
   key: string; // section[.sub].name, section and name lower-cased
+  section: string;
   value: string;
   line: number; // first line of the entry
   lines: number; // lines it spans (continuations)
+  /** the entry follows its section header on the header's line: the header's text */
+  header?: string;
 }
 
-const SECTION = /^\s*\[\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\]/;
+const SECTION = /^\s*\[\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\\n]|\\.)*)")?\s*\]/;
+const SECTION_NAME = /^[A-Za-z0-9-]+$/;
+const KEY_NAME = /^[A-Za-z][A-Za-z0-9-]*$/;
+const stripCr = (line: string) => (line.endsWith("\r") ? line.slice(0, -1) : line);
+const isSpace = (c: string) => c === " " || c === "\t" || c === "\r" || c === "\v" || c === "\f";
 
-function unquote(raw: string): string {
+/** git's parse_value from `text` (the rest of line `i` after `=`), following continuations. */
+function parseValue(lines: string[], i: number, text: string): { value: string; span: number } {
   let out = "";
   let quoted = false;
-  for (let i = 0; i < raw.length; i++) {
-    const c = raw[i] as string;
+  let comment = false;
+  let spaces = 0;
+  let span = 1;
+  let s = text;
+  let j = 0;
+  for (;;) {
+    if (j >= s.length) break; // end of the line ends the value
+    const c = s[j++] as string;
+    if (comment) continue;
+    if (!quoted && isSpace(c)) {
+      if (out.length) spaces++;
+      continue;
+    }
+    if (!quoted && (c === ";" || c === "#")) {
+      comment = true;
+      continue;
+    }
+    for (; spaces; spaces--) out += " ";
     if (c === "\\") {
-      const n = raw[++i];
-      out += n === "n" ? "\n" : n === "t" ? "\t" : n === "b" ? "\b" : (n ?? "");
-    } else if (c === '"') quoted = !quoted;
-    else if (!quoted && (c === "#" || c === ";")) break;
-    else out += c;
+      if (j >= s.length) {
+        // a continuation: the value goes on with the next line
+        if (i + span >= lines.length) break;
+        s = stripCr(lines[i + span] as string);
+        span++;
+        j = 0;
+        continue;
+      }
+      const n = s[j++] as string;
+      out += n === "n" ? "\n" : n === "t" ? "\t" : n === "b" ? "\b" : n;
+      continue;
+    }
+    if (c === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    out += c;
   }
-  return quoted ? out : out.replace(/\s+$/, "");
+  return { value: out, span };
 }
 
+/** git's write_pair: quoted when it starts or ends with a space or holds a comment character */
 function quote(value: string): string {
-  const needs = /^\s|\s$|[#;"\\\n\t]/.test(value);
   const escaped = value
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
     .replace(/\n/g, "\\n")
-    .replace(/\t/g, "\\t");
-  return needs ? `"${escaped}"` : escaped;
+    .replace(/\t/g, "\\t")
+    .replace(/\x08/g, "\\b");
+  return /^\s|\s$|[#;]/.test(value) ? `"${escaped}"` : escaped;
 }
 
+/** git_config_parse_key: section[.subsection].name */
 function splitKey(key: string): { section: string; sub?: string; name: string } {
   const first = key.indexOf(".");
   const last = key.lastIndexOf(".");
-  if (first < 0 || (first === last && first === -1)) throw new Error(`bad config key ${key}`);
-  return {
-    section: key.slice(0, first).toLowerCase(),
-    sub: first === last ? undefined : key.slice(first + 1, last),
-    name: key.slice(last + 1).toLowerCase(),
-  };
+  const bad = () => new Error(`invalid key: ${JSON.stringify(key)}`);
+  if (first < 0) throw bad();
+  const section = key.slice(0, first);
+  const sub = first === last ? undefined : key.slice(first + 1, last);
+  const name = key.slice(last + 1);
+  if (!SECTION_NAME.test(section) || !KEY_NAME.test(name)) throw bad();
+  if (sub !== undefined && /[\n\0]/.test(sub)) throw bad();
+  return { section: section.toLowerCase(), sub, name: name.toLowerCase() };
 }
 const canonical = (key: string) => {
   const k = splitKey(key);
@@ -68,31 +113,30 @@ export class GitConfig {
     this.headers = [];
     let section: string | undefined;
     for (let i = 0; i < this.lines.length; i++) {
-      let line = this.lines[i] as string;
+      let line = stripCr(this.lines[i] as string);
+      let header: string | undefined;
       const h = SECTION.exec(line);
       if (h) {
         const name = (h[1] as string).toLowerCase();
-        // the deprecated [section.sub] form has its subsection lower-cased
         const sub = h[2] !== undefined ? h[2].replace(/\\(.)/g, "$1") : undefined;
         section = sub !== undefined ? `${name}.${sub}` : name;
         this.headers.push({ id: section, line: i });
+        header = h[0];
         line = line.slice(h[0].length);
-        if (!line.trim() || /^\s*[#;]/.test(line)) continue;
       }
       if (!section || !line.trim() || /^\s*[#;]/.test(line)) continue;
-      const m = /^\s*([A-Za-z][A-Za-z0-9-]*)\s*(?:=(.*))?$/.exec(line);
+      const m = /^\s*([A-Za-z][A-Za-z0-9-]*)\s*(=?)/.exec(line);
       if (!m) continue;
-      let raw = m[2] ?? "";
-      let span = 1;
-      while (raw.endsWith("\\") && i + span < this.lines.length) {
-        raw = raw.slice(0, -1) + (this.lines[i + span] as string);
-        span++;
-      }
+      const { value, span } = m[2]
+        ? parseValue(this.lines, i, line.slice(m[0].length))
+        : { value: "true", span: 1 };
       this.entries.push({
         key: `${section}.${(m[1] as string).toLowerCase()}`,
-        value: m[2] === undefined ? "true" : unquote(raw.trim()),
+        section,
+        value,
         line: i,
         lines: span,
+        header,
       });
       i += span - 1;
     }
@@ -104,21 +148,25 @@ export class GitConfig {
     const k = canonical(key);
     return this.entries.filter((e) => e.key === k).map((e) => e.value);
   }
-  /** Sets the last occurrence of `key` (or adds it to its section, or a new section). */
+  /** Sets `key` (one value: replaced; none: added to its section, or a new section). */
   set(key: string, value: string) {
     const k = splitKey(key);
+    if (/[\r\0]/.test(value)) throw new Error(`invalid value for ${key}: CR and NUL are not kept`);
     const id = k.sub === undefined ? k.section : `${k.section}.${k.sub}`;
     const line = `\t${k.name} = ${quote(value)}`;
-    const existing = this.entries.filter((e) => e.key === `${id}.${k.name}`).at(-1);
-    if (existing) this.lines.splice(existing.line, existing.lines, line);
-    else {
+    const existing = this.entries.filter((e) => e.key === `${id}.${k.name}`);
+    if (existing.length > 1)
+      throw new Error(`${key}: cannot overwrite multiple values with a single value`);
+    const e = existing[0];
+    if (e) {
+      // a key on its header's line: the header stays, the key goes on its own line
+      if (e.header !== undefined) this.lines.splice(e.line, e.lines, e.header, line);
+      else this.lines.splice(e.line, e.lines, line);
+    } else {
       const header = this.headers.filter((h) => h.id === id).at(-1);
       if (header) {
-        // after the section's last line (up to the next header)
-        const next = this.headers.find((h) => h.line > header.line);
-        let at = next ? next.line : this.lines.length;
-        while (at > header.line + 1 && !(this.lines[at - 1] as string).trim()) at--;
-        this.lines.splice(at, 0, line);
+        const last = this.entries.filter((x) => x.section === id && x.line >= header.line).at(-1);
+        this.lines.splice(last ? last.line + last.lines : header.line + 1, 0, line);
       } else {
         const sub =
           k.sub === undefined ? "" : ` "${k.sub.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;

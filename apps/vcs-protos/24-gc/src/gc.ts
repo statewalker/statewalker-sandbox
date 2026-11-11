@@ -429,6 +429,7 @@ export async function gcStep(repo: Repository, opts: GcOptions = {}): Promise<Gc
           if (all) doomed.push(r.packId);
         }
         for (const id of doomed) {
+          opts.signal?.throwIfAborted();
           await a.removePacks([id]);
           await opts.afterDelete?.();
         }
@@ -487,14 +488,22 @@ export async function acquireLease(
   const p = paths(a.dir);
   const ttl = opts.ttlMs ?? DEFAULT_TTL_MS;
   const lease = `${p.leases}/${randomId()}.json`;
-  const write = () => writeText(a.files, lease, JSON.stringify({ expires: Date.now() + ttl }));
-  await write();
-  const renew = setInterval(() => void write().catch(() => {}), Math.max(10, ttl / 3));
   let released = false;
+  let pending: Promise<unknown> = Promise.resolve();
+  // release waits for a renewal in flight (it would recreate the removed file)
+  const write = () => {
+    pending = writeText(a.files, lease, JSON.stringify({ expires: Date.now() + ttl })).catch(
+      () => {},
+    );
+    return pending;
+  };
+  await writeText(a.files, lease, JSON.stringify({ expires: Date.now() + ttl }));
+  const renew = setInterval(() => void write(), Math.max(10, ttl / 3));
   const release = async () => {
     if (released) return;
     released = true;
     clearInterval(renew);
+    await pending;
     await a.files.remove(lease).catch(() => false);
   };
   try {
