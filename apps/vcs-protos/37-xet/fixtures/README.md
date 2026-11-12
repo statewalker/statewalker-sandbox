@@ -10,5 +10,8 @@ data of the Xet protocol specification (https://huggingface.co/docs/xet):
 - `recon.recorded.json`: the reconstruction answer of `cas-server.xethub.hf.co` for the CSV's file
   hash (anonymous read token, 2026-11-12), with each signed URL replaced by `xorb://<hash>`.
 
-The xorb itself (14.7 MB) is downloaded by the tests from the dataset and cached in the system's
-temporary directory.
+The xorb itself (14.7 MB) is downloaded by the tests from the dataset (revision
+`c4aa3a3f15b1395fff5ce934784bf6c8f2d62de8`, SHA-256 checked) and cached in the system's temporary
+directory; it is not committed. The CSV the reference files describe is Washington State's
+"Electric Vehicle Population Data" (data.wa.gov, 2025-09-17); only hashes and lengths derived from
+it are committed here.

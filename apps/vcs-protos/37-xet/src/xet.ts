@@ -204,54 +204,76 @@ export function bg4Regroup(grouped: Uint8Array): Uint8Array {
 
 /** one chunk of a xorb: its 8-byte header (version 0, sizes as 3 bytes little-endian) and payload */
 function decodeChunk(type: number, payload: Uint8Array, size: number): Uint8Array {
-  if (type === 0) return payload.slice();
+  if (type === 0) {
+    if (payload.length !== size) throw new Error("xorb: stored chunk of the wrong size");
+    return payload.slice();
+  }
   if (type === 1) return lz4FrameDecode(payload, size);
   if (type === 2) return bg4Regroup(lz4FrameDecode(payload, size));
   throw new Error(`xorb: unknown compression ${type}`);
 }
 
-/** the chunks of a fetched xorb range, decoded one at a time as the bytes arrive */
-async function* xorbChunks(bytes: AsyncIterable<Uint8Array>): AsyncGenerator<Uint8Array> {
+/**
+ * The first `count` chunks of a fetched xorb range, decoded one at a time as the bytes arrive; the
+ * body is closed when done (a range may run on past them: later chunks, the `XETB` tail).
+ */
+async function* xorbChunks(
+  bytes: AsyncIterable<Uint8Array>,
+  count: number,
+): AsyncGenerator<Uint8Array> {
+  const it = bytes[Symbol.asyncIterator]();
   let buf = new Uint8Array(0);
-  const need = async (it: AsyncIterator<Uint8Array>, n: number) => {
-    while (buf.length < n) {
+  let pos = 0; // read position in buf: no copy of the rest per chunk
+  const need = async (n: number) => {
+    while (buf.length - pos < n) {
       const r = await it.next();
       if (r.done) return false;
-      const joined = new Uint8Array(buf.length + r.value.length);
-      joined.set(buf);
-      joined.set(r.value, buf.length);
+      const joined = new Uint8Array(buf.length - pos + r.value.length);
+      joined.set(buf.subarray(pos));
+      joined.set(r.value, buf.length - pos);
       buf = joined;
+      pos = 0;
     }
     return true;
   };
-  const it = bytes[Symbol.asyncIterator]();
-  for (;;) {
-    if (!(await need(it, 8))) {
-      if (buf.length) throw new Error("xorb: truncated chunk header");
-      return;
+  try {
+    for (let k = 0; k < count; k++) {
+      if (!(await need(8))) throw new Error("xorb: range ends before its chunks");
+      const version = buf[pos] as number;
+      if (version !== 0) throw new Error(`xorb: chunk header version ${version}`);
+      const csize =
+        (buf[pos + 1] as number) |
+        ((buf[pos + 2] as number) << 8) |
+        ((buf[pos + 3] as number) << 16);
+      const type = buf[pos + 4] as number;
+      const usize =
+        (buf[pos + 5] as number) |
+        ((buf[pos + 6] as number) << 8) |
+        ((buf[pos + 7] as number) << 16);
+      if (!(await need(8 + csize))) throw new Error("xorb: truncated chunk");
+      const chunk = decodeChunk(type, buf.subarray(pos + 8, pos + 8 + csize), usize);
+      pos += 8 + csize;
+      yield chunk;
     }
-    const version = buf[0] as number;
-    if (version !== 0) throw new Error(`xorb: chunk header version ${version}`);
-    const csize = (buf[1] as number) | ((buf[2] as number) << 8) | ((buf[3] as number) << 16);
-    const type = buf[4] as number;
-    const usize = (buf[5] as number) | ((buf[6] as number) << 8) | ((buf[7] as number) << 16);
-    if (!(await need(it, 8 + csize))) throw new Error("xorb: truncated chunk");
-    yield decodeChunk(type, buf.subarray(8, 8 + csize), usize);
-    buf = buf.slice(8 + csize);
+  } finally {
+    await it.return?.();
   }
 }
 
 /**
  * Rebuilds a file from a reconstruction answer: for each term, the fetch entry of its xorb that
  * covers its chunk range is fetched and decoded chunk by chunk, and the term's chunks are yielded;
- * `offset_into_first_range` bytes of the first term are dropped.
+ * `offset_into_first_range` bytes of the first term are dropped, and `length` (a range request's
+ * length) truncates the last. This is the v1 answer (`fetch_info`, `url_range` inclusive); v2's
+ * `xorbs[].ranges[]` and multipart range fetches are not implemented.
  */
 export async function* reconstruct(
   answer: ReconstructionAnswer,
   fetchRange: FetchRange,
-  _opts: { length?: number } = {},
+  opts: { length?: number } = {},
 ): AsyncGenerator<Uint8Array> {
   let skip = answer.offset_into_first_range;
+  let left = opts.length ?? Number.POSITIVE_INFINITY;
   for (const term of answer.terms) {
     const entry = (answer.fetch_info[term.hash] ?? []).find(
       (f) => f.range.start <= term.range.start && term.range.end <= f.range.end,
@@ -262,19 +284,23 @@ export async function* reconstruct(
       );
     let index = entry.range.start;
     let produced = 0;
-    for await (const chunk of xorbChunks(
-      fetchRange(entry.url, entry.url_range.start, entry.url_range.end),
-    )) {
+    const bytes = fetchRange(entry.url, entry.url_range.start, entry.url_range.end);
+    for await (const chunk of xorbChunks(bytes, term.range.end - entry.range.start)) {
       const i = index++;
       if (i < term.range.start) continue;
-      if (i >= term.range.end) break;
       produced += chunk.length;
       if (skip >= chunk.length) {
         skip -= chunk.length;
         continue;
       }
-      yield skip ? chunk.subarray(skip) : chunk;
+      const piece = skip ? chunk.subarray(skip) : chunk;
       skip = 0;
+      if (piece.length >= left) {
+        yield piece.subarray(0, left);
+        return;
+      }
+      left -= piece.length;
+      yield piece;
     }
     if (produced !== term.unpacked_length)
       throw new Error(
