@@ -194,6 +194,138 @@ describe("S4 deterministic merges", () => {
     });
 });
 
+describe("S7 review cases: crashes, edits during a sync, directories, renames, unrelated starts", () => {
+  /** a FilesApi whose `write` can be made to fail, or to run a hook first */
+  function faulty(inner: MemFilesApi) {
+    const ctl = {
+      failAt: 0,
+      writes: 0,
+      before: undefined as undefined | ((path: string) => Promise<void>),
+    };
+    const files = new Proxy(inner, {
+      get(t, k, r) {
+        if (k === "write")
+          return async (
+            path: string,
+            content: Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
+          ) => {
+            ctl.writes++;
+            if (ctl.failAt && ctl.writes === ctl.failAt)
+              throw new Error(`injected failure writing ${path}`);
+            const hook = ctl.before;
+            if (hook) {
+              ctl.before = undefined;
+              await hook(path);
+            }
+            return t.write(path, content);
+          };
+        const v = Reflect.get(t, k, r);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    return { files, ctl };
+  }
+  const dirsOf = async (ep: Endpoint) => {
+    const out: string[] = [];
+    for await (const e of ep.folder.list("/", { recursive: true }))
+      if (e.kind === "directory") out.push(e.path);
+    return out.sort();
+  };
+
+  it("a checkout that fails halfway loses none of the peer's edits", async () => {
+    const f = faulty(new MemFilesApi());
+    const a = await openEndpoint({ name: "a", folder: f.files, storage: new MemFilesApi(), now });
+    const b = await endpoint("b");
+    await put(a, "x.txt", "base\n");
+    await put(a, "y.txt", "base\n");
+    await sync(a, b);
+    await put(b, "x.txt", "x by b\n");
+    await put(b, "y.txt", "y by b\n");
+    f.ctl.writes = 0;
+    f.ctl.failAt = 2; // a's second folder write during the merge's checkout
+    await expect(sync(a, b)).rejects.toThrow(/injected/);
+    f.ctl.failAt = 0;
+    await settle([a, b]);
+    const files = await same([a, b]);
+    expect(files["x.txt"]).toBe("x by b\n");
+    expect(files["y.txt"]).toBe("y by b\n");
+  });
+
+  it("a transfer that fails halfway, at any object, does not break later syncs", async () => {
+    for (let failAt = 2; failAt <= 8; failAt++) {
+      const st = faulty(new MemFilesApi());
+      const a = await openEndpoint({
+        name: "a",
+        folder: new MemFilesApi(),
+        storage: st.files,
+        now,
+      });
+      const b = await endpoint("b");
+      await put(a, "x.txt", "x\n");
+      await sync(a, b);
+      await put(b, "d/y.txt", "y by b\n");
+      await commitFolder(a);
+      await commitFolder(b);
+      st.ctl.writes = 0;
+      st.ctl.failAt = failAt; // a commit must never be stored without its tree and blobs
+      await sync(a, b).catch(() => {});
+      st.ctl.failAt = 0;
+      await settle([a, b]);
+      expect((await same([a, b]))["d/y.txt"], `failing write ${failAt}`).toBe("y by b\n");
+    }
+  });
+
+  it("an edit made in the folder while a sync runs is kept, not overwritten", async () => {
+    const f = faulty(new MemFilesApi());
+    const a = await openEndpoint({ name: "a", folder: f.files, storage: new MemFilesApi(), now });
+    const b = await endpoint("b");
+    await put(a, "x.txt", "base\n");
+    await sync(a, b);
+    await put(b, "x.txt", "from b\n");
+    // the user writes x.txt just as the checkout is about to
+    f.ctl.before = async () => {
+      await f.files.write("/x.txt", [enc.encode("typed during the sync\n")]);
+    };
+    await sync(a, b);
+    await settle([a, b]);
+    expect((await same([a, b]))["x.txt"]).toBe("typed during the sync\n");
+  });
+
+  it("no empty directories are left: a file becoming a directory and back, everything deleted", async () => {
+    const [a, b] = [await endpoint("a"), await endpoint("b")] as [Endpoint, Endpoint];
+    await put(a, "e", "a file\n");
+    await put(a, "q/r/s.txt", "deep\n");
+    await settle([a, b]);
+    await del(a, "e");
+    await put(a, "e/inner.txt", "now a directory\n");
+    await settle([a, b]);
+    expect(await dirsOf(b)).toContain("/e");
+    for (const ep of [a]) for (const p of Object.keys(await folderFiles(ep))) await del(ep, p);
+    await settle([a, b]);
+    await same([a, b]);
+    expect(await dirsOf(a)).toEqual([]);
+    expect(await dirsOf(b)).toEqual([]);
+  });
+
+  it("renames and endpoints that started apart converge", async () => {
+    const [a, b, c] = [await endpoint("a"), await endpoint("b"), await endpoint("c")] as [
+      Endpoint,
+      Endpoint,
+      Endpoint,
+    ];
+    await put(a, "a/old.txt", "moving\n");
+    await put(b, "b/own.txt", "b started alone\n"); // b's history is unrelated to a's at first
+    await settle([a, b, c]);
+    await del(a, "a/old.txt");
+    await put(a, "a/new.txt", "moving\n");
+    await settle([a, b, c]);
+    const files = await same([a, b, c]);
+    expect(files["a/new.txt"]).toBe("moving\n");
+    expect(files["a/old.txt"]).toBeUndefined();
+    expect(files["b/own.txt"]).toBe("b started alone\n");
+  });
+});
+
 describe("S5 the history is a git repository", () => {
   it("git fsck --strict, and git log names each endpoint", async () => {
     const [a, b, c] = [await endpoint("a"), await endpoint("b"), await endpoint("c")] as [
