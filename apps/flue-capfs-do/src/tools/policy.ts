@@ -11,7 +11,7 @@ import type { ToolBundleConfig } from "./config.ts";
  */
 export const isolatesSeeHostFs = (): boolean =>
   /Node\.js/.test(
-    // workers-types 5 no longer declares `navigator` on globalThis.
+    // workers-types 5 declares `navigator` as a global const, not a globalThis property.
     (globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent ?? "",
   );
 
