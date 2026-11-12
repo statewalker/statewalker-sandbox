@@ -313,6 +313,8 @@ export async function* reconstruct(
 
 /** at most this many chunks in a xorb (the specification's MUST) */
 export const XORB_MAX_CHUNKS = 8192;
+/** at most this much chunk data in a xorb (the specification's SHOULD, kept as a limit here) */
+export const XORB_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
  * A serialized xorb of `chunks`: an 8-byte header (version 0, compressed size, compression type,
@@ -326,13 +328,16 @@ export function writeXorb(
 ): Uint8Array {
   if (chunks.length > XORB_MAX_CHUNKS)
     throw new Error(`xorb: ${chunks.length} chunks (at most ${XORB_MAX_CHUNKS})`);
+  const data = chunks.reduce((n, c) => n + c.length, 0);
+  if (data > XORB_MAX_BYTES) throw new Error(`xorb: ${data} bytes of chunks (at most 64 MiB)`);
   const parts: Uint8Array[] = [];
   let total = 0;
   for (const c of chunks) {
+    if (c.length === 0) throw new Error("xorb: an empty chunk");
     if (c.length >= 1 << 24) throw new Error("xorb: a chunk of 16 MiB or more");
     let type = 0;
     let payload = c;
-    if (o.compression !== "none" && c.length) {
+    if (o.compression !== "none") {
       const packed = lz4FrameEncode(o.compression === "bg4-lz4" ? bg4Split(c) : c);
       if (packed.length < c.length) {
         type = o.compression === "bg4-lz4" ? 2 : 1;

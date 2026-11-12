@@ -22,6 +22,10 @@ export function lz4FrameDecode(src: Uint8Array, size: number): Uint8Array {
   const flg = src[4] as number;
   if (flg >> 6 !== 1) throw new Error("lz4: unsupported frame version");
   const independent = (flg & 0x20) !== 0;
+  // BD: the largest block the frame may hold (64 KiB, 256 KiB, 1 MiB or 4 MiB)
+  const bdCode = ((src[5] as number) >> 4) & 7;
+  if (bdCode < 4) throw new Error("lz4: invalid block maximum");
+  const maxBlock = 1 << (8 + 2 * bdCode);
   const blockChecksum = (flg & 0x10) !== 0;
   const contentSize = (flg & 0x08) !== 0;
   if (flg & 0x01) throw new Error("lz4: dictionaries are not supported");
@@ -34,6 +38,7 @@ export function lz4FrameDecode(src: Uint8Array, size: number): Uint8Array {
     at += 4;
     if (word === 0) break; // end mark (a content checksum may follow)
     const n = word & 0x7fffffff;
+    if (n > maxBlock) throw new Error("lz4: block larger than the frame's maximum");
     if (at + n > src.length) throw new Error("lz4: block past the end of the frame");
     if (word & 0x80000000) {
       if (o + n > size) throw new Error("lz4: output overflow");
@@ -183,26 +188,34 @@ export function lz4BlockEncode(src: Uint8Array): Uint8Array {
   return out.subarray(0, o);
 }
 
+/** the frame's block maximum: 4 MiB (BD 0x70); a Xet chunk (at most 128 KiB) is one block */
+export const LZ4_MAX_BLOCK = 4 * 1024 * 1024;
+
 /**
- * One LZ4 frame of `src`: version 01, independent blocks, a 4 MiB block size (a Xet chunk is one
- * block), no checksums but the header's; a block that would not shrink is stored uncompressed.
+ * One LZ4 frame of `src`: version 01, independent blocks of at most 4 MiB (decoders refuse a block
+ * past the frame's declared maximum), no checksums but the header's; a block that would not shrink
+ * is stored uncompressed.
  */
 export function lz4FrameEncode(src: Uint8Array): Uint8Array {
-  const block = lz4BlockEncode(src);
-  const stored = block.length >= src.length;
-  const body = stored ? src : block;
-  const out = new Uint8Array(7 + 4 + body.length + 4);
+  const blocks: { body: Uint8Array; stored: boolean }[] = [];
+  for (let at = 0; at < src.length; at += LZ4_MAX_BLOCK) {
+    const part = src.subarray(at, Math.min(at + LZ4_MAX_BLOCK, src.length));
+    const block = lz4BlockEncode(part);
+    const stored = block.length >= part.length;
+    blocks.push({ body: stored ? part : block, stored });
+  }
+  const out = new Uint8Array(7 + blocks.reduce((n, b) => n + 4 + b.body.length, 0) + 4);
   const v = new DataView(out.buffer);
   v.setUint32(0, MAGIC, true);
   out[4] = 0x60; // version 01, independent blocks
   out[5] = 0x70; // block maximum 4 MiB
   out[6] = (xxh32(out.subarray(4, 6)) >>> 8) & 0xff;
   let at = 7;
-  if (src.length) {
-    v.setUint32(at, (body.length | (stored ? 0x80000000 : 0)) >>> 0, true);
-    out.set(body, at + 4);
-    at += 4 + body.length;
+  for (const b of blocks) {
+    v.setUint32(at, (b.body.length | (b.stored ? 0x80000000 : 0)) >>> 0, true);
+    out.set(b.body, at + 4);
+    at += 4 + b.body.length;
   }
   v.setUint32(at, 0, true); // end mark
-  return out.subarray(0, at + 4);
+  return out;
 }

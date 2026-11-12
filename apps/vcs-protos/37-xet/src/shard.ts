@@ -85,8 +85,17 @@ const isZero = (b: Uint8Array) => b.every((x) => x === 0);
 export const metadataSha256 = (digest: Uint8Array): Uint8Array =>
   hashFromString(Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join(""));
 
-/** serializes a shard as xet-core does: no lookup tables, the byte counts the footer sums */
+/**
+ * Serializes a shard as the reference shards are: no lookup tables, the byte counts the footer
+ * sums. Verification entries go to every term of every file or to none (an upload needs them
+ * everywhere; a shard mixing files with and without is valid to read but not written here).
+ */
 export function writeShard(shard: Shard): Uint8Array {
+  const footerKey = shard.footer?.chunkHashKey;
+  if (shard.chunkHashesKeyed && (!footerKey || isZero(footerKey)))
+    throw new Error(
+      "shard: keyed chunk hashes without the footer key (an upload would carry them)",
+    );
   const withVerification = shard.files.some((f) => f.terms.some((t) => t.rangeHash));
   if (withVerification && !shard.files.every((f) => f.terms.every((t) => t.rangeHash)))
     throw new Error("shard: verification hashes for some terms only (the shard would be invalid)");
@@ -209,7 +218,11 @@ export function writeShard(shard: Shard): Uint8Array {
   return out;
 }
 
-/** reads a shard (with or without its footer); keyed chunk hashes are returned as stored */
+/**
+ * Reads a shard (with or without its footer); keyed chunk hashes are returned as stored. Lookup
+ * tables (between the CAS section and the footer) and the footer's offsets and byte counts are
+ * not kept: written again, such a shard has no tables.
+ */
 export function readShard(bytes: Uint8Array): Shard {
   const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const need = (at: number, n: number) => {
@@ -292,6 +305,7 @@ export function readShard(bytes: Uint8Array): Shard {
   if (f < at) throw new Error("shard: truncated footer");
   if (v.getBigUint64(f, true) !== BigInt(FOOTER_VERSION))
     throw new Error("shard: footer version is not 1");
+  if (Number(v.getBigUint64(f + 192, true)) !== f) throw new Error("shard: footer offset");
   const chunkHashKey = hash(f + 72);
   return {
     files,
@@ -323,7 +337,8 @@ export function dedupeIndex(shards: Shard[]): (hash: Uint8Array) => ChunkLocatio
   for (const s of shards) {
     const key = s.footer?.chunkHashKey;
     let map = plain;
-    if (key && !isZero(key)) {
+    // keyed as stored (read from a keyed shard); an in-memory shard to be written holds plain ones
+    if (key && !isZero(key) && s.chunkHashesKeyed) {
       map = new Map();
       byKey.push({ key, map });
     }

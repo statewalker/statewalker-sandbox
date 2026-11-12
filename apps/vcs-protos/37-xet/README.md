@@ -114,8 +114,9 @@ the tests from the dataset's pinned revision, checked by SHA-256 and cached. Bui
   - the 32-byte header tag;
   - the SHA-256 in the metadata extension is stored in Xet's hash layout (each eight-byte word
     reversed, `metadataSha256`), not as the raw digest;
-  - xet-core writes no lookup tables (each lookup offset at the footer, no entries) and leaves
-    `num_bytes_on_disk` 0;
+  - the reference shards have no lookup tables (each lookup offset at the footer, no entries)
+    and leave `num_bytes_on_disk` 0; `readShard` does not keep lookup tables, so a shard that
+    has them is written again without;
   - the footers' timestamps and the dedupe key are the reference shards' own inputs.
 - **Deduplication (U2).** `dedupeIndex` finds a chunk in shards by its hash, or by its keyed hash
   in a shard whose footer has a key (BLAKE3 keyed with it; not RFC 2104 HMAC). `termsFor` turns
@@ -141,6 +142,26 @@ the tests from the dataset's pinned revision, checked by SHA-256 and cached. Bui
 | W6 | No end-of-block rules | survived (our decoder does not check them); killed by U3's block check |
 | W7 | ByteGrouping4 groups in reverse | killed (U3) |
 | W8 | The SHA-256 stored as the raw digest | killed (U1, U2) |
+
+**Review of #121** (no blocking findings; the encoder fuzzed against a strict decoder and its
+header checksum confirmed for `60 70`) found, and U4 covers:
+
+| Finding | Fix |
+|---|---|
+| A chunk over 4 MiB became one block under a header declaring 4 MiB blocks (liblz4 and lz4_flex refuse it; our decoder did not check) | frames split into independent blocks of at most 4 MiB; our decoder refuses a block past the declared maximum |
+| `dedupeIndex` took a keyed footer to mean keyed hashes, unlike `writeShard` | it follows `chunkHashesKeyed` |
+| Keyed hashes could be written into an upload shard (no footer) | refused |
+| `readShard` drops lookup tables and the footer's offsets; the README said xet-core writes no tables | documented: the reference shards have none; the footer offset is checked |
+| `writeXorb` took empty chunks and more than 64 MiB | refused |
+| Tests: the header checksum, several files and xorbs, footer totals, hostile counts, plain and mixed dedupe, duplicate chunks, encoder fuzzing | U4 (the empty frame's bytes, 2,000 random inputs against LZ4's end-of-block rules, the rest as listed) |
+
+| # | Mutant | Result |
+|---|---|---|
+| R1 | One block per frame whatever its size | killed (U4) |
+| R2 | The block maximum not checked | killed (U4) |
+| R3 | `dedupeIndex` ignores `chunkHashesKeyed` | killed (U4) |
+| R4 | Keyed hashes allowed without the key | killed (U4) |
+| R5 | No end-of-block rules | killed (U4's fuzz) |
 
 ## Promotion grades
 

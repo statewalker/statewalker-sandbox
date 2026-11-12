@@ -562,6 +562,38 @@ async function readBack(xorb: Uint8Array, count: number, bytes: number): Promise
   return out;
 }
 
+/**
+ * LZ4's end-of-block rules, which decoders may rely on (ours does not check them): the last 5
+ * bytes are literals, no match starts within the last 12, offsets reach only bytes already
+ * written; and the block decodes to `data`.
+ */
+function checkBlockRules(block: Uint8Array, data: Uint8Array, name: string) {
+  const out = new Uint8Array(data.length);
+  let at = 0;
+  let o = 0;
+  while (at < block.length) {
+    const token = block[at++] as number;
+    let lit = token >> 4;
+    if (lit === 15) for (let b = 255; b === 255; lit += b) b = block[at++] as number;
+    out.set(block.subarray(at, at + lit), o);
+    at += lit;
+    o += lit;
+    if (at >= block.length) break;
+    const offset = (block[at] as number) | ((block[at + 1] as number) << 8);
+    at += 2;
+    let len = (token & 15) + 4;
+    if ((token & 15) === 15) for (let b = 255; b === 255; len += b) b = block[at++] as number;
+    // plain comparisons (thousands per block); an assertion only on a failure
+    if (o > data.length - 12) expect.fail(`${name}: a match starts within the last 12 bytes`);
+    if (offset < 1 || offset > o) expect.fail(`${name}: offset ${offset} at ${o}`);
+    for (let i = 0; i < len; i++) out[o + i] = out[o - offset + i] as number;
+    o += len;
+    if (o > data.length - 5) expect.fail(`${name}: a match covers the last 5 bytes`);
+  }
+  if (o !== data.length || !Buffer.from(out).equals(Buffer.from(data)))
+    expect.fail(`${name}: does not decode back`);
+}
+
 describe("U3 (X11b) xorbs written: LZ4 frames our decoder and the reference chunking read back", () => {
   it("xxHash32 matches its published values (the frame's header checksum)", () => {
     const t = (s: string) => xxh32(new TextEncoder().encode(s));
@@ -599,30 +631,7 @@ describe("U3 (X11b) xorbs written: LZ4 frames our decoder and the reference chun
         true,
       );
     }
-    // LZ4's end-of-block rules, which decoders may rely on (ours does not check them): the last
-    // 5 bytes are literals, and no match starts within the last 12
-    for (const [name, data] of cases) {
-      const block = lz4BlockEncode(data);
-      let at = 0;
-      let o = 0;
-      while (at < block.length) {
-        const token = block[at++] as number;
-        let lit = token >> 4;
-        if (lit === 15) for (let b = 255; b === 255; lit += b) b = block[at++] as number;
-        at += lit;
-        o += lit;
-        if (at >= block.length) break;
-        at += 2;
-        let len = (token & 15) + 4;
-        if ((token & 15) === 15) for (let b = 255; b === 255; len += b) b = block[at++] as number;
-        expect(o, `${name}: a match starts within the last 12 bytes`).toBeLessThanOrEqual(
-          data.length - 12,
-        );
-        o += len;
-        expect(o, `${name}: a match covers the last 5 bytes`).toBeLessThanOrEqual(data.length - 5);
-      }
-      expect(o, name).toBe(data.length);
-    }
+    for (const [name, data] of cases) checkBlockRules(lz4BlockEncode(data), data, name);
     expect(lz4BlockEncode(new Uint8Array(100_000).fill(42)).length).toBeLessThan(500);
     expect(lz4FrameEncode(rand(4096, 1)).length).toBeLessThanOrEqual(4096 + 15); // stored
   });
@@ -661,6 +670,158 @@ describe("U3 (X11b) xorbs written: LZ4 frames our decoder and the reference chun
     expect(() =>
       writeXorb(Array.from({ length: XORB_MAX_CHUNKS + 1 }, () => new Uint8Array(1))),
     ).toThrow(/at most 8192/);
+  });
+});
+
+describe("U4 (review of #121) frames, shards and dedupe beyond the reference files", () => {
+  const rand = (n: number, seed: number, alphabet = 256) => {
+    const out = new Uint8Array(n);
+    let x = seed;
+    for (let i = 0; i < n; i++) {
+      x = (Math.imul(x, 1103515245) + 12345) >>> 0;
+      out[i] = (x >>> 24) % alphabet;
+    }
+    return out;
+  };
+
+  it("the empty frame's bytes (the header checksum as liblz4 writes it for 60 70)", () => {
+    expect(Buffer.from(lz4FrameEncode(new Uint8Array(0))).toString("hex")).toBe(
+      "04224d1860707300000000",
+    );
+  });
+
+  it("a chunk over 4 MiB: blocks of at most 4 MiB; a block past the frame's maximum is refused", () => {
+    const big = new Uint8Array(6 * 1024 * 1024);
+    for (let at = 0; at < big.length; at += 4096) big.set(rand(4096, at % 65536, 16), at);
+    const frame = lz4FrameEncode(big);
+    let at = 7;
+    const sizes: number[] = [];
+    for (;;) {
+      const word = new DataView(frame.buffer, frame.byteOffset).getUint32(at, true);
+      if (word === 0) break;
+      sizes.push(word & 0x7fffffff);
+      at += 4 + (word & 0x7fffffff);
+    }
+    expect(sizes.length).toBe(2);
+    for (const n of sizes) expect(n).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(Buffer.from(lz4FrameDecode(frame, big.length)).equals(Buffer.from(big))).toBe(true);
+    // a frame declaring 64 KiB blocks (BD 0x40) that holds a 70,000-byte stored block
+    const lying = new Uint8Array(7 + 4 + 70_000 + 4);
+    lying.set([0x04, 0x22, 0x4d, 0x18, 0x60, 0x40, 0x00]);
+    new DataView(lying.buffer).setUint32(7, (70_000 | 0x80000000) >>> 0, true);
+    expect(() => lz4FrameDecode(lying, 70_000)).toThrow(/maximum/);
+  });
+
+  it("2,000 random inputs: every block keeps LZ4's end-of-block rules and decodes back", () => {
+    for (let k = 0; k < 2000; k++) {
+      const n = (k * 7919) % 20_000;
+      const data = rand(n, k + 1, 2 + (k % 6));
+      checkBlockRules(lz4BlockEncode(data), data, `input ${k} (${n} bytes)`);
+    }
+  });
+
+  it("refuses an empty chunk and more than 64 MiB in one xorb", () => {
+    expect(() => writeXorb([new Uint8Array(0)])).toThrow(/empty chunk/);
+    const mib = new Uint8Array(1024 * 1024);
+    expect(() =>
+      writeXorb(
+        Array.from({ length: 65 }, () => mib),
+        { compression: "none" },
+      ),
+    ).toThrow(/64 MiB/);
+  });
+
+  it("several files and xorbs, a file of no terms, chunk flags and sizes on disk: round trip and footer totals", () => {
+    const h = (b: number) => new Uint8Array(32).fill(b);
+    const shard: Shard = {
+      files: [
+        { fileHash: h(1), terms: [] },
+        {
+          fileHash: h(2),
+          terms: [
+            { xorbHash: h(10), bytes: 7, start: 0, end: 2 },
+            { xorbHash: h(11), bytes: 8, start: 1, end: 2 },
+          ],
+          sha256: h(3),
+        },
+      ],
+      xorbs: [
+        {
+          xorbHash: h(10),
+          chunks: [
+            { hash: h(20), length: 3 },
+            { hash: h(21), length: 4 },
+          ],
+          bytesOnDisk: 30,
+          chunkFlags: [0x80000000, 1],
+        },
+        {
+          xorbHash: h(11),
+          chunks: [
+            { hash: h(22), length: 0 },
+            { hash: h(23), length: 8 },
+          ],
+          bytesOnDisk: 17,
+          chunkFlags: [0, 0],
+        },
+      ],
+      footer: { creationTimestamp: 5 },
+    };
+    const bytes = writeShard(shard);
+    const back = readShard(bytes);
+    expect(hex(writeShard(back))).toBe(hex(bytes));
+    expect(back.xorbs.map((x) => x.chunkFlags)).toEqual([
+      [0x80000000, 1],
+      [0, 0],
+    ]);
+    expect(back.xorbs.map((x) => x.bytesOnDisk)).toEqual([30, 17]);
+    expect(back.files[0]?.terms).toEqual([]);
+    const f = new DataView(bytes.buffer, bytes.byteOffset + bytes.length - 200);
+    const u64 = (at: number) => Number(f.getBigUint64(at, true));
+    expect([u64(8), u64(168), u64(176), u64(184), u64(192)]).toEqual([
+      48,
+      47, // on disk: 30 + 17
+      15, // materialized: the terms' bytes
+      15, // stored: the chunks' bytes
+      bytes.length - 200,
+    ]);
+    // a hostile entry count is refused before anything is read for it
+    const hostile = bytes.slice();
+    new DataView(hostile.buffer).setUint32(48 + 36, 0xffffffff, true);
+    expect(() => readShard(hostile)).toThrow(/truncated/);
+  });
+
+  it("dedupe over plain, keyed and mixed shards; duplicate chunks start new terms; keyed hashes stay out of uploads", () => {
+    const chunks = referenceChunks().slice(0, 6);
+    const key = hashFromString("12345678".repeat(8));
+    const a = new Uint8Array(32).fill(0xa);
+    const b = new Uint8Array(32).fill(0xb);
+    const plain: Shard = { files: [], xorbs: [{ xorbHash: a, chunks: chunks.slice(0, 3) }] };
+    const keyed = readShard(
+      writeShard({
+        files: [],
+        xorbs: [{ xorbHash: b, chunks: chunks.slice(3) }],
+        footer: { chunkHashKey: key },
+      }),
+    );
+    const locate = dedupeIndex([plain, keyed]);
+    chunks.forEach((c, i) => {
+      const at = locate(c.hash);
+      expect(at?.xorbHash[0], `chunk ${i}`).toBe(i < 3 ? 0xa : 0xb);
+      expect(at?.index).toBe(i % 3);
+    });
+    // an in-memory shard with a footer key holds plain hashes until written
+    const unwritten: Shard = {
+      files: [],
+      xorbs: [{ xorbHash: b, chunks: chunks.slice(3) }],
+      footer: { chunkHashKey: key },
+    };
+    expect(dedupeIndex([unwritten])(chunks[4]?.hash as Uint8Array)?.index).toBe(1);
+    // the same chunk twice: two terms (an index does not repeat within one term)
+    const twice = [chunks[0], chunks[0]] as ChunkRef[];
+    expect(termsFor(twice, () => ({ xorbHash: a, index: 0 })).length).toBe(2);
+    // keyed hashes written without their key would reach the server as if plain
+    expect(() => writeShard({ ...keyed, footer: undefined })).toThrow(/without the footer key/);
   });
 });
 
