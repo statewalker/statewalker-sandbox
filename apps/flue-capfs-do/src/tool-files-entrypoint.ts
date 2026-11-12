@@ -11,6 +11,7 @@
 // the account, with forged props): it would need the nonce of a live run.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { largeFileCalls } from "./cap-bytes.ts";
 import { TokenCap, type WorkspaceEnv } from "./caps.ts";
 
 interface Props {
@@ -40,7 +41,8 @@ export class ToolFilesEntrypoint extends WorkerEntrypoint<Env> {
     return new TokenCap(this.env, p.workspace, p.token);
   }
   async call(method: string, path: string, ...args: unknown[]) {
-    return (await this.#cap()).call(method, path, ...args);
+    // Files over 16 MiB are streamed here, as for ToolFiles.
+    return largeFileCalls(await this.#cap())(method, path, ...args);
   }
   async readdir(path: string) {
     return (await this.#cap()).readdir(path);

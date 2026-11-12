@@ -154,6 +154,36 @@ export default class extends WorkerEntrypoint {
   assert.equal((await b64())["/b/tool.bin"], Buffer.from([0, 255, 128, 10]).toString("base64"));
 });
 
+test("a tool reads, writes and appends files over 16 MiB (streamed on the host side)", async (t) => {
+  const rt = (await http("/api/runtime")).value;
+  if (rt.toolIsolates !== "isolated") return t.skip("raw tool code runs only in isolates");
+  const ws = freshWs();
+  await seed(ws, { "/b/.keep": "" });
+  const { token } = await session(ws, "alice", ["/b"]);
+  // More than one whole-file call moves (16 MiB): the host streams it over the files RPC.
+  const code = `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class extends WorkerEntrypoint {
+  async run(files) {
+    files ??= this.env.FILES;
+    const size = 20 * 1024 * 1024 + 3;
+    const big = new Uint8Array(size);
+    for (let i = 0; i < size; i++) big[i] = (i * 31 + 7) & 255;
+    await files.call("writeFileBuffer", "/b/big.bin", big);
+    await files.call("appendFileBuffer", "/b/big.bin", big.subarray(0, 5));
+    const back = new Uint8Array(await files.call("readFileBuffer", "/b/big.bin"));
+    let same = back.length === size + 5;
+    for (let i = 0; same && i < size; i++) same = back[i] === big[i];
+    for (let i = 0; same && i < 5; i++) same = back[size + i] === big[i];
+    const st = await files.call("stat", "/b/big.bin");
+    return { length: back.length, same, size: st.size };
+  }
+}`;
+  const r = await run(`btb-${ws}`, ws, token, "token", { kind: "tool", code });
+  assert.equal(r.ok, true, r.error);
+  const size = 20 * 1024 * 1024 + 3 + 5;
+  assert.deepEqual(r.value.result, { length: size, same: true, size });
+});
+
 for (const transport of TRANSPORTS) {
   describe(`transport=${transport}`, () => {
     test("files of any size stream in chunks over the capability (files RPC)", async () => {

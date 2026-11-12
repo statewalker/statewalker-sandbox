@@ -14,8 +14,8 @@ export const PROCESS_GLOBAL = "__capfs_process";
  * node:fs over the capability, in bytes only: reads return a Buffer-like Uint8Array of the stored
  * bytes (`toString(encoding)`), strings are encoded here as UTF-8 or in the encoding given
  * (latin1/binary, ascii, base64, hex), and every write and append sends bytes. UTF-8 is decoded
- * as the store decodes it: U+FFFD for invalid sequences, a leading U+FEFF kept. One call moves
- * at most 16 MiB (EFBIG beyond).
+ * as the store decodes it: U+FFFD for invalid sequences, a leading U+FEFF kept. The capability
+ * streams a file over 16 MiB on the host side (largeFileCalls); a read is refused over 32 MiB.
  */
 export const FS_SHIM = String.raw`
 let files;

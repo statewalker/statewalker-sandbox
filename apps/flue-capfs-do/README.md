@@ -657,8 +657,12 @@ Every writer sends bytes as bytes:
   append that races another writer (`ESTALE`) is sent again; a streamed read of a file removed
   meanwhile answers `ENOENT`, not an empty file.
 - tools' `node:fs`: bytes only too. Strings are encoded in the shim (UTF-8 or the encoding given),
-  Buffers and TypedArrays written byte for byte, UTF-8 decoded as the store decodes; one call
-  moves at most 16 MiB (the shim is inlined into each bundle, without the files-RPC client).
+  Buffers and TypedArrays written byte for byte, UTF-8 decoded as the store decodes. The shim
+  makes whole-file calls (it is inlined into each bundle, without the files-RPC client); the
+  tool's capability (`ToolFiles`, `ToolFilesEntrypoint`) answers them through `capBytes` on the
+  host side, so a file over 16 MiB is streamed there: reads up to 32 MiB, as above. A call's
+  bytes cross JS RPC between the tool's isolate and the host, so one call carries what that
+  allows (workerd: 32 MiB a message).
 - Python: binary files are synced in and written back as bytes; the live `capfs` module moves
   bytes (`read_bytes`, `write_bytes`, `append_bytes`, and the `*_text` calls on top of them).
 - The store's text calls (`readFile`, `writeFile`, `appendFile`) remain only for tool bundles
@@ -668,8 +672,8 @@ Every writer sends bytes as bytes:
 Limits and notes:
 - **Size:** whole-file calls (`readFile`, `writeFileBuffer`, …) move at most 16 MiB in one
   message (`EFBIG`, HTTP 413, beyond); larger files are streamed (just-bash, Flue's tools, the
-  `stream` task, Wasmer reads and appends). just-bash and Flue read files up to 32 MiB: their
-  APIs return whole files, held in the agent's memory.
+  `stream` task, Wasmer reads and appends, tools' `node:fs`). just-bash, Flue and tools read
+  files up to 32 MiB: their APIs return whole files, held in memory.
 - **Approved tool bundles:** the `node:fs` shim is inlined into every tool bundle, so bundles
   built after this change hash differently. Approve them again; bundles already approved still
   run (their shim sends text as strings, which the store still accepts).

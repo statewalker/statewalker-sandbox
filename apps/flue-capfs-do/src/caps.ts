@@ -8,6 +8,7 @@
 import { RpcTarget } from "cloudflare:workers";
 import { Biscuit } from "@statewalker/webrun-biscuit";
 import type { FsRequest, ModelAction, ModelUsage } from "./authority.ts";
+import { largeFileCalls } from "./cap-bytes.ts";
 import { rebuildError } from "./path.ts";
 import type { FilteredFiles, Workspace } from "./workspace.ts";
 
@@ -130,12 +131,14 @@ export function capFromHandoff(env: WorkspaceEnv, h: CapHandoff): Cap {
  */
 export class ToolFiles extends RpcTarget {
   #cap: Cap;
+  #call: ReturnType<typeof largeFileCalls>;
   constructor(cap: Cap) {
     super();
     this.#cap = cap;
+    this.#call = largeFileCalls(cap); // a tool's files over 16 MiB are streamed here
   }
   call(method: string, path: string, ...args: unknown[]) {
-    return this.#cap.call(method, path, ...args);
+    return this.#call(method, path, ...args);
   }
   readdir(path: string) {
     return this.#cap.readdir(path);

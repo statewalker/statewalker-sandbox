@@ -94,3 +94,27 @@ export function capBytes(cap: ByteCarrier) {
     },
   };
 }
+
+/**
+ * `cap.call` for a holder that forwards whole-file calls it did not make itself (a tool's
+ * capability: ToolFiles, ToolFilesEntrypoint). readFileBuffer, writeFileBuffer and
+ * appendFileBuffer go through capBytes, so a file over MAX_WHOLE_FILE_BYTES is streamed here
+ * instead of refused with EFBIG; every other call is passed on as it is.
+ */
+export function largeFileCalls(cap: ByteCarrier) {
+  let bytes: ReturnType<typeof capBytes> | undefined;
+  const b = () => (bytes ??= capBytes(cap));
+  return (method: string, path: string, ...args: unknown[]): Promise<unknown> => {
+    if (typeof path !== "string") return cap.call(method, path, ...args); // refused there
+    switch (method) {
+      case "readFileBuffer":
+        return b().read(path);
+      case "writeFileBuffer":
+        return b().write(path, bytesArg(args[0]));
+      case "appendFileBuffer":
+        return b().append(path, bytesArg(args[0]));
+      default:
+        return cap.call(method, path, ...args);
+    }
+  };
+}
