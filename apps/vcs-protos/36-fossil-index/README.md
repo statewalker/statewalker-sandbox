@@ -1,6 +1,6 @@
 # 36 — Can SQL indexes give Fossil-like history queries, in the same transaction as the refs?
 
-Plan id **X9** (Fossil-like capabilities). Status: **answered — yes: path history and message search from SQL tables equal git's on 40 random histories, the rows commit with the ref update or not at all, and each query answers in under 5 ms on 100,000 commits over 50,000 files**. Limits: literal paths, git's order only where commit dates are distinct and fall from child to parent, and answers stay as they were after a ref is deleted or rewound (no unindexing yet); building the rows through our objects runs at about 370 commits a second.
+Plan id **X9** (Fossil-like capabilities). Status: **answered — yes: path history and message search from SQL tables equal git's on 40 random histories, the rows commit with the ref update or not at all, and each query answers in under 5 ms on 100,000 commits over 50,000 files**. X9b adds git's default history simplification (`simplifiedPathHistory`, equal to `git log --all --no-merges -- <path>`). Limits: literal paths, git's order only where commit dates are distinct and fall from child to parent, and answers stay as they were after a ref is deleted or rewound (no unindexing yet); building the rows through our objects runs at about 370 commits a second.
 
 ## Question
 
@@ -26,11 +26,15 @@ over 50,000 files.
 | F4 | **Speed.** 100,000 commits over 50,000 files (indexed once): a path history and a search each answer in under 100 ms. |
 | F6 | Added after review: refs to annotated tags (peeled) and to a blob (skipped); pathspec forms `d/`, `./d`, `d/.`, `.` as git reads them, and globs, `:(magic)` and the empty pathspec refused; search text with newlines (any of its lines; an empty line matches all); text of three UTF-16 units but two characters kept off the trigram index; equal commit dates give the index and the walk one order. |
 | F5 | **Portable.** `src/` has no `node:` imports; the SQL is plain SQLite (FTS5 trigram, available in node:sqlite, sqlite-wasm and Durable Objects). |
+| F1b | (X9b) **git's default simplification.** `simplifiedPathHistory(path, tips)` equals `git log --all --no-merges --format=%H -- <path>` (no `--full-history`) on 40 random histories — half of them built so the simplification matters: side branches merged as usual, with `-s ours`, after the same change on both sides, with an edit reverted on one side, most deleted after their merge — for every path and directory, from the index and by walking (`walkSimplifiedPathHistory`); at least 10 answers differ from `--full-history`'s. |
+| F1c | (X9b) Commits indexed after the walk's parent graph was loaded are walked by the next query. |
+| F4b | (X9b) On F4's 100,000 commits a simplified path history answers in under 100 ms once the parent graph is loaded. |
 
 ## Scope
 
-- `--no-merges`: merge commits are indexed (date, message, parents) but not listed; git's history
-  simplification through merges (TREESAME pruning) is left out, hence `--full-history` in F1.
+- `--no-merges`: merge commits are indexed (date, message, parents) but not listed. `pathHistory`
+  is `--full-history`; `simplifiedPathHistory` (X9b) is git's default TREESAME pruning, from the
+  tips given. `--simplify-merges` and parent rewriting (`--parents`, `--graph`) are not done.
   (F1 first said `--no-merges` alone; the first run showed that git still simplifies through merges
   then, hiding commits on a side a merge discarded, so the criterion was corrected to the command
   that means "every non-merge commit that changed the path".)
@@ -91,16 +95,47 @@ build them through our objects.
 | P8 | Batches on one handle not one at a time | survived; killed by F3's one-handle case over unrelated histories |
 | P9 | Short text through FTS (trigrams need three characters) | killed (F2) |
 
+### X9b: git's default history simplification
+
+`simplifiedPathHistory(path, tips)` lists what `git log --no-merges -- <path>` lists from `tips`
+(the refs and HEAD for `--all`): a merge that is TREESAME to a parent for the path — no file
+under it differs — is followed through its first such parent only (git's
+`try_to_simplify_commit`), so a side that a merge discarded (`-s ours`, a change made on both
+sides, an edit reverted) is not walked, and its commits are not listed unless another tip
+reaches them. Two more tables hold what the walk needs: `fossil_parent` (every commit's parents,
+in order) and `fossil_merge_change` (for each merge and each parent, the file paths that differ
+from it, indexed by path). A query fetches the merges' differing parents for the path in one
+range, walks from the tips in memory, and keeps the `--full-history` answer's commits it reached.
+
+- **F1b**: 346 paths over 40 histories (half built so the simplification matters), 57 of them
+  answered differently from `--full-history`: every answer equals git's, indexed and walked.
+- **Speed (F4b)**: a recursive CTE did the walk in 808 ms on 100,000 commits. The walk now runs
+  over an in-memory parent graph by integer id: 4.9 ms per query once loaded; the first query
+  loads the graph (100,000 rows, about 0.5 s) and later ones only take in the rows added since (a
+  rowid watermark). A commit the graph lacks is read from the table, so the cache saves queries
+  and never changes an answer (F1c), and a commit not indexed yet is not cached.
+- **Storage**: a merge stores its differences from each parent, which for a merge of a long side
+  branch is that branch's whole change set.
+
+| # | Mutant | Result |
+|---|---|---|
+| S1 | No simplification (every parent followed) | killed (F1b) |
+| S2 | The last TREESAME parent instead of the first | killed (F1b) |
+| S3 | A merge's difference matched for the exact path only (not under a directory) | killed (F1b) |
+| S4 | Neither the watermark refresh nor the read on a miss | killed (F1c) |
+| S5 | No watermark refresh (the read on a miss alone) | survived, as designed: the refresh only saves queries |
+
 ## Promotion grades
 
 | File | Grade | Why |
 |---|---|---|
-| `src/fossil.ts` | **Adopt** (merge simplification, unindexing on ref deletion to come) | git's answers from SQL, committed with the refs |
+| `src/fossil.ts` | **Adopt** (unindexing on ref deletion to come) | git's answers from SQL, committed with the refs |
 | `sqlRefDb`'s `beforeCommit` | **Adopt** | the seam for anything that must commit with the refs |
 
 ## Open threads
 
-1. git's default history simplification through merges (TREESAME pruning, `--simplify-merges`).
+1. ~~git's default history simplification through merges~~ — answered by X9b
+   (`simplifiedPathHistory`, F1b). `--simplify-merges` (the parent-rewriting variant) is not done.
 2. Unindexing commits a deleted ref leaves unreachable (or keeping a reachability column).
 3. Indexing speed: X6r's deeper tree reads on fast-import packs.
 4. Search across all refs only: per-branch answers need reachability (a commit-graph's generation

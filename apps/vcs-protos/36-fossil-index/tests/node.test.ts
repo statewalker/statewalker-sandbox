@@ -14,6 +14,7 @@ import {
   indexedSqlRepository,
   walkPathHistory,
   walkSearch,
+  walkSimplifiedPathHistory,
 } from "../src/fossil.js";
 
 const dirs: string[] = [];
@@ -92,6 +93,61 @@ function history(seed: number): string {
   return d;
 }
 
+/**
+ * Histories where git's simplification matters: side branches merged as usual, with `-s ours`
+ * (their changes discarded), or after the same change on both sides, and an edit reverted on one
+ * side; most side branches are deleted after their merge, so only the merge reaches them.
+ */
+function mergyHistory(seed: number): string {
+  const rand = rng(seed);
+  const pick = <T>(xs: T[]) => xs[Math.floor(rand() * xs.length)] as T;
+  const d = tmp("x9b-");
+  git(d, ["init", "-q", "-b", "main"]);
+  const paths = ["a", "b", "d/e", "d/f", "x"];
+  for (const p of paths) write(d, p, `${p}\n`);
+  git(d, ["add", "-A"]);
+  git(d, ["commit", "-qm", "base commit"]);
+  let n = 0;
+  const commit = (msg: string) => {
+    git(d, ["add", "-A"]);
+    git(d, ["commit", "-q", "--allow-empty", "-m", `${msg} ${n++}`]);
+  };
+  const edit = (p: string, text = `${p} ${n}\n`) => {
+    write(d, p, text);
+    commit(`fix ${p}`);
+  };
+  for (let round = 0; round < 3 + Math.floor(rand() * 3); round++) {
+    const branch = `b${round}`;
+    git(d, ["checkout", "-qb", branch]);
+    const touched: string[] = [];
+    for (let i = 0; i < 1 + Math.floor(rand() * 3); i++) {
+      const p = pick(paths);
+      touched.push(p);
+      edit(p);
+    }
+    const same = pick(paths);
+    const sameText = `same ${n}\n`;
+    const kind = pick(["merge", "ours", "same", "revert"] as const);
+    if (kind === "same") edit(same, sameText);
+    if (kind === "revert") {
+      const p = touched[0] as string;
+      git(d, ["checkout", "-q", `HEAD~${touched.length}`, "--", p]);
+      commit(`revert ${p}`);
+    }
+    git(d, ["checkout", "-q", "main"]);
+    if (rand() < 0.7) edit(pick(paths));
+    if (kind === "same") edit(same, sameText);
+    try {
+      git(d, ["merge", "-q", "--no-edit", ...(kind === "ours" ? ["-s", "ours"] : []), branch]);
+    } catch {
+      git(d, ["checkout", "-q", "--ours", "--", "."]);
+      commit("merge by hand");
+    }
+    if (rand() < 0.75) git(d, ["branch", "-qD", branch]);
+  }
+  return d;
+}
+
 /** every path and directory any commit's tree has had, plus one never present */
 function allPaths(d: string): string[] {
   const out = new Set<string>(["never/there"]);
@@ -153,6 +209,79 @@ describe("F1 path history equals git log --all --full-history --no-merges -- <pa
     expect(wrong.slice(0, 3)).toEqual([]);
     expect(checked).toBeGreaterThan(300);
   }, 600_000);
+});
+
+describe("F1b (X9b) simplified path history equals git log --all --no-merges -- <path>", () => {
+  it("40 random histories, every path and directory, indexed and walked", async () => {
+    const wrong: string[] = [];
+    let checked = 0;
+    let differs = 0;
+    for (const seed of SEEDS) {
+      const d = seed % 2 ? mergyHistory(seed) : history(seed);
+      const { repo, index } = await loadSql(d);
+      const tips = lines(git(d, ["for-each-ref", "--format=%(objectname)"]));
+      tips.push(git(d, ["rev-parse", "HEAD"]).trim());
+      for (const path of allPaths(d)) {
+        const want = lines(git(d, ["log", "--all", "--no-merges", "--format=%H", "--", path]));
+        const full = lines(
+          git(d, ["log", "--all", "--full-history", "--no-merges", "--format=%H", "--", path]),
+        );
+        if (JSON.stringify(want) !== JSON.stringify(full)) differs++;
+        const indexed = await index.simplifiedPathHistory(path, tips);
+        const walked = await walkSimplifiedPathHistory(repo, path);
+        checked++;
+        if (JSON.stringify(indexed) !== JSON.stringify(want))
+          wrong.push(`${seed} ${path} indexed\n git:  ${want}\n ours: ${indexed}`);
+        if (JSON.stringify(walked) !== JSON.stringify(want))
+          wrong.push(`${seed} ${path} walked\n git:  ${want}\n ours: ${walked}`);
+      }
+    }
+    expect(wrong.slice(0, 3)).toEqual([]);
+    expect(checked).toBeGreaterThan(300);
+    // the corpus exercises the simplification: some answers differ from --full-history
+    expect(differs).toBeGreaterThan(10);
+    console.log(`F1b: ${checked} paths, ${differs} where simplification changes the answer`);
+  }, 600_000);
+});
+
+describe("F1c (X9b) the walk's parent graph follows commits indexed after it was loaded", () => {
+  it("a commit and a merge pushed after the first query are walked by the next", async () => {
+    const d = mergyHistory(3);
+    const { repo, index } = await loadSql(d);
+    const tipsOf = () => [
+      ...lines(git(d, ["for-each-ref", "--format=%(objectname)"])),
+      git(d, ["rev-parse", "HEAD"]).trim(),
+    ];
+    const want = (p: string) =>
+      lines(git(d, ["log", "--all", "--no-merges", "--format=%H", "--", p]));
+    expect(await index.simplifiedPathHistory("a", tipsOf())).toEqual(want("a"));
+    // more history: a side branch editing a, merged with -s ours (its edit discarded), then an edit
+    const old = git(d, ["rev-parse", "main"]).trim();
+    git(d, ["checkout", "-qb", "late"]);
+    write(d, "a", "late side\n");
+    git(d, ["commit", "-qam", "late side edit"]);
+    git(d, ["checkout", "-q", "main"]);
+    git(d, ["merge", "-q", "-s", "ours", "--no-edit", "late"]);
+    git(d, ["branch", "-qD", "late"]);
+    write(d, "a", "late main\n");
+    git(d, ["commit", "-qam", "late main edit"]);
+    const pack = execFileSync("git", ["pack-objects", "--all", "--stdout", "-q"], {
+      cwd: d,
+      input: "",
+      maxBuffer: 1 << 30,
+    });
+    await repo.objects.installPack(
+      (async function* () {
+        yield new Uint8Array(pack);
+      })(),
+    );
+    const now = git(d, ["rev-parse", "main"]).trim();
+    expect((await repo.refs.batch([{ name: "refs/heads/main", old, new: now }])).ok).toBe(true);
+    const after = await index.simplifiedPathHistory("a", tipsOf());
+    expect(after).toEqual(want("a"));
+    expect(after[0]).toBe(now); // the new edit; the discarded side's edit is not listed
+    expect(after).not.toContain(git(d, ["rev-parse", "main~1^2"]).trim());
+  }, 120_000);
 });
 
 describe("F2 search equals git log --all --no-merges -F --grep=<text>", () => {
@@ -423,6 +552,8 @@ describe("F4 speed: 100,000 commits over 50,000 files", () => {
           merge: parents.filter(Boolean).length > 1,
           message,
           changes: names.split("\n").filter(Boolean),
+          parents: parents.filter(Boolean),
+          mergeChanges: [],
         };
       });
     expect(rows.length).toBe(COMMITS);
@@ -446,13 +577,26 @@ describe("F4 speed: 100,000 commits over 50,000 files", () => {
     const searchMs = performance.now() - t0;
     expect(found).toEqual(lines(git(d, ["log", "--format=%H", "-F", "--grep=Rename d7/e1"])));
 
+    const tip = git(d, ["rev-parse", "main"]).trim();
+    t0 = performance.now();
+    const simplified = await index.simplifiedPathHistory(target, [tip]);
+    const simplifiedMs = performance.now() - t0;
+    expect(simplified).toEqual(history); // a linear history: nothing to simplify
+    // the parent graph is loaded on the first walk; later walks only extend it
+    t0 = performance.now();
+    const warm = await index.simplifiedPathHistory("d12/e3", [tip]);
+    const warmMs = performance.now() - t0;
+    expect(warm).toEqual(dirHistory);
+
     phases.push(
-      `path ${pathMs.toFixed(1)} ms, directory ${dirMs.toFixed(1)} ms, search ${searchMs.toFixed(1)} ms`,
+      `path ${pathMs.toFixed(1)} ms, directory ${dirMs.toFixed(1)} ms, search ${searchMs.toFixed(1)} ms, simplified path ${simplifiedMs.toFixed(1)} ms (first, loading the parents), ${warmMs.toFixed(1)} ms after`,
     );
+    console.log(phases.join("\n"));
     if (process.env.X9_TIMES) writeFileSync(process.env.X9_TIMES, phases.join("\n"));
     expect(pathMs).toBeLessThan(100);
     expect(dirMs).toBeLessThan(100);
     expect(searchMs).toBeLessThan(100);
+    expect(warmMs).toBeLessThan(100);
   }, 1_800_000);
 });
 

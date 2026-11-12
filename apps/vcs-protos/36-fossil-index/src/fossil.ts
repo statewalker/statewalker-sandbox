@@ -6,9 +6,12 @@
  * - `fossil_commit`: each indexed commit once — committer date, whether it is a merge, its message;
  * - `fossil_change`: for each non-merge commit, the file paths that differ from its parent (all of
  *   them for a root commit): adds, edits, deletes, mode changes, a file that became a directory;
- * - `fossil_text`: an FTS5 trigram index of the messages (case-sensitive, as `git log --grep`).
+ * - `fossil_text`: an FTS5 trigram index of the messages (case-sensitive, as `git log --grep`);
+ * - `fossil_parent`, `fossil_merge_change` (X9b): every commit's parents, and for each merge the
+ *   paths that differ from each parent, for git's default history simplification.
  *
- * `pathHistory(path)` is `git log --all --full-history --no-merges -- <path>` (a literal path, as a
+ * `pathHistory(path)` is `git log --all --full-history --no-merges -- <path>`; `simplifiedPathHistory`
+ * (X9b) is the same without `--full-history`, from given tips (a literal path, as a
  * file or a directory) and `searchMessages(text)` is `git log --all --no-merges -F --grep=<text>`.
  * Both list newest first, by committer date and then by id: git's order wherever dates are distinct
  * and fall from child to parent. The same answers come from walking the objects
@@ -35,6 +38,13 @@ export interface FossilIndex {
   /** `prepare` then `write`, for a store outside the index's database */
   indexCommits(tx: Db, tips: string[]): Promise<void>;
   pathHistory(path: string): Promise<string[]>;
+  /**
+   * `git log --no-merges -- <path>` from `tips` (for `--all`: every ref and HEAD), with git's
+   * default history simplification: a merge that is TREESAME to a parent for the path (no
+   * difference under it) is followed through its first such parent only, so commits that only a
+   * discarded side of a merge reaches are not listed.
+   */
+  simplifiedPathHistory(path: string, tips: string[]): Promise<string[]>;
   searchMessages(text: string): Promise<string[]>;
 }
 
@@ -44,6 +54,15 @@ const SCHEMA = [
   "CREATE INDEX IF NOT EXISTS fossil_commit_date ON fossil_commit (date)",
   `CREATE TABLE IF NOT EXISTS fossil_change (
      path TEXT NOT NULL, oid TEXT NOT NULL, PRIMARY KEY (path, oid)) WITHOUT ROWID`,
+  // every commit's parents, in order, with their count (the walk of simplifiedPathHistory)
+  `CREATE TABLE IF NOT EXISTS fossil_parent (
+     oid TEXT NOT NULL, idx INTEGER NOT NULL, parent TEXT NOT NULL, n INTEGER NOT NULL,
+     PRIMARY KEY (oid, idx)) WITHOUT ROWID`,
+  // for each merge, the file paths that differ from its parent number idx (TREESAME tests)
+  `CREATE TABLE IF NOT EXISTS fossil_merge_change (
+     oid TEXT NOT NULL, idx INTEGER NOT NULL, path TEXT NOT NULL,
+     PRIMARY KEY (oid, idx, path)) WITHOUT ROWID`,
+  "CREATE INDEX IF NOT EXISTS fossil_merge_change_path ON fossil_merge_change (path)",
   `CREATE VIRTUAL TABLE IF NOT EXISTS fossil_text USING fts5(
      oid UNINDEXED, message, tokenize = 'trigram case_sensitive 1')`,
 ];
@@ -107,6 +126,9 @@ export interface CommitInfo {
   merge: boolean;
   message: string;
   changes: string[];
+  parents: string[];
+  /** for a merge, per parent, the paths that differ from it */
+  mergeChanges: string[][];
 }
 
 /** walks the commits reachable from `tips`, stopping at those `known` says are done */
@@ -141,11 +163,25 @@ async function* commitsFrom(
     trees.set(oid, c.tree);
     const merge = c.parents.length > 1;
     const changes: string[] = [];
+    const mergeChanges: string[][] = [];
     if (!merge) {
       const parentTree = c.parents[0] ? await treeOf(c.parents[0]) : undefined;
       await changedPaths(read, parentTree, c.tree, "", changes);
-    }
-    yield { oid, date: c.committer.when, merge, message: c.message, changes };
+    } else
+      for (const p of c.parents) {
+        const diff: string[] = [];
+        await changedPaths(read, await treeOf(p), c.tree, "", diff);
+        mergeChanges.push(diff);
+      }
+    yield {
+      oid,
+      date: c.committer.when,
+      merge,
+      message: c.message,
+      changes,
+      parents: c.parents,
+      mergeChanges,
+    };
     stack.push(...c.parents);
   }
 }
@@ -217,9 +253,112 @@ async function insertRows(tx: Db, rows: CommitInfo[]) {
       part.flat(),
     );
   }
+  const parents = rows.flatMap((c) => c.parents.map((p, i) => [c.oid, i, p, c.parents.length]));
+  for (let i = 0; i < parents.length; i += 200) {
+    const part = parents.slice(i, i + 200);
+    await tx.query(
+      `INSERT OR IGNORE INTO fossil_parent (oid, idx, parent, n) VALUES ${part.map(() => "(?, ?, ?, ?)").join(", ")}`,
+      part.flat(),
+    );
+  }
+  const mergeChanges = rows.flatMap((c) =>
+    c.mergeChanges.flatMap((paths, i) => paths.map((p) => [c.oid, i, p])),
+  );
+  for (let i = 0; i < mergeChanges.length; i += 300) {
+    const part = mergeChanges.slice(i, i + 300);
+    await tx.query(
+      `INSERT OR IGNORE INTO fossil_merge_change (oid, idx, path) VALUES ${part.map(() => "(?, ?, ?)").join(", ")}`,
+      part.flat(),
+    );
+  }
 }
 
+/** does `p` fall under the literal path `path` ("" is the whole tree) */
+const under = (path: string, p: string) => path === "" || p === path || p.startsWith(`${path}/`);
+
 const SPAN = (path: string) => [path, `${path}/`, `${path}0`]; // '0' follows '/'
+
+/**
+ * The indexed commits' parents in memory, by integer id, for walks: loaded once, then extended by
+ * the rows added since (a rowid watermark on `fossil_commit`, whose rows are only ever inserted).
+ * A commit it lacks (indexed by another handle meanwhile, say) is read from the table, so the
+ * cache only ever saves queries; it never changes an answer.
+ */
+function parentGraph(db: Db) {
+  const ids = new Map<string, number>();
+  const oids: string[] = [];
+  /** parents by id; undefined: not loaded yet */
+  const parents: (number[] | undefined)[] = [];
+  let watermark = 0;
+  const idOf = (oid: string): number => {
+    let id = ids.get(oid);
+    if (id === undefined) {
+      id = oids.length;
+      ids.set(oid, id);
+      oids.push(oid);
+      parents.push(undefined);
+    }
+    return id;
+  };
+  const take = (rows: { oid: string; idx: number; parent: string }[], loaded: string[]) => {
+    for (const o of loaded) parents[idOf(o)] = [];
+    for (const r of rows) {
+      const list = parents[idOf(r.oid)];
+      // a commit not being loaded here is left to the lookup that misses it
+      if (list && list.length === Number(r.idx)) list.push(idOf(r.parent));
+    }
+  };
+  const load = async (list: string[]) => {
+    for (let i = 0; i < list.length; i += 500) {
+      const part = list.slice(i, i + 500);
+      const marks = part.map(() => "?").join(", ");
+      const rows = await db.query<{ oid: string; idx: number; parent: string }>(
+        `SELECT oid, idx, parent FROM fossil_parent WHERE oid IN (${marks}) ORDER BY oid, idx`,
+        part,
+      );
+      // only indexed commits are cached: one not indexed yet is looked up again next time
+      const indexed = await db.query<{ oid: string }>(
+        `SELECT oid FROM fossil_commit WHERE oid IN (${marks})`,
+        part,
+      );
+      take(
+        rows,
+        indexed.map((r) => r.oid),
+      );
+    }
+  };
+  return {
+    oids,
+    idOf,
+    lookup: (oid: string) => ids.get(oid),
+    /** takes in the rows added since the last call */
+    async refresh(): Promise<void> {
+      const fresh = await db.query<{ rowid: number; oid: string }>(
+        "SELECT rowid, oid FROM fossil_commit WHERE rowid > ? ORDER BY rowid",
+        [watermark],
+      );
+      if (!fresh.length) return;
+      watermark = Number(fresh[fresh.length - 1]?.rowid);
+      const list = fresh.map((f) => f.oid);
+      if (list.length > 1000)
+        // the whole table at once rather than in IN-lists
+        take(
+          await db.query<{ oid: string; idx: number; parent: string }>(
+            "SELECT oid, idx, parent FROM fossil_parent ORDER BY oid, idx",
+          ),
+          list,
+        );
+      else await load(list);
+    },
+    /** the parents already in memory, without a query */
+    cached: (id: number) => parents[id],
+    /** a commit not indexed has no parents to walk to (yet) */
+    async parentsOf(id: number): Promise<number[]> {
+      if (!parents[id]) await load([oids[id] as string]);
+      return parents[id] ?? [];
+    },
+  };
+}
 
 export async function fossilIndex(
   db: Db,
@@ -228,6 +367,7 @@ export async function fossilIndex(
 ): Promise<FossilIndex> {
   for (const s of SCHEMA) await db.exec(s);
   const repo: Repo = { objects };
+  const graph = parentGraph(db);
   const index: FossilIndex = {
     async prepare(tips) {
       const out: CommitInfo[] = [];
@@ -270,6 +410,53 @@ export async function fossilIndex(
                ORDER BY c.date DESC, c.oid`,
           );
       return rows.map((r) => r.oid);
+    },
+    async simplifiedPathHistory(pathspec, tips) {
+      const path = literalPath(pathspec);
+      // the merges' parents that differ from the merge under `path`: one indexed range
+      const rows = path
+        ? await db.query<{ oid: string; idx: number }>(
+            "SELECT oid, idx FROM fossil_merge_change WHERE path = ? OR (path >= ? AND path < ?)",
+            SPAN(path),
+          )
+        : await db.query<{ oid: string; idx: number }>(
+            "SELECT DISTINCT oid, idx FROM fossil_merge_change",
+          );
+      await graph.refresh();
+      const differs = new Map<number, Set<number>>();
+      for (const r of rows) {
+        const id = graph.idOf(r.oid);
+        const set = differs.get(id) ?? new Set<number>();
+        set.add(Number(r.idx));
+        differs.set(id, set);
+      }
+      // walk from the tips: every parent of a non-merge; of a merge, its first parent TREESAME
+      // for the path if it has one (git's try_to_simplify_commit), else all of them
+      let seen = new Uint8Array(graph.oids.length + tips.length);
+      const stack = tips.map((t) => graph.idOf(t));
+      while (stack.length) {
+        const id = stack.pop() as number;
+        if (id >= seen.length) {
+          const grown = new Uint8Array(Math.max(id + 1, seen.length * 2));
+          grown.set(seen);
+          seen = grown;
+        }
+        if (seen[id]) continue;
+        seen[id] = 1;
+        const parents = graph.cached(id) ?? (await graph.parentsOf(id));
+        if (parents.length < 2) {
+          for (const p of parents) stack.push(p);
+        } else {
+          const diff = differs.get(id);
+          const same = parents.findIndex((_, i) => !diff?.has(i));
+          if (same >= 0) stack.push(parents[same] as number);
+          else for (const p of parents) stack.push(p);
+        }
+      }
+      return (await index.pathHistory(pathspec)).filter((oid) => {
+        const id = graph.lookup(oid);
+        return id !== undefined && seen[id] === 1;
+      });
     },
     async searchMessages(text) {
       // git splits the pattern into lines, any of which may match; an empty line matches all
@@ -356,6 +543,39 @@ export async function walkPathHistory(repo: Repository, pathspec: string): Promi
     .filter(
       (c) => !c.merge && c.changes.some((p) => path === "" || p === path || p.startsWith(under)),
     )
+    .map((c) => c.oid);
+}
+
+/** `git log --all --no-merges -- <path>` (git's default simplification) by walking the objects */
+export async function walkSimplifiedPathHistory(
+  repo: Repository,
+  pathspec: string,
+): Promise<string[]> {
+  const path = literalPath(pathspec);
+  const all = new Map((await allCommits(repo)).map((c) => [c.oid, c]));
+  const tips: string[] = [];
+  for await (const r of repo.refs.list("refs/")) tips.push(r.oid);
+  const head = await repo.refs.resolve("HEAD");
+  if (head) tips.push(head);
+  const seen = new Set<string>();
+  const stack: string[] = [];
+  for (const t of tips) {
+    const c = await peelToCommit(repo, t);
+    if (c) stack.push(c);
+  }
+  while (stack.length) {
+    const oid = stack.pop() as string;
+    if (seen.has(oid)) continue;
+    seen.add(oid);
+    const c = all.get(oid) as CommitInfo;
+    if (!c.merge) stack.push(...c.parents);
+    else {
+      const same = c.mergeChanges.findIndex((diff) => !diff.some((p) => under(path, p)));
+      stack.push(...(same >= 0 ? [c.parents[same] as string] : c.parents));
+    }
+  }
+  return [...all.values()]
+    .filter((c) => seen.has(c.oid) && !c.merge && c.changes.some((p) => under(path, p)))
     .map((c) => c.oid);
 }
 
