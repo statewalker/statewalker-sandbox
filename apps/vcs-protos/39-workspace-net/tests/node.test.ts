@@ -156,6 +156,71 @@ describe("N2b (review of the mutants) an incoming push meets an uncommitted edit
   });
 });
 
+describe("N7 (review of #114) a push that lands on an endpoint during its own sync", () => {
+  it("is checked out, not reverted: the pushed edits and deletions survive", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    const c = await endpoint("c");
+    const cToA = await connect(c, a);
+    await put(c, "p.txt", "base\n");
+    await put(c, "gone.txt", "to delete\n");
+    await syncWith(c, cToA);
+    await idle(a);
+    await put(c, "p.txt", "from c\n");
+    await c.folder.remove("/gone.txt");
+    await put(a, "a.txt", "a's own\n");
+    await put(b, "b.txt", "b's\n"); // b has history of its own, so a's sync merges
+    await commitFolder(b);
+    let pushed = false;
+    // while a fetches from b, c pushes to a
+    const duringFetch = (f: typeof fetch): typeof fetch =>
+      (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(input, { ...init, duplex: "half" } as RequestInit);
+        if (!pushed && req.method === "POST" && req.url.endsWith("/git-upload-pack")) {
+          pushed = true;
+          await syncWith(c, cToA);
+        }
+        return f(req);
+      }) as typeof fetch;
+    await syncWith(a, await connect(a, b, duringFetch));
+    expect(pushed).toBe(true);
+    await idle(a);
+    await commitFolder(a);
+    const files = await folderFiles(a);
+    expect(files["p.txt"]).toBe("from c\n");
+    expect(files["gone.txt"]).toBeUndefined();
+    expect(files["a.txt"]).toBe("a's own\n");
+    await syncWith(c, cToA);
+    expect((await same([a, c]))["p.txt"]).toBe("from c\n");
+  });
+
+  it("a push moving main between the merge's read and its compare-and-swap is retried, not thrown", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    const c = await endpoint("c");
+    const toB = await connect(a, b);
+    const cToA = await connect(c, a);
+    await put(b, "b.txt", "b\n");
+    await commitFolder(b);
+    await put(c, "c.txt", "c\n");
+    const batch = a.repo.refs.batch.bind(a.repo.refs);
+    let raced = false;
+    a.repo.refs.batch = async (cmds) => {
+      if (!raced && cmds.some((x) => x.name === "refs/heads/main" && x.new !== null)) {
+        raced = true;
+        await syncWith(c, cToA); // moves a's main first
+      }
+      return batch(cmds);
+    };
+    const r = await syncWith(a, toB);
+    expect(raced).toBe(true);
+    expect(r.attempts).toBeGreaterThanOrEqual(2);
+    await syncWith(c, cToA);
+    const files = await same([a, b, c].slice(0, 2));
+    expect(files).toMatchObject({ "b.txt": "b\n", "c.txt": "c\n" });
+  });
+});
+
 describe("N3 property test: a hub and two spokes, only over the transport", () => {
   it("50 random schedules converge, and every untouched edit survives", async () => {
     for (let seed = 1; seed <= 50; seed++) {

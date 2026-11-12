@@ -398,3 +398,51 @@ describe("S8 (X17b) a head moved from outside after a local commit is checked ou
     expect(await folderFiles(b)).toEqual({ "shared.txt": "ONE\ntwo\nTHREE\n" });
   });
 });
+
+describe("S9 (review of #114) kept user edits survive a merge that loses its race, and a crash", () => {
+  it("the merge of a kept edit losing its compare-and-swap is retried with the edit", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    const copyObjects = async (from: Endpoint, to: Endpoint) => {
+      for await (const e of from.storage.list("/objects", { recursive: true })) {
+        if (e.kind !== "file" || (await to.storage.exists(e.path))) continue;
+        const parts: Uint8Array[] = [];
+        for await (const p of from.storage.read(e.path)) parts.push(p);
+        await to.storage.write(e.path, parts);
+      }
+    };
+    await put(a, "p.txt", "one\ntwo\nthree\n");
+    await sync(a, b);
+    const x = (await headOf(b)) as string;
+    // b's user edits line 3, uncommitted; a changes line 1 (Y), then an unrelated file (Z)
+    await put(b, "p.txt", "one\ntwo\nTHREE\n");
+    await put(a, "p.txt", "ONE\ntwo\nthree\n");
+    const y = (await commitFolder(a)) as string;
+    await put(a, "other.txt", "z\n");
+    const z = (await commitFolder(a)) as string;
+    await copyObjects(a, b);
+    expect((await b.repo.refs.batch([{ name: "refs/heads/main", old: x, new: y }])).ok).toBe(true);
+    // the second push lands just before the kept edit's merge moves main
+    const batch = b.repo.refs.batch.bind(b.repo.refs);
+    let raced = false;
+    b.repo.refs.batch = async (cmds) => {
+      if (!raced) {
+        raced = true;
+        await batch([{ name: "refs/heads/main", old: y, new: z }]);
+      }
+      return batch(cmds);
+    };
+    for (let i = 0; ; i++) {
+      try {
+        await commitFolder(b);
+        break;
+      } catch (err) {
+        if (i > 5 || !/moved/.test(String(err))) throw err;
+      }
+    }
+    expect(raced).toBe(true);
+    const files = await folderFiles(b);
+    expect(files["p.txt"]).toBe("ONE\ntwo\nTHREE\n"); // both changes, merged
+    expect(files["other.txt"]).toBe("z\n");
+  });
+});
