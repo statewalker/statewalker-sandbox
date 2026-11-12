@@ -29,6 +29,7 @@ over 50,000 files.
 | F1b | (X9b) **git's default simplification.** `simplifiedPathHistory(path, tips)` equals `git log --all --no-merges --format=%H -- <path>` (no `--full-history`) on 40 random histories — half of them built so the simplification matters: side branches merged as usual, with `-s ours`, after the same change on both sides, with an edit reverted on one side, most deleted after their merge — for every path and directory, from the index and by walking (`walkSimplifiedPathHistory`); at least 10 answers differ from `--full-history`'s. |
 | F1c | (X9b) Commits indexed after the walk's parent graph was loaded are walked by the next query. |
 | F4b | (X9b) On F4's 100,000 commits a simplified path history answers in under 100 ms once the parent graph is loaded. |
+| F7 | (X9c) **Per-branch answers.** With `tips`, `pathHistory` equals `git log --full-history --no-merges <ref> -- <path>`, `simplifiedPathHistory` `git log --no-merges <ref> -- <path>` and `searchMessages` `git log --no-merges -F --grep <ref>`, for every ref of 40 histories; after a ref is deleted (rows kept), the current refs as tips give `git log --all`'s answers. Under 100 ms from a tip on F4's corpus. |
 
 ## Scope
 
@@ -147,6 +148,23 @@ unrelated-history, file/directory, criss-cross and mode-only merges, and found a
 
 Not modelled: `refs/replace` and grafted or shallow parents (git follows replace refs by default).
 
+### X9c: per-branch answers
+
+`pathHistory(path, { tips })` and `searchMessages(text, { tips })` keep the commits `tips` reach
+(every parent followed, over X9b's in-memory parent graph); `simplifiedPathHistory` already took
+tips. One ref gives that branch's history (`git log <ref> -- <path>`); the current refs and HEAD
+give `--all` without what deleted or rewound refs left behind, which answers open thread 2 for
+queries while the rows stay. F7: every ref of the 40 histories, 2,000+ answers, all equal to
+git's; on 100,000 commits a path history and a search from a tip take 9 ms together. A merge read
+on a miss during a walk (indexed after the walk began) has its differences read before the walk,
+the window T6 names.
+
+| # | Mutant | Result |
+|---|---|---|
+| U1 | `pathHistory` ignores `tips` | killed (F7) |
+| U2 | `searchMessages` ignores `tips` | killed (F7) |
+| U3 | The walk follows first parents only | killed (F7) |
+
 ## Promotion grades
 
 | File | Grade | Why |
@@ -158,10 +176,14 @@ Not modelled: `refs/replace` and grafted or shallow parents (git follows replace
 
 1. ~~git's default history simplification through merges~~ — answered by X9b
    (`simplifiedPathHistory`, F1b). `--simplify-merges` (the parent-rewriting variant) is not done.
-2. Unindexing commits a deleted ref leaves unreachable (or keeping a reachability column).
+2. ~~Unindexing commits a deleted ref leaves unreachable~~ — answered for queries by X9c: with
+   `tips` (the refs left, and HEAD) nothing only a deleted or rewound ref reached is listed. The
+   rows themselves stay (storage, not answers); dropping them is X18's gc.
 3. Indexing speed: X6r's deeper tree reads on fast-import packs.
-4. Search across all refs only: per-branch answers need reachability (a commit-graph's generation
-   numbers would bound the walk).
+4. ~~Search across all refs only~~ — answered by X9c: `pathHistory` and `searchMessages` take
+   `tips` (one branch, several, or the current refs), walking X9b's parent graph (9 ms for a path
+   and a search on 100,000 commits). Generation numbers would let a walk stop early; not needed at
+   that speed.
 
 ### Review
 
