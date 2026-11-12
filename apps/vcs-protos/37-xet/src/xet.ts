@@ -249,6 +249,7 @@ async function* xorbChunks(bytes: AsyncIterable<Uint8Array>): AsyncGenerator<Uin
 export async function* reconstruct(
   answer: ReconstructionAnswer,
   fetchRange: FetchRange,
+  _opts: { length?: number } = {},
 ): AsyncGenerator<Uint8Array> {
   let skip = answer.offset_into_first_range;
   for (const term of answer.terms) {
