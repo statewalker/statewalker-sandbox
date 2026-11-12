@@ -104,6 +104,7 @@ All 14 tests pass (`pnpm test 39-workspace-net`), and X17's 14 (`38-workspace-sy
 | N5 | An edit on A appears in B's folder with no `sync` call; 20 quick writes cause ≤ 3 rounds; a change made during a round is synced after it; `stop()` during a round lets it finish and nothing runs after; `stop()` during a look at the folder starts no round; `idle()` after `stop()` returns; watchers on both sides converge. |
 | N7 | (review of #114) A push lands on an endpoint during its own `syncWith` (while it fetches from another peer): the pushed edit and deletion survive, nothing is reverted. A push moving `main` between the merge's read and its compare-and-swap is retried (2 rounds), not thrown. |
 | N6 | `src/` has no `node:` imports. |
+| N10 | (review of #118) A push lost to a competing push: `syncWith` reports both rounds' conflicts (2 attempts). A merge with conflicts on `main` whose kept edits then lose a race: the merge's conflicts are still reported (carried on the "moved" error). A refresh that fails goes to `onError`; a throwing `onError` breaks nothing; the next sync converges. |
 | N8 | (X17c) A push whose response the link drops unread: the serving endpoint's folder reaches the pushed files and head anyway. |
 | N9 | (X17c) A push over an uncommitted edit on the same path: `onRefresh` gets `{ pushed, head, conflicts: ["p.txt"] }`, `head` the serving endpoint's merge (past `pushed`); a clean push reports `conflicts: []` and `head === pushed`; a throwing `onRefresh` breaks nothing; `syncWith` on an endpoint whose `main` a bare push moved (folder not yet checked out) reports the conflict its folder commit merged. |
 
@@ -134,6 +135,11 @@ All 14 tests pass (`pnpm test 39-workspace-net`), and X17's 14 (`38-workspace-sy
 | C4 a throwing `onRefresh` not caught | N9 (an unhandled rejection) |
 | C5 the first `main` command instead of the last | none: equivalent (a push names `main` once) |
 | C6 (22) a throwing post-receive hook not caught | X8b R8 (an unhandled rejection) |
+| C7 (review of #118) post-receive awaited before the report | X8b R8b — survived first, test added |
+| C8 conflicts of a lost round not reported | N10 — survived first, test added |
+| C9 a throwing `onError` not caught | N10 — test added |
+| C10 (38) a merge's conflicts not carried when its kept edits lose a race | N10 — a real bug, found by review |
+| C11 `syncWith` ignores the conflicts a "moved" error carries | N10 |
 
 ## Promotion grades
 
@@ -152,4 +158,5 @@ All 14 tests pass (`pnpm test 39-workspace-net`), and X17's 14 (`38-workspace-sy
 4. ~~The refresh after a push needs the response read~~ — answered by X17c: receive-pack's
    post-receive hook queues it (N8).
 5. ~~What a refresh reports~~ — answered by X17c: `onRefresh` (N9). The pusher learns of the
-   serving endpoint's merge on its next sync, not from the push itself.
+   serving endpoint's merge on its next sync, not from the push itself. A refresh reports what it
+   merged itself: a push a sync (or an earlier refresh) already checked out reports there.

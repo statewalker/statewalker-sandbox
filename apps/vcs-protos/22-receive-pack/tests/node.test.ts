@@ -810,3 +810,25 @@ describe("R8 post-receive", () => {
       expect(calls[5]).toEqual([{ ref: "refs/heads/direct", old: ZERO, new: h }]);
     }, 60_000);
 });
+
+describe("R8b (review of #118) post-receive does not hold the report", () => {
+  it("a hook that never settles: the report is read in full, the hook started after the refs moved", async () => {
+    const src = repoWithHistory(3);
+    const h = rev(src, "HEAD");
+    let started = 0;
+    const { url } = await ourServer(src, "files", {
+      postReceive: () => {
+        started++;
+        return new Promise<void>(() => {});
+      },
+    });
+    const lines = await report(
+      await postReceive(
+        url,
+        receiveRequest([`${ZERO} ${h} refs/heads/held`], packOf(src, `${h}^!`)),
+      ),
+    );
+    expect(lines).toEqual(["unpack ok", "ok refs/heads/held"]);
+    await expect.poll(() => started).toBe(1);
+  });
+});

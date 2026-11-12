@@ -601,6 +601,113 @@ describe("N9 what a refresh reports", () => {
   });
 });
 
+describe("N10 (review of #118) conflicts across lost rounds and failed refreshes", () => {
+  it("syncWith reports the conflicts of every round, a lost one included", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    const c = await endpoint("c");
+    const toB = await connect(a, b);
+    const cToB = await connect(c, b);
+    await put(a, "p.txt", "base\n");
+    await put(a, "q.txt", "base\n");
+    await syncWith(a, toB);
+    await syncWith(c, cToB);
+    await put(c, "p.txt", "c's p\n");
+    await syncWith(c, cToB);
+    await idle(b);
+    await put(a, "p.txt", "a's p\n");
+    await put(a, "q.txt", "a's q\n");
+    let raced = false;
+    const r = await syncWith(a, toB, {
+      beforePush: async () => {
+        if (raced) return;
+        raced = true; // c's push lands between a's fetch and a's push: a's push loses
+        await put(c, "q.txt", "c's q\n");
+        await syncWith(c, cToB);
+      },
+    });
+    expect(r.attempts).toBe(2);
+    expect(r.conflicts).toEqual(["p.txt", "q.txt"]);
+  });
+
+  it("a merge whose kept edits then lose a race to a push: its conflicts are still reported", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    let typing = false;
+    const toB = await connect(
+      a,
+      b,
+      (f) =>
+        (async (input: RequestInfo | URL, init?: RequestInit) => {
+          if (typing) {
+            typing = false;
+            await put(a, "q.txt", "typed on a during the fetch\n"); // after a's folder commit
+            armed = true;
+          }
+          return f(input, init);
+        }) as typeof fetch,
+    );
+    await put(a, "p.txt", "base\n");
+    await put(a, "q.txt", "base\n");
+    await syncWith(a, toB);
+    await idle(b);
+    await put(b, "p.txt", "b's p\n");
+    await put(b, "q.txt", "b's q\n");
+    await commitFolder(b);
+    await put(a, "p.txt", "a's p\n");
+    // the second update of a's main in this sync (the kept edits' merge, after the merge with
+    // conflicts on p.txt has moved main) loses its compare-and-swap once, as to a push
+    let armed = false;
+    let mainUpdates = 0;
+    const refs = a.repo.refs;
+    const batch = refs.batch.bind(refs);
+    refs.batch = (async (cmds: Parameters<typeof batch>[0], o?: Parameters<typeof batch>[1]) => {
+      if (armed && cmds.some((x) => x.name === "refs/heads/main") && ++mainUpdates === 2) {
+        armed = false;
+        return { ok: false, rejected: [{ name: "refs/heads/main", reason: "mismatch" }] };
+      }
+      return batch(cmds, o);
+    }) as typeof refs.batch;
+    typing = true;
+    const r = await syncWith(a, toB);
+    expect(mainUpdates).toBe(2); // the race was injected
+    expect(r.attempts).toBe(2);
+    expect(r.conflicts).toEqual(["p.txt", "q.txt"]);
+    await same([a, b]);
+  });
+
+  it("a refresh that fails goes to onError (a throwing onError breaks nothing); the next one finishes it", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    const errors: unknown[] = [];
+    const toB = await connect(
+      a,
+      b,
+      undefined,
+      serveEndpoint(b, {
+        onError: (err) => {
+          errors.push(err);
+          throw new Error("listener");
+        },
+      }),
+    );
+    await put(a, "p.txt", "one\n");
+    await syncWith(a, toB);
+    await idle(b);
+    const list = b.folder.list.bind(b.folder);
+    b.folder.list = (() => {
+      throw new Error("folder unreadable");
+    }) as typeof b.folder.list;
+    await put(a, "p.txt", "two\n");
+    await syncWith(a, toB);
+    await expect.poll(() => errors.length).toBe(1);
+    expect(String(errors[0])).toMatch(/folder unreadable/);
+    b.folder.list = list;
+    await syncWith(a, toB);
+    await same([a, b]);
+  });
+});
+
 describe("N6 portable", () => {
   it("src/ has no node: imports", () => {
     const src = fileURLToPath(new URL("../src/", import.meta.url));

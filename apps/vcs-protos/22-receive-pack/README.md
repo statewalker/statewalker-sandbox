@@ -28,7 +28,7 @@ value can overwrite a concurrent update, or if a push holds the whole pack in me
 | R5 | Thin packs: our client's pack is thin against the remote's refs; its size within 1.10× of native `git push`'s for the same update. |
 | R6 | Streaming: pushing a 64 MiB blob, the server holds < 16 MiB extra live (the request body streams into the index). |
 | R7 | Hostile and invalid: malformed command lines, invalid ref names (git's check-ref-format) → `ng … invalid`, commands without the pack they need, an oversized request → refused, no crash; hooks: a `preReceive` callback can refuse the whole push, an `update` callback one ref (`ng … hook declined`). |
-| R8 | (X17c) `postReceive`: called with the commands whose refs moved (not the refused or stale ones; every one of an atomic push, in order), once the refs have moved, after the report, also when the response is never read; a hook that throws breaks neither the report nor later pushes; files and SQL. |
+| R8 | (X17c) `postReceive`: called with the commands whose refs moved (not the refused or stale ones; every one of an atomic push, in order), once the refs have moved, after the report, also when the response is never read; a hook that throws breaks neither the report nor later pushes; files and SQL. R8b: a hook that never settles does not hold the report. |
 
 ## Scope — what this slice does NOT do
 

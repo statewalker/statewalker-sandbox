@@ -139,7 +139,7 @@ export async function commitFolderReport(
   const at = await checkedOut(ep);
   const current = await headOf(ep);
   if (current && at !== current) await checkout(ep, at, current);
-  const conflicts = await finishKeptEdits(ep);
+  const conflicts = await finishKeptEdits(ep); // throws carrying what it committed
   const head = await headOf(ep);
   const files = await folderBytes(ep.folder);
   const tree = await writeFiles(ep.repo, Object.fromEntries(files));
@@ -158,7 +158,7 @@ export async function commitFolderReport(
   });
   if (!result.ok)
     // what was merged on the way is committed already: the error carries it for the retry
-    throw Object.assign(new Error(`${ep.name}: ${MAIN} moved`), { conflicts });
+    throw carrying(new Error(`${ep.name}: ${MAIN} moved`), conflicts);
   // The folder is this commit now. Left at the old record, a later checkout (a head moved by a
   // push, X17b) would take this commit's own edits for the user's and keep them over the merge.
   await setCheckedOut(ep, oid);
@@ -341,7 +341,11 @@ async function finishKeptEdits(ep: Endpoint): Promise<string[]> {
         }),
       );
       const before = JSON.stringify(pending);
-      conflicts.push(...(await mergeInto(ep, user, alsoOld)));
+      try {
+        conflicts.push(...(await mergeInto(ep, user, alsoOld)));
+      } catch (err) {
+        throw carrying(err, conflicts); // earlier rounds' merges are committed
+      }
       // the merge's checkout may have kept more (an edit typed meanwhile): merge that next
       const after = await readKept(ep);
       if (after && JSON.stringify(after) === before) await ep.storage.remove(KEPT);
@@ -358,6 +362,16 @@ async function finishKeptEdits(ep: Endpoint): Promise<string[]> {
   }
 }
 
+/**
+ * An error thrown after a ref moved carries the paths already committed with conflict markers
+ * (`conflicts`), so a caller that retries on "moved" can still report them.
+ */
+function carrying(err: unknown, conflicts: string[]): unknown {
+  if (!conflicts.length || typeof err !== "object" || err === null) return err;
+  const had = (err as { conflicts?: string[] }).conflicts ?? [];
+  return Object.assign(err, { conflicts: [...new Set([...had, ...conflicts])].sort() });
+}
+
 /** merges `theirs` into the endpoint's head: nothing, a fast-forward, or a deterministic merge */
 export async function mergeInto(
   ep: Endpoint,
@@ -367,13 +381,17 @@ export async function mergeInto(
   const ours = await headOf(ep);
   if (ours === theirs) return [];
   const extra: string[] = [];
-  const update = async (to: string) => {
+  const update = async (to: string, own: string[] = []) => {
     const r = await ep.repo.refs.batch([{ name: MAIN, old: ours ?? null, new: to }]);
     if (!r.ok) throw new Error(`${ep.name}: ${MAIN} moved`);
-    // from what the folder holds, which is not `ours` when a push moved `main` meanwhile:
-    // `ours`' changes are then not in the folder yet, and must not be taken for the user's
-    await checkout(ep, (await checkedOut(ep)) ?? ours, to, alsoOld);
-    extra.push(...(await finishKeptEdits(ep)));
+    try {
+      // from what the folder holds, which is not `ours` when a push moved `main` meanwhile:
+      // `ours`' changes are then not in the folder yet, and must not be taken for the user's
+      await checkout(ep, (await checkedOut(ep)) ?? ours, to, alsoOld);
+      extra.push(...(await finishKeptEdits(ep)));
+    } catch (err) {
+      throw carrying(err, own); // `to` is on main: its conflicts are committed
+    }
   };
   if (!ours) {
     await update(theirs);
@@ -405,7 +423,7 @@ export async function mergeInto(
     "commit",
     encodeCommit({ tree: r.tree, parents: [p1, p2], author: sync, committer: sync, message }),
   );
-  await update(oid);
+  await update(oid, conflicts);
   return [...new Set([...conflicts, ...extra])].sort();
 }
 

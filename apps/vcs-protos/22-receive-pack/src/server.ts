@@ -349,7 +349,8 @@ export function receivePackHandler(
           } catch (e) {
             ctrl.error(e);
           }
-          // as git and JGit do: after the report, for the refs that moved, even after an error.
+          // as git and JGit do: after the report (queued into the response here, not necessarily
+          // read yet), for the refs that moved, even after an error.
           // Apart from the stream: a hook that throws must not error a report not yet read.
           const hook = opts.postReceive;
           if (hook && updated.length)

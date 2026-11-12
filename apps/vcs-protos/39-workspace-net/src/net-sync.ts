@@ -77,11 +77,16 @@ export interface RefreshReport {
   /** the head the push left `main` at */
   pushed: string;
   /**
-   * `main` after the refresh: `pushed`, or a commit on top of it holding the serving endpoint's
-   * own folder edits (merged with the push), which the pushing endpoint gets on its next sync
+   * `main` when the refresh finished: usually `pushed`, or a commit past it holding the serving
+   * endpoint's own folder edits merged with the push (the pusher gets it on its next sync). A
+   * later push, or a sync queued before the refresh, may have moved it further.
    */
   head: string | undefined;
-  /** paths committed with conflict markers: the serving endpoint's edits against the push's */
+  /**
+   * paths this refresh committed with conflict markers. Empty when the push was already checked
+   * out by the time the refresh ran (a sync queued before it, or the refresh of an earlier push,
+   * reports those conflicts instead).
+   */
   conflicts: string[];
 }
 
@@ -173,7 +178,9 @@ export async function syncWith(
         // committed even when the push then loses its race: reported whichever round succeeds
         conflicts = all(theirs ? await mergeInto(ep, theirs) : []);
       } catch (err) {
-        // a push moved `main` between the merge's read and its compare-and-swap: a lost race
+        // a push moved `main` between the merge's read and its compare-and-swap: a lost race.
+        // What it committed before losing (`conflicts` on the error) is reported all the same.
+        all((err as { conflicts?: string[] })?.conflicts ?? []);
         if (!/moved/.test(String((err as Error)?.message))) throw err;
         lastReason = "main moved during the merge";
         continue;
