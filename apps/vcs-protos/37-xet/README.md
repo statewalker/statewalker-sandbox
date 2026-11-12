@@ -1,6 +1,6 @@
 # 37 — Can webrun-vcs chunk, hash and reconstruct Hugging Face Xet files exactly?
 
-Plan id **X11** (Hugging Face Xet). Status: **answered — yes: the specification's reference file is rebuilt from a recorded reconstruction answer, and its 796 chunk boundaries and hashes, xorb hash, file hash and range hash all match the reference data**.
+Plan id **X11** (Hugging Face Xet). Status: **answered — yes (X11b: xorbs and shards written, the reference shards byte for byte): the specification's reference file is rebuilt from a recorded reconstruction answer, and its 796 chunk boundaries and hashes, xorb hash, file hash and range hash all match the reference data**.
 
 ## Question
 
@@ -27,10 +27,14 @@ reconstructed byte differs from the reference data.
 | H7 | Added after the mutation check: a hash match one byte before 8 KiB is no boundary, one at 8 KiB is, as the specification's chunker (written out literally in the test, every byte hashed with BigInt) says. |
 | H8 | Added after review: the fetched body is closed when a term ends before its fetch range, and no chunk past the term is read; a fetch range taking in the xorb's `XETB` tail; a requested length truncating the last term; LZ4 frames with uncompressed and linked blocks, a content size and checksums decode, and frames that lie (literals past their block, no end mark, a match into an earlier independent block) are refused; random data in piece sizes from 1 byte to 1 MiB chunks as the specification's chunker does. |
 | H5 | **Portable.** `src/` has no `node:` imports. |
+| U1 | (X11b) **Shards byte for byte.** From the reference chunk list, the xorb and file hashes, the range hash and the file's SHA-256, `writeShard` gives the specification's four reference shards exactly: the base shard, the one with verification entries, the upload form (no footer) and the global-dedupe answer (keyed chunk hashes); each reference shard read and written again is the same bytes. |
+| U2 | (X11b) **Deduplication.** Every chunk of the reference file is found in the global-dedupe shard by its keyed hash, at its index; the terms built from those locations (with their range hashes) serialize to the reference upload shard. Terms split where chunks leave a xorb or skip an index; damaged shards are refused. |
+| U3 | (X11b) **Xorbs written.** `writeXorb` serializes chunks (LZ4, ByteGrouping4-LZ4 or none, a chunk LZ4 would not shrink stored), ending after the last chunk; the reference file's 796 chunks written so and read back through `reconstruct` give the reference chunk hashes. LZ4 frames round trip on edge cases and keep LZ4's end-of-block rules; xxHash32 (the header checksum) matches its published values. |
 
 ## Scope
 
-- Download (reconstruction) only; uploading xorbs and shards is later work.
+- Download (reconstruction), and (X11b) writing xorbs and shards and deduplicating against shards;
+  the CAS upload API itself (tokens, `POST /v1/xorbs`, `POST /v1/shards`) is not called.
 - The reconstruction answer is the v1 shape (`fetch_info`, inclusive `url_range`), as
   `/v1/reconstructions` returns it; v2's `xorbs[].ranges[]` and multipart range fetches are not
   implemented.
@@ -94,16 +98,63 @@ the tests from the dataset's pinned revision, checked by SHA-256 and cached. Bui
 | K10 | Groups of at most 8 | killed (H2, H3) |
 | K11 | Range hash over hex text | killed (H2) |
 
+### X11b: writing xorbs and shards
+
+`src/shard.ts` writes and reads shards; `writeXorb` (in `src/xet.ts`) and an LZ4 frame encoder
+(in `src/lz4.ts`) write xorbs. No new dependency, no `node:` imports.
+
+- **Shards (U1).** The reference shards are four, all committed under `fixtures/` (38 KB each):
+  - the base shard (file info with the file's SHA-256, CAS info, a footer);
+  - the same with verification entries;
+  - the upload form: the same without its footer;
+  - a global-dedupe answer: no file info, chunk hashes keyed with the footer's key.
+
+  `writeShard` reproduces each byte for byte from the reference chunk list and hashes. What the
+  specification left to the reference files:
+  - the 32-byte header tag;
+  - the SHA-256 in the metadata extension is stored in Xet's hash layout (each eight-byte word
+    reversed, `metadataSha256`), not as the raw digest;
+  - xet-core writes no lookup tables (each lookup offset at the footer, no entries) and leaves
+    `num_bytes_on_disk` 0;
+  - the footers' timestamps and the dedupe key are the reference shards' own inputs.
+- **Deduplication (U2).** `dedupeIndex` finds a chunk in shards by its hash, or by its keyed hash
+  in a shard whose footer has a key (BLAKE3 keyed with it; not RFC 2104 HMAC). `termsFor` turns
+  the chunks' locations into terms with their range hashes. For the reference file, every chunk
+  is found in the dedupe shard, and the upload shard built from it is the reference's.
+- **Xorbs (U3).** Chunks written with an 8-byte header each and no trailing bytes (the
+  specification forbids the `XETB` tail the reference xorb carries). LZ4 is a greedy block
+  encoder (one block per chunk, 64 KiB window, the format's end-of-block rules kept) in a frame
+  with the header checksum (xxHash32). The reference file's chunks make a 14,408,825-byte LZ4
+  xorb (the reference xorb is 14,737,817), read back to the reference chunk hashes.
+- **Not checked against another implementation:** our LZ4 frames are read back by our own
+  decoder. An independent decoder (python-lz4) could not be installed here, and none is in the
+  workspace. Before uploading to the live CAS, the frames should be checked once with liblz4 or
+  lz4_flex.
+
+| # | Mutant | Result |
+|---|---|---|
+| W1 | Compressed chunk offsets in the CAS section | killed (U1) |
+| W2 | Plain chunk hashes in a keyed shard | killed (U1) |
+| W3 | Terms never split | killed (U2) |
+| W4 | Matches farther back than 64 KiB | killed (U3) |
+| W5 | xxHash32 with a wrong seed term | killed (U3) |
+| W6 | No end-of-block rules | survived (our decoder does not check them); killed by U3's block check |
+| W7 | ByteGrouping4 groups in reverse | killed (U3) |
+| W8 | The SHA-256 stored as the raw digest | killed (U1, U2) |
+
 ## Promotion grades
 
 | File | Grade | Why |
 |---|---|---|
 | `src/xet.ts`, `src/gear-table.ts` | **Adopt** | the specification's reference data, bit for bit |
-| `src/lz4.ts` | **Adopt** for Xet chunks | small, dependency-free; frames verified through chunk hashes |
+| `src/lz4.ts` | **Adopt** for Xet chunks | small, dependency-free; frames verified through chunk hashes (the encoder: once against liblz4 or lz4_flex before uploads) |
+| `src/shard.ts` | **Adopt** | the reference shards, byte for byte |
 
 ## Open threads
 
-1. Upload: xorb and shard writing, deduplication against shards, the CAS upload API.
+1. Upload: ~~xorb and shard writing, deduplication against shards~~ — answered by X11b (U1–U3);
+   the CAS upload API (tokens, the xorb and shard POSTs, the global-dedupe query) is not called:
+   no write token here.
 2. Fetching several terms of one xorb with one request (the answer's fetch entries allow it).
 3. Reconstruction against the live CAS (tokens, signed URLs, retries, `Range` resume).
 4. Verifying a fetched xorb range by its chunk hashes as it streams (here the file hash checks the

@@ -7,6 +7,8 @@ data of the Xet protocol specification (https://huggingface.co/docs/xet):
   (63,527,244 bytes), one `<chunk hash> <length>` line each;
 - `….csv.xet-file-hash`, `….csv.xet-xorb-hash`: its file hash and its xorb's hash;
 - `eea25d6e….xorb.range-hash`: the verification hash of the range of all 796 chunks;
+- `….csv.shard`, `….csv.shard.verification`, `….csv.shard.verification-no-footer`,
+  `….csv.shard.dedupe` (X11b): the reference shards, unchanged;
 - `recon.recorded.json`: the reconstruction answer of `cas-server.xethub.hf.co` for the CSV's file
   hash (anonymous read token, 2026-11-12), with each signed URL replaced by `xorb://<hash>`.
 

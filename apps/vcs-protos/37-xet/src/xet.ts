@@ -6,7 +6,7 @@
 
 import { createBlake3 } from "../../03-sha256-blake3/src/hashes.js";
 import { GEAR_TABLE } from "./gear-table.js";
-import { lz4FrameDecode } from "./lz4.js";
+import { lz4FrameDecode, lz4FrameEncode } from "./lz4.js";
 
 export interface ChunkRef {
   hash: Uint8Array;
@@ -307,4 +307,64 @@ export async function* reconstruct(
         `reconstruction: term ${term.hash} gave ${produced} bytes, expected ${term.unpacked_length}`,
       );
   }
+}
+
+// ---------------------------------------------------------------- xorbs written (X11b)
+
+/** at most this many chunks in a xorb (the specification's MUST) */
+export const XORB_MAX_CHUNKS = 8192;
+
+/**
+ * A serialized xorb of `chunks`: an 8-byte header (version 0, compressed size, compression type,
+ * uncompressed size) and the payload per chunk, ending right after the last chunk (no footer: the
+ * specification forbids trailing bytes). LZ4 by default; a chunk LZ4 would not shrink is stored
+ * uncompressed, as the specification advises.
+ */
+export function writeXorb(
+  chunks: Uint8Array[],
+  o: { compression?: "none" | "lz4" | "bg4-lz4" } = {},
+): Uint8Array {
+  if (chunks.length > XORB_MAX_CHUNKS)
+    throw new Error(`xorb: ${chunks.length} chunks (at most ${XORB_MAX_CHUNKS})`);
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  for (const c of chunks) {
+    if (c.length >= 1 << 24) throw new Error("xorb: a chunk of 16 MiB or more");
+    let type = 0;
+    let payload = c;
+    if (o.compression !== "none" && c.length) {
+      const packed = lz4FrameEncode(o.compression === "bg4-lz4" ? bg4Split(c) : c);
+      if (packed.length < c.length) {
+        type = o.compression === "bg4-lz4" ? 2 : 1;
+        payload = packed;
+      }
+    }
+    const header = new Uint8Array(8);
+    header[0] = 0;
+    header[1] = payload.length & 0xff;
+    header[2] = (payload.length >> 8) & 0xff;
+    header[3] = (payload.length >> 16) & 0xff;
+    header[4] = type;
+    header[5] = c.length & 0xff;
+    header[6] = (c.length >> 8) & 0xff;
+    header[7] = (c.length >> 16) & 0xff;
+    parts.push(header, payload);
+    total += 8 + payload.length;
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+
+/** ByteGrouping4: byte k of every 4-byte group into group k (the inverse of `bg4Regroup`) */
+export function bg4Split(data: Uint8Array): Uint8Array {
+  const n = data.length;
+  const out = new Uint8Array(n);
+  let at = 0;
+  for (let g = 0; g < 4; g++) for (let i = g; i < n; i += 4) out[at++] = data[i] as number;
+  return out;
 }
