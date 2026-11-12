@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { GEAR_TABLE } from "../src/gear-table.js";
 import {
   bg4Regroup,
   type ChunkRef,
@@ -146,6 +147,56 @@ describe("H6 range requests and ByteGrouping4", () => {
       expect([...bg4Regroup(grouped)], `${n}`).toEqual([...data]);
     }
   });
+});
+
+describe("H7 chunk boundaries at the minimum size, against the specification's own steps", () => {
+  /** the specification's chunker, literally: every byte hashed (BigInt), the mask tested from 8 KiB */
+  function specChunkLengths(data: Uint8Array): number[] {
+    const MASK = 0xffff000000000000n;
+    const M = (1n << 64n) - 1n;
+    const out: number[] = [];
+    let h = 0n;
+    let size = 0;
+    for (const b of data) {
+      h = ((h << 1n) + (GEAR_TABLE[b] as bigint)) & M;
+      size++;
+      if ((size >= 8192 && (h & MASK) === 0n) || size >= 131072) {
+        out.push(size);
+        h = 0n;
+        size = 0;
+      }
+    }
+    if (size) out.push(size);
+    return out;
+  }
+  /** 64 bytes after which the hash has its top 16 bits clear: a candidate boundary */
+  function matchingWindow(): Uint8Array {
+    for (let seed = 1; ; seed++) {
+      const w = new Uint8Array(64);
+      let x = seed;
+      for (let i = 0; i < 64; i++) {
+        x = (x * 1103515245 + 12345) >>> 0;
+        w[i] = x >>> 24;
+      }
+      let h = 0n;
+      for (const b of w) h = ((h << 1n) + (GEAR_TABLE[b] as bigint)) & ((1n << 64n) - 1n);
+      if (h >> 48n === 0n) return w;
+    }
+  }
+
+  it("a match one byte before 8 KiB is no boundary; one at 8 KiB is", async () => {
+    const w = matchingWindow();
+    for (const end of [8191, 8192, 8193]) {
+      // filler that the window's 64 bytes wash out, then the window ending at byte `end`
+      const data = new Uint8Array(end + 20_000);
+      for (let i = 0; i < data.length; i++) data[i] = (i * 131 + 7) & 255;
+      data.set(w, end - 64);
+      const ours: number[] = [];
+      for await (const c of chunkStream([data] as unknown as AsyncIterable<Uint8Array>))
+        ours.push(c.length);
+      expect(ours, `window ending at ${end}`).toEqual(specChunkLengths(data));
+    }
+  }, 120_000);
 });
 
 describe("H5 portable", () => {
