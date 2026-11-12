@@ -49,8 +49,10 @@ export interface FossilIndex {
 }
 
 const SCHEMA = [
+  // `parents` (X9b): how many parents the commit has; NULL in an index written before X9b
   `CREATE TABLE IF NOT EXISTS fossil_commit (
-     oid TEXT PRIMARY KEY, date INTEGER NOT NULL, merge INTEGER NOT NULL, message TEXT NOT NULL)`,
+     oid TEXT PRIMARY KEY, date INTEGER NOT NULL, merge INTEGER NOT NULL, message TEXT NOT NULL,
+     parents INTEGER)`,
   "CREATE INDEX IF NOT EXISTS fossil_commit_date ON fossil_commit (date)",
   `CREATE TABLE IF NOT EXISTS fossil_change (
      path TEXT NOT NULL, oid TEXT NOT NULL, PRIMARY KEY (path, oid)) WITHOUT ROWID`,
@@ -237,14 +239,7 @@ const byOrder = (a: { date: number; oid: string }, b: { date: number; oid: strin
 
 async function insertRows(tx: Db, rows: CommitInfo[]) {
   if (!rows.length) return;
-  await tx.query(
-    `INSERT INTO fossil_commit (oid, date, merge, message) VALUES ${rows.map(() => "(?, ?, ?, ?)").join(", ")}`,
-    rows.flatMap((c) => [c.oid, c.date, c.merge ? 1 : 0, c.message]),
-  );
-  await tx.query(
-    `INSERT INTO fossil_text (oid, message) VALUES ${rows.map(() => "(?, ?)").join(", ")}`,
-    rows.flatMap((c) => [c.oid, c.message]),
-  );
+  await insertGraphRows(tx, rows);
   const changes = rows.flatMap((c) => c.changes.map((p) => [p, c.oid]));
   for (let i = 0; i < changes.length; i += 400) {
     const part = changes.slice(i, i + 400);
@@ -253,6 +248,20 @@ async function insertRows(tx: Db, rows: CommitInfo[]) {
       part.flat(),
     );
   }
+  await tx.query(
+    `INSERT INTO fossil_text (oid, message) VALUES ${rows.map(() => "(?, ?)").join(", ")}`,
+    rows.flatMap((c) => [c.oid, c.message]),
+  );
+  // the commit rows last: a query on the same connection mid-write (inside this transaction) sees
+  // a commit only once its parents and differences are there (review of #119)
+  await tx.query(
+    `INSERT INTO fossil_commit (oid, date, merge, message, parents) VALUES ${rows.map(() => "(?, ?, ?, ?, ?)").join(", ")}`,
+    rows.flatMap((c) => [c.oid, c.date, c.merge ? 1 : 0, c.message, c.parents.length]),
+  );
+}
+
+/** a commit's parents and, for a merge, its differences from each: what the walk reads */
+async function insertGraphRows(tx: Db, rows: CommitInfo[]) {
   const parents = rows.flatMap((c) => c.parents.map((p, i) => [c.oid, i, p, c.parents.length]));
   for (let i = 0; i < parents.length; i += 200) {
     const part = parents.slice(i, i + 200);
@@ -273,6 +282,16 @@ async function insertRows(tx: Db, rows: CommitInfo[]) {
   }
 }
 
+const EMPTY_INFO: CommitInfo = {
+  oid: "",
+  date: 0,
+  merge: false,
+  message: "",
+  changes: [],
+  parents: [],
+  mergeChanges: [],
+};
+
 /** does `p` fall under the literal path `path` ("" is the whole tree) */
 const under = (path: string, p: string) => path === "" || p === path || p.startsWith(`${path}/`);
 
@@ -281,13 +300,14 @@ const SPAN = (path: string) => [path, `${path}/`, `${path}0`]; // '0' follows '/
 /**
  * The indexed commits' parents in memory, by integer id, for walks: loaded once, then extended by
  * the rows added since (a rowid watermark on `fossil_commit`, whose rows are only ever inserted).
- * A commit it lacks (indexed by another handle meanwhile, say) is read from the table, so the
- * cache only ever saves queries; it never changes an answer.
+ * A commit is cached only once all its parent rows are seen (their count is the commit row's
+ * `parents`); one it lacks is read from the tables when the walk reaches it, so the cache only
+ * ever saves queries and never changes an answer.
  */
 function parentGraph(db: Db) {
   const ids = new Map<string, number>();
   const oids: string[] = [];
-  /** parents by id; undefined: not loaded yet */
+  /** parents by id; undefined: not loaded (or not complete) yet */
   const parents: (number[] | undefined)[] = [];
   let watermark = 0;
   const idOf = (oid: string): number => {
@@ -300,31 +320,36 @@ function parentGraph(db: Db) {
     }
     return id;
   };
-  const take = (rows: { oid: string; idx: number; parent: string }[], loaded: string[]) => {
-    for (const o of loaded) parents[idOf(o)] = [];
+  type ParentRow = { oid: string; idx: number; parent: string };
+  /** caches the commits whose parent rows are all here */
+  const take = (commits: { oid: string; parents: number | null }[], rows: ParentRow[]) => {
+    const found = new Map<string, string[]>();
     for (const r of rows) {
-      const list = parents[idOf(r.oid)];
-      // a commit not being loaded here is left to the lookup that misses it
-      if (list && list.length === Number(r.idx)) list.push(idOf(r.parent));
+      const list = found.get(r.oid) ?? [];
+      list[Number(r.idx)] = r.parent;
+      found.set(r.oid, list);
+    }
+    for (const c of commits) {
+      if (c.parents === null || c.parents === undefined) continue; // written before X9b
+      const list = found.get(c.oid) ?? [];
+      if (list.length !== Number(c.parents) || list.includes(undefined as never)) continue;
+      parents[idOf(c.oid)] = list.map(idOf);
     }
   };
   const load = async (list: string[]) => {
     for (let i = 0; i < list.length; i += 500) {
       const part = list.slice(i, i + 500);
       const marks = part.map(() => "?").join(", ");
-      const rows = await db.query<{ oid: string; idx: number; parent: string }>(
-        `SELECT oid, idx, parent FROM fossil_parent WHERE oid IN (${marks}) ORDER BY oid, idx`,
+      // the commit rows first: written last, so their parents are there when they are
+      const commits = await db.query<{ oid: string; parents: number | null }>(
+        `SELECT oid, parents FROM fossil_commit WHERE oid IN (${marks})`,
         part,
       );
-      // only indexed commits are cached: one not indexed yet is looked up again next time
-      const indexed = await db.query<{ oid: string }>(
-        `SELECT oid FROM fossil_commit WHERE oid IN (${marks})`,
+      const rows = await db.query<ParentRow>(
+        `SELECT oid, idx, parent FROM fossil_parent WHERE oid IN (${marks})`,
         part,
       );
-      take(
-        rows,
-        indexed.map((r) => r.oid),
-      );
+      take(commits, rows);
     }
   };
   return {
@@ -333,29 +358,25 @@ function parentGraph(db: Db) {
     lookup: (oid: string) => ids.get(oid),
     /** takes in the rows added since the last call */
     async refresh(): Promise<void> {
-      const fresh = await db.query<{ rowid: number; oid: string }>(
-        "SELECT rowid, oid FROM fossil_commit WHERE rowid > ? ORDER BY rowid",
+      const fresh = await db.query<{ rowid: number; oid: string; parents: number | null }>(
+        "SELECT rowid, oid, parents FROM fossil_commit WHERE rowid > ? ORDER BY rowid",
         [watermark],
       );
       if (!fresh.length) return;
       watermark = Number(fresh[fresh.length - 1]?.rowid);
-      const list = fresh.map((f) => f.oid);
-      if (list.length > 1000)
+      if (fresh.length > 1000)
         // the whole table at once rather than in IN-lists
-        take(
-          await db.query<{ oid: string; idx: number; parent: string }>(
-            "SELECT oid, idx, parent FROM fossil_parent ORDER BY oid, idx",
-          ),
-          list,
-        );
-      else await load(list);
+        take(fresh, await db.query<ParentRow>("SELECT oid, idx, parent FROM fossil_parent"));
+      else await load(fresh.map((f) => f.oid));
     },
     /** the parents already in memory, without a query */
     cached: (id: number) => parents[id],
-    /** a commit not indexed has no parents to walk to (yet) */
+    /** the parents of an indexed commit; one not indexed (or not complete) is refused */
     async parentsOf(id: number): Promise<number[]> {
       if (!parents[id]) await load([oids[id] as string]);
-      return parents[id] ?? [];
+      const list = parents[id];
+      if (!list) throw new Error(`fossil: commit ${oids[id]} is not indexed`);
+      return list;
     },
   };
 }
@@ -366,8 +387,70 @@ export async function fossilIndex(
   opts: { failAfter?: number } = {},
 ): Promise<FossilIndex> {
   for (const s of SCHEMA) await db.exec(s);
+  // an index written before X9b has no `parents` column
+  const columns = await db.query<{ name: string }>("PRAGMA table_info(fossil_commit)");
+  if (!columns.some((c) => c.name === "parents"))
+    await db.exec("ALTER TABLE fossil_commit ADD COLUMN parents INTEGER");
   const repo: Repo = { objects };
   const graph = parentGraph(db);
+  /**
+   * The parents and merge differences of commits indexed before X9b (`parents` NULL), read from
+   * the objects once per handle: without them every such commit would read as a root and every
+   * merge as TREESAME to its first parent (review of #119).
+   */
+  let backfilled = false;
+  const backfillOnce = async () => {
+    if (backfilled) return;
+    const read = treeReader(objects);
+    for (;;) {
+      const old = await db.query<{ oid: string }>(
+        "SELECT oid FROM fossil_commit WHERE parents IS NULL LIMIT 200",
+      );
+      if (!old.length) break;
+      const infos: CommitInfo[] = [];
+      for (const { oid } of old) {
+        const c = await readCommit(repo as Repository, oid);
+        const mergeChanges: string[][] = [];
+        if (c.parents.length > 1)
+          for (const p of c.parents) {
+            const diff: string[] = [];
+            await changedPaths(
+              read,
+              (await readCommit(repo as Repository, p)).tree,
+              c.tree,
+              "",
+              diff,
+            );
+            mergeChanges.push(diff);
+          }
+        infos.push({ ...EMPTY_INFO, oid, parents: c.parents, mergeChanges });
+      }
+      await insertGraphRows(db, infos);
+      for (const i of infos)
+        await db.query("UPDATE fossil_commit SET parents = ? WHERE oid = ?", [
+          i.parents.length,
+          i.oid,
+        ]);
+    }
+    backfilled = true;
+  };
+  /**
+   * The tips as commits: indexed commits as they are, annotated tags peeled, other objects (a
+   * blob, a tree) skipped as `git log --all` does; an id that is no object here is refused.
+   */
+  const commitTips = async (tips: string[]): Promise<string[]> => {
+    const out: string[] = [];
+    for (const t of tips) {
+      if ((await db.query("SELECT 1 FROM fossil_commit WHERE oid = ?", [t])).length) {
+        out.push(t);
+        continue;
+      }
+      if (!(await objects.has(t))) throw new Error(`fossil: tip ${t} is not indexed`);
+      const c = await peelToCommit(repo, t);
+      if (c) out.push(c);
+    }
+    return out;
+  };
   const index: FossilIndex = {
     async prepare(tips) {
       const out: CommitInfo[] = [];
@@ -413,6 +496,9 @@ export async function fossilIndex(
     },
     async simplifiedPathHistory(pathspec, tips) {
       const path = literalPath(pathspec);
+      await backfillOnce();
+      // before the differences are read: a commit cached here had its differences written first
+      await graph.refresh();
       // the merges' parents that differ from the merge under `path`: one indexed range
       const rows = path
         ? await db.query<{ oid: string; idx: number }>(
@@ -422,7 +508,6 @@ export async function fossilIndex(
         : await db.query<{ oid: string; idx: number }>(
             "SELECT DISTINCT oid, idx FROM fossil_merge_change",
           );
-      await graph.refresh();
       const differs = new Map<number, Set<number>>();
       for (const r of rows) {
         const id = graph.idOf(r.oid);
@@ -432,8 +517,9 @@ export async function fossilIndex(
       }
       // walk from the tips: every parent of a non-merge; of a merge, its first parent TREESAME
       // for the path if it has one (git's try_to_simplify_commit), else all of them
-      let seen = new Uint8Array(graph.oids.length + tips.length);
-      const stack = tips.map((t) => graph.idOf(t));
+      const stack: number[] = [];
+      for (const t of await commitTips(tips)) stack.push(graph.idOf(t));
+      let seen = new Uint8Array(graph.oids.length + stack.length);
       while (stack.length) {
         const id = stack.pop() as number;
         if (id >= seen.length) {

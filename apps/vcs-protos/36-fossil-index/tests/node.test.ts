@@ -145,6 +145,12 @@ function mergyHistory(seed: number): string {
     }
     if (rand() < 0.75) git(d, ["branch", "-qD", branch]);
   }
+  // an annotated tag on a commit only the tag reaches (review of #119: tips are peeled)
+  git(d, ["checkout", "-qb", "tagged"]);
+  edit(pick(paths));
+  git(d, ["tag", "-a", "-m", "release", "v1"]);
+  git(d, ["checkout", "-q", "main"]);
+  git(d, ["branch", "-qD", "tagged"]);
   return d;
 }
 
@@ -282,6 +288,66 @@ describe("F1c (X9b) the walk's parent graph follows commits indexed after it was
     expect(after[0]).toBe(now); // the new edit; the discarded side's edit is not listed
     expect(after).not.toContain(git(d, ["rev-parse", "main~1^2"]).trim());
   }, 120_000);
+});
+
+describe("F1d (review of #119) the walk against concurrent writes, old indexes, unindexed tips", () => {
+  const tipsOf = (d: string) => [
+    ...lines(git(d, ["for-each-ref", "--format=%(objectname)"])),
+    git(d, ["rev-parse", "HEAD"]).trim(),
+  ];
+  const want = (d: string, p: string) =>
+    lines(git(d, ["log", "--all", "--no-merges", "--format=%H", "--", p]));
+
+  it("a query while rows are being written does not poison later answers", async () => {
+    const d = mergyHistory(5);
+    const db = await newNodeSqliteDb();
+    const { repo } = await indexedSqlRepository(db); // objects only; refs written below
+    const pack = execFileSync("git", ["pack-objects", "--all", "--stdout", "-q"], {
+      cwd: d,
+      input: "",
+      maxBuffer: 1 << 30,
+    });
+    await repo.objects.installPack(
+      (async function* () {
+        yield new Uint8Array(pack);
+      })(),
+    );
+    const index = await fossilIndex(db, repo.objects);
+    const rows = await index.prepare(tipsOf(d));
+    // a Db whose every insert is followed by a query on the same connection, mid-write
+    const meddling = new Proxy(db, {
+      get(target, key) {
+        if (key !== "query") return Reflect.get(target, key).bind(target);
+        return async (sql: string, params?: unknown[]) => {
+          const out = await target.query(sql, params as never);
+          if (/^\s*INSERT/.test(sql))
+            await index.simplifiedPathHistory("a", tipsOf(d)).catch(() => {});
+          return out;
+        };
+      },
+    });
+    await index.write(meddling, rows);
+    for (const p of ["a", "b", "d", "x"])
+      expect(await index.simplifiedPathHistory(p, tipsOf(d)), p).toEqual(want(d, p));
+  }, 120_000);
+
+  it("an index written before X9b (no parents, no merge differences) is backfilled", async () => {
+    const d = mergyHistory(7);
+    const { db, repo } = await loadSql(d);
+    // what an index of the old schema holds: commits, changes, text; no parents
+    await db.exec("DELETE FROM fossil_parent");
+    await db.exec("DELETE FROM fossil_merge_change");
+    await db.exec("UPDATE fossil_commit SET parents = NULL");
+    const reopened = await fossilIndex(db, repo.objects);
+    for (const p of ["a", "b", "d", "x", "d/e"])
+      expect(await reopened.simplifiedPathHistory(p, tipsOf(d)), p).toEqual(want(d, p));
+  }, 120_000);
+
+  it("a tip that is not indexed is refused, not walked as a root", async () => {
+    const d = mergyHistory(9);
+    const { index } = await loadSql(d);
+    await expect(index.simplifiedPathHistory("a", ["0".repeat(40)])).rejects.toThrow(/not indexed/);
+  });
 });
 
 describe("F2 search equals git log --all --no-merges -F --grep=<text>", () => {

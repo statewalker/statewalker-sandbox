@@ -125,6 +125,28 @@ range, walks from the tips in memory, and keeps the `--full-history` answer's co
 | S4 | Neither the watermark refresh nor the read on a miss | killed (F1c) |
 | S5 | No watermark refresh (the read on a miss alone) | survived, as designed: the refresh only saves queries |
 
+**Review of #119** confirmed the rule against git's `revision.c` (`try_to_simplify_commit`;
+`REV_TREE_NEW` special only with `--remove-empty`; no default post-pass) and on octopus,
+unrelated-history, file/directory, criss-cross and mode-only merges, and found around it:
+
+| Finding | Fix (test F1d unless noted) |
+|---|---|
+| Annotated-tag tips not peeled: a commit only a tag reaches was missing | tips peeled (indexed commits as they are, tags followed, blobs and trees skipped); an id that is no object is refused. `mergyHistory` now tags a commit only the tag reaches (F1b) |
+| A query during an index write (same connection, inside its transaction) cached commits whose parent rows were not written yet as roots, for good | commit rows written after their parents and differences, and a commit cached only once all its parent rows are seen (`fossil_commit.parents`); either guard alone holds, both removed fail the test |
+| An index written before X9b read every commit as a root | the `parents` column added on open, and the parents and merge differences of commits without it read from the objects once per handle |
+| An unindexed tip or parent silently ended the walk | refused with "not indexed" |
+
+| # | Mutant | Result |
+|---|---|---|
+| T1 | Commit rows written before their parents | survived alone (T2 holds); with T2, killed |
+| T2 | Cached without checking the parent count | survived alone (T1 holds); with T1, killed |
+| T3 | No backfill | killed |
+| T4 | Tips not peeled | killed (F1b) |
+| T5 | A missing tip skipped | killed |
+| T6 | The differences read before the refresh | survived: the window (a write between the two queries of one walk) is not exercised |
+
+Not modelled: `refs/replace` and grafted or shallow parents (git follows replace refs by default).
+
 ## Promotion grades
 
 | File | Grade | Why |
