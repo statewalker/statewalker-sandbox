@@ -33,19 +33,6 @@ makes them a real deployment shape:
 
 ## How to run it
 
-`@statewalker/webrun-files-rpc` with appends (0.2.0) is not on npm yet: it is linked from a
-[webrun-files](https://github.com/statewalker/webrun-files) checkout beside this repository
-(`link:../../../webrun-files/packages/webrun-files-rpc`), built before installing here:
-
-```sh
-git clone https://github.com/statewalker/webrun-files ../webrun-files   # beside statewalker-sandbox
-git -C ../webrun-files checkout --detach 71b538341c1e3707d402dd1c886efd84e78a2e84   # what CI builds
-(cd ../webrun-files && pnpm install --filter '@statewalker/webrun-files-rpc...' \
-  && pnpm --filter '@statewalker/webrun-files-rpc...' run build)
-```
-
-Then:
-
 ```sh
 pnpm install                                        # at the repository root
 pnpm --filter @statewalker/flue-capfs-do test       # unit + cellb + cellb(celld bucket) + wrangler
@@ -61,7 +48,7 @@ again.
 |---|---|
 | `test:unit` | the authorization core and the store on `node:sqlite`, without a runtime |
 | `test:wrangler` | `wrangler dev` (workerd 2026-11-04) |
-| `test:cellb` | `@statewalker/cellb` 0.8.5 `loadProject`, cells in `node:sqlite` files |
+| `test:cellb` | `@statewalker/cellb` 0.8.6 `loadProject`, cells in `node:sqlite` files |
 | `test:cellb-bundled-only` | cellb with `TOOL_BUNDLE={"hostFsRuntimes":"bundled-only","allowedBundles":[<hash of tests/fixtures/todo-tool.ts>]}`: that approved bundle runs, other bundles and raw tools are refused |
 | `test:cellb-celld-bucket` | cellb with `celldBucket(sqliteObjectStore(...))`: cells as celld writes them (LTX logs, `own.json` ownership records), in the object store `celld dev` keeps |
 | `test:browser` | the project in Chromium on cellb (Playwright): builds `dist/`, serves it, runs the capability checks and the Python cases through the page |

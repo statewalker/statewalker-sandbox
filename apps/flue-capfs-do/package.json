@@ -38,7 +38,7 @@
     "@statewalker/webrun-bundler": "0.1.1",
     "@statewalker/webrun-files": "catalog:",
     "@statewalker/webrun-files-mem": "catalog:",
-    "@statewalker/webrun-files-rpc": "link:../../../webrun-files/packages/webrun-files-rpc",
+    "@statewalker/webrun-files-rpc": "catalog:",
     "@wasmer/sdk": "0.19.1",
     "acorn": "^8.15.0",
     "acorn-walk": "^8.3.4",
@@ -50,7 +50,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261107.1",
     "@sqlite.org/sqlite-wasm": "3.53.4-build2",
-    "@statewalker/cellb": "0.8.5",
+    "@statewalker/cellb": "0.8.6",
     "@statewalker/webrun-files-node": "catalog:",
     "esbuild": "0.28.2",
     "playwright": "catalog:",
