@@ -554,6 +554,72 @@ describe("R2b review: cached objects are not shared with callers", () => {
   });
 });
 
+describe("R7 small objects share block reads (git's pack windows)", () => {
+  /** counts the reads that reach the pack file */
+  const counting = (files: StreamingNodeFilesApi, packPath: string) => {
+    const counter = { reads: 0 };
+    const proxy = new Proxy(files, {
+      get(t, k, r) {
+        if (k === "read")
+          return (path: string, o?: { start?: number; length?: number }) => {
+            if (path === packPath) counter.reads++;
+            return t.read(path, o);
+          };
+        const v = Reflect.get(t, k, r);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    return { proxy, counter };
+  };
+  it("reading every object of a 60-commit pack costs far fewer reads than objects, and the same bytes", async () => {
+    const { repo, files, packPath, idxPath } = await installed(packAll(history, true));
+    const expected = allObjects(repo);
+    const { proxy, counter } = counting(files, packPath);
+    const reader = await openPack(proxy, packPath, idxPath, { baseCacheBytes: 0 });
+    const opened = counter.reads;
+    for (const [oid, e] of expected) {
+      const o = await reader.get(oid);
+      expect((await collect(o?.content ?? [])).equals(e.content), oid).toBe(true);
+      const raw = await collect((await reader.entry(oid))?.raw() ?? []);
+      expect(raw.length, oid).toBeGreaterThan(0);
+    }
+    expect(counter.reads - opened).toBeLessThan(expected.size / 8);
+  }, 60_000);
+  it("raw() chunks are copies: changing one does not change the next read", async () => {
+    const { files, packPath, idxPath, result } = await installed(packAll(history, true));
+    const reader = await openPack(files, packPath, idxPath);
+    const oid = result.entries[0]?.oid as string;
+    const first = await collect((await reader.entry(oid))?.raw() ?? []);
+    for await (const c of (await reader.entry(oid))?.raw() ?? []) c.fill(0);
+    const again = await collect((await reader.entry(oid))?.raw() ?? []);
+    expect(again.equals(first)).toBe(true);
+    await expect(
+      collect((await reader.get(oid, { verify: true }))?.content ?? []),
+    ).resolves.toBeDefined();
+  });
+  it("the block cache stays within readCacheBytes", async () => {
+    const { repo, files, packPath, idxPath } = await installed(packAll(history, true));
+    const limit = 65536; // the pack is two blocks: holding both exceeds it
+    const reader = await openPack(files, packPath, idxPath, { readCacheBytes: limit });
+    for (const oid of allObjects(repo).keys())
+      await collect((await reader.get(oid))?.content ?? []);
+    expect(reader.stats.peakBlockBytes).toBeGreaterThan(0);
+    expect(reader.stats.peakBlockBytes).toBeLessThanOrEqual(limit);
+  });
+  it("readCacheBytes: 0 reads straight from the file", async () => {
+    const { repo, files, packPath, idxPath } = await installed(packAll(history, true));
+    const { proxy, counter } = counting(files, packPath);
+    const reader = await openPack(proxy, packPath, idxPath, {
+      readCacheBytes: 0,
+      baseCacheBytes: 0,
+    });
+    const opened = counter.reads;
+    const oids = [...allObjects(repo).keys()];
+    for (const oid of oids) await collect((await reader.get(oid))?.content ?? []);
+    expect(counter.reads - opened).toBeGreaterThanOrEqual(oids.length);
+  });
+});
+
 describe("R6 streaming a large packed blob", () => {
   it("a 64 MiB incompressible blob is streamed with < 16 MiB live", async () => {
     const src = emptyRepo();
