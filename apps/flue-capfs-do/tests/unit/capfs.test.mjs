@@ -46,7 +46,14 @@ async function setup() {
   const ro = Biscuit.fromBase64(token)
     .attenuate(attenuationBlock({ readOnly: true }))
     .toBase64();
-  return { store, methods, hooks, fs: new CapFs(capOf(token)), roFs: new CapFs(capOf(ro)) };
+  return {
+    store,
+    methods,
+    hooks,
+    cap: capOf(token),
+    fs: new CapFs(capOf(token)),
+    roFs: new CapFs(capOf(ro)),
+  };
 }
 const code = (c) => (e) => e.code === c || String(e.message).startsWith(`${c}:`);
 const TEXT_METHODS = ["readFile", "writeFile", "appendFile"];
@@ -171,4 +178,87 @@ test("a large append that races another writer (ESTALE) is sent again", async ()
     2 + more.length,
     "appended once, after the race",
   );
+});
+
+// ---- a tool's whole-file calls, answered on the host side (largeFileCalls) ----
+
+test("a tool's whole-file calls over 16 MiB are streamed on the host side", async () => {
+  const { cap, store, methods } = await setup();
+  const { largeFileCalls } = await import("../../src/cap-bytes.ts");
+  const call = largeFileCalls(cap);
+  const big = new Uint8Array(MAX_WHOLE_FILE_BYTES + 3).map((_, i) => (i * 7) & 255);
+  await call("writeFileBuffer", "/p1/big.bin", big);
+  await call("appendFileBuffer", "/p1/big.bin", big.subarray(0, 5));
+  await call("appendFileBuffer", "/p1/app.bin", big.subarray(0, MAX_WHOLE_FILE_BYTES + 1));
+  const back = await call("readFileBuffer", "/p1/big.bin");
+  assert.equal(back.length, MAX_WHOLE_FILE_BYTES + 8);
+  assert.deepEqual(back.subarray(0, MAX_WHOLE_FILE_BYTES + 3), big);
+  assert.deepEqual(back.subarray(MAX_WHOLE_FILE_BYTES + 3), big.subarray(0, 5));
+  assert.equal((await store.stat("/p1/app.bin")).size, MAX_WHOLE_FILE_BYTES + 1);
+  assert.ok(methods.includes("rpc:openWrite") && methods.includes("rpc:openRead"), "streamed");
+  // Small files and every other call go as they are.
+  methods.length = 0;
+  await call("writeFileBuffer", "/p1/s.bin", new Uint8Array([1, 2]));
+  assert.deepEqual([...(await call("readFileBuffer", "/p1/s.bin"))], [1, 2]);
+  assert.equal((await call("stat", "/p1/s.bin")).size, 2);
+  assert.ok(!methods.some((m) => m.startsWith("rpc:")), methods.join(", "));
+  await assert.rejects(call("readFileBuffer", "/p1/none"), code("ENOENT"));
+  await assert.rejects(call("writeFileBuffer", "/p2/x", new Uint8Array(1)), code("EACCES"));
+  assert.equal((await store.stat("/p1/big.bin")).size, MAX_WHOLE_FILE_BYTES + 8);
+});
+
+test("a tool's read must fit the RPC reply: EFBIG on the host, before anything is streamed", async () => {
+  const { cap, fs, methods } = await setup();
+  const { largeFileCalls, MAX_TOOL_READ_BYTES } = await import("../../src/cap-bytes.ts");
+  assert.ok(MAX_TOOL_READ_BYTES > MAX_WHOLE_FILE_BYTES);
+  assert.ok(MAX_TOOL_READ_BYTES <= 31 * 1024 * 1024, "room for the reply under JS RPC's 32 MiB");
+  await fs.writeFile("/p1/r.bin", new Uint8Array(MAX_TOOL_READ_BYTES + 1));
+  methods.length = 0;
+  await assert.rejects(largeFileCalls(cap)("readFileBuffer", "/p1/r.bin"), code("EFBIG"));
+  assert.ok(!methods.includes("rpc:openRead"), "nothing streamed");
+});
+
+test("a tool's large calls stream one at a time in an isolate (host memory)", async () => {
+  const { cap, hooks } = await setup();
+  const { largeFileCalls } = await import("../../src/cap-bytes.ts");
+  let open = 0;
+  let most = 0;
+  hooks.beforeRpc = async (m) => {
+    if (m === "openWrite" || m === "openRead") most = Math.max(most, ++open);
+    if (m === "closeWrite" || m === "closeRead") open--;
+  };
+  const big = new Uint8Array(MAX_WHOLE_FILE_BYTES + 1);
+  // Two capabilities' calls (two tools in one isolate) wait for each other.
+  await Promise.all([
+    largeFileCalls(cap)("writeFileBuffer", "/p1/a.bin", big),
+    largeFileCalls(cap)("writeFileBuffer", "/p1/b.bin", big),
+    largeFileCalls(cap)("appendFileBuffer", "/p1/c.bin", big),
+  ]);
+  await Promise.all([
+    largeFileCalls(cap)("readFileBuffer", "/p1/a.bin"),
+    largeFileCalls(cap)("readFileBuffer", "/p1/b.bin"),
+  ]);
+  assert.equal(most, 1);
+});
+
+test("everyCall checks before each call and files-RPC call (a tool's run still active)", async () => {
+  const { cap, store } = await setup();
+  const { everyCall, largeFileCalls } = await import("../../src/cap-bytes.ts");
+  let active = true;
+  let checks = 0;
+  const live = everyCall(cap, async () => {
+    checks++;
+    if (!active) throw new Error("EACCES: the tool's run is over");
+  });
+  const big = new Uint8Array(MAX_WHOLE_FILE_BYTES + 1);
+  await largeFileCalls(live)("writeFileBuffer", "/p1/l.bin", big);
+  assert.ok(checks > 2, `checked on every call of the stream (${checks})`);
+  // The run ends while a large read streams: its next call is refused.
+  let calls = 0;
+  const ending = everyCall(cap, async () => {
+    if (++calls === 3) active = false;
+    if (!active) throw new Error("EACCES: the tool's run is over");
+  });
+  await assert.rejects(largeFileCalls(ending)("readFileBuffer", "/p1/l.bin"), code("EACCES"));
+  assert.equal((await store.stat("/p1/l.bin")).size, MAX_WHOLE_FILE_BYTES + 1);
 });
