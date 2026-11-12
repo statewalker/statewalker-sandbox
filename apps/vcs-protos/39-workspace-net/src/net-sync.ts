@@ -86,11 +86,16 @@ export function serveEndpoint(ep: Endpoint): (req: Request) => Promise<Response>
     };
     const body = new ReadableStream<Uint8Array>({
       async pull(c) {
-        const r = await reader.read();
-        if (r.done) {
-          c.close();
-          finish();
-        } else c.enqueue(r.value);
+        try {
+          const r = await reader.read();
+          if (r.done) {
+            c.close();
+            finish();
+          } else c.enqueue(r.value);
+        } catch (err) {
+          finish(); // the ref moved before the report was written, whatever became of the body
+          throw err;
+        }
       },
       async cancel(reason) {
         await reader.cancel(reason);
@@ -132,6 +137,7 @@ export async function syncWith(
   const maxAttempts = o.maxAttempts ?? 8;
   const tracking = `refs/remotes/${peer.name}/main`;
   return run(ep, async () => {
+    let lastReason = "";
     for (let attempts = 1; attempts <= maxAttempts; attempts++) {
       await commitFolderSettled(ep);
       await fetchFrom(peer.url, ep.repo, {
@@ -141,7 +147,15 @@ export async function syncWith(
         signal: o.signal,
       });
       const theirs = await ep.repo.refs.resolve(tracking);
-      const conflicts = theirs ? await mergeInto(ep, theirs) : [];
+      let conflicts: string[] = [];
+      try {
+        conflicts = theirs ? await mergeInto(ep, theirs) : [];
+      } catch (err) {
+        // a push moved `main` between the merge's read and its compare-and-swap: a lost race
+        if (!/moved/.test(String((err as Error)?.message))) throw err;
+        lastReason = "main moved during the merge";
+        continue;
+      }
       const head = await headOf(ep);
       if (!head || head === theirs) return { head: head ?? "", conflicts, attempts };
       await o.beforePush?.();
@@ -155,8 +169,11 @@ export async function syncWith(
       if (!r || !LOST_RACE.test(r.reason ?? "")) {
         throw new Error(`push to ${peer.name} refused: ${r?.reason ?? "no report"}`);
       }
+      lastReason = r.reason ?? "";
     }
-    throw new Error(`no agreement with ${peer.name} after ${maxAttempts} attempts`);
+    throw new Error(
+      `no agreement with ${peer.name} after ${maxAttempts} attempts (last: ${lastReason})`,
+    );
   });
 }
 
@@ -171,6 +188,8 @@ export interface WatchOptions {
   onSync?: () => void;
   /** a peer that could not be reached; the next round tries again */
   onError?: (err: unknown, peer: Peer) => void;
+  /** how long one peer's sync may take before it is abandoned for this round (default 120 s) */
+  peerTimeoutMs?: number;
 }
 
 /** what the poll compares: every file's path, size and modification time */
@@ -210,20 +229,26 @@ export function watchEndpoint(
 
   const syncAll = async () => {
     for (const peer of peers) {
+      if (stopped) break;
       try {
-        await syncWith(ep, peer);
+        await syncWith(ep, peer, { signal: AbortSignal.timeout(o.peerTimeoutMs ?? 120_000) });
       } catch (err) {
-        o.onError?.(err, peer);
+        try {
+          o.onError?.(err, peer);
+        } catch {}
       }
     }
     lastRound = Date.now();
-    o.onSync?.();
+    try {
+      o.onSync?.();
+    } catch {}
   };
   const tick = async () => {
     timer = undefined;
     if (stopped) return;
     try {
       const now = await snapshot(ep.folder);
+      if (stopped) return; // stopped while looking
       if (seen !== undefined && now !== seen) {
         dirty = true;
         changedAt = Date.now();
@@ -259,6 +284,7 @@ export function watchEndpoint(
     async idle() {
       for (;;) {
         await round;
+        if (stopped) return;
         await new Promise((r) => setTimeout(r, pollMs * 2));
         if (!round && !dirty) return;
       }

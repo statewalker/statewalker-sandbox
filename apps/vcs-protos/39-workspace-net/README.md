@@ -51,7 +51,13 @@ the same code path as libp2p, X8c).
 2. **The remote's folder follows a push.** receive-pack moves `main`; once the push's response has
    been sent, the serving endpoint queues a refresh that checks its folder out at the new head. The
    response does not wait for it: two endpoints syncing with each other at once would otherwise
-   wait on each other's queues. Each endpoint's own operations (sync, refresh) run one at a time.
+   wait on each other's queues. An endpoint's own operations (sync, refresh) run one at a time,
+   but **incoming pushes are not queued**: they move `main` at any moment, guarded only by
+   compare-and-swap. Everything that checks out therefore starts from the commit the folder
+   actually holds (the checked-out record), never from `main`; a push landing during an
+   endpoint's own sync is checked out with the merge instead of being taken for user edits and
+   reverted (review of #114, N7); and a merge whose compare-and-swap loses to a push starts the
+   round again rather than failing.
 3. **A failing link leaves nothing half-done.** Objects arrive before refs move on both sides
    (X6a's install, receive-pack's order), so a fetch or push cut after 4 KiB leaves both
    repositories `git fsck --strict`-clean, and the next sync completes (N4).
@@ -82,7 +88,7 @@ regression tests):
 
 ### Verified
 
-All 11 tests pass (`pnpm test 39-workspace-net`), and X17's 13 (`38-workspace-sync`, S8 new).
+All 14 tests pass (`pnpm test 39-workspace-net`), and X17's 14 (`38-workspace-sync`, S8 and S9 new).
 
 | # | Result |
 |---|---|
@@ -90,7 +96,8 @@ All 11 tests pass (`pnpm test 39-workspace-net`), and X17's 13 (`38-workspace-sy
 | N2 | The remote commits between fetch and push: the push is refused, `syncWith` retries (2 attempts), the remote's file survives. N2b: an uncommitted edit on the remote meets a push to the same path: both texts survive in the file, on both endpoints. |
 | N3 | 50 random hub-and-spoke schedules (edits, a shared file that conflicts, syncs only through the bridge): every endpoint on one commit and the same files; every edit no one else touched survives. |
 | N4 | A link cut after 4 KiB of the fetch's response, or of the push's request: `syncWith` rejects, both repositories pass `fsck --strict`, the next sync converges (60 / 90 files). |
-| N5 | An edit on A appears in B's folder with no `sync` call; 20 quick writes cause ≤ 3 rounds; a change made during a round is synced after it; `stop()` during a round lets it finish and nothing runs after; watchers on both sides converge. |
+| N5 | An edit on A appears in B's folder with no `sync` call; 20 quick writes cause ≤ 3 rounds; a change made during a round is synced after it; `stop()` during a round lets it finish and nothing runs after; `stop()` during a look at the folder starts no round; `idle()` after `stop()` returns; watchers on both sides converge. |
+| N7 | (review of #114) A push lands on an endpoint during its own `syncWith` (while it fetches from another peer): the pushed edit and deletion survive, nothing is reverted. A push moving `main` between the merge's read and its compare-and-swap is retried (2 rounds), not thrown. |
 | N6 | `src/` has no `node:` imports. |
 
 ### Mutation check
@@ -107,13 +114,19 @@ All 11 tests pass (`pnpm test 39-workspace-net`), and X17's 13 (`38-workspace-sy
 | X1 (38) a commit not recorded as checked out | X17 S3, S8, N1 |
 | X2 (38) kept user edits not merged (sync) | X17 S7 |
 | X3 (38) kept user edits not merged (refresh after a push) | N2b — survived first, test added |
-| X4 (38) the user's own committed bytes not recognised in the follow-up checkout | X17 S7 |
+| X4 (38) the user's own committed bytes not recognised in the follow-up checkout | X17 S7 (by a timeout: the recursion does not end) |
+| R1 (38, review of #114) a checkout starts from `main`, not from the folder's commit | N7 push during a sync |
+| R2 (38) kept edits recorded nowhere before the checkout is | X17 S7 |
+| R3 (38) recorded kept edits not finished by `commitFolder` | X17 S9 |
+| R4 a lost race inside the merge is thrown | N7 |
+| R5 `stop()` during a look at the folder not honoured | N5 — survived first (the test's change was not yet due), test sharpened |
+| R6 `idle()` after `stop()` waits forever | N5 — survived first, test added |
 
 ## Promotion grades
 
 | File | Grade | For |
 |---|---|---|
-| `src/net-sync.ts` | **Adopt** | webrun-sync's network sync: `serveEndpoint`, `syncWith`, `watchEndpoint` |
+| `src/net-sync.ts` | **Adapt** | webrun-sync's network sync: `serveEndpoint`, `syncWith`, `watchEndpoint`. Before adopting: open threads 4–5. |
 
 ## Open threads
 
@@ -122,4 +135,10 @@ All 11 tests pass (`pnpm test 39-workspace-net`), and X17's 13 (`38-workspace-sy
 2. **Change events** where the platform has them (`fs.watch`, FileSystemObserver), with polling as
    the fallback; content hashes for same-size rewrites within a clock tick.
 3. **Many peers**: a hub syncing with spokes that are offline, peer discovery, and fairness when
-   one peer is slow (rounds are sequential per endpoint today).
+   one peer is slow (rounds are sequential per endpoint today; `peerTimeoutMs` bounds one peer).
+4. **The refresh after a push needs the response read to its end** (or cancelled, or failed).
+   httpeers' bridge drains it; a transport that drops an unread response would leave the folder to
+   the next sync or watcher round, which checks it out then.
+5. **What a refresh reports**: conflicts a refresh merges are committed but not reported to
+   anyone, and a refresh also commits the serving endpoint's own folder edits, so the head
+   `syncWith` returned may already have moved on.

@@ -409,6 +409,58 @@ describe("N5 a watcher keeps endpoints in step", () => {
     expect((await folderFiles(b))["two.txt"]).toBeUndefined();
   });
 
+  it("(review) stop() while the folder is being looked at: no round follows; idle() after stop() returns", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    let slowList = false;
+    let listing!: () => void;
+    const listed = new Promise<void>((r) => {
+      listing = r;
+    });
+    const folder = a.folder;
+    a.folder = new Proxy(folder, {
+      get(t, k, rcv) {
+        if (k === "list" && slowList)
+          return (path: string, opts?: { recursive?: boolean }) =>
+            (async function* () {
+              listing();
+              await sleep(200);
+              yield* t.list(path, opts);
+            })();
+        const v = Reflect.get(t, k, rcv);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    let syncs = 0;
+    const watcher = watchEndpoint(a, [await connect(a, b)], {
+      pollMs: 20,
+      debounceMs: 30,
+      onSync: () => {
+        syncs++;
+      },
+    });
+    stops.push(() => watcher.stop());
+    await watcher.idle();
+    syncs = 0;
+    await put(a, "x.txt", "x\n");
+    await sleep(25); // a look has seen x.txt; the debounce is not due yet
+    slowList = true;
+    await listed; // the next look, slow: the debounce falls due while it runs
+    await watcher.stop(); // during the look that would find x.txt
+    await sleep(400);
+    expect(syncs).toBe(0);
+    expect((await folderFiles(b))["x.txt"]).toBeUndefined();
+    // a watcher stopped before its first look still has its starting sync pending
+    const early = watchEndpoint(a, [], { pollMs: 20 });
+    await early.stop();
+    await Promise.race([
+      early.idle(),
+      sleep(2000).then(() => {
+        throw new Error("idle() after stop() did not return");
+      }),
+    ]);
+  });
+
   it("watchers on both sides: edits made on each side converge", async () => {
     const a = await endpoint("a");
     const b = await endpoint("b");

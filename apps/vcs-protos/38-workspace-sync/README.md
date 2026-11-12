@@ -40,7 +40,7 @@ is not a valid git repository.
 ## Answer
 
 Yes. `src/workspace.ts` (about 230 lines, no `node:` imports) builds it from X16a's repository, X5's
-refs on a FilesApi (X15's `filesRefFiles`) and X13f's recursive merge. All 13 tests pass:
+refs on a FilesApi (X15's `filesRefFiles`) and X13f's recursive merge. All 14 tests pass:
 
 - **S1.** 30 random schedules of non-overlapping edits (adds, edits, deletes, new directories)
   and syncs over three endpoints: no conflict, one commit and the same files everywhere.
@@ -92,6 +92,8 @@ merges from copies taken before either side merged.
 | Earlier belief | What the network showed |
 |---|---|
 | "The folder is recorded as checked out after every checkout" | Not after `commitFolder`'s own commit: locally the next sync repaired it, but a push moving `main` first made the refresh take the endpoint's own committed edit for a user edit and undo the peer's half of the merge. A commit is recorded as checked out now (S8). |
+| (review of #114) "a kept user edit is merged right after the checkout" | Not if that merge lost its race to a push, or the process stopped in between: the checkout had already recorded the new head, so the retry no longer saw the overlap and the peer's change was lost again. Kept edits are now recorded (`/sync/kept-edits`: base and paths) before the checkout is, and removed only once merged (S9). |
+| (review of #114) "a merge checks out from the head it read" | Over a network a push moves `main` while the folder is still at the previous commit; checking out from `main` took the push's changes for user edits and reverted them. Checkouts start from the folder's checked-out record now (39 N7). |
 | S7: "an edit typed during a sync is kept and merged" | Kept, but on the real path (typed while the peer's objects arrive) committed on top of the peer's commit, so the peer's change to that path vanished. S7 passed because its hook fired on the old record's write. A checkout now reports user edits kept over changed paths; they are committed on the commit the user worked from and merged in, conflict-marked where they collide. |
 
 ## Promotion grades
