@@ -346,8 +346,91 @@ describe("F1d (review of #119) the walk against concurrent writes, old indexes, 
   it("a tip that is not indexed is refused, not walked as a root", async () => {
     const d = mergyHistory(9);
     const { index } = await loadSql(d);
-    await expect(index.simplifiedPathHistory("a", ["0".repeat(40)])).rejects.toThrow(/not indexed/);
+    await expect(index.simplifiedPathHistory("a", ["0".repeat(40)])).rejects.toThrow(/object id/);
   });
+});
+
+describe("F7 (X9c) per-branch answers, and --all without what a deleted ref left behind", () => {
+  it("40 random histories: path history and search from each ref, and after a ref is deleted", async () => {
+    const wrong: string[] = [];
+    let checked = 0;
+    let narrower = 0;
+    let narrowedAfterDelete = 0;
+    for (const seed of SEEDS) {
+      const d = seed % 2 ? mergyHistory(seed) : history(seed);
+      const { index } = await loadSql(d);
+      const refs = lines(git(d, ["for-each-ref", "--format=%(refname)"]));
+      const paths = allPaths(d).filter((_, i) => i % 3 === 0);
+      const check = (what: string, ours: string[], want: string[]) => {
+        checked++;
+        if (JSON.stringify(ours) !== JSON.stringify(want))
+          wrong.push(`${seed} ${what}\n git:  ${want}\n ours: ${ours}`);
+      };
+      for (const ref of refs) {
+        const tip = git(d, ["rev-parse", ref]).trim();
+        for (const path of paths) {
+          const want = lines(
+            git(d, ["log", "--full-history", "--no-merges", "--format=%H", ref, "--", path]),
+          );
+          const all = await index.pathHistory(path);
+          if (want.length < all.length) narrower++;
+          check(`${ref} -- ${path}`, await index.pathHistory(path, { tips: [tip] }), want);
+          check(
+            `${ref} simplified -- ${path}`,
+            await index.simplifiedPathHistory(path, [tip]),
+            lines(git(d, ["log", "--no-merges", "--format=%H", ref, "--", path])),
+          );
+        }
+        for (const q of ["fix", "base", "Rename", "x"])
+          check(
+            `${ref} --grep=${q}`,
+            await index.searchMessages(q, { tips: [tip] }),
+            lines(git(d, ["log", "--no-merges", "--format=%H", "-F", `--grep=${q}`, ref])),
+          );
+        // a pattern with an empty line matches every commit the tip reaches (review of #120)
+        check(
+          `${ref} --grep=zzzq --grep=`,
+          await index.searchMessages("zzzq\n", { tips: [tip, tip] }),
+          lines(git(d, ["log", "--no-merges", "--format=%H", "-F", "--grep=zzzq", "--grep=", ref])),
+        );
+      }
+      // tips that are no commit: a tree or a blob is skipped (`git log <tree>` lists nothing), an
+      // id that is no object is refused, and no tips at all reach nothing (review of #120)
+      const tree = git(d, ["rev-parse", "HEAD^{tree}"]).trim();
+      const first = lines(git(d, ["ls-tree", "--name-only", "HEAD"]))[0];
+      const blob = git(d, ["rev-parse", `HEAD:${first}`]).trim();
+      check("tree and blob tips", await index.pathHistory(".", { tips: [tree, blob] }), []);
+      check("no tips", await index.searchMessages("fix", { tips: [] }), []);
+      await expect(index.pathHistory(".", { tips: ["f".repeat(40)] })).rejects.toThrow(/object id/);
+      // a ref deleted after indexing: --all from the refs left does not list what only it reached
+      const victim = refs.find((r) => r !== "refs/heads/main");
+      if (victim) {
+        git(d, ["update-ref", "-d", victim]);
+        const tips = lines(git(d, ["for-each-ref", "--format=%(objectname)"]));
+        tips.push(git(d, ["rev-parse", "HEAD"]).trim());
+        for (const path of paths) {
+          const after = await index.pathHistory(path, { tips });
+          if (after.length < (await index.pathHistory(path)).length) narrowedAfterDelete++;
+          check(
+            `after deleting ${victim} -- ${path}`,
+            after,
+            lines(
+              git(d, ["log", "--all", "--full-history", "--no-merges", "--format=%H", "--", path]),
+            ),
+          );
+        }
+        check(
+          `after deleting ${victim} --grep=fix`,
+          await index.searchMessages("fix", { tips }),
+          lines(git(d, ["log", "--all", "--no-merges", "--format=%H", "-F", "--grep=fix"])),
+        );
+      }
+    }
+    expect(wrong.slice(0, 3)).toEqual([]);
+    expect(checked).toBeGreaterThan(1000);
+    expect(narrower).toBeGreaterThan(20); // per-branch answers really are narrower than --all
+    expect(narrowedAfterDelete).toBeGreaterThan(5); // and deleting a ref really narrows --all
+  }, 900_000);
 });
 
 describe("F2 search equals git log --all --no-merges -F --grep=<text>", () => {
@@ -653,9 +736,16 @@ describe("F4 speed: 100,000 commits over 50,000 files", () => {
     const warm = await index.simplifiedPathHistory("d12/e3", [tip]);
     const warmMs = performance.now() - t0;
     expect(warm).toEqual(dirHistory);
+    // X9c: from one tip (a branch's own history)
+    t0 = performance.now();
+    const branchPath = await index.pathHistory(target, { tips: [tip] });
+    const branchSearch = await index.searchMessages("Rename d7/e1", { tips: [tip] });
+    const branchMs = performance.now() - t0;
+    expect(branchPath).toEqual(history);
+    expect(branchSearch).toEqual(found);
 
     phases.push(
-      `path ${pathMs.toFixed(1)} ms, directory ${dirMs.toFixed(1)} ms, search ${searchMs.toFixed(1)} ms, simplified path ${simplifiedMs.toFixed(1)} ms (first, loading the parents), ${warmMs.toFixed(1)} ms after`,
+      `path ${pathMs.toFixed(1)} ms, directory ${dirMs.toFixed(1)} ms, search ${searchMs.toFixed(1)} ms, simplified path ${simplifiedMs.toFixed(1)} ms (first, loading the parents), ${warmMs.toFixed(1)} ms after, from a tip: path and search ${branchMs.toFixed(1)} ms`,
     );
     console.log(phases.join("\n"));
     if (process.env.X9_TIMES) writeFileSync(process.env.X9_TIMES, phases.join("\n"));
@@ -663,6 +753,7 @@ describe("F4 speed: 100,000 commits over 50,000 files", () => {
     expect(dirMs).toBeLessThan(100);
     expect(searchMs).toBeLessThan(100);
     expect(warmMs).toBeLessThan(100);
+    expect(branchMs).toBeLessThan(100);
   }, 1_800_000);
 });
 
