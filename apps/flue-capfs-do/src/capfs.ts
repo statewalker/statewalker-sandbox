@@ -1,22 +1,20 @@
 // just-bash IFileSystem implemented purely by calls on a capability. This is what makes
 // `ls`, `cat`, `grep -r`, `find`, redirects, `cp`/`mv` — and Flue's read/write/edit/grep/glob/
 // bash tools — run on the filtered file system. There is no other file system underneath.
+//
+// Content crosses the capability as bytes only: text is encoded and decoded here, in the file's
+// encoding (UTF-8 by default), and files larger than a whole-file call move as files-RPC streams
+// (src/cap-bytes.ts).
 
-import { asBytes, bytesToString, encodingOf, isUtf8, ownBytes, stringToBytes } from "./bytes.ts";
+import { asBytes, bytesToString, encodingOf, stringToBytes } from "./bytes.ts";
+import { capBytes } from "./cap-bytes.ts";
 import type { Cap } from "./caps.ts";
 import { fsError, normalise } from "./path.ts";
-import { bytesArg, type DirEntryStat } from "./sql-fs.ts";
+import type { DirEntryStat } from "./sql-fs.ts";
 
-/**
- * What a write stores: UTF-8 text as text; bytes (a Uint8Array, or a string in a byte encoding
- * such as just-bash's "binary"/"latin1") as bytes, byte for byte in the store's BLOB.
- */
-function content(d: unknown, o: unknown): { text: string } | { bytes: Uint8Array } {
-  const b = asBytes(d);
-  if (b) return { bytes: ownBytes(b) };
-  const e = encodingOf(o);
-  if (e === undefined || isUtf8(e)) return { text: String(d ?? "") };
-  return { bytes: stringToBytes(String(d ?? ""), e) };
+/** The bytes a write stores: a Uint8Array as is, a string in its encoding (UTF-8 by default). */
+function content(d: unknown, o: unknown): Uint8Array {
+  return asBytes(d) ?? stringToBytes(String(d ?? ""), encodingOf(o) ?? "utf8");
 }
 
 interface PlainStat {
@@ -49,30 +47,27 @@ const NULL_STAT = {
 
 export class CapFs {
   #cap: Cap;
+  #bytes: ReturnType<typeof capBytes>;
   constructor(cap: Cap) {
     this.#cap = cap;
+    this.#bytes = capBytes(cap);
   }
+  /** Decoded here, in the file's encoding (UTF-8: as the store decodes, U+FEFF kept). */
   async readFile(p: string, o?: unknown): Promise<string> {
     if (isNull(p)) return "";
-    const e = encodingOf(o);
-    if (e === undefined || isUtf8(e)) return (await this.#cap.call("readFile", p)) as string;
-    return bytesToString(await this.readFileBuffer(p), e);
+    return bytesToString(await this.readFileBuffer(p), encodingOf(o) ?? "utf8");
   }
   async readFileBuffer(p: string): Promise<Uint8Array> {
     if (isNull(p)) return new Uint8Array();
-    return bytesArg(await this.#cap.call("readFileBuffer", p));
+    return this.#bytes.read(p);
   }
   async writeFile(p: string, d: unknown, o?: unknown): Promise<void> {
     if (isNull(p)) return;
-    const c = content(d, o);
-    if ("bytes" in c) await this.#cap.call("writeFileBuffer", p, c.bytes);
-    else await this.#cap.call("writeFile", p, c.text);
+    await this.#bytes.write(p, content(d, o));
   }
   async appendFile(p: string, d: unknown, o?: unknown): Promise<void> {
     if (isNull(p)) return;
-    const c = content(d, o);
-    if ("bytes" in c) await this.#cap.call("appendFileBuffer", p, c.bytes);
-    else await this.#cap.call("appendFile", p, c.text);
+    await this.#bytes.append(p, content(d, o));
   }
   async exists(p: string): Promise<boolean> {
     if (isNull(p)) return true;

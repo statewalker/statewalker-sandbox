@@ -61,7 +61,7 @@ again.
 |---|---|
 | `test:unit` | the authorization core and the store on `node:sqlite`, without a runtime |
 | `test:wrangler` | `wrangler dev` (workerd 2026-11-04) |
-| `test:cellb` | `@statewalker/cellb` 0.8.3 `loadProject`, cells in `node:sqlite` files |
+| `test:cellb` | `@statewalker/cellb` 0.8.5 `loadProject`, cells in `node:sqlite` files |
 | `test:cellb-bundled-only` | cellb with `TOOL_BUNDLE={"hostFsRuntimes":"bundled-only","allowedBundles":[<hash of tests/fixtures/todo-tool.ts>]}`: that approved bundle runs, other bundles and raw tools are refused |
 | `test:cellb-celld-bucket` | cellb with `celldBucket(sqliteObjectStore(...))`: cells as celld writes them (LTX logs, `own.json` ownership records), in the object store `celld dev` keeps |
 | `test:browser` | the project in Chromium on cellb (Playwright): builds `dist/`, serves it, runs the capability checks and the Python cases through the page |
@@ -657,17 +657,25 @@ Writing bytes is a `write` operation like writing text, authorized the same way.
 TEXT before BLOBs are read as `CAST(data AS BLOB)`, so they come back whole too.
 
 Every writer sends bytes as bytes:
-- just-bash (`CapFs`): `Uint8Array` content, and strings in a byte encoding (`binary`/`latin1`,
-  `base64`, `hex`), go to `writeFileBuffer`; `readFileBuffer` reads the stored bytes.
+- just-bash (`CapFs`) and Flue's tools on Wasmer exchange bytes only (`src/cap-bytes.ts`): text
+  is encoded and decoded holder-side in its encoding (UTF-8 by default, as the store decodes:
+  U+FFFD for invalid sequences, a leading U+FEFF kept). Up to 16 MiB a file is one binary call
+  (`readFileBuffer`, `writeFileBuffer`, `appendFileBuffer`); a larger one moves as a files-RPC
+  stream (read, write, append): writes and appends of any size (the store's limit is 1 GiB), and
+  reads up to 32 MiB, since a read is whole in the agent's memory (`EFBIG` beyond). A streamed
+  append that races another writer (`ESTALE`) is sent again; a streamed read of a file removed
+  meanwhile answers `ENOENT`, not an empty file. The store's text calls (`readFile`, `writeFile`, `appendFile`) remain for the
+  callers that still use them: already-approved tool bundles' `node:fs` shim and Python's live
+  `capfs` module.
 - tools' `node:fs`: Buffers and TypedArrays are written byte for byte; reads return the bytes.
 - Python: binary files are synced in and written back as bytes.
 - Wasmer: open files are read and saved as bytes.
-- Flue's tools on Wasmer: `writeFile(Uint8Array)` and `readFileBuffer`.
 
 Limits and notes:
 - **Size:** whole-file calls (`readFile`, `writeFileBuffer`, …) move at most 16 MiB in one
-  message (`EFBIG`, HTTP 413, beyond); larger files are streamed. Wasmer refuses larger files at
-  the write.
+  message (`EFBIG`, HTTP 413, beyond); larger files are streamed (just-bash, Flue's tools, the
+  `stream` task, Wasmer reads and appends). just-bash and Flue read files up to 32 MiB: their
+  APIs return whole files, held in the agent's memory.
 - **Approved tool bundles:** the `node:fs` shim is inlined into every tool bundle, so bundles
   built after this change hash differently. Approve them again; bundles already approved still
   run (their shim writes text only).
@@ -773,6 +781,7 @@ src/files-rpc.ts    holder side of streaming: capFiles(cap), the webrun-files-rp
 src/files-rpc-hub.ts  owner side: a webrun-files-rpc server per token, in the Workspace
 src/guarded-files-api.ts  the FilesApi those servers serve: the store through FsGate
 src/capfs.ts        just-bash IFileSystem over a capability; /dev/null sink; safeExec
+src/cap-bytes.ts    whole-file reads/writes/appends in bytes: one binary call, or a files-RPC stream
 src/agent.ts        Agent DO: bash, Flue tools, Worker Loader tools, delegation chain
 src/flue-compat.ts  `rg` shim so Flue's grep tool works on just-bash
 src/agent-loop.ts   the `agent` task: pi-agent-core loop, Flue's tools over the capability, sessions
