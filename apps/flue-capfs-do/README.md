@@ -334,9 +334,11 @@ engine of its own, never in the cell's realm. It works on the same filtered file
    `/`) into the engine's `/workspace`. Files the capability hides are simply not there.
 2. **The code runs** with `/workspace` (or `cwd`) as its working directory: ordinary `open`,
    `os`, `csv`, `json`, `sqlite3` and so on work on that copy. `import capfs` gives live,
-   authorized calls (`await capfs.read_text(p)`, `write_text`, `append_text`, `listdir`,
-   `exists`, `stat`, `mkdir`, `remove`), with paths in the capability's namespace (a
-   `/workspace/…` path is accepted too).
+   authorized calls (`await capfs.read_text(p)`, `write_text`, `append_text`, `read_bytes`,
+   `write_bytes`, `append_bytes`, `listdir`, `exists`, `stat`, `mkdir`, `remove`), with paths in
+   the capability's namespace (a `/workspace/…` path is accepted too). Content reaches the
+   capability as bytes only: the `*_text` calls encode and decode UTF-8 in the engine (as the
+   store decodes: U+FFFD for invalid sequences), and large files move as files-RPC streams.
 3. **After the run**, the engine reports what changed. The Agent writes it back through the
    capability: each new directory, write and deletion (a removed tree as one recursive delete)
    is authorized again. The result lists what was `written`, `deleted` and `denied` (with the
@@ -664,11 +666,14 @@ Every writer sends bytes as bytes:
   stream (read, write, append): writes and appends of any size (the store's limit is 1 GiB), and
   reads up to 32 MiB, since a read is whole in the agent's memory (`EFBIG` beyond). A streamed
   append that races another writer (`ESTALE`) is sent again; a streamed read of a file removed
-  meanwhile answers `ENOENT`, not an empty file. The store's text calls (`readFile`, `writeFile`, `appendFile`) remain for the
-  callers that still use them: already-approved tool bundles' `node:fs` shim and Python's live
-  `capfs` module.
-- tools' `node:fs`: Buffers and TypedArrays are written byte for byte; reads return the bytes.
-- Python: binary files are synced in and written back as bytes.
+  meanwhile answers `ENOENT`, not an empty file.
+- tools' `node:fs`: bytes only too. Strings are encoded in the shim (UTF-8 or the encoding given),
+  Buffers and TypedArrays written byte for byte, UTF-8 decoded as the store decodes; one call
+  moves at most 16 MiB (the shim is inlined into each bundle, without the files-RPC client).
+- Python: binary files are synced in and written back as bytes; the live `capfs` module moves
+  bytes (`read_bytes`, `write_bytes`, `append_bytes`, and the `*_text` calls on top of them).
+- The store's text calls (`readFile`, `writeFile`, `appendFile`) remain only for tool bundles
+  approved before this change: their inlined shim still sends strings.
 - Wasmer: open files are read and saved as bytes.
 
 Limits and notes:
@@ -678,9 +683,7 @@ Limits and notes:
   APIs return whole files, held in the agent's memory.
 - **Approved tool bundles:** the `node:fs` shim is inlined into every tool bundle, so bundles
   built after this change hash differently. Approve them again; bundles already approved still
-  run (their shim writes text only).
-- **Python's live `capfs` module** (`read_text`, `write_text`, …) is text-only: a binary file
-  read there comes back with U+FFFD. Files under `/workspace` are synced as bytes.
+  run (their shim sends text as strings, which the store still accepts).
 - **just-bash's `printf`** writes `\377` as the character U+00FF (UTF-8 `c3 bf`), as on just-bash's
   own in-memory file system; `cat`, `cp`, redirects of binary data and `base64 -d` are byte-exact.
 

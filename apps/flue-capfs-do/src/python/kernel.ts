@@ -4,6 +4,7 @@
 // capability, and writes the run's changes back THROUGH the capability: whatever the code did
 // in its sandbox, only authorized writes reach the store.
 
+import { capBytes } from "../cap-bytes.ts";
 import type { Cap } from "../caps.ts";
 import { fsError, join, normalise } from "../path.ts";
 
@@ -70,10 +71,15 @@ type Changes = {
 const LIMITS = { files: 5000, bytes: 16 * 1024 * 1024 };
 /** An engine with nothing to do is stopped after this long (its memory is released). */
 const IDLE_MS = 5 * 60_000;
+/**
+ * What Python's live `capfs` module may call. Content is bytes only (the module encodes and
+ * decodes text itself); over the engine's JSON channel it travels as a Content, and the kernel
+ * moves it with capBytes (one binary call, or a files-RPC stream for a large file).
+ */
 const CAP_METHODS = new Set([
-  "readFile",
-  "writeFile",
-  "appendFile",
+  "readFileBuffer",
+  "writeFileBuffer",
+  "appendFileBuffer",
   "readdir",
   "exists",
   "stat",
@@ -171,10 +177,18 @@ export class PythonKernel {
     }
     try {
       const [path, ...rest] = m.args as [string, ...unknown[]];
-      const value =
-        m.method === "readdir"
-          ? await run.cap.readdir(path)
-          : await run.cap.call(m.method, path, ...rest);
+      const content = (c: unknown) => {
+        const b = fromContent(c);
+        if (!b) throw fsError("EINVAL", "capfs: content is a string or { $b64 }");
+        return b;
+      };
+      const bytes = capBytes(run.cap);
+      let value: unknown;
+      if (m.method === "readdir") value = await run.cap.readdir(path);
+      else if (m.method === "readFileBuffer") value = toContent(await bytes.read(path));
+      else if (m.method === "writeFileBuffer") await bytes.write(path, content(rest[0]));
+      else if (m.method === "appendFileBuffer") await bytes.append(path, content(rest[0]));
+      else value = await run.cap.call(m.method, path, ...rest);
       await reply(true, value ?? null);
     } catch (e) {
       await reply(false, undefined, String((e as Error)?.message ?? e));
@@ -349,12 +363,8 @@ async function writeBack(cap: Cap, changes: Changes) {
       truncated = true;
       break;
     }
-    // Text as text, binary content byte for byte.
-    const write =
-      typeof content === "string"
-        ? () => cap.call("writeFile", p, content)
-        : () => cap.call("writeFileBuffer", p, b);
-    if (await attempt("write", p, write)) written.push(p);
+    // Bytes only (a UTF-8 file's Content is its text, encoded back here).
+    if (await attempt("write", p, () => cap.call("writeFileBuffer", p, b))) written.push(p);
   }
   // Removed trees: one recursive rm each; then the single files outside them.
   const goneDirs = list(changes?.deletedDirs);

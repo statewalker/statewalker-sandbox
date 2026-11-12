@@ -135,9 +135,19 @@ function capfsModule() {
     return s === WORKSPACE ? "/" : s.startsWith(`${WORKSPACE}/`) ? s.slice(WORKSPACE.length) : s;
   };
   return {
-    read_text: (run, path) => capCall(run, "readFile", p(path)),
-    write_text: (run, path, text) => capCall(run, "writeFile", p(path), String(text)),
-    append_text: (run, path, text) => capCall(run, "appendFile", p(path), String(text)),
+    // Bytes only reach the capability. Over the kernel's JSON channel they travel as files do: a
+    // string when they are valid UTF-8, else { $b64 }. Text is encoded and decoded here.
+    read_bytes: async (run, path) => fromContent(await capCall(run, "readFileBuffer", p(path))),
+    write_bytes: (run, path, data) =>
+      capCall(run, "writeFileBuffer", p(path), toContent(bytesOf(data))),
+    append_bytes: (run, path, data) =>
+      capCall(run, "appendFileBuffer", p(path), toContent(bytesOf(data))),
+    read_text: async (run, path) =>
+      lossyUtf8.decode(fromContent(await capCall(run, "readFileBuffer", p(path)))),
+    write_text: (run, path, text) =>
+      capCall(run, "writeFileBuffer", p(path), toContent(encoder.encode(String(text)))),
+    append_text: (run, path, text) =>
+      capCall(run, "appendFileBuffer", p(path), toContent(encoder.encode(String(text)))),
     listdir: async (run, path) => pyodide.toPy(await capCall(run, "readdir", p(path))),
     exists: (run, path) => capCall(run, "exists", p(path)),
     stat: async (run, path) => pyodide.toPy(await capCall(run, "stat", p(path))),
@@ -153,15 +163,19 @@ _run = contextvars.ContextVar("capfs_run", default=None)
 capfs = types.ModuleType("capfs", "Live calls through the agent's file capability (paths in its namespace).")
 capfs._run = _run
 capfs.WORKSPACE = "${WORKSPACE}"
+from pyodide.ffi import to_js as _to_js
 async def read_text(path): return await _capfs_js.read_text(_run.get(), path)
 async def write_text(path, text): return await _capfs_js.write_text(_run.get(), path, text)
 async def append_text(path, text): return await _capfs_js.append_text(_run.get(), path, text)
+async def read_bytes(path): return (await _capfs_js.read_bytes(_run.get(), path)).to_bytes()
+async def write_bytes(path, data): return await _capfs_js.write_bytes(_run.get(), path, _to_js(bytes(data)))
+async def append_bytes(path, data): return await _capfs_js.append_bytes(_run.get(), path, _to_js(bytes(data)))
 async def listdir(path="/"): return await _capfs_js.listdir(_run.get(), path)
 async def exists(path): return await _capfs_js.exists(_run.get(), path)
 async def stat(path): return await _capfs_js.stat(_run.get(), path)
 async def mkdir(path): return await _capfs_js.mkdir(_run.get(), path)
 async def remove(path): return await _capfs_js.remove(_run.get(), path)
-for f in (read_text, write_text, append_text, listdir, exists, stat, mkdir, remove):
+for f in (read_text, write_text, append_text, read_bytes, write_bytes, append_bytes, listdir, exists, stat, mkdir, remove):
     setattr(capfs, f.__name__, f)
 sys.modules["capfs"] = capfs
 del sys.modules["_capfs_js"]
@@ -196,6 +210,30 @@ const toB64 = (b) => {
   return btoa(s);
 };
 const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+const encoder = new TextEncoder();
+/** UTF-8 as the store decodes it: U+FFFD for invalid sequences, a leading U+FEFF kept. */
+const lossyUtf8 = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
+/** Bytes as they cross the kernel's JSON channel: a string if valid UTF-8, else { $b64 }. */
+const toContent = (b) => {
+  try {
+    return utf8.decode(b);
+  } catch {
+    return { $b64: toB64(b) };
+  }
+};
+const fromContent = (c) =>
+  typeof c === "string"
+    ? encoder.encode(c)
+    : c?.$b64 !== undefined
+      ? fromB64(c.$b64)
+      : new Uint8Array();
+/** A Uint8Array from what Python passed (to_js of bytes gives one). */
+const bytesOf = (d) =>
+  d instanceof Uint8Array
+    ? d
+    : ArrayBuffer.isView(d)
+      ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength)
+      : new Uint8Array(d);
 const sameContent = (a, b) =>
   typeof a === "string" || typeof b === "string" ? a === b : a?.$b64 === b?.$b64;
 

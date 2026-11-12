@@ -23,19 +23,22 @@ function fakeFiles(initial = {}) {
     data,
     async call(method, p, ...a) {
       guard(p);
-      if (method === "readFile") {
-        if (!data.has(p)) throw new Error(`ENOENT: no such file '${p}'`);
-        return data.get(p);
-      }
-      // Text is kept as a string, bytes as a Uint8Array (as the store keeps them in its BLOB).
+      // Bytes only: the shim encodes and decodes text itself, so the string calls are refused.
+      // Seeded text is kept as a string, written bytes as a Uint8Array.
       if (method === "readFileBuffer") {
         if (!data.has(p)) throw new Error(`ENOENT: no such file '${p}'`);
         const v = data.get(p);
         return typeof v === "string" ? new TextEncoder().encode(v) : v.slice();
       }
       if (method === "writeFileBuffer") return void data.set(p, new Uint8Array(a[0]));
-      if (method === "writeFile") return void data.set(p, a[0]);
-      if (method === "appendFile") return void data.set(p, (data.get(p) ?? "") + a[0]);
+      if (method === "appendFileBuffer") {
+        const old = data.get(p) ?? new Uint8Array();
+        const before = typeof old === "string" ? new TextEncoder().encode(old) : old;
+        const out = new Uint8Array(before.length + a[0].length);
+        out.set(before);
+        out.set(new Uint8Array(a[0]), before.length);
+        return void data.set(p, out);
+      }
       if (method === "exists") return data.has(p);
       if (method === "stat")
         return { isFile: data.has(p), isDirectory: !data.has(p), size: 0, mode: 0, mtime: 0 };
@@ -101,7 +104,8 @@ test("node:fs, fs, fs/promises and node:path are rewritten; other builtins denie
     same: true,
     ext: ".md",
   });
-  assert.equal(files.data.get("/allowed/out.txt"), "HELLO");
+  // Written as bytes (the shim encodes text itself).
+  assert.equal(new TextDecoder().decode(files.data.get("/allowed/out.txt")), "HELLO");
 });
 
 test("the bundling is configurable", async () => {
@@ -354,4 +358,28 @@ test("admitTool: the policy comes from the deployment; host-fs runtimes need app
   await admit(bundle, true, "bundled-only", { allowedBundles: [hash] });
   await eperm(admit(`${bundle}\n`, true, "bundled-only", { allowedBundles: [hash] })); // any change → new hash
   await eperm(admit(raw, false, "isolated", { allowedBundles: [hash] })); // a list applies everywhere
+});
+
+test("fs shim: text crosses the capability as bytes (appends too; a leading U+FEFF is kept)", async () => {
+  const out = await build(`import fsp from "node:fs/promises";
+export async function run() {
+  await fsp.writeFile("/allowed/t.txt", "\\uFEFFh\\u00e9");
+  await fsp.appendFile("/allowed/t.txt", "!");
+  await fsp.appendFile("/allowed/t.txt", new Uint8Array([0x3f]));
+  await fsp.appendFile("/allowed/t.txt", "ff", "hex");
+  return [await fsp.readFile("/allowed/t.txt", "utf8"), await fsp.readFile("/allowed/t.txt", { encoding: "utf-8" })];
+}`);
+  assert.equal(out.check.ok, true, out.check.problems.join("; "));
+  const files = fakeFiles();
+  const [a, b] = await runTool(out, files);
+  assert.equal(
+    a,
+    "\uFEFFhé!?\uFFFD",
+    "U+FEFF kept, invalid UTF-8 as U+FFFD (as the store decodes)",
+  );
+  assert.equal(b, a);
+  assert.deepEqual(
+    [...files.data.get("/allowed/t.txt")],
+    [0xef, 0xbb, 0xbf, 0x68, 0xc3, 0xa9, 0x21, 0x3f, 0xff],
+  );
 });
