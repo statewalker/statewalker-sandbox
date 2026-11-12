@@ -139,15 +139,15 @@ function capfsModule() {
     // string when they are valid UTF-8, else { $b64 }. Text is encoded and decoded here.
     read_bytes: async (run, path) => fromContent(await capCall(run, "readFileBuffer", p(path))),
     write_bytes: (run, path, data) =>
-      capCall(run, "writeFileBuffer", p(path), toContent(bytesOf(data))),
+      capCall(run, "writeFileBuffer", p(path), toContent(liveBytes(bytesOf(data)))),
     append_bytes: (run, path, data) =>
-      capCall(run, "appendFileBuffer", p(path), toContent(bytesOf(data))),
+      capCall(run, "appendFileBuffer", p(path), toContent(liveBytes(bytesOf(data)))),
     read_text: async (run, path) =>
       lossyUtf8.decode(fromContent(await capCall(run, "readFileBuffer", p(path)))),
     write_text: (run, path, text) =>
-      capCall(run, "writeFileBuffer", p(path), toContent(encoder.encode(String(text)))),
+      capCall(run, "writeFileBuffer", p(path), toContent(liveBytes(encoder.encode(String(text))))),
     append_text: (run, path, text) =>
-      capCall(run, "appendFileBuffer", p(path), toContent(encoder.encode(String(text)))),
+      capCall(run, "appendFileBuffer", p(path), toContent(liveBytes(encoder.encode(String(text))))),
     listdir: async (run, path) => pyodide.toPy(await capCall(run, "readdir", p(path))),
     exists: (run, path) => capCall(run, "exists", p(path)),
     stat: async (run, path) => pyodide.toPy(await capCall(run, "stat", p(path))),
@@ -168,8 +168,13 @@ async def read_text(path): return await _capfs_js.read_text(_run.get(), path)
 async def write_text(path, text): return await _capfs_js.write_text(_run.get(), path, text)
 async def append_text(path, text): return await _capfs_js.append_text(_run.get(), path, text)
 async def read_bytes(path): return (await _capfs_js.read_bytes(_run.get(), path)).to_bytes()
-async def write_bytes(path, data): return await _capfs_js.write_bytes(_run.get(), path, _to_js(bytes(data)))
-async def append_bytes(path, data): return await _capfs_js.append_bytes(_run.get(), path, _to_js(bytes(data)))
+def _bytes(data):
+    # bytes(5) would be five zero bytes: only bytes-like data is written, as file.write does.
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        raise TypeError(f"a bytes-like object is required, not '{type(data).__name__}'")
+    return _to_js(bytes(data))
+async def write_bytes(path, data): return await _capfs_js.write_bytes(_run.get(), path, _bytes(data))
+async def append_bytes(path, data): return await _capfs_js.append_bytes(_run.get(), path, _bytes(data))
 async def listdir(path="/"): return await _capfs_js.listdir(_run.get(), path)
 async def exists(path): return await _capfs_js.exists(_run.get(), path)
 async def stat(path): return await _capfs_js.stat(_run.get(), path)
@@ -221,12 +226,22 @@ const toContent = (b) => {
     return { $b64: toB64(b) };
   }
 };
-const fromContent = (c) =>
-  typeof c === "string"
-    ? encoder.encode(c)
-    : c?.$b64 !== undefined
-      ? fromB64(c.$b64)
-      : new Uint8Array();
+const fromContent = (c) => {
+  if (typeof c === "string") return encoder.encode(c);
+  if (typeof c?.$b64 === "string") return fromB64(c.$b64);
+  throw new Error("EIO: capfs: unexpected content from the kernel");
+};
+/**
+ * What one live call may carry: a write travels as one JSON message (binary data as base64, 4/3
+ * larger), and a JS string is at most ~512 MB. Larger writes fail here with EFBIG, not with a
+ * RangeError while encoding.
+ */
+const MAX_LIVE_BYTES = 256 * 1024 * 1024;
+const liveBytes = (b) => {
+  if (b.length > MAX_LIVE_BYTES)
+    throw new Error(`EFBIG: capfs: at most ${MAX_LIVE_BYTES} bytes per call`);
+  return b;
+};
 /** A Uint8Array from what Python passed (to_js of bytes gives one). */
 const bytesOf = (d) =>
   d instanceof Uint8Array

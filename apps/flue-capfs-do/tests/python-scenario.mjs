@@ -124,11 +124,21 @@ await capfs.write_text("/proj/t.txt", "h\\u00e9")
 await capfs.append_text("/proj/t.txt", "!")
 text = await capfs.read_text("/proj/t.txt")
 lossy = await capfs.read_text("/proj/b.bin")
-f"{type(back).__name__}|{list(back)}|{text}|{lossy.count(chr(0xfffd))}"`,
+try:
+    await capfs.write_bytes("/proj/n.bin", 5)
+    refused = "no"
+except TypeError:
+    refused = "TypeError"
+f"{type(back).__name__}|{list(back)}|{text}|{lossy.count(chr(0xfffd))}|{refused}"`,
           }),
         );
         assert.equal(r.error, undefined, r.error);
-        const [kind, back, text, replaced] = String(r.value).split("|");
+        const [kind, back, text, replaced, refused] = String(r.value).split("|");
+        assert.equal(
+          refused,
+          "TypeError",
+          "an int is not bytes (bytes(5) would be five zero bytes)",
+        );
         assert.equal(kind, "bytes");
         assert.equal(back, "[255, 254, 0, 1, 2]");
         assert.equal(text, "hé!");

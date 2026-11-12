@@ -338,7 +338,9 @@ engine of its own, never in the cell's realm. It works on the same filtered file
    `write_bytes`, `append_bytes`, `listdir`, `exists`, `stat`, `mkdir`, `remove`), with paths in
    the capability's namespace (a `/workspace/…` path is accepted too). Content reaches the
    capability as bytes only: the `*_text` calls encode and decode UTF-8 in the engine (as the
-   store decodes: U+FFFD for invalid sequences), and large files move as files-RPC streams.
+   store decodes: U+FFFD for invalid sequences), and large files move as files-RPC streams. A
+   live call carries at most 256 MiB (one JSON message to the kernel, binary data as base64);
+   reads stop at 32 MiB, as elsewhere.
 3. **After the run**, the engine reports what changed. The Agent writes it back through the
    capability: each new directory, write and deletion (a removed tree as one recursive delete)
    is authorized again. The result lists what was `written`, `deleted` and `denied` (with the
