@@ -7,7 +7,14 @@ import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { afterAll, describe, expect, it } from "vitest";
 import { gitEnv } from "../../12-index-pack/src/git-repo.js";
 import { rng } from "../../29-merge/tests/tree-harness.js";
-import { type Endpoint, folderFiles, headOf, openEndpoint, sync } from "../src/workspace.js";
+import {
+  commitFolder,
+  type Endpoint,
+  folderFiles,
+  headOf,
+  openEndpoint,
+  sync,
+} from "../src/workspace.js";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -136,21 +143,55 @@ describe("S3 property test: 200 random schedules converge, no untouched edit los
 });
 
 describe("S4 deterministic merges", () => {
-  it("two endpoints merging each other at once make one commit; syncing back fast-forwards", async () => {
-    const [a, b] = [await endpoint("a"), await endpoint("b")] as [Endpoint, Endpoint];
-    await put(a, "x.txt", "x\n");
-    await sync(a, b);
-    await put(a, "a.txt", "from a\n");
-    await put(b, "b.txt", "from b\n");
-    // each pulls the other's head without pushing back: two merges made apart
-    const ma = await sync(a, b, { oneWay: true });
-    const mb = await sync(b, a, { oneWay: true });
-    expect(ma.head).toBe(mb.head);
-    const before = ma.head;
-    await sync(a, b);
-    expect(await headOf(a)).toBe(before);
-    expect(await headOf(b)).toBe(before);
-  });
+  /** an endpoint's twin: the same folder and repository, copied */
+  async function twin(ep: Endpoint): Promise<Endpoint> {
+    const copy = async (from: MemFilesApi | Endpoint["folder"]) => {
+      const to = new MemFilesApi();
+      for await (const e of from.list("/", { recursive: true })) {
+        if (e.kind !== "file") continue;
+        const parts: Uint8Array[] = [];
+        for await (const p of from.read(e.path)) parts.push(p);
+        await to.write(e.path, parts);
+      }
+      return to;
+    };
+    return openEndpoint({
+      name: ep.name,
+      folder: await copy(ep.folder),
+      storage: await copy(ep.storage),
+      now,
+    });
+  }
+
+  for (const conflicting of [false, true])
+    it(`two endpoints merging each other's heads apart make one commit (${conflicting ? "conflicting" : "disjoint"} edits)`, async () => {
+      const [a, b] = [await endpoint("a"), await endpoint("b")] as [Endpoint, Endpoint];
+      await put(a, "x.txt", "x\n");
+      await sync(a, b);
+      if (conflicting) {
+        await put(a, "x.txt", "x by a\n");
+        await put(b, "x.txt", "x by b\n");
+      } else {
+        await put(a, "a.txt", "from a\n");
+        await put(b, "b.txt", "from b\n");
+      }
+      // both edits committed, then copies taken before either merges: each side then merges the
+      // other's head on its own
+      await commitFolder(a);
+      await commitFolder(b);
+      const aBefore = await twin(a);
+      const bBefore = await twin(b);
+      const ma = await sync(a, bBefore, { oneWay: true });
+      clock += 100; // a later merge must not change the commit
+      const mb = await sync(b, aBefore, { oneWay: true });
+      expect(ma.conflicts).toEqual(conflicting ? ["x.txt"] : []);
+      expect(ma.head).toBe(mb.head);
+      // one way: the peer was not touched
+      expect(await headOf(bBefore)).not.toBe(ma.head);
+      await sync(a, b);
+      expect(await headOf(a)).toBe(ma.head);
+      expect(await headOf(b)).toBe(ma.head);
+    });
 });
 
 describe("S5 the history is a git repository", () => {

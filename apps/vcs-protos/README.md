@@ -44,6 +44,7 @@ then tests written first (red), then the implementation (green), then findings.
 | `35-sequencer` | X15 — **git's merge, cherry-pick and rebase state (MERGE_HEAD/MERGE_MSG, CHERRY_PICK_HEAD, rebase-merge/, index stages) written and read exactly: native git finishes ours and we finish git's on 120 random histories, and a rebase resumes from files after a reload** | Can git and webrun-vcs finish each other's merges, cherry-picks and rebases? |
 | `36-fossil-index` | X9 — **Fossil-like path history and message search from SQL tables (FTS5 trigram), written in the ref update's transaction; equal to git on 40 random histories, under 5 ms on 100,000 commits over 50,000 files** | Can SQL indexes give Fossil-like history queries, in the same transaction as the refs? |
 | `37-xet` | X11 — **Hugging Face Xet: gear-hash chunking, keyed BLAKE3 Merkle hashes, LZ4 xorbs, streaming reconstruction from a recorded CAS answer; the specification's reference file matches bit for bit** | Can webrun-vcs chunk, hash and reconstruct Hugging Face Xet files exactly? |
+| `38-workspace-sync` | X17 — **folders kept in step through git history: commits, object transfer and deterministic merges; three endpoints converge on one commit after 200 random schedules, conflicts committed and reported** | Can folders sync through git history and converge? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.

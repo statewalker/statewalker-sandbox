@@ -97,8 +97,8 @@ async function flatten(
   return out;
 }
 
-/** records the folder as a commit when it differs from HEAD's tree */
-async function snapshot(ep: Endpoint): Promise<string | undefined> {
+/** records the folder as a commit when it differs from HEAD's tree; returns the head */
+export async function commitFolder(ep: Endpoint): Promise<string | undefined> {
   const head = await headOf(ep);
   const files = await folderBytes(ep.folder);
   const tree = await writeFiles(ep.repo, Object.fromEntries(files));
@@ -209,8 +209,8 @@ export async function sync(
   b: Endpoint,
   o: { oneWay?: boolean } = {},
 ): Promise<{ head: string; conflicts: string[] }> {
-  await snapshot(a);
-  const theirs = await snapshot(b);
+  await commitFolder(a);
+  const theirs = await commitFolder(b);
   let conflicts: string[] = [];
   if (theirs) {
     await transfer(b.repo, a.repo, theirs);

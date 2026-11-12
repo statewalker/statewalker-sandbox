@@ -1,6 +1,6 @@
 # 38 — Can folders sync through git history and converge?
 
-Plan id **X17** (workspace sync on history). Status: **open**.
+Plan id **X17** (workspace sync on history). Status: **answered — yes: three endpoints converge on one commit and the same files after 200 random schedules, non-overlapping edits merge cleanly, conflicts are committed and reported, and two endpoints merging each other apart make the identical commit**.
 
 ## Question
 
@@ -31,3 +31,63 @@ is not a valid git repository.
 
 - Endpoints sync in one process here; the transport (X7/X8) carries the same objects and refs.
 - Folders are plain files (no executable bits or symlinks, as X14 on a FilesApi).
+
+## Answer
+
+Yes. `src/workspace.ts` (about 250 lines, no `node:` imports) builds it from X16a's repository, X5's
+refs on a FilesApi (X15's `filesRefFiles`) and X13f's recursive merge. All 7 tests pass:
+
+- **S1.** 30 random schedules of non-overlapping edits (adds, edits, deletes, new directories)
+  and syncs over three endpoints: no conflict, one commit and the same files everywhere.
+- **S2.** The same lines edited on two endpoints, and an edit against a delete: both paths
+  reported, the conflicted files committed with git's markers, and the three endpoints converge,
+  whichever merged first.
+- **S3.** 200 random schedules (15 steps of edits, deletes and syncs each): after a final round,
+  one commit and the same files everywhere, and every path only one endpoint touched holds that
+  endpoint's last edit (or is gone, if it was deleted).
+- **S4.** Two endpoints merging each other's heads apart (copies taken before either merged), with
+  disjoint and with conflicting edits: the identical merge commit, even when one merges later.
+- **S5.** An endpoint's repository on disk passes `git fsck --strict`; `git log` names a, b and c.
+
+**How a sync works.** Both folders are committed when they differ from their head (author: the
+endpoint). `a` copies the objects of `b`'s head it lacks (a commit present has its history), and
+merges: nothing when `b`'s head is an ancestor, a fast-forward when `a`'s is, else a merge. Then
+`b` copies `a`'s result and fast-forwards. The folder is moved from the old tree to the new one:
+removed files deleted, changed files written.
+
+**Why it converges on one commit.** A merge commit depends only on the two heads: parents in id
+order (the smaller one is "ours" for the merge too), the identity `sync`, the later parent's
+committer date, labels from the parent ids, and a message listing the conflicts. Two endpoints
+merging the same heads, at any time, make the same commit, so a sync back is a fast-forward and a
+round of syncs with no new edits leaves every endpoint on one commit. The first S4 test did not
+show this (the second sync was already a fast-forward); the mutation check caught it, and S4 now
+merges from copies taken before either side merged.
+
+### Mutation check
+
+| # | Mutant | Result |
+|---|---|---|
+| V1 | Parents in merge order, not id order | survived the first S4; killed by the rewritten S4 |
+| V2 | Merge dated "now" | survived the first S4; killed by the rewritten S4 |
+| V3 | Conflicts not reported | killed (S2) |
+| V4 | Removed files kept in the folder | killed (S3) |
+| V5 | The peer's folder not committed before the merge | killed (S1, S2) |
+| V6 | One-way syncs pushing back | survived the first S4; killed by the rewritten S4 |
+| V7 | Conflict labels from the merging side | survived the first S4; killed by the rewritten S4 (conflicting edits) |
+| V8 | Fast-forwards made into merges | killed (S1, S2) |
+
+## Promotion grades
+
+| File | Grade | Why |
+|---|---|---|
+| `src/workspace.ts` | **Adopt** (transport, conflict UI, large files to come) | converges on one commit; each step is plain git |
+
+## Open threads
+
+1. Syncs over the network: the object transfer through smart HTTP or webrun-wire (X8, X7), and
+   pushes racing on one endpoint (the ref compare-and-swap already refuses a stale update).
+2. Conflict resolution in the folder: today the markers are committed; a resolution is an ordinary
+   edit and syncs like one.
+3. Large files through LFS or Xet pointers (X10, X11) instead of blobs.
+4. Rename detection is the merge's (X13); a folder watcher (files-sync events) instead of
+   listing the whole folder at each sync.
