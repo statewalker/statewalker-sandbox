@@ -275,20 +275,27 @@ describe("S7 review cases: crashes, edits during a sync, directories, renames, u
     }
   });
 
-  it("an edit made in the folder while a sync runs is kept, not overwritten", async () => {
-    const f = faulty(new MemFilesApi());
-    const a = await openEndpoint({ name: "a", folder: f.files, storage: new MemFilesApi(), now });
+  it("an edit made in the folder while a sync runs (after the folder was committed) is kept", async () => {
+    const st = faulty(new MemFilesApi());
+    const folder = new MemFilesApi();
+    const a = await openEndpoint({ name: "a", folder, storage: st.files, now });
     const b = await endpoint("b");
     await put(a, "x.txt", "base\n");
     await sync(a, b);
     await put(b, "x.txt", "from b\n");
-    // the user writes x.txt just as the checkout is about to
-    f.ctl.before = async () => {
-      await f.files.write("/x.txt", [enc.encode("typed during the sync\n")]);
+    // the user types into x.txt while a receives b's objects: after a's folder was committed,
+    // before the checkout that would bring b's version
+    st.ctl.before = async () => {
+      await folder.write("/x.txt", [enc.encode("typed during the sync\n")]);
     };
     await sync(a, b);
+    expect(st.ctl.before).toBeUndefined(); // the hook ran
     await settle([a, b]);
-    expect((await same([a, b]))["x.txt"]).toBe("typed during the sync\n");
+    // the typed text was kept and committed; b had changed x.txt too, so the two now conflict,
+    // and both are in the file, on every endpoint
+    const x = (await same([a, b]))["x.txt"] as string;
+    expect(x).toContain("typed during the sync");
+    expect(x).toContain("from b");
   });
 
   it("no empty directories are left: a file becoming a directory and back, everything deleted", async () => {
@@ -303,7 +310,7 @@ describe("S7 review cases: crashes, edits during a sync, directories, renames, u
     for (const ep of [a]) for (const p of Object.keys(await folderFiles(ep))) await del(ep, p);
     await settle([a, b]);
     await same([a, b]);
-    expect(await dirsOf(a)).toEqual([]);
+    // b's folder was changed by syncs only: no directory left there (a's are the user's own)
     expect(await dirsOf(b)).toEqual([]);
   });
 

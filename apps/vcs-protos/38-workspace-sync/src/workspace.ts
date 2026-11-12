@@ -8,6 +8,7 @@
  */
 
 import type { FilesApi } from "@statewalker/webrun-files";
+import { createSha1, toHex } from "../../01-streaming-git-hash/src/git-object-hash.js";
 import { commit, readCommit, readTree, writeFiles } from "../../17-repository/src/commands.js";
 import { encodeCommit, type Person } from "../../17-repository/src/git-format.js";
 import type { Repository } from "../../17-repository/src/object-store.js";
@@ -27,6 +28,8 @@ export interface Endpoint {
 }
 
 const MAIN = "refs/heads/main";
+/** the commit the folder was last checked out at (git's index, reduced to its tree) */
+const CHECKED_OUT = "/sync/checked-out";
 const dec = new TextDecoder();
 
 export async function openEndpoint(o: {
@@ -37,7 +40,12 @@ export async function openEndpoint(o: {
 }): Promise<Endpoint> {
   const repo = await filesRepository(o.storage, filesRefFiles(o.storage));
   if (!(await repo.refs.read("HEAD"))) await repo.refs.setSymref("HEAD", MAIN);
-  return { ...o, repo };
+  const ep = { ...o, repo };
+  if (!(await checkedOut(ep))) {
+    const head = await headOf(ep);
+    if (head) await setCheckedOut(ep, head);
+  }
+  return ep;
 }
 
 export async function headOf(ep: Endpoint): Promise<string | undefined> {
@@ -97,8 +105,23 @@ async function flatten(
   return out;
 }
 
-/** records the folder as a commit when it differs from HEAD's tree; returns the head */
+async function checkedOut(ep: Endpoint): Promise<string | undefined> {
+  if (!(await ep.storage.exists(CHECKED_OUT))) return undefined;
+  return dec.decode(await readAll(ep.storage, CHECKED_OUT)).trim() || undefined;
+}
+async function setCheckedOut(ep: Endpoint, oid: string) {
+  await ep.storage.write(CHECKED_OUT, [new TextEncoder().encode(`${oid}\n`)]);
+}
+
+/**
+ * Records the folder as a commit when it differs from HEAD's tree; returns the head. A checkout
+ * left unfinished (a crash after the ref moved) is finished first, so a half-written folder is
+ * never taken for local edits.
+ */
 export async function commitFolder(ep: Endpoint): Promise<string | undefined> {
+  const at = await checkedOut(ep);
+  const current = await headOf(ep);
+  if (current && at !== current) await checkout(ep, at, current);
   const head = await headOf(ep);
   const files = await folderBytes(ep.folder);
   const tree = await writeFiles(ep.repo, Object.fromEntries(files));
@@ -119,42 +142,97 @@ export async function commitFolder(ep: Endpoint): Promise<string | undefined> {
   return oid;
 }
 
-/** copies the objects reachable from `oid` that `to` lacks (a commit present has its history) */
+/**
+ * Copies the objects reachable from `oid` that `to` lacks, children before parents: a commit is
+ * stored only once its tree, blobs and parents are, so "a commit present has its history" holds
+ * even after a transfer that failed halfway.
+ */
 async function transfer(from: Repository, to: Repository, oid: string): Promise<void> {
-  const stack = [oid];
+  const stack: [string, boolean][] = [[oid, false]];
   const seen = new Set<string>();
   while (stack.length) {
-    const id = stack.pop() as string;
+    const [id, expanded] = stack.pop() as [string, boolean];
+    if (expanded) {
+      const o = await from.objects.get(id);
+      if (!o) throw new Error(`no object ${id}`);
+      const parts: Uint8Array[] = [];
+      for await (const p of o.content) parts.push(p);
+      const bytes = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+      let at = 0;
+      for (const p of parts) {
+        bytes.set(p, at);
+        at += p.length;
+      }
+      await to.objects.put(o.type, bytes);
+      continue;
+    }
     if (seen.has(id) || (await to.objects.has(id))) continue;
     seen.add(id);
+    stack.push([id, true]);
     const o = await from.objects.get(id);
     if (!o) throw new Error(`no object ${id}`);
-    const parts: Uint8Array[] = [];
-    for await (const p of o.content) parts.push(p);
-    const bytes = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-    let at = 0;
-    for (const p of parts) {
-      bytes.set(p, at);
-      at += p.length;
-    }
-    if (o.type === "commit") {
+    const type = o.type;
+    await o.content[Symbol.asyncIterator]().return?.();
+    if (type === "commit") {
       const c = await readCommit(from, id);
-      stack.push(c.tree, ...c.parents);
-    } else if (o.type === "tree") for (const e of await readTree(from, id)) stack.push(e.oid);
-    await to.objects.put(o.type, bytes);
+      for (const child of [c.tree, ...c.parents]) stack.push([child, false]);
+    } else if (type === "tree")
+      for (const e of await readTree(from, id)) stack.push([e.oid, false]);
   }
 }
 
-/** makes the folder hold `to`'s files (it held `from`'s) */
+const blobId = (data: Uint8Array) =>
+  toHex(
+    createSha1("noble")
+      .update(new TextEncoder().encode(`blob ${data.length}\0`))
+      .update(data)
+      .digest(),
+  );
+
+async function removeEmptyParents(folder: FilesApi, path: string) {
+  for (let i = path.lastIndexOf("/"); i > 0; i = path.lastIndexOf("/", i - 1)) {
+    const dir = `/${path.slice(0, i)}`;
+    if ((await folder.stats(dir))?.kind !== "directory") continue;
+    for await (const _ of folder.list(dir)) return;
+    await folder.remove(dir);
+  }
+}
+
+/**
+ * Moves the folder from `from`'s files to `to`'s. A path is changed only where the folder still
+ * holds `from`'s version (or already holds `to`'s): a path the user changed meanwhile keeps the
+ * user's bytes, and the next commit records them. Then the folder is recorded as checked out at
+ * `to`. Run again after a failure, it finishes what is left.
+ */
 async function checkout(ep: Endpoint, from: string | undefined, to: string) {
   const before = from ? await flatten(ep.repo, (await readCommit(ep.repo, from)).tree) : new Map();
   const after = await flatten(ep.repo, (await readCommit(ep.repo, to)).tree);
-  for (const p of before.keys()) if (!after.has(p)) await ep.folder.remove(`/${p}`);
+  const current = async (p: string) =>
+    (await ep.folder.stats(`/${p}`))?.kind === "file"
+      ? blobId(await readAll(ep.folder, `/${p}`))
+      : undefined;
+  for (const [p, oid] of before)
+    if (!after.has(p) && (await current(p)) === oid) {
+      await ep.folder.remove(`/${p}`);
+      await removeEmptyParents(ep.folder, p);
+    }
   for (const [p, oid] of after) {
-    if (before.get(p) === oid) continue;
-    if ((await ep.folder.stats(`/${p}`))?.kind === "directory") await ep.folder.remove(`/${p}`);
+    const now = await current(p);
+    if (now === oid) continue;
+    if (now !== undefined && now !== before.get(p)) continue; // the user's edit: kept
+    const st = await ep.folder.stats(`/${p}`);
+    if (st?.kind === "directory") {
+      let empty = true;
+      for await (const _ of ep.folder.list(`/${p}`)) {
+        empty = false;
+        break;
+      }
+      if (!empty) continue; // the user's files there: kept
+      await ep.folder.remove(`/${p}`);
+    }
     await ep.folder.write(`/${p}`, [await blob(ep.repo, oid)]);
   }
+  await setCheckedOut(ep, to);
 }
 
 /** merges `theirs` into the endpoint's head: nothing, a fast-forward, or a deterministic merge */
@@ -219,7 +297,7 @@ export async function sync(
   const head = (await headOf(a)) as string;
   if (!o.oneWay && head) {
     await transfer(a.repo, b.repo, head);
-    await mergeInto(b, head);
+    for (const c of await mergeInto(b, head)) if (!conflicts.includes(c)) conflicts.push(c);
   }
   return { head, conflicts };
 }

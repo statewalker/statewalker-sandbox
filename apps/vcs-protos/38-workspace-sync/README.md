@@ -25,17 +25,22 @@ is not a valid git repository.
 | S3 | **Property test.** 200 random schedules over three endpoints (edits, deletes, syncs interleaved): after a final round of syncs every endpoint holds the same commit and files, and every edit no other endpoint touched is in the result. |
 | S4 | **Deterministic merges.** Two endpoints merging each other's heads at the same time make the identical merge commit (sorted parents, a fixed identity, the later parent's date), so syncing back is a fast-forward, not another merge. |
 | S5 | **Git history.** An endpoint's repository, copied to disk, passes `git fsck --strict`, and `git log` shows each endpoint's edits. |
+| S7 | Added after review: a checkout failing halfway loses none of the peer's edits; a transfer failing at any object leaves later syncs working; an edit typed during a sync (after the folder was committed) is kept and merged; no empty directory is left in a folder the syncs changed; renames, and endpoints that started apart, converge. |
 | S6 | **Portable.** `src/` has no `node:` imports; the endpoints run on in-memory FilesApis. |
 
 ## Scope
 
 - Endpoints sync in one process here; the transport (X7/X8) carries the same objects and refs.
 - Folders are plain files (no executable bits or symlinks, as X14 on a FilesApi).
+- A FilesApi has no compare-and-swap: between the checkout's check of a path and its write there is
+  still an instant in which a user's write would be overwritten.
+- A conflicting binary file holds one side's bytes (the parent with the smaller id, as git's
+  merge keeps "ours"); the other side's version is in the history, and the conflict is reported.
 
 ## Answer
 
 Yes. `src/workspace.ts` (about 230 lines, no `node:` imports) builds it from X16a's repository, X5's
-refs on a FilesApi (X15's `filesRefFiles`) and X13f's recursive merge. All 7 tests pass:
+refs on a FilesApi (X15's `filesRefFiles`) and X13f's recursive merge. All 12 tests pass:
 
 - **S1.** 30 random schedules of non-overlapping edits (adds, edits, deletes, new directories)
   and syncs over three endpoints: no conflict, one commit and the same files everywhere.
@@ -48,12 +53,18 @@ refs on a FilesApi (X15's `filesRefFiles`) and X13f's recursive merge. All 7 tes
 - **S4.** Two endpoints merging each other's heads apart (copies taken before either merged), with
   disjoint and with conflicting edits: the identical merge commit, even when one merges later.
 - **S5.** An endpoint's repository on disk passes `git fsck --strict`; `git log` names a, b and c.
+- **S7.** Failures halfway through a checkout or a transfer, edits during a sync, directories,
+  renames and unrelated starts.
 
 **How a sync works.** Both folders are committed when they differ from their head (author: the
 endpoint). `a` copies the objects of `b`'s head it lacks (a commit present has its history), and
 merges: nothing when `b`'s head is an ancestor, a fast-forward when `a`'s is, else a merge. Then
-`b` copies `a`'s result and fast-forwards. The folder is moved from the old tree to the new one:
-removed files deleted, changed files written.
+`b` copies `a`'s result and fast-forwards. Objects travel children first, so a stored commit
+always has its tree, blobs and parents. The folder is moved from the old tree to the new one, path
+by path, only where it still holds the old version: a path the user changed meanwhile keeps the
+user's bytes and is committed by the next sync. Each endpoint records the commit its folder was
+last checked out at (git's index, reduced to a tree); a checkout cut short is finished at the next
+sync before the folder is committed, so a half-written folder is never taken for local edits.
 
 **Why it converges on one commit.** A merge commit depends only on the two heads: parents in id
 order (the smaller one is "ours" for the merge too), the identity `sync`, the later parent's
@@ -91,3 +102,16 @@ merges from copies taken before either side merged.
 3. Large files through LFS or Xet pointers (X10, X11) instead of blobs.
 4. Rename detection is the merge's (X13); a folder watcher (files-sync events) instead of
    listing the whole folder at each sync.
+
+### Review
+
+| Finding | Fix |
+|---|---|
+| A checkout cut short left a mixed folder, committed as local edits: the peer's edits reverted everywhere | the checked-out commit is recorded and an unfinished checkout finished first (S7) |
+| A transfer cut short stored a commit without its tree: every later sync failed | objects stored children first (S7, every failure point 2–8) |
+| Edits made during a sync were overwritten | a path is written only where the folder holds the old version (S7); the check-then-write instant remains (Scope) |
+| Empty directories left behind | parents emptied by a removal are removed (S7) |
+| Binary conflicts kept one side silently | stated in Scope; reported as conflicts |
+| Conflicts of the second merge dropped | both merges' conflicts reported |
+| Renames, file/directory swaps, unrelated starts untested | covered (S7) |
+| Every sync reads and hashes every file | an open thread (a folder watcher) |
