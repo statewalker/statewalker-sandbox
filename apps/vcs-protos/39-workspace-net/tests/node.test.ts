@@ -8,6 +8,7 @@ import { pairedLinks } from "@statewalker/httpeers-bridge/ports";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { gitEnv } from "../../12-index-pack/src/git-repo.js";
+import { gitHandler } from "../../22-receive-pack/src/server.js";
 import { rng } from "../../29-merge/tests/tree-harness.js";
 import {
   commitFolder,
@@ -16,7 +17,14 @@ import {
   headOf,
   openEndpoint,
 } from "../../38-workspace-sync/src/workspace.js";
-import { idle, type Peer, serveEndpoint, syncWith, watchEndpoint } from "../src/net-sync.js";
+import {
+  idle,
+  type Peer,
+  type RefreshReport,
+  serveEndpoint,
+  syncWith,
+  watchEndpoint,
+} from "../src/net-sync.js";
 
 const dirs: string[] = [];
 const stops: Array<() => unknown> = [];
@@ -49,9 +57,10 @@ async function connect(
   client: Endpoint,
   server: Endpoint,
   wrap: (f: typeof fetch) => typeof fetch = (f) => f,
+  dispatch: (req: Request) => Promise<Response> = serveEndpoint(server),
 ): Promise<Peer> {
   const [mine, theirs] = pairedLinks(client.name, server.name);
-  stops.push(await serveFetchOverLink({ link: theirs, dispatch: serveEndpoint(server) }));
+  stops.push(await serveFetchOverLink({ link: theirs, dispatch }));
   const remote = createRemoteOverLink({ link: mine });
   const f = ((input: RequestInfo | URL, init?: RequestInit) =>
     remote(
@@ -486,6 +495,109 @@ describe("N5 a watcher keeps endpoints in step", () => {
     await wa.stop();
     await wb.stop();
     await same([a, b]);
+  });
+});
+
+describe("N8 the refresh after a push does not depend on the response being read", () => {
+  it("a link that drops the push's response unread: the folder is still checked out", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    await put(a, "p.txt", "one\n");
+    await syncWith(a, await connect(a, b));
+    await idle(b);
+    await put(a, "p.txt", "two\n");
+    await put(a, "q.txt", "new\n");
+    // the push reaches b's handler; its response is never read (the link is gone)
+    const serve = serveEndpoint(b);
+    const dropping: Peer = {
+      name: "b",
+      url: "http://b.peer/repo.git",
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(input, { ...init, duplex: "half" } as RequestInit);
+        const isPush = new URL(req.url).pathname.endsWith("/git-receive-pack");
+        const res = await serve(req);
+        if (isPush && req.method === "POST") throw new Error("link dropped");
+        return res;
+      }) as typeof fetch,
+    };
+    await expect(syncWith(a, dropping)).rejects.toThrow(/link dropped/);
+    const want = await folderFiles(a);
+    await expect.poll(async () => folderFiles(b), { timeout: 5000 }).toEqual(want);
+    await idle(b);
+    expect(await headOf(b)).toBe(await headOf(a));
+  });
+});
+
+describe("N9 what a refresh reports", () => {
+  it("a push over an uncommitted edit on the same path: the conflict and the new head", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    const reports: RefreshReport[] = [];
+    const toB = await connect(
+      a,
+      b,
+      undefined,
+      serveEndpoint(b, { onRefresh: (r) => reports.push(r) }),
+    );
+    await put(a, "p.txt", "base\n");
+    await put(a, "other.txt", "same\n");
+    await syncWith(a, toB);
+    await idle(b);
+    expect(reports).toEqual([{ pushed: await headOf(a), head: await headOf(a), conflicts: [] }]);
+    await put(b, "p.txt", "typed on b\n"); // not committed: b's own sync has not run
+    await put(a, "p.txt", "pushed from a\n");
+    const r = await syncWith(a, toB);
+    await idle(b);
+    expect(reports).toHaveLength(2);
+    const last = reports[1] as RefreshReport;
+    expect(last.pushed).toBe(r.head);
+    expect(last.conflicts).toEqual(["p.txt"]);
+    // b's head moved on past what a pushed: the merge of b's edit, which a gets on its next sync
+    expect(last.head).toBe(await headOf(b));
+    expect(last.head).not.toBe(r.head);
+    await syncWith(a, toB);
+    await same([a, b]);
+  });
+
+  it("onRefresh and onError that throw do not break serving", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    const toB = await connect(
+      a,
+      b,
+      undefined,
+      serveEndpoint(b, {
+        onRefresh: () => {
+          throw new Error("listener");
+        },
+      }),
+    );
+    await put(a, "p.txt", "one\n");
+    await syncWith(a, toB);
+    await put(a, "p.txt", "two\n");
+    await syncWith(a, toB);
+    await same([a, b]);
+  });
+
+  it("syncWith reports conflicts merged while committing the folder (a push not yet checked out)", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    const c = await endpoint("c");
+    // a reaches b through a bare git handler: a push lands on b's main, b's folder stays as it was
+    const toBRaw = await connect(a, b, undefined, gitHandler(b.repo));
+    const toC = await connect(b, c);
+    await put(a, "p.txt", "base\n");
+    await syncWith(a, toBRaw);
+    await commitFolder(b); // b checks out the push
+    expect((await folderFiles(b))["p.txt"]).toBe("base\n");
+    await put(b, "p.txt", "typed on b\n");
+    await put(a, "p.txt", "pushed from a\n");
+    await syncWith(a, toBRaw); // b's main moves; its folder still holds b's edit against base
+    const r = await syncWith(b, toC);
+    expect(r.conflicts).toEqual(["p.txt"]);
+    const onB = (await folderFiles(b))["p.txt"] as string;
+    expect(onB).toContain("typed on b");
+    expect(onB).toContain("pushed from a");
   });
 });
 

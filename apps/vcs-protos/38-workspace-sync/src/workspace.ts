@@ -126,15 +126,25 @@ async function setCheckedOut(ep: Endpoint, oid: string) {
  * never taken for local edits.
  */
 export async function commitFolder(ep: Endpoint): Promise<string | undefined> {
+  return (await commitFolderReport(ep)).head;
+}
+
+/**
+ * `commitFolder`, also naming the paths committed with conflict markers on the way: a checkout
+ * that kept the user's edits over a moved head merges them first (X17b's refresh after a push).
+ */
+export async function commitFolderReport(
+  ep: Endpoint,
+): Promise<{ head: string | undefined; conflicts: string[] }> {
   const at = await checkedOut(ep);
   const current = await headOf(ep);
   if (current && at !== current) await checkout(ep, at, current);
-  await finishKeptEdits(ep);
+  const conflicts = await finishKeptEdits(ep);
   const head = await headOf(ep);
   const files = await folderBytes(ep.folder);
   const tree = await writeFiles(ep.repo, Object.fromEntries(files));
-  if (head && (await readCommit(ep.repo, head)).tree === tree) return head;
-  if (!head && files.size === 0) return undefined;
+  if (head && (await readCommit(ep.repo, head)).tree === tree) return { head, conflicts };
+  if (!head && files.size === 0) return { head: undefined, conflicts };
   const when = ep.now();
   const me: Person = { name: ep.name, email: `${ep.name}@sync.local`, when, tz: "+0000" };
   const { oid, result } = await commit(ep.repo, {
@@ -146,11 +156,13 @@ export async function commitFolder(ep: Endpoint): Promise<string | undefined> {
     message: `${ep.name}: folder changes\n`,
     expected: head ?? null,
   });
-  if (!result.ok) throw new Error(`${ep.name}: ${MAIN} moved`);
+  if (!result.ok)
+    // what was merged on the way is committed already: the error carries it for the retry
+    throw Object.assign(new Error(`${ep.name}: ${MAIN} moved`), { conflicts });
   // The folder is this commit now. Left at the old record, a later checkout (a head moved by a
   // push, X17b) would take this commit's own edits for the user's and keep them over the merge.
   await setCheckedOut(ep, oid);
-  return oid;
+  return { head: oid, conflicts };
 }
 
 /**
@@ -406,17 +418,18 @@ export async function sync(
   b: Endpoint,
   o: { oneWay?: boolean } = {},
 ): Promise<{ head: string; conflicts: string[] }> {
-  await commitFolder(a);
-  const theirs = await commitFolder(b);
-  let conflicts: string[] = [];
+  const ca = await commitFolderReport(a);
+  const cb = await commitFolderReport(b);
+  const theirs = cb.head;
+  const conflicts = [...new Set([...ca.conflicts, ...cb.conflicts])];
   if (theirs) {
     await transfer(b.repo, a.repo, theirs);
-    conflicts = await mergeInto(a, theirs);
+    for (const c of await mergeInto(a, theirs)) if (!conflicts.includes(c)) conflicts.push(c);
   }
   const head = (await headOf(a)) as string;
   if (!o.oneWay && head) {
     await transfer(a.repo, b.repo, head);
     for (const c of await mergeInto(b, head)) if (!conflicts.includes(c)) conflicts.push(c);
   }
-  return { head, conflicts };
+  return { head, conflicts: conflicts.sort() };
 }

@@ -28,6 +28,8 @@ the watcher misses a change or syncs once per write in a burst.
 | N4 | **Transport failure.** A link that fails during the fetch or during the push (requests rejected after N bytes) leaves both repositories valid (`git fsck --strict`); the next sync over a working link converges. |
 | N5 | **Watcher.** `watchEndpoint(ep, peers)` notices a changed folder (portably: polling the FilesApi, no `node:fs`) and syncs it to every peer: an edit on A appears in B's folder with no `sync` call; a burst of 20 writes in quick succession causes at most 3 syncs (debounced); edits on both sides converge; `stop()` ends it. |
 | N6 | **Portable.** `src/` has no `node:` imports; endpoints run on in-memory FilesApis. |
+| N8 | (X17c) **The refresh does not need the response read.** A link that drops the push's response unread: the serving endpoint's folder is still checked out at the pushed head. |
+| N9 | (X17c) **A refresh reports.** `serveEndpoint(ep, { onRefresh })` names the pushed head, the head after the refresh (a merge of the serving endpoint's own edits when it had any) and the paths it committed with conflict markers; `syncWith` reports conflicts merged while committing the folder too; a throwing listener breaks nothing. |
 
 ## Scope — what this slice does NOT do
 
@@ -48,9 +50,12 @@ the same code path as libp2p, X8c).
    (`rejected (fetch first)` / `(non-fast-forward)`), and receive-pack's compare-and-swap covers
    the window between advertisement and update. `syncWith` then fetches, merges and pushes again
    (N2: the remote's commit made between our fetch and our push survives).
-2. **The remote's folder follows a push.** receive-pack moves `main`; once the push's response has
-   been sent, the serving endpoint queues a refresh that checks its folder out at the new head. The
-   response does not wait for it: two endpoints syncing with each other at once would otherwise
+2. **The remote's folder follows a push.** receive-pack moves `main`; its post-receive hook
+   (X17c: once the report is written, whether or not anyone reads it, as in git and JGit) queues a
+   refresh that checks the serving endpoint's folder out at the new head and reports it to
+   `onRefresh` (`{ pushed, head, conflicts }`): the serving endpoint's own folder edits are merged
+   with the push, so `head` may be a commit past what the pusher's `syncWith` returned, which the
+   pusher gets on its next sync. The response does not wait for the refresh: two endpoints syncing with each other at once would otherwise
    wait on each other's queues. An endpoint's own operations (sync, refresh) run one at a time,
    but **incoming pushes are not queued**: they move `main` at any moment, guarded only by
    compare-and-swap. Everything that checks out therefore starts from the commit the folder
@@ -99,6 +104,8 @@ All 14 tests pass (`pnpm test 39-workspace-net`), and X17's 14 (`38-workspace-sy
 | N5 | An edit on A appears in B's folder with no `sync` call; 20 quick writes cause ≤ 3 rounds; a change made during a round is synced after it; `stop()` during a round lets it finish and nothing runs after; `stop()` during a look at the folder starts no round; `idle()` after `stop()` returns; watchers on both sides converge. |
 | N7 | (review of #114) A push lands on an endpoint during its own `syncWith` (while it fetches from another peer): the pushed edit and deletion survive, nothing is reverted. A push moving `main` between the merge's read and its compare-and-swap is retried (2 rounds), not thrown. |
 | N6 | `src/` has no `node:` imports. |
+| N8 | (X17c) A push whose response the link drops unread: the serving endpoint's folder reaches the pushed files and head anyway. |
+| N9 | (X17c) A push over an uncommitted edit on the same path: `onRefresh` gets `{ pushed, head, conflicts: ["p.txt"] }`, `head` the serving endpoint's merge (past `pushed`); a clean push reports `conflicts: []` and `head === pushed`; a throwing `onRefresh` breaks nothing; `syncWith` on an endpoint whose `main` a bare push moved (folder not yet checked out) reports the conflict its folder commit merged. |
 
 ### Mutation check
 
@@ -121,12 +128,18 @@ All 14 tests pass (`pnpm test 39-workspace-net`), and X17's 14 (`38-workspace-sy
 | R4 a lost race inside the merge is thrown | N7 |
 | R5 `stop()` during a look at the folder not honoured | N5 — survived first (the test's change was not yet due), test sharpened |
 | R6 `idle()` after `stop()` waits forever | N5 — survived first, test added |
+| C1 (X17c) receive-pack's post-receive hook never called | N8, N9 |
+| C2 `syncWith` drops the folder commit's conflicts | N9 |
+| C3 `onRefresh` gets no conflicts | N9 |
+| C4 a throwing `onRefresh` not caught | N9 (an unhandled rejection) |
+| C5 the first `main` command instead of the last | none: equivalent (a push names `main` once) |
+| C6 (22) a throwing post-receive hook not caught | X8b R8 (an unhandled rejection) |
 
 ## Promotion grades
 
 | File | Grade | For |
 |---|---|---|
-| `src/net-sync.ts` | **Adapt** | webrun-sync's network sync: `serveEndpoint`, `syncWith`, `watchEndpoint`. Before adopting: open threads 4–5. |
+| `src/net-sync.ts` | **Adapt** | webrun-sync's network sync: `serveEndpoint`, `syncWith`, `watchEndpoint`. |
 
 ## Open threads
 
@@ -136,9 +149,7 @@ All 14 tests pass (`pnpm test 39-workspace-net`), and X17's 14 (`38-workspace-sy
    the fallback; content hashes for same-size rewrites within a clock tick.
 3. **Many peers**: a hub syncing with spokes that are offline, peer discovery, and fairness when
    one peer is slow (rounds are sequential per endpoint today; `peerTimeoutMs` bounds one peer).
-4. **The refresh after a push needs the response read to its end** (or cancelled, or failed).
-   httpeers' bridge drains it; a transport that drops an unread response would leave the folder to
-   the next sync or watcher round, which checks it out then.
-5. **What a refresh reports**: conflicts a refresh merges are committed but not reported to
-   anyone, and a refresh also commits the serving endpoint's own folder edits, so the head
-   `syncWith` returned may already have moved on.
+4. ~~The refresh after a push needs the response read~~ — answered by X17c: receive-pack's
+   post-receive hook queues it (N8).
+5. ~~What a refresh reports~~ — answered by X17c: `onRefresh` (N9). The pusher learns of the
+   serving endpoint's merge on its next sync, not from the push itself.

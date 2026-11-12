@@ -717,3 +717,96 @@ describe("review cases (#82)", () => {
     expect(firstLine).not.toMatch(/side-band-64k|ofs-delta/);
   }, 60_000);
 });
+
+describe("R8 post-receive", () => {
+  for (const backend of ["files", "sql"] as const)
+    it(`${backend}: the refs that moved, after the report, read or not; a throwing hook is ignored`, async () => {
+      const src = repoWithHistory(4);
+      const h = rev(src, "HEAD");
+      const p = rev(src, "HEAD~1");
+      const calls: PushCommand[][] = [];
+      let throwing = false;
+      const { repo, url } = await ourServer(src, backend, {
+        update: async (c: PushCommand) => (c.ref === "refs/heads/nope" ? "no" : undefined),
+        postReceive: async (updated: PushCommand[]) => {
+          // the refs have moved by now
+          for (const c of updated) expect(await refOf(repo, c.ref)).toBe(c.new);
+          calls.push(updated);
+          if (throwing) throw new Error("hook failed");
+        },
+      });
+      const pack = packOf(src, `${h}^!`);
+      // read: one moved, one declined by update, one stale old value
+      let lines = await report(
+        await postReceive(
+          url,
+          receiveRequest(
+            [
+              `${ZERO} ${h} refs/heads/yes`,
+              `${ZERO} ${h} refs/heads/nope`,
+              `${p} ${h} refs/heads/stale`,
+            ],
+            pack,
+          ),
+        ),
+      );
+      expect(lines).toEqual(
+        expect.arrayContaining([
+          "ok refs/heads/yes",
+          expect.stringMatching(/^ng refs\/heads\/nope/),
+          expect.stringMatching(/^ng refs\/heads\/stale/),
+        ]),
+      );
+      await expect.poll(() => calls.length).toBe(1);
+      expect(calls[0]).toEqual([{ ref: "refs/heads/yes", old: ZERO, new: h }]);
+      // nothing moved: no call
+      lines = await report(
+        await postReceive(url, receiveRequest([`${ZERO} ${h} refs/heads/nope`], pack)),
+      );
+      expect(lines.join("\n")).toMatch(/^ng refs\/heads\/nope/m);
+      // atomic: all of them, in command order
+      lines = await report(
+        await postReceive(
+          url,
+          receiveRequest(
+            [`${h} ${p} refs/heads/yes`, `${ZERO} ${p} refs/heads/two`],
+            pack,
+            "report-status side-band-64k atomic",
+          ),
+        ),
+      );
+      expect(lines).toEqual(["unpack ok", "ok refs/heads/yes", "ok refs/heads/two"]);
+      await expect.poll(() => calls.length).toBe(2);
+      expect(calls[1]?.map((c) => c.ref)).toEqual(["refs/heads/yes", "refs/heads/two"]);
+      // the response never read (and the hook throws): still called, and the server goes on
+      throwing = true;
+      lines = await report(
+        await postReceive(url, receiveRequest([`${ZERO} ${h} refs/heads/thrown`], pack)),
+      );
+      expect(lines).toContain("ok refs/heads/thrown");
+      await expect.poll(() => calls.length).toBe(3);
+      const unread = await postReceive(
+        url,
+        receiveRequest([`${ZERO} ${h} refs/heads/unread`], pack),
+      );
+      await expect.poll(() => calls.length).toBe(4);
+      await unread.body?.cancel();
+      throwing = false;
+      lines = await report(
+        await postReceive(url, receiveRequest([`${h} ${p} refs/heads/unread`], pack)),
+      );
+      expect(lines).toContain("ok refs/heads/unread");
+      await expect.poll(() => calls.length).toBe(5);
+      // and a handler called directly, its body never touched
+      const direct = receivePackHandler(repo, { postReceive: (u) => void calls.push(u) });
+      await direct(
+        new Request(`${url}/git-receive-pack`, {
+          method: "POST",
+          headers: { "content-type": "application/x-git-receive-pack-request" },
+          body: receiveRequest([`${ZERO} ${h} refs/heads/direct`], pack) as unknown as BodyInit,
+        }),
+      );
+      await expect.poll(() => calls.length).toBe(6);
+      expect(calls[5]).toEqual([{ ref: "refs/heads/direct", old: ZERO, new: h }]);
+    }, 60_000);
+});
