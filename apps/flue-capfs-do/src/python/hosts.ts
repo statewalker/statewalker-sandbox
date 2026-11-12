@@ -33,7 +33,10 @@ const g = globalThis as unknown as {
   location?: { href: string };
 };
 const proc = (globalThis as { process?: ProcessLike }).process;
-const IN_WORKERD = /Cloudflare-Workers/.test(globalThis.navigator?.userAgent ?? "");
+// workers-types 5 declares `navigator` as a global const (not a globalThis property), shadowing
+// @types/node's var: read it through a narrow type.
+const userAgent = (globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent;
+const IN_WORKERD = /Cloudflare-Workers/.test(userAgent ?? "");
 // cellb's nodejs_compat polyfills `process` in browsers (with versions.node): a browser is
 // recognized by its global scope, not by `process`.
 const IN_BROWSER =

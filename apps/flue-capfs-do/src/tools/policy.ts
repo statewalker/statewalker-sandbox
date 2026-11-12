@@ -10,7 +10,10 @@ import type { ToolBundleConfig } from "./config.ts";
  * SQLite files, including the Workspace root key.
  */
 export const isolatesSeeHostFs = (): boolean =>
-  /Node\.js/.test(globalThis.navigator?.userAgent ?? "");
+  /Node\.js/.test(
+    // workers-types 5 declares `navigator` as a global const, not a globalThis property.
+    (globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent ?? "",
+  );
 
 export type ToolPolicy = "none" | "isolated" | "bundled-only" | "refused";
 
