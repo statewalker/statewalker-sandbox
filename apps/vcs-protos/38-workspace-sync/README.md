@@ -34,7 +34,7 @@ is not a valid git repository.
 
 ## Answer
 
-Yes. `src/workspace.ts` (about 250 lines, no `node:` imports) builds it from X16a's repository, X5's
+Yes. `src/workspace.ts` (about 230 lines, no `node:` imports) builds it from X16a's repository, X5's
 refs on a FilesApi (X15's `filesRefFiles`) and X13f's recursive merge. All 7 tests pass:
 
 - **S1.** 30 random schedules of non-overlapping edits (adds, edits, deletes, new directories)
