@@ -399,7 +399,7 @@ describe("F4 speed: 100,000 commits over 50,000 files", () => {
     git(d, ["fast-import", "--quiet"], parts.join(""));
     mark("fast-import");
     // F4 is about the queries on tables of this size: the rows come from git's own log (reading
-    // them through our objects takes ~3 ms a commit, X6r's pack reader; see the README)
+    // them through our objects takes ~1.3 ms a commit, about 2 minutes here; see the README)
     const db = await newNodeSqliteDb();
     const index = await fossilIndex(db, {} as ObjectStore);
     const log = git(d, [

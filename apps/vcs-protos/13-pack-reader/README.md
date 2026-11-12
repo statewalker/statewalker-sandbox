@@ -33,6 +33,7 @@ object size beyond the cache budget, or streaming a 64 MiB packed blob holds it 
 | R3 | Opening a pack whose idx checksum is wrong, whose idx names another pack (trailer mismatch) or whose idx is truncated fails with `PackError`; reading an entry whose compressed bytes are corrupt fails with `PackError`; `verify: true` detects content that hashes to another id. |
 | R4 | Reading every object of a 4 MiB base + 50-deep chain pack in random order holds < 24 MiB live with a 16 MiB base cache; with the cache, the number of entry inflations is at most half of what it is without. |
 | R5 | In Chromium (OPFS) and a Durable Object (SqliteFilesApi): every object of X6a's fixture pack is read with `verify: true` (its content hashes to its id). |
+| R7 | (follow-up) every object of the 60-commit pack, `get` and `raw()`: fewer `files.read` calls than objects / 8, same bytes; mutating a `raw()` chunk changes no later read; a one-block `readCacheBytes` holds at most one block; `readCacheBytes: 0` reads the file at least once per object. Review of #112: three concurrent rounds of every `get` read each block once (they read 1,317 times, and the accounting ran past its limit); an entry whose header starts at 65,535 reads with `verify`. |
 | R6 | A 64 MiB incompressible blob stored in a pack without delta is streamed with < 16 MiB live. |
 
 ## Scope — what this slice does NOT do
@@ -103,13 +104,20 @@ Findings:
    `mark_bad_packed_object` does; the error is raised only when no other copy exists. This covers
    errors raised before `get` returns; a whole (non-delta) object is streamed, so its corruption
    surfaces while the caller reads, past the point where another copy could be chosen.
-6. **Limits** (stated, not fixed): idx v1 and SHA-256 repositories are not read; loose objects
+6. **Pack windows** (follow-up, X9's finding). Every entry read used to open the pack twice
+   through FilesApi (header, then data): 303 µs a read on a 10,000-commit fast-import pack, mostly
+   open/stat/close. Small reads now go through a cache of 64 KiB blocks (`readCacheBytes`, default
+   4 MiB, LRU; git's `core.packedGitWindowSize` scaled down); entries over 256 KiB stream past it,
+   so the large-object memory bounds are unchanged. The same reads cost 64 µs (4.7×), and walking
+   X9's corpus through our objects 1.34 ms a commit instead of 3.75 ms (2.8×). Chunks from `raw()`
+   are copies, as returned objects already were.
+7. **Limits** (stated, not fixed): idx v1 and SHA-256 repositories are not read; loose objects
    with `verify` raise X4's `ObjectIdMismatchError` where packs raise `PackError`; `list` keeps
    every id in a set; bytes after an entry's zlib stream are tolerated, as git does when reading.
 
 ## Verified
 
-All 22 Node tests and 1 Chromium test pass (`pnpm test 13-pack-reader`).
+All 28 Node tests and 1 Chromium test pass (`pnpm test 13-pack-reader`).
 
 | # | Result |
 |---|---|
@@ -140,6 +148,14 @@ All 22 Node tests and 1 Chromium test pass (`pnpm test 13-pack-reader`).
 | Q5a / Q5b cached buffer handed out (cache hit / freshly resolved) | R2b (a third read after mutating the second) |
 | Q6 a bad pack fails the whole database | R3b |
 | Q7 inflated length not compared with the header | R3b size cases |
+| B1 block cache never used | R7 read count, R7 bound |
+| B2 `raw()` yields the cached block | R7 copies |
+| B3 no eviction | R7 bound |
+| B4 block end off by one | R7 read count and copies (wrong bytes) |
+| B5 large entries through the cache | survived: eviction keeps memory bounded either way (R6 holds); the bypass only spares a copy |
+| B6 `readCacheBytes: 0` ignored | R7 direct reads |
+| C1 concurrent misses of one block not shared (review of #112) | R7 concurrent reads |
+| C2 an entry header read from its first block only (review of #112) | R7 header across blocks |
 
 The review found that the first versions of several tests could not fail (a cache bound true by
 construction, an aliasing check that never reached the cache-hit path, a corrupt-pack check that
@@ -153,6 +169,7 @@ depended on random pack names); each was rebuilt and its mutation re-run.
 | An LRU of every resolved object is git's delta base cache | For one deep chain it thrashes; spacing cached objects along the chain halves the work. |
 | First version: "each entry is read with one ranged read" | Two: header, then data. |
 | First version: a REF base outside the pack is "resolved through the whole database" | Without a visiting set, a cross-pack cycle exhausted memory (review). |
+| Follow-up: "a block cache needs no locking" | Concurrent misses of one block each read it and each added its bytes: the count ran past the limit and the cache emptied itself (review of #112). Misses now share one read. |
 | #62: "every declared size is bounded by `maxObjectSize`" | Not a delta's result size, nor a loose REF base's: a 15.6 KB pack allocated 4.8 GB (review of #62). Both are checked now. |
 
 ## Functional description
@@ -185,8 +202,7 @@ function openObjectDatabase(files: FilesApi, objectsDir: string, opts?): Promise
    the Repository façade (X16) needs a single `ObjectStore`.
 2. **multi-pack-index**, `.rev` files and bitmaps for repositories with many packs (git's caches).
 3. Packs in the native SQL store (X6b) — reading them through the same interface.
-4. A persistent cache across readers and a shared inflater per pack read (one open read per entry
-   today).
+4. A persistent cache across readers (the block cache is per reader since the follow-up).
 5. **Chains of large objects** (review of #62): cache every intermediate object while patching
    upwards (git's `add_delta_base_cache`) when the cache holds few of them, and bound the work of
    one `get` (bytes applied ≤ N × `maxObjectSize`) so a few-KB chain cannot cost 4 095 objects.

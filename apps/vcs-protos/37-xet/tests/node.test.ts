@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,11 +41,14 @@ const sha256 = (path: string) => createHash("sha256").update(readFileSync(path))
 
 /**
  * The reference xorb, downloaded once from the pinned revision of the specification's dataset into
- * the temp directory: written to a private file, checked by SHA-256, then renamed into place (so a
+ * `XET_REFERENCE_CACHE` (or the temp directory): written to a private file, checked by SHA-256, then renamed into place (so a
  * parallel run never reads a partial file). Offline, this fails with the URL it needs.
  */
 function referenceXorb(): string {
-  const path = join(tmpdir(), `x11-${XORB_SHA256}.xorb`);
+  // CI keeps this directory in its cache (keyed by the SHA-256): the network only on a cache miss
+  const dir = process.env.XET_REFERENCE_CACHE || tmpdir();
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `x11-${XORB_SHA256}.xorb`);
   if (existsSync(path) && sha256(path) === XORB_SHA256) return path;
   const url = `https://huggingface.co/datasets/xet-team/xet-spec-reference-files/resolve/${REVISION}/${XORB}.xorb`;
   const part = `${path}.${process.pid}.part`;

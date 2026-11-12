@@ -12,6 +12,7 @@ data of the Xet protocol specification (https://huggingface.co/docs/xet):
 
 The xorb itself (14.7 MB) is downloaded by the tests from the dataset (revision
 `c4aa3a3f15b1395fff5ce934784bf6c8f2d62de8`, SHA-256 checked) and cached in the system's temporary
-directory; it is not committed. The CSV the reference files describe is Washington State's
+directory (`XET_REFERENCE_CACHE` names another, which CI keeps in its cache keyed by that SHA-256,
+so huggingface.co is reached only on a cache miss); it is not committed. The CSV the reference files describe is Washington State's
 "Electric Vehicle Population Data" (data.wa.gov, 2025-09-17); only hashes and lengths derived from
 it are committed here.

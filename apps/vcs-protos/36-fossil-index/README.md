@@ -70,10 +70,10 @@ the batch hung. Now indexing has two halves: `prepare` walks the new commits and
 rows before the batch (reading objects); the hook only writes them, skipping commits another handle
 indexed in between. Batches on one handle run one at a time, so each hook writes its own rows.
 
-**Indexing speed (a finding for X6r).** Computing the rows by reading our objects costs about
-3 ms a commit on the fast-import corpus, and more on its newest commits: about 370 commits a second,
-some 13 minutes for 100,000. Plain reads of commits and root trees are 0.4 ms each; the cost is in
-the deeper tree reads of X6r's pack reader on this pack. F4 therefore builds its rows from git's own
+**Indexing speed (a finding for X6r).** Computing the rows by reading our objects cost about
+3.75 ms a commit on the fast-import corpus (50,000 files): some 6 minutes for 100,000. The cost was
+X6r opening the pack twice per object read. With X6r's block cache (follow-up) it is 1.34 ms a
+commit, about 2 minutes for 100,000. F4 therefore builds its rows from git's own
 log (`--root --name-only`), since what it measures is the queries on tables of that size; F1–F3
 build them through our objects.
 
