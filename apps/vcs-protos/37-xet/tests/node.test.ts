@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  bg4Regroup,
   type ChunkRef,
   chunkHash,
   chunkStream,
@@ -109,6 +110,42 @@ describe("H3 + H4 reconstruction from the recorded answer", () => {
     // the file is 63 MB; streaming retains a few chunks and fetched pieces, not the file
     expect(peak).toBeLessThan(8 * 1024 * 1024);
   }, 300_000);
+});
+
+describe("H6 range requests and ByteGrouping4", () => {
+  it("a term over a chunk sub-range with an offset into it: the matching slice of the file", async () => {
+    const xorb = readFileSync(referenceXorb());
+    const answer = JSON.parse(fixture("recon.recorded.json")) as ReconstructionAnswer;
+    const fetchRange = async function* (_url: string, start: number, end: number) {
+      yield xorb.subarray(start, end + 1);
+    };
+    const collect = async (a: ReconstructionAnswer) => {
+      const parts: Uint8Array[] = [];
+      for await (const p of reconstruct(a, fetchRange)) parts.push(p);
+      return Buffer.concat(parts);
+    };
+    const whole = await collect(answer);
+    const ref = referenceChunks();
+    const startByte = ref.slice(0, 10).reduce((n, c) => n + c.length, 0);
+    const length = ref.slice(10, 20).reduce((n, c) => n + c.length, 0);
+    const term = { ...answer.terms[0], unpacked_length: length, range: { start: 10, end: 20 } };
+    const ranged = await collect({
+      ...answer,
+      offset_into_first_range: 12_345,
+      terms: [term],
+    } as ReconstructionAnswer);
+    expect(ranged.equals(whole.subarray(startByte + 12_345, startByte + length))).toBe(true);
+  }, 300_000);
+
+  it("ByteGrouping4: groups split as xet-core's bg4_split_together come back in order", () => {
+    for (const n of [0, 1, 2, 3, 4, 5, 6, 7, 1000, 1001, 1002, 1003]) {
+      const data = Uint8Array.from({ length: n }, (_, i) => (i * 37 + 11) & 255);
+      // bg4_split_together: bytes 4i+g into group g, the groups one after another
+      const groups = [0, 1, 2, 3].map((g) => data.filter((_, i) => i % 4 === g));
+      const grouped = Uint8Array.from(groups.flatMap((g) => [...g]));
+      expect([...bg4Regroup(grouped)], `${n}`).toEqual([...data]);
+    }
+  });
 });
 
 describe("H5 portable", () => {
