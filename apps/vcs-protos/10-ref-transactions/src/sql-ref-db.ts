@@ -32,7 +32,26 @@ function successor(p: string): string | undefined {
 }
 type Row = { oid: string | null; symref: string | null };
 
-export async function sqlRefDb(db: Db, prefix = "refdb_"): Promise<RefDb> {
+export interface SqlRefDbOptions {
+  /**
+   * Runs inside a successful batch's transaction, after its ref and reflog writes and before
+   * COMMIT; never for a rejected batch. Whatever it writes through `tx` commits with the refs; if
+   * it throws, the batch rolls back and `batch` rejects. `updates` has one entry per command, under
+   * the dereferenced name (a symbolic ref's target), no-op updates included; `old` is the value
+   * before the batch, `undefined` when the ref did not exist (unlike a command's `old: null`).
+   * X9's indexes use it.
+   */
+  beforeCommit?(
+    tx: Db,
+    updates: { name: string; old?: string; new: string | null }[],
+  ): Promise<void>;
+}
+
+export async function sqlRefDb(
+  db: Db,
+  prefix = "refdb_",
+  options: SqlRefDbOptions = {},
+): Promise<RefDb> {
   if (!IDENT.test(prefix)) throw new Error(`invalid table prefix ${prefix}`);
   const refs = `${prefix}refs`;
   const logs = `${prefix}reflog`;
@@ -150,6 +169,10 @@ export async function sqlRefDb(db: Db, prefix = "refdb_"): Promise<RefDb> {
             );
           }
         }
+        await options.beforeCommit?.(
+          tx,
+          cmds.map((c) => ({ name: c.name, old: current.get(c.name), new: c.new })),
+        );
         return { ok: true, rejected: [] };
       });
     },

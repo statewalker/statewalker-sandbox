@@ -42,6 +42,7 @@ then tests written first (red), then the implementation (green), then findings.
 | `33-criss-cross` | X13f — **criss-cross merges: git's merge bases (paint_down_to_common by date, remove_redundant) and merge-ort's recursive merge (virtual bases, inner-merge rules); identical to git on 511 histories** | Can merge-ort's recursive merges be reproduced exactly? |
 | `34-index` | X14 — **git's index (versions 2–4, extensions) byte for byte, staging git reads clean, status equal to git's on 300 random changes, nothing hashed for 50,000 unchanged files, racy-git rules** | Can a portable index and working tree interoperate with git, fast? |
 | `35-sequencer` | X15 — **git's merge, cherry-pick and rebase state (MERGE_HEAD/MERGE_MSG, CHERRY_PICK_HEAD, rebase-merge/, index stages) written and read exactly: native git finishes ours and we finish git's on 120 random histories, and a rebase resumes from files after a reload** | Can git and webrun-vcs finish each other's merges, cherry-picks and rebases? |
+| `36-fossil-index` | X9 — **Fossil-like path history and message search from SQL tables (FTS5 trigram), written in the ref update's transaction; equal to git on 40 random histories, under 5 ms on 100,000 commits over 50,000 files** | Can SQL indexes give Fossil-like history queries, in the same transaction as the refs? |
 
 `pnpm test` runs typecheck and both vitest projects (`node` and `browser`, Chromium); a folder filter applies to both. `pnpm test 01-streaming-git-hash` runs one.
 `pnpm bench` prints the throughput tables recorded in each README.
