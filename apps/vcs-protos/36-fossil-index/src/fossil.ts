@@ -41,6 +41,7 @@ export interface FossilIndex {
    * `git log --full-history --no-merges -- <path>` over every indexed commit (`--all` as of the
    * refs that indexed them), or, with `tips`, over the commits they reach (`git log <tips>`; X9c):
    * a branch's own history, or `--all` without what deleted and rewound refs left behind.
+   * `tips` are object ids (not ref names); `[]` reaches nothing, so the answer is empty.
    */
   pathHistory(path: string, opts?: { tips?: string[] }): Promise<string[]>;
   /**
@@ -451,7 +452,8 @@ export async function fossilIndex(
         out.push(t);
         continue;
       }
-      if (!(await objects.has(t))) throw new Error(`fossil: tip ${t} is not indexed`);
+      if (!(await objects.has(t)))
+        throw new Error(`fossil: tip ${t} is no object here (tips are object ids, not ref names)`);
       const c = await peelToCommit(repo, t);
       if (c) out.push(c);
     }
@@ -519,7 +521,6 @@ export async function fossilIndex(
     },
     async pathHistory(pathspec, opts = {}) {
       const path = literalPath(pathspec);
-      const keep = opts.tips ? await reach(opts.tips) : undefined;
       const rows = path
         ? await db.query<{ oid: string }>(
             `SELECT c.oid FROM fossil_commit c
@@ -533,7 +534,10 @@ export async function fossilIndex(
                WHERE c.merge = 0 AND c.oid IN (SELECT oid FROM fossil_change)
                ORDER BY c.date DESC, c.oid`,
           );
-      return rows.map((r) => r.oid).filter((oid) => keep?.(oid) ?? true);
+      if (!opts.tips) return rows.map((r) => r.oid);
+      if (!rows.length) return []; // nothing to keep: no walk
+      const keep = await reach(opts.tips);
+      return rows.map((r) => r.oid).filter(keep);
     },
     async simplifiedPathHistory(pathspec, tips) {
       const path = literalPath(pathspec);

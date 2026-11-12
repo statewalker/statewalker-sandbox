@@ -164,6 +164,15 @@ the window T6 names.
 | U1 | `pathHistory` ignores `tips` | killed (F7) |
 | U2 | `searchMessages` ignores `tips` | killed (F7) |
 | U3 | The walk follows first parents only | killed (F7) |
+| V1 | (review of #120) A pattern with an empty line not limited to the tips | killed (F7) |
+| V2 | `tips: []` read as "no limit" (it reaches nothing) | killed (F7) |
+| V3 | A tree or blob tip walked instead of skipped (`git log <tree>` lists nothing) | killed (F7) |
+
+Review of #120 also: an id that is no object is refused with a message saying tips are object
+ids; a query with no candidate row returns before walking (no walk, no "not indexed" error for a
+query that matches nothing); F7 checks that deleting a ref narrows `--all` in practice. Order on
+equal dates is by id, which git's walk is not (nor, with clock skew, a pure date sort): not
+modelled, as before.
 
 ## Promotion grades
 

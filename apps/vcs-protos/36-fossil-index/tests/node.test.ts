@@ -346,7 +346,7 @@ describe("F1d (review of #119) the walk against concurrent writes, old indexes, 
   it("a tip that is not indexed is refused, not walked as a root", async () => {
     const d = mergyHistory(9);
     const { index } = await loadSql(d);
-    await expect(index.simplifiedPathHistory("a", ["0".repeat(40)])).rejects.toThrow(/not indexed/);
+    await expect(index.simplifiedPathHistory("a", ["0".repeat(40)])).rejects.toThrow(/object id/);
   });
 });
 
@@ -355,6 +355,7 @@ describe("F7 (X9c) per-branch answers, and --all without what a deleted ref left
     const wrong: string[] = [];
     let checked = 0;
     let narrower = 0;
+    let narrowedAfterDelete = 0;
     for (const seed of SEEDS) {
       const d = seed % 2 ? mergyHistory(seed) : history(seed);
       const { index } = await loadSql(d);
@@ -386,21 +387,38 @@ describe("F7 (X9c) per-branch answers, and --all without what a deleted ref left
             await index.searchMessages(q, { tips: [tip] }),
             lines(git(d, ["log", "--no-merges", "--format=%H", "-F", `--grep=${q}`, ref])),
           );
+        // a pattern with an empty line matches every commit the tip reaches (review of #120)
+        check(
+          `${ref} --grep=zzzq --grep=`,
+          await index.searchMessages("zzzq\n", { tips: [tip, tip] }),
+          lines(git(d, ["log", "--no-merges", "--format=%H", "-F", "--grep=zzzq", "--grep=", ref])),
+        );
       }
+      // tips that are no commit: a tree or a blob is skipped (`git log <tree>` lists nothing), an
+      // id that is no object is refused, and no tips at all reach nothing (review of #120)
+      const tree = git(d, ["rev-parse", "HEAD^{tree}"]).trim();
+      const first = lines(git(d, ["ls-tree", "--name-only", "HEAD"]))[0];
+      const blob = git(d, ["rev-parse", `HEAD:${first}`]).trim();
+      check("tree and blob tips", await index.pathHistory(".", { tips: [tree, blob] }), []);
+      check("no tips", await index.searchMessages("fix", { tips: [] }), []);
+      await expect(index.pathHistory(".", { tips: ["f".repeat(40)] })).rejects.toThrow(/object id/);
       // a ref deleted after indexing: --all from the refs left does not list what only it reached
       const victim = refs.find((r) => r !== "refs/heads/main");
       if (victim) {
         git(d, ["update-ref", "-d", victim]);
         const tips = lines(git(d, ["for-each-ref", "--format=%(objectname)"]));
         tips.push(git(d, ["rev-parse", "HEAD"]).trim());
-        for (const path of paths)
+        for (const path of paths) {
+          const after = await index.pathHistory(path, { tips });
+          if (after.length < (await index.pathHistory(path)).length) narrowedAfterDelete++;
           check(
             `after deleting ${victim} -- ${path}`,
-            await index.pathHistory(path, { tips }),
+            after,
             lines(
               git(d, ["log", "--all", "--full-history", "--no-merges", "--format=%H", "--", path]),
             ),
           );
+        }
         check(
           `after deleting ${victim} --grep=fix`,
           await index.searchMessages("fix", { tips }),
@@ -411,6 +429,7 @@ describe("F7 (X9c) per-branch answers, and --all without what a deleted ref left
     expect(wrong.slice(0, 3)).toEqual([]);
     expect(checked).toBeGreaterThan(1000);
     expect(narrower).toBeGreaterThan(20); // per-branch answers really are narrower than --all
+    expect(narrowedAfterDelete).toBeGreaterThan(5); // and deleting a ref really narrows --all
   }, 900_000);
 });
 
