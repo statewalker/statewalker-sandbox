@@ -45,7 +45,7 @@ export interface PackReaderOptions {
   /**
    * Bytes of pack data kept in 64 KiB blocks, so reading many small objects costs a few block reads
    * rather than two `files.read` calls each (git's core.packedGitWindowSize, scaled down). Entries
-   * larger than 256 KiB stream past it. Default 4 MiB; 0 turns it off.
+   * larger than 256 KiB stream past it. Default 4 MiB; below 64 KiB (one block) it is off.
    */
   readCacheBytes?: number;
   /**
@@ -264,24 +264,33 @@ export async function openPack(
   const readCacheLimit = opts.readCacheBytes ?? 4 * 2 ** 20;
   const blocks = new Map<number, Uint8Array>();
   let blockBytes = 0;
-  const block = async (i: number): Promise<Uint8Array> => {
+  /** blocks being read: concurrent misses of one block share its read */
+  const loading = new Map<number, Promise<Uint8Array>>();
+  const block = (i: number): Promise<Uint8Array> => {
     const hit = blocks.get(i);
     if (hit) {
       blocks.delete(i);
       blocks.set(i, hit);
-      return hit;
+      return Promise.resolve(hit);
     }
+    const pending = loading.get(i);
+    if (pending) return pending;
     const start = i * BLOCK;
-    const b = await readAll(files, packPath, start, Math.min(BLOCK, packLen - start));
-    blocks.set(i, b);
-    blockBytes += b.length;
-    for (const [k, v] of blocks) {
-      if (blockBytes <= readCacheLimit || k === i) break;
-      blocks.delete(k);
-      blockBytes -= v.length;
-    }
-    st.peakBlockBytes = Math.max(st.peakBlockBytes, blockBytes);
-    return b;
+    const p = readAll(files, packPath, start, Math.min(BLOCK, packLen - start))
+      .then((b) => {
+        blocks.set(i, b);
+        blockBytes += b.length;
+        for (const [k, v] of blocks) {
+          if (blockBytes <= readCacheLimit || k === i) break;
+          blocks.delete(k);
+          blockBytes -= v.length;
+        }
+        st.peakBlockBytes = Math.max(st.peakBlockBytes, blockBytes);
+        return b;
+      })
+      .finally(() => loading.delete(i));
+    loading.set(i, p);
+    return p;
   };
   async function* packBytes(start: number, length: number): AsyncGenerator<Uint8Array> {
     if (readCacheLimit < BLOCK || length > 4 * BLOCK) {

@@ -33,7 +33,7 @@ object size beyond the cache budget, or streaming a 64 MiB packed blob holds it 
 | R3 | Opening a pack whose idx checksum is wrong, whose idx names another pack (trailer mismatch) or whose idx is truncated fails with `PackError`; reading an entry whose compressed bytes are corrupt fails with `PackError`; `verify: true` detects content that hashes to another id. |
 | R4 | Reading every object of a 4 MiB base + 50-deep chain pack in random order holds < 24 MiB live with a 16 MiB base cache; with the cache, the number of entry inflations is at most half of what it is without. |
 | R5 | In Chromium (OPFS) and a Durable Object (SqliteFilesApi): every object of X6a's fixture pack is read with `verify: true` (its content hashes to its id). |
-| R7 | (follow-up) every object of the 60-commit pack, `get` and `raw()`: fewer `files.read` calls than objects / 8, same bytes; mutating a `raw()` chunk changes no later read; a one-block `readCacheBytes` holds at most one block; `readCacheBytes: 0` reads the file at least once per object. |
+| R7 | (follow-up) every object of the 60-commit pack, `get` and `raw()`: fewer `files.read` calls than objects / 8, same bytes; mutating a `raw()` chunk changes no later read; a one-block `readCacheBytes` holds at most one block; `readCacheBytes: 0` reads the file at least once per object. Review of #112: three concurrent rounds of every `get` read each block once (they read 1,317 times, and the accounting ran past its limit); an entry whose header starts at 65,535 reads with `verify`. |
 | R6 | A 64 MiB incompressible blob stored in a pack without delta is streamed with < 16 MiB live. |
 
 ## Scope — what this slice does NOT do
@@ -117,7 +117,7 @@ Findings:
 
 ## Verified
 
-All 26 Node tests and 1 Chromium test pass (`pnpm test 13-pack-reader`).
+All 28 Node tests and 1 Chromium test pass (`pnpm test 13-pack-reader`).
 
 | # | Result |
 |---|---|
@@ -154,6 +154,8 @@ All 26 Node tests and 1 Chromium test pass (`pnpm test 13-pack-reader`).
 | B4 block end off by one | R7 read count and copies (wrong bytes) |
 | B5 large entries through the cache | survived: eviction keeps memory bounded either way (R6 holds); the bypass only spares a copy |
 | B6 `readCacheBytes: 0` ignored | R7 direct reads |
+| C1 concurrent misses of one block not shared (review of #112) | R7 concurrent reads |
+| C2 an entry header read from its first block only (review of #112) | R7 header across blocks |
 
 The review found that the first versions of several tests could not fail (a cache bound true by
 construction, an aliasing check that never reached the cache-hit path, a corrupt-pack check that
@@ -167,6 +169,7 @@ depended on random pack names); each was rebuilt and its mutation re-run.
 | An LRU of every resolved object is git's delta base cache | For one deep chain it thrashes; spacing cached objects along the chain halves the work. |
 | First version: "each entry is read with one ranged read" | Two: header, then data. |
 | First version: a REF base outside the pack is "resolved through the whole database" | Without a visiting set, a cross-pack cycle exhausted memory (review). |
+| Follow-up: "a block cache needs no locking" | Concurrent misses of one block each read it and each added its bytes: the count ran past the limit and the cache emptied itself (review of #112). Misses now share one read. |
 | #62: "every declared size is bounded by `maxObjectSize`" | Not a delta's result size, nor a loose REF base's: a 15.6 KB pack allocated 4.8 GB (review of #62). Both are checked now. |
 
 ## Functional description
