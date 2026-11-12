@@ -81,6 +81,7 @@ describe("H3 + H4 reconstruction from the recorded answer", () => {
       for (let at = start; at <= end; at += 1 << 20)
         yield xorb.subarray(at, Math.min(end + 1, at + (1 << 20)));
     };
+    (globalThis as { gc?: () => void }).gc?.();
     const before = process.memoryUsage();
     let peak = 0;
     const got: ChunkRef[] = [];
@@ -88,8 +89,12 @@ describe("H3 + H4 reconstruction from the recorded answer", () => {
     for await (const chunk of chunkStream(reconstruct(answer, fetchRange))) {
       got.push({ hash: chunkHash(chunk), length: chunk.length });
       size += chunk.length;
-      const m = process.memoryUsage();
-      peak = Math.max(peak, m.heapUsed + m.arrayBuffers - before.heapUsed - before.arrayBuffers);
+      // what is retained, after a collection (vitest runs with --expose-gc)
+      if (got.length % 50 === 0) {
+        (globalThis as { gc?: () => void }).gc?.();
+        const m = process.memoryUsage();
+        peak = Math.max(peak, m.heapUsed + m.arrayBuffers - before.heapUsed - before.arrayBuffers);
+      }
     }
     expect(fetched).toEqual([`xorb://${XORB} 0-14737812`]);
     expect(size).toBe(63_527_244);
@@ -101,8 +106,8 @@ describe("H3 + H4 reconstruction from the recorded answer", () => {
     );
     expect(wrong).toBe(-1);
     expect(hashToString(fileHash(got))).toBe(fixture(`${CSV}.xet-file-hash`).trim());
-    // the file is 63 MB; streaming keeps a few chunks and fetched pieces, not the file
-    expect(peak).toBeLessThan(40 * 1024 * 1024);
+    // the file is 63 MB; streaming retains a few chunks and fetched pieces, not the file
+    expect(peak).toBeLessThan(8 * 1024 * 1024);
   }, 300_000);
 });
 
