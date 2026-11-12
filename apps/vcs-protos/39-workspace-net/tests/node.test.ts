@@ -36,6 +36,13 @@ async function endpoint(name: string): Promise<Endpoint> {
 }
 const put = (ep: Endpoint, path: string, text: string) =>
   ep.folder.write(`/${path}`, [enc.encode(text)]);
+/** incompressible text, so a pack of it is as large as it looks */
+const noise = (n: number, seed: number) => {
+  const rand = rng(seed);
+  let out = "";
+  for (let i = 0; i < n; i++) out += String.fromCharCode(97 + Math.floor(rand() * 26));
+  return `${out}\n`;
+};
 
 /** `client` reaching `server` only through httpeers' bridge, as a `Peer` for `syncWith`. */
 async function connect(
@@ -129,6 +136,26 @@ describe("N2 a push that loses a race is refused and retried", () => {
   });
 });
 
+describe("N2b (review of the mutants) an incoming push meets an uncommitted edit on the same path", () => {
+  it("the remote's folder edit and the pushed change both survive (merged, or conflict-marked)", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    const toB = await connect(a, b);
+    await put(a, "p.txt", "base\n");
+    await syncWith(a, toB);
+    await idle(b);
+    await put(b, "p.txt", "typed on b, not committed\n"); // b's own sync has not run
+    await put(a, "p.txt", "pushed from a\n");
+    await syncWith(a, toB); // the push lands; b's refresh checks out over its uncommitted edit
+    await idle(b);
+    const onB = (await folderFiles(b))["p.txt"] as string;
+    expect(onB).toContain("typed on b");
+    expect(onB).toContain("pushed from a");
+    await syncWith(a, toB);
+    expect((await same([a, b]))["p.txt"]).toBe(onB);
+  });
+});
+
 describe("N3 property test: a hub and two spokes, only over the transport", () => {
   it("50 random schedules converge, and every untouched edit survives", async () => {
     for (let seed = 1; seed <= 50; seed++) {
@@ -156,6 +183,9 @@ describe("N3 property test: a hub and two spokes, only over the transport", () =
           await syncWith(ep, peers.get(ep) as Peer);
         }
       }
+      // the hub's own edits are committed by its own sync or watcher, which this hub does not run
+      await idle(hub);
+      await commitFolder(hub);
       for (let round = 0; round < 2; round++)
         for (const s of [s1, s2]) await syncWith(s, peers.get(s) as Peer);
       const files = await same(eps);
@@ -203,13 +233,13 @@ describe("N4 a link that fails halfway leaves both repositories valid, and the n
     it(`fails during the ${phase}`, async () => {
       const a = await endpoint("a");
       const b = await endpoint("b");
-      for (let i = 0; i < 30; i++) await put(b, `b/${i}.txt`, `${"x".repeat(2000)} ${i}\n`);
-      for (let i = 0; i < 30; i++) await put(a, `a/${i}.txt`, `${"y".repeat(2000)} ${i}\n`);
+      for (let i = 0; i < 30; i++) await put(b, `b/${i}.txt`, noise(2000, 100 + i));
+      for (let i = 0; i < 30; i++) await put(a, `a/${i}.txt`, noise(2000, 200 + i));
       await commitFolder(b);
       if (phase === "push") {
         // b's history reaches a first, so the failing step is a's push
         await syncWith(a, await connect(a, b));
-        for (let i = 0; i < 30; i++) await put(a, `a2/${i}.txt`, `${"z".repeat(2000)} ${i}\n`);
+        for (let i = 0; i < 30; i++) await put(a, `a2/${i}.txt`, noise(2000, 300 + i));
       }
       const bad = await connect(a, b, failing(phase, 4096));
       await expect(syncWith(a, bad)).rejects.toThrow();
@@ -256,6 +286,62 @@ describe("N5 a watcher keeps endpoints in step", () => {
     await put(a, "after-stop.txt", "x\n");
     await sleep(500);
     expect((await folderFiles(b))["after-stop.txt"]).toBeUndefined();
+  });
+
+  it("a change made during a round is synced after it", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    let started!: () => void;
+    const roundStarted = new Promise<void>((r) => {
+      started = r;
+    });
+    let first = true;
+    const slow = (f: typeof fetch): typeof fetch =>
+      (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (first) {
+          first = false;
+          started();
+          await sleep(300);
+        }
+        return f(input, init);
+      }) as typeof fetch;
+    const watcher = watchEndpoint(a, [await connect(a, b, slow)], { pollMs: 20, debounceMs: 50 });
+    stops.push(() => watcher.stop());
+    await put(a, "one.txt", "1\n");
+    await roundStarted;
+    await put(a, "during.txt", "written while the round ran\n");
+    await expect
+      .poll(async () => (await folderFiles(b))["during.txt"], { timeout: 5000 })
+      .toBe("written while the round ran\n");
+  });
+
+  it("stop() during a round: the round finishes and nothing runs after it", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    let started!: () => void;
+    const roundStarted = new Promise<void>((r) => {
+      started = r;
+    });
+    let first = true;
+    const slow = (f: typeof fetch): typeof fetch =>
+      (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (first) {
+          // only the round in progress is slow: a round after stop() would finish well in time
+          first = false;
+          started();
+          await sleep(300);
+        }
+        return f(input, init);
+      }) as typeof fetch;
+    const watcher = watchEndpoint(a, [await connect(a, b, slow)], { pollMs: 20, debounceMs: 50 });
+    stops.push(() => watcher.stop());
+    await put(a, "one.txt", "1\n");
+    await roundStarted;
+    const stopping = watcher.stop(); // mid-round
+    await put(a, "two.txt", "2\n");
+    await stopping;
+    await sleep(1000);
+    expect((await folderFiles(b))["two.txt"]).toBeUndefined();
   });
 
   it("watchers on both sides: edits made on each side converge", async () => {

@@ -12,6 +12,7 @@ import {
   type Endpoint,
   folderFiles,
   headOf,
+  mergeInto,
   openEndpoint,
   sync,
 } from "../src/workspace.js";
@@ -365,5 +366,35 @@ describe("S6 portable", () => {
     const src = join(dirname(fileURLToPath(import.meta.url)), "../src");
     for (const f of readdirSync(src))
       expect(readFileSync(join(src, f), "utf8"), f).not.toMatch(/from "node:/);
+  });
+});
+
+describe("S8 (X17b) a head moved from outside after a local commit is checked out exactly", () => {
+  it("commitFolder records the commit as checked out, so its own edits are not taken for new ones", async () => {
+    const a = await endpoint("a");
+    const b = await endpoint("b");
+    const copyObjects = async (from: Endpoint, to: Endpoint) => {
+      for await (const e of from.storage.list("/objects", { recursive: true })) {
+        if (e.kind !== "file" || (await to.storage.exists(e.path))) continue;
+        const parts: Uint8Array[] = [];
+        for await (const p of from.storage.read(e.path)) parts.push(p);
+        await to.storage.write(e.path, parts);
+      }
+    };
+    await put(a, "shared.txt", "one\ntwo\nthree\n");
+    await sync(a, b);
+    await put(a, "shared.txt", "ONE\ntwo\nthree\n");
+    await put(b, "shared.txt", "one\ntwo\nTHREE\n");
+    const bHead = (await commitFolder(b)) as string; // b's edit, committed once
+    await commitFolder(a);
+    // a merges b's commit; b's main is then moved to the merge from outside (as a push does)
+    await copyObjects(b, a);
+    await mergeInto(a, bHead);
+    const merged = (await headOf(a)) as string;
+    await copyObjects(a, b);
+    const r = await b.repo.refs.batch([{ name: "refs/heads/main", old: bHead, new: merged }]);
+    expect(r.ok).toBe(true);
+    expect(await commitFolder(b)).toBe(merged); // checked out, nothing new committed
+    expect(await folderFiles(b)).toEqual({ "shared.txt": "ONE\ntwo\nTHREE\n" });
   });
 });

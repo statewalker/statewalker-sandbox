@@ -1,6 +1,6 @@
 # 39 — Can folders sync over a network transport, kept in step by a watcher?
 
-Plan id **X17b** (workspace sync over the network). Status: **open**.
+Plan id **X17b** (workspace sync over the network). Status: **answered — yes: endpoints that reach each other only through httpeers' bridge converge on one commit and the same files (50 random hub-and-spoke schedules), lost races retry instead of overwriting, a link failing mid-fetch or mid-push leaves both repositories `fsck`-clean, and a polling watcher keeps folders in step with debounced syncs. Two X17 bugs found on the way, both fixed in 38.**
 
 ## Question
 
@@ -35,3 +35,91 @@ the watcher misses a change or syncs once per write in a burst.
   a `MessageChannel` (X8c); webrun-wire's port stack over WebSocket is the next transport.
 - Access control (X8c's Biscuit tokens apply unchanged) and discovery of peers.
 - Filesystem notification APIs (`fs.watch`, FileSystemObserver): polling is the portable floor.
+
+## Answer
+
+**Yes.** `serveEndpoint(ep)` is X8's `gitHandler` over the endpoint's repository; `syncWith(ep,
+peer)` commits the folder, fetches the peer's `main` into `refs/remotes/<peer>/main`, merges it
+with X17's deterministic merge (checked out into the folder), and pushes the result, never forced.
+A peer is a URL and a `fetch`; the tests reach it only through httpeers' bridge (`pairedLinks`,
+the same code path as libp2p, X8c).
+
+1. **Lost races retry, they never overwrite.** The push client refuses a non-fast-forward
+   (`rejected (fetch first)` / `(non-fast-forward)`), and receive-pack's compare-and-swap covers
+   the window between advertisement and update. `syncWith` then fetches, merges and pushes again
+   (N2: the remote's commit made between our fetch and our push survives).
+2. **The remote's folder follows a push.** receive-pack moves `main`; once the push's response has
+   been sent, the serving endpoint queues a refresh that checks its folder out at the new head. The
+   response does not wait for it: two endpoints syncing with each other at once would otherwise
+   wait on each other's queues. Each endpoint's own operations (sync, refresh) run one at a time.
+3. **A failing link leaves nothing half-done.** Objects arrive before refs move on both sides
+   (X6a's install, receive-pack's order), so a fetch or push cut after 4 KiB leaves both
+   repositories `git fsck --strict`-clean, and the next sync completes (N4).
+4. **The watcher** polls the folder (`size` and `lastModified` of every file: a FilesApi offers no
+   change events everywhere), syncs with every peer once the folder has been quiet for
+   `debounceMs`, syncs once at start, and syncs again after a round when the folder changed during
+   it. A burst of 20 writes caused at most 3 rounds (N5). `syncEveryMs` adds rounds with no local
+   change, to pick up the peers'. A rewrite of the same size within one clock tick is not seen
+   until the next change or the next periodic round.
+
+**Two X17 bugs, found because the network separates commit and checkout** (both fixed in 38, with
+regression tests):
+
+- **A commit was not recorded as checked out.** `commitFolder` committed the folder but left the
+  checked-out record at the previous commit. Locally the next sync repaired it; over the network a
+  push moves `main` first, and the refresh's checkout then took the endpoint's own committed edit
+  for a live user edit, kept it over the merge, and committed it again — undoing the peer's half of
+  the merge (N1 failed this way; S8 now pins it).
+- **A user edit kept over an incoming change was committed on top of it.** When the user edits a
+  path while a peer's change to the same path arrives (typed during a sync, or not yet committed
+  when a push lands), X17 kept the user's bytes and the next commit recorded them on top of the
+  peer's commit: the peer's change vanished without a conflict, though the user never saw it. The
+  checkout now reports such paths; their edits are committed on top of the commit the user worked
+  from, and that commit is merged in deterministically, so both sides survive, conflict-marked where
+  they collide. X17's S7 had passed only because its hook fired on the old record's write, before
+  the folder was committed; on the real path it now shows the conflict it expects, and N2b covers
+  the push case.
+
+### Verified
+
+All 11 tests pass (`pnpm test 39-workspace-net`), and X17's 13 (`38-workspace-sync`, S8 new).
+
+| # | Result |
+|---|---|
+| N1 | Over the bridge: different files and different lines of one file merge cleanly; both endpoints on one commit, the remote's folder checked out; both repositories `git fsck --strict`. |
+| N2 | The remote commits between fetch and push: the push is refused, `syncWith` retries (2 attempts), the remote's file survives. N2b: an uncommitted edit on the remote meets a push to the same path: both texts survive in the file, on both endpoints. |
+| N3 | 50 random hub-and-spoke schedules (edits, a shared file that conflicts, syncs only through the bridge): every endpoint on one commit and the same files; every edit no one else touched survives. |
+| N4 | A link cut after 4 KiB of the fetch's response, or of the push's request: `syncWith` rejects, both repositories pass `fsck --strict`, the next sync converges (60 / 90 files). |
+| N5 | An edit on A appears in B's folder with no `sync` call; 20 quick writes cause ≤ 3 rounds; a change made during a round is synced after it; `stop()` during a round lets it finish and nothing runs after; watchers on both sides converge. |
+| N6 | `src/` has no `node:` imports. |
+
+### Mutation check
+
+| Mutation | Caught by |
+|---|---|
+| T1 a lost race is not retried | N2 |
+| T2 no refresh after a push | N1 |
+| T3 the fetched head is not merged | N1 |
+| T4 no debounce | N5 burst |
+| T5 the watcher ignores changes | N5 |
+| T6 `stop()` does not stop a round in progress | N5 stop — survived first, because the after-round snapshot also swallowed changes made during the round (a bug, fixed); killed once that was fixed |
+| T7 no sync at start | N5 |
+| X1 (38) a commit not recorded as checked out | X17 S3, S8, N1 |
+| X2 (38) kept user edits not merged (sync) | X17 S7 |
+| X3 (38) kept user edits not merged (refresh after a push) | N2b — survived first, test added |
+| X4 (38) the user's own committed bytes not recognised in the follow-up checkout | X17 S7 |
+
+## Promotion grades
+
+| File | Grade | For |
+|---|---|---|
+| `src/net-sync.ts` | **Adopt** | webrun-sync's network sync: `serveEndpoint`, `syncWith`, `watchEndpoint` |
+
+## Open threads
+
+1. **A real link**: webrun-wire's port stack over a WebSocket (`messageTargetOverWebSocket` +
+   `overPipe` + `webrun-http-streams`' `fetchOverDuplex`), once those packages are released.
+2. **Change events** where the platform has them (`fs.watch`, FileSystemObserver), with polling as
+   the fallback; content hashes for same-size rewrites within a clock tick.
+3. **Many peers**: a hub syncing with spokes that are offline, peer discovery, and fairness when
+   one peer is slow (rounds are sequential per endpoint today).
