@@ -3,7 +3,8 @@
 // capability directly. Flue's tools (read, write, edit, grep, glob, bash) then work as they do on
 // just-bash, with the same rights. Paths are guest paths: /workspace/x is the capability's /x.
 
-import { ownBytes } from "../bytes.ts";
+import { bytesToString, stringToBytes } from "../bytes.ts";
+import { capBytes } from "../cap-bytes.ts";
 import type { Cap } from "../caps.ts";
 import type { WasmerSession } from "./kernel.ts";
 
@@ -21,6 +22,7 @@ export function resolveGuestPath(p: string): string {
 }
 
 export function flueSandboxOnWasmer(session: WasmerSession, cap: Cap) {
+  const bytes = capBytes(cap);
   const capPath = (p: string) => {
     const abs = resolveGuestPath(p);
     if (abs !== WORKSPACE && !abs.startsWith(`${WORKSPACE}/`))
@@ -41,16 +43,12 @@ export function flueSandboxOnWasmer(session: WasmerSession, cap: Cap) {
       });
       return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode };
     },
-    readFile: async (p: string) => (await cap.call("readFile", capPath(p))) as string,
-    readFileBuffer: async (p: string) => {
-      const b = await cap.call("readFileBuffer", capPath(p));
-      return b instanceof Uint8Array ? b : new Uint8Array(b as ArrayBuffer);
-    },
-    // Text as UTF-8, bytes byte for byte.
-    writeFile: async (p: string, c: string | Uint8Array) => {
-      if (typeof c === "string") await cap.call("writeFile", capPath(p), c);
-      else await cap.call("writeFileBuffer", capPath(p), ownBytes(c));
-    },
+    // Bytes only cross the capability (text encoded and decoded here as UTF-8); files larger
+    // than a whole-file call move as files-RPC streams.
+    readFile: async (p: string) => bytesToString(await bytes.read(capPath(p)), "utf8"),
+    readFileBuffer: (p: string) => bytes.read(capPath(p)),
+    writeFile: (p: string, c: string | Uint8Array) =>
+      bytes.write(capPath(p), typeof c === "string" ? stringToBytes(c, "utf8") : c),
     stat: async (p: string) => {
       const s = (await cap.call("stat", capPath(p))) as {
         isDirectory: boolean;

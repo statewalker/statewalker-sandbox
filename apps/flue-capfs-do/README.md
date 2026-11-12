@@ -657,17 +657,23 @@ Writing bytes is a `write` operation like writing text, authorized the same way.
 TEXT before BLOBs are read as `CAST(data AS BLOB)`, so they come back whole too.
 
 Every writer sends bytes as bytes:
-- just-bash (`CapFs`): `Uint8Array` content, and strings in a byte encoding (`binary`/`latin1`,
-  `base64`, `hex`), go to `writeFileBuffer`; `readFileBuffer` reads the stored bytes.
+- just-bash (`CapFs`) and Flue's tools on Wasmer exchange bytes only (`src/cap-bytes.ts`): text
+  is encoded and decoded holder-side in its encoding (UTF-8 by default, as the store decodes:
+  U+FFFD for invalid sequences, a leading U+FEFF kept). Up to 16 MiB a file is one binary call
+  (`readFileBuffer`, `writeFileBuffer`, `appendFileBuffer`); a larger one moves as a files-RPC
+  stream (read, write, append), so `cat`, `grep`, `>>` and Flue's read/write/edit work on files
+  of any size. The store's text calls (`readFile`, `writeFile`, `appendFile`) remain for the
+  callers that still use them: already-approved tool bundles' `node:fs` shim and Python's live
+  `capfs` module.
 - tools' `node:fs`: Buffers and TypedArrays are written byte for byte; reads return the bytes.
 - Python: binary files are synced in and written back as bytes.
 - Wasmer: open files are read and saved as bytes.
-- Flue's tools on Wasmer: `writeFile(Uint8Array)` and `readFileBuffer`.
 
 Limits and notes:
 - **Size:** whole-file calls (`readFile`, `writeFileBuffer`, …) move at most 16 MiB in one
-  message (`EFBIG`, HTTP 413, beyond); larger files are streamed. Wasmer refuses larger files at
-  the write.
+  message (`EFBIG`, HTTP 413, beyond); larger files are streamed (just-bash, Flue's tools, the
+  `stream` task, Wasmer reads and appends). A just-bash or Flue read of a large file still holds
+  it whole in the agent's memory: their APIs return whole files.
 - **Approved tool bundles:** the `node:fs` shim is inlined into every tool bundle, so bundles
   built after this change hash differently. Approve them again; bundles already approved still
   run (their shim writes text only).
@@ -773,6 +779,7 @@ src/files-rpc.ts    holder side of streaming: capFiles(cap), the webrun-files-rp
 src/files-rpc-hub.ts  owner side: a webrun-files-rpc server per token, in the Workspace
 src/guarded-files-api.ts  the FilesApi those servers serve: the store through FsGate
 src/capfs.ts        just-bash IFileSystem over a capability; /dev/null sink; safeExec
+src/cap-bytes.ts    whole-file reads/writes/appends in bytes: one binary call, or a files-RPC stream
 src/agent.ts        Agent DO: bash, Flue tools, Worker Loader tools, delegation chain
 src/flue-compat.ts  `rg` shim so Flue's grep tool works on just-bash
 src/agent-loop.ts   the `agent` task: pi-agent-core loop, Flue's tools over the capability, sessions
