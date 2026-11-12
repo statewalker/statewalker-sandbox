@@ -128,7 +128,16 @@ async function readIndex(s: Session): Promise<IndexFile> {
   const bytes = await readBytes(s.git, "/index");
   return bytes ? parseIndex(bytes) : { version: 2, entries: [], extensions: [] };
 }
+/**
+ * Writes the index once the clock has passed every entry's mtime, as git avoids racy entries: an
+ * entry no newer than the index file would have to be smudged (size 0), and git's
+ * `reset --merge` (`merge --abort`) refuses smudged entries as "not uptodate".
+ */
 async function writeIndex(s: Session, index: IndexFile) {
+  let newest = 0;
+  for (const e of index.entries)
+    if (e.stage === 0) newest = Math.max(newest, e.mtimeSec * 1000 + Math.ceil(e.mtimeNsec / 1e6));
+  while (Date.now() <= newest) await new Promise((r) => setTimeout(r, 1));
   await s.git.write("/index", [serializeIndex(smudgeRacy(index, Date.now()))]);
 }
 async function indexTimestamp(s: Session): Promise<number> {

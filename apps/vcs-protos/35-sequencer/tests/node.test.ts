@@ -555,6 +555,32 @@ describe("S8 hand-made cases for mutants the corpora missed", () => {
   });
 });
 
+describe("S10 our index is never left racily smudged", () => {
+  it("after our merges, no stage-0 entry has size 0 (git's reset --merge refuses those)", async () => {
+    const smudged: string[] = [];
+    for (const seed of corpus.slice(0, 40)) {
+      const d = history(seed);
+      await merge(await session(d), "refs/heads/side");
+      const out = git(d, ["ls-files", "--debug"]);
+      // blocks of "path\n  ctime..\n  mtime..\n  dev..\n  uid..\n  size: N flags: F"
+      const blocks = out.split(/\n(?=\S)/);
+      for (const b of blocks) {
+        const path = b.split("\n")[0] as string;
+        const size = Number(/size: (\d+)/.exec(b)?.[1]);
+        const stage = Number(/flags: ([0-9a-f]+)/.exec(b)?.[1] ?? "0");
+        if (
+          size === 0 &&
+          (Number.parseInt(String(stage), 16) & 0x3000) === 0 &&
+          existsSync(join(d, path)) &&
+          readFileSync(join(d, path)).length > 0
+        )
+          smudged.push(`${seed} ${path}`);
+      }
+    }
+    expect(smudged).toEqual([]);
+  }, 300_000);
+});
+
 describe("S9 review cases", () => {
   const repo = (base: Record<string, string>) => {
     const d = tmp("x15r-");

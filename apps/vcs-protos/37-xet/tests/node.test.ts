@@ -1,0 +1,372 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, renameSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { GEAR_TABLE } from "../src/gear-table.js";
+import { lz4FrameDecode } from "../src/lz4.js";
+import {
+  bg4Regroup,
+  type ChunkRef,
+  chunkHash,
+  chunkStream,
+  fileHash,
+  hashFromString,
+  hashToString,
+  type ReconstructionAnswer,
+  rangeHash,
+  reconstruct,
+  xorbHash,
+} from "../src/xet.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const fixture = (name: string) => readFileSync(join(here, "../fixtures", name), "utf8");
+const CSV = "Electric_Vehicle_Population_Data_20250917.csv";
+const XORB = "eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632";
+const referenceChunks = (): ChunkRef[] =>
+  fixture(`${CSV}.chunks`)
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [hash, length] = line.split(" ") as [string, string];
+      return { hash: hashFromString(hash), length: Number(length) };
+    });
+
+/** the dataset revision the fixtures come from, and the xorb's SHA-256 there */
+const REVISION = "c4aa3a3f15b1395fff5ce934784bf6c8f2d62de8";
+const XORB_SHA256 = "e72f4e05b9c4b96f1c6b2213d93de00ab943585a2f7c049fd127ba72ec1ff413";
+const sha256 = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+
+/**
+ * The reference xorb, downloaded once from the pinned revision of the specification's dataset into
+ * the temp directory: written to a private file, checked by SHA-256, then renamed into place (so a
+ * parallel run never reads a partial file). Offline, this fails with the URL it needs.
+ */
+function referenceXorb(): string {
+  const path = join(tmpdir(), `x11-${XORB_SHA256}.xorb`);
+  if (existsSync(path) && sha256(path) === XORB_SHA256) return path;
+  const url = `https://huggingface.co/datasets/xet-team/xet-spec-reference-files/resolve/${REVISION}/${XORB}.xorb`;
+  const part = `${path}.${process.pid}.part`;
+  try {
+    execFileSync("curl", ["-sSfL", "--retry", "3", "-o", part, url]);
+  } catch (e) {
+    throw new Error(`the reference xorb could not be downloaded from ${url}: ${e}`);
+  }
+  if (sha256(part) !== XORB_SHA256) throw new Error(`${url}: unexpected content (SHA-256)`);
+  renameSync(part, path);
+  return path;
+}
+
+describe("H1 hash strings", () => {
+  it("the specification's example, both ways", () => {
+    const bytes = Uint8Array.from({ length: 32 }, (_, i) => i);
+    const s = "07060504030201000f0e0d0c0b0a090817161514131211101f1e1d1c1b1a1918";
+    expect(hashToString(bytes)).toBe(s);
+    expect([...hashFromString(s)]).toEqual([...bytes]);
+  });
+});
+
+describe("H2 aggregated hashes from the reference chunk list", () => {
+  it("xorb hash, file hash and the full range's verification hash", () => {
+    const reference = referenceChunks();
+    expect(reference.length).toBe(796);
+    expect(reference.reduce((n, c) => n + c.length, 0)).toBe(63_527_244);
+    expect(hashToString(xorbHash(reference))).toBe(fixture(`${CSV}.xet-xorb-hash`).trim());
+    expect(hashToString(fileHash(reference))).toBe(fixture(`${CSV}.xet-file-hash`).trim());
+    expect(hashToString(rangeHash(reference.map((c) => c.hash)))).toBe(
+      fixture(`${XORB}.xorb.range-hash`).trim(),
+    );
+  });
+});
+
+describe("H3 + H4 reconstruction from the recorded answer", () => {
+  it("rebuilds the reference file: its chunks, chunk hashes and file hash, streaming", async () => {
+    const reference = referenceChunks();
+    const xorb = readFileSync(referenceXorb());
+    const answer = JSON.parse(fixture("recon.recorded.json")) as ReconstructionAnswer;
+    const fetched: string[] = [];
+    // the recorded URLs name the xorb; a range is served in 1 MiB pieces, as a body would arrive
+    const fetchRange = async function* (url: string, start: number, end: number) {
+      fetched.push(`${url} ${start}-${end}`);
+      expect(url).toBe(`xorb://${XORB}`);
+      for (let at = start; at <= end; at += 1 << 20)
+        yield xorb.subarray(at, Math.min(end + 1, at + (1 << 20)));
+    };
+    (globalThis as { gc?: () => void }).gc?.();
+    const before = process.memoryUsage();
+    let peak = 0;
+    const got: ChunkRef[] = [];
+    let size = 0;
+    for await (const chunk of chunkStream(reconstruct(answer, fetchRange))) {
+      got.push({ hash: chunkHash(chunk), length: chunk.length });
+      size += chunk.length;
+      // what is retained, after a collection (vitest runs with --expose-gc)
+      if (got.length % 50 === 0) {
+        (globalThis as { gc?: () => void }).gc?.();
+        const m = process.memoryUsage();
+        peak = Math.max(peak, m.heapUsed + m.arrayBuffers - before.heapUsed - before.arrayBuffers);
+      }
+    }
+    expect(fetched).toEqual([`xorb://${XORB} 0-14737812`]);
+    expect(size).toBe(63_527_244);
+    expect(got.length).toBe(796);
+    const wrong = got.findIndex(
+      (c, i) =>
+        c.length !== reference[i]?.length ||
+        hashToString(c.hash) !== hashToString(reference[i]?.hash as Uint8Array),
+    );
+    expect(wrong).toBe(-1);
+    expect(hashToString(fileHash(got))).toBe(fixture(`${CSV}.xet-file-hash`).trim());
+    // the file is 63 MB; streaming retains a few chunks and fetched pieces, not the file
+    expect(peak).toBeLessThan(8 * 1024 * 1024);
+  }, 300_000);
+});
+
+describe("H6 range requests and ByteGrouping4", () => {
+  it("a term over a chunk sub-range with an offset into it: the matching slice of the file", async () => {
+    const xorb = readFileSync(referenceXorb());
+    const answer = JSON.parse(fixture("recon.recorded.json")) as ReconstructionAnswer;
+    const fetchRange = async function* (_url: string, start: number, end: number) {
+      yield xorb.subarray(start, end + 1);
+    };
+    const collect = async (a: ReconstructionAnswer) => {
+      const parts: Uint8Array[] = [];
+      for await (const p of reconstruct(a, fetchRange)) parts.push(p);
+      return Buffer.concat(parts);
+    };
+    const whole = await collect(answer);
+    const ref = referenceChunks();
+    const startByte = ref.slice(0, 10).reduce((n, c) => n + c.length, 0);
+    const length = ref.slice(10, 20).reduce((n, c) => n + c.length, 0);
+    const term = { ...answer.terms[0], unpacked_length: length, range: { start: 10, end: 20 } };
+    const ranged = await collect({
+      ...answer,
+      offset_into_first_range: 12_345,
+      terms: [term],
+    } as ReconstructionAnswer);
+    expect(ranged.equals(whole.subarray(startByte + 12_345, startByte + length))).toBe(true);
+  }, 300_000);
+
+  it("ByteGrouping4: groups split as xet-core's bg4_split_together come back in order", () => {
+    for (const n of [0, 1, 2, 3, 4, 5, 6, 7, 1000, 1001, 1002, 1003]) {
+      const data = Uint8Array.from({ length: n }, (_, i) => (i * 37 + 11) & 255);
+      // bg4_split_together: bytes 4i+g into group g, the groups one after another
+      const groups = [0, 1, 2, 3].map((g) => data.filter((_, i) => i % 4 === g));
+      const grouped = Uint8Array.from(groups.flatMap((g) => [...g]));
+      expect([...bg4Regroup(grouped)], `${n}`).toEqual([...data]);
+    }
+  });
+});
+
+/** the specification's chunker, literally: every byte hashed (BigInt), the mask tested from 8 KiB */
+function specLengths(data: Uint8Array): number[] {
+  const MASK = 0xffff000000000000n;
+  const M = (1n << 64n) - 1n;
+  const out: number[] = [];
+  let h = 0n;
+  let size = 0;
+  for (const b of data) {
+    h = ((h << 1n) + (GEAR_TABLE[b] as bigint)) & M;
+    size++;
+    if ((size >= 8192 && (h & MASK) === 0n) || size >= 131072) {
+      out.push(size);
+      h = 0n;
+      size = 0;
+    }
+  }
+  if (size) out.push(size);
+  return out;
+}
+
+describe("H7 chunk boundaries at the minimum size, against the specification's own steps", () => {
+  /** 64 bytes after which the hash has its top 16 bits clear: a candidate boundary */
+  function matchingWindow(): Uint8Array {
+    for (let seed = 1; ; seed++) {
+      const w = new Uint8Array(64);
+      let x = seed;
+      for (let i = 0; i < 64; i++) {
+        x = (x * 1103515245 + 12345) >>> 0;
+        w[i] = x >>> 24;
+      }
+      let h = 0n;
+      for (const b of w) h = ((h << 1n) + (GEAR_TABLE[b] as bigint)) & ((1n << 64n) - 1n);
+      if (h >> 48n === 0n) return w;
+    }
+  }
+
+  it("a match one byte before 8 KiB is no boundary; one at 8 KiB is", async () => {
+    const w = matchingWindow();
+    for (const end of [8191, 8192, 8193]) {
+      // filler that the window's 64 bytes wash out, then the window ending at byte `end`
+      const data = new Uint8Array(end + 20_000);
+      for (let i = 0; i < data.length; i++) data[i] = (i * 131 + 7) & 255;
+      data.set(w, end - 64);
+      const ours: number[] = [];
+      for await (const c of chunkStream([data] as unknown as AsyncIterable<Uint8Array>))
+        ours.push(c.length);
+      expect(ours, `window ending at ${end}`).toEqual(specLengths(data));
+    }
+  }, 120_000);
+});
+
+describe("H8 review cases", () => {
+  const answerOf = (): ReconstructionAnswer => JSON.parse(fixture("recon.recorded.json"));
+
+  it("the fetched body is closed when a term ends before its fetch range; no chunk past the term is read", async () => {
+    const xorb = readFileSync(referenceXorb());
+    let closed = 0;
+    let served = 0;
+    const fetchRange = async function* (_url: string, start: number, end: number) {
+      try {
+        for (let at = start; at <= end; at += 4096) {
+          served = at + 4096;
+          yield xorb.subarray(at, Math.min(end + 1, at + 4096));
+        }
+      } finally {
+        closed++;
+      }
+    };
+    const answer = answerOf();
+    const ref = referenceChunks();
+    const length = ref.slice(0, 3).reduce((n, c) => n + c.length, 0);
+    const term = { ...answer.terms[0], unpacked_length: length, range: { start: 0, end: 3 } };
+    let size = 0;
+    for await (const p of reconstruct(
+      { ...answer, terms: [term] } as ReconstructionAnswer,
+      fetchRange,
+    ))
+      size += p.length;
+    expect(size).toBe(length);
+    expect(closed).toBe(1);
+    // the 4th chunk's header starts where the 3rd chunk ends: nothing far past it was pulled
+    let end3 = 0;
+    for (let k = 0; k < 3; k++)
+      end3 +=
+        8 +
+        ((xorb[end3 + 1] as number) |
+          ((xorb[end3 + 2] as number) << 8) |
+          ((xorb[end3 + 3] as number) << 16));
+    expect(served).toBeLessThanOrEqual(end3 + 4096);
+  }, 120_000);
+
+  it("a fetch range that takes in the xorb's tail (XETB) after its last chunk", async () => {
+    const xorb = readFileSync(referenceXorb());
+    const answer = answerOf();
+    const entry = answer.fetch_info[XORB]?.[0];
+    if (entry) entry.url_range = { start: 0, end: xorb.length - 1 };
+    const fetchRange = async function* (_url: string, start: number, end: number) {
+      yield xorb.subarray(start, end + 1);
+    };
+    let size = 0;
+    for await (const p of reconstruct(answer, fetchRange)) size += p.length;
+    expect(size).toBe(63_527_244);
+  }, 120_000);
+
+  it("a requested length truncates the last term", async () => {
+    const xorb = readFileSync(referenceXorb());
+    const fetchRange = async function* (_url: string, start: number, end: number) {
+      yield xorb.subarray(start, end + 1);
+    };
+    let size = 0;
+    for await (const p of reconstruct(answerOf(), fetchRange, { length: 1_000_003 }))
+      size += p.length;
+    expect(size).toBe(1_000_003);
+  }, 120_000);
+
+  /** an LZ4 frame put together by hand */
+  function frame(
+    blocks: { bytes: number[]; raw?: boolean }[],
+    o: {
+      independent?: boolean;
+      blockChecksum?: boolean;
+      contentSize?: number;
+      contentChecksum?: boolean;
+      endMark?: boolean;
+    } = {},
+  ): Uint8Array {
+    const flg =
+      0x40 |
+      (o.independent ? 0x20 : 0) |
+      (o.blockChecksum ? 0x10 : 0) |
+      (o.contentSize !== undefined ? 0x08 : 0) |
+      (o.contentChecksum ? 0x04 : 0);
+    const out = [0x04, 0x22, 0x4d, 0x18, flg, 0x40];
+    if (o.contentSize !== undefined)
+      for (let i = 0; i < 8; i++) out.push(i === 0 ? o.contentSize : 0);
+    out.push(0x00); // header checksum (not checked)
+    const u32 = (v: number) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+    for (const b of blocks) {
+      out.push(...u32(b.bytes.length | (b.raw ? 0x80000000 : 0)), ...b.bytes);
+      if (o.blockChecksum) out.push(0, 0, 0, 0);
+    }
+    if (o.endMark !== false) out.push(0, 0, 0, 0);
+    if (o.contentChecksum) out.push(0, 0, 0, 0);
+    return Uint8Array.from(out);
+  }
+  const text = (b: Uint8Array) => new TextDecoder().decode(b);
+  const lits = (s: string) => [s.length << 4, ...new TextEncoder().encode(s)]; // a literals-only block
+
+  it("LZ4 frames: uncompressed and linked blocks, content size, checksums", () => {
+    expect(
+      text(
+        lz4FrameDecode(frame([{ bytes: [...new TextEncoder().encode("plain")], raw: true }]), 5),
+      ),
+    ).toBe("plain");
+    // block 2 starts with a match 4 bytes back into block 1 ("abcd"), then a literal
+    const linked = frame([{ bytes: lits("abcd") }, { bytes: [0x00, 4, 0, ...lits("Z")] }]);
+    expect(text(lz4FrameDecode(linked, 9))).toBe("abcdabcdZ");
+    const all = frame([{ bytes: lits("hello") }], {
+      contentSize: 5,
+      blockChecksum: true,
+      contentChecksum: true,
+    });
+    expect(text(lz4FrameDecode(all, 5))).toBe("hello");
+  });
+
+  it("LZ4 frames that lie are refused", () => {
+    // literals running past their block, padded to the expected size
+    expect(() => lz4FrameDecode(frame([{ bytes: [0xf0, 0x0a, 0x41] }]), 25)).toThrow(/lz4/);
+    // no end mark
+    expect(() => lz4FrameDecode(frame([{ bytes: lits("abc") }], { endMark: false }), 3)).toThrow(
+      /lz4/,
+    );
+    // independent blocks: a match into the previous block
+    expect(() =>
+      lz4FrameDecode(
+        frame([{ bytes: lits("abcd") }, { bytes: [0x00, 4, 0, ...lits("Z")] }], {
+          independent: true,
+        }),
+        9,
+      ),
+    ).toThrow(/lz4/);
+  });
+
+  it("random data in every piece size chunks as the specification's chunker does", async () => {
+    let x = 12345;
+    const data = new Uint8Array(1_500_000);
+    for (let i = 0; i < data.length; i++) {
+      x ^= x << 13;
+      x ^= x >>> 17;
+      x ^= x << 5;
+      data[i] = x & 255;
+    }
+    const want = specLengths(data);
+    for (const piece of [1, 7, 8127, 8128, 65_536, 131_072, 1_048_579]) {
+      const src = (async function* () {
+        for (let at = 0; at < data.length; at += piece) yield data.subarray(at, at + piece);
+      })();
+      const got: number[] = [];
+      for await (const c of chunkStream(src)) got.push(c.length);
+      expect(got, `pieces of ${piece}`).toEqual(want);
+    }
+  }, 300_000);
+});
+
+describe("H5 portable", () => {
+  it("src/ has no node: imports", () => {
+    for (const f of readdirSync(join(here, "../src")))
+      expect(readFileSync(join(here, "../src", f), "utf8"), f).not.toMatch(/from "node:/);
+  });
+});
