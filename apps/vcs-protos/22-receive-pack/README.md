@@ -28,6 +28,7 @@ value can overwrite a concurrent update, or if a push holds the whole pack in me
 | R5 | Thin packs: our client's pack is thin against the remote's refs; its size within 1.10× of native `git push`'s for the same update. |
 | R6 | Streaming: pushing a 64 MiB blob, the server holds < 16 MiB extra live (the request body streams into the index). |
 | R7 | Hostile and invalid: malformed command lines, invalid ref names (git's check-ref-format) → `ng … invalid`, commands without the pack they need, an oversized request → refused, no crash; hooks: a `preReceive` callback can refuse the whole push, an `update` callback one ref (`ng … hook declined`). |
+| R8 | (X17c) `postReceive`: called with the commands whose refs moved (not the refused or stale ones; every one of an atomic push, in order), once the refs have moved, after the report, also when the response is never read; a hook that throws breaks neither the report nor later pushes; files and SQL. R8b: a hook that never settles does not hold the report. |
 
 ## Scope — what this slice does NOT do
 
@@ -36,7 +37,7 @@ value can overwrite a concurrent update, or if a push holds the whole pack in me
 
 ## Answer
 
-**Yes.** `receivePackHandler(repo, { preReceive, update })` (and `gitHandler`, which routes
+**Yes.** `receivePackHandler(repo, { preReceive, update, postReceive })` (and `gitHandler`, which routes
 upload-pack and receive-pack) is a `(Request) => Promise<Response>`; `push(url, repo, { refspecs,
 atomic, pushOptions })` uses global `fetch` with a streamed request body.
 
@@ -47,7 +48,9 @@ atomic, pushOptions })` uses global `fetch` with a streamed request body.
   branch, git's connectivity check (X6c's walk from the new tip down to what the refs reach: every
   object present), the `preReceive` and `update` hooks, and X5's transaction — compare-and-set on
   the old value, one transaction for `atomic` (a ref failing a check fails them all), one per ref
-  otherwise. report-status in side-band. Objects of a refused push stay in the store (git
+  otherwise. report-status in side-band. Then `postReceive` (git's post-receive, added by X17c)
+  with the commands whose refs moved, after the report is written whether or not it is read,
+  apart from the response: it cannot change the outcome, and what it throws is ignored (R8). Objects of a refused push stay in the store (git
   quarantines and drops them): garbage for X18.
 - **Client**: the advertisement, refspecs (`[+]src:dst`, `:dst`), git's rules checked locally (a
   branch must fast-forward from a remote tip known here — "fetch first" otherwise; a tag is not
