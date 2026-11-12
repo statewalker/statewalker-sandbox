@@ -11,6 +11,7 @@
 // the account, with forged props): it would need the nonce of a live run.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { everyCall, largeFileCalls } from "./cap-bytes.ts";
 import { TokenCap, type WorkspaceEnv } from "./caps.ts";
 
 interface Props {
@@ -29,18 +30,29 @@ const refuse = (): never => {
 };
 
 export class ToolFilesEntrypoint extends WorkerEntrypoint<Env> {
-  async #cap() {
+  #props(): Props {
     const p = (this.ctx as unknown as { props?: Partial<Props> }).props ?? {};
     if (!p.workspace || !p.token || !p.agent || !p.run)
       throw new Error("EACCES: no file capability bound");
+    return p as Props;
+  }
+  async #checkRun(p: Props) {
     const agent = this.env.AGENT.get(this.env.AGENT.idFromName(p.agent)) as unknown as {
       toolRunActive(run: string): Promise<boolean>;
     };
     if (!(await agent.toolRunActive(p.run))) throw new Error("EACCES: the tool's run is over");
+  }
+  async #cap() {
+    const p = this.#props();
+    await this.#checkRun(p);
     return new TokenCap(this.env, p.workspace, p.token);
   }
   async call(method: string, path: string, ...args: unknown[]) {
-    return (await this.#cap()).call(method, path, ...args);
+    // Files over 16 MiB are streamed here, as for ToolFiles; the run is checked before each
+    // call the stream makes, so a transfer stops at its next block once the run is over.
+    const p = this.#props();
+    const live = everyCall(new TokenCap(this.env, p.workspace, p.token), () => this.#checkRun(p));
+    return largeFileCalls(live)(method, path, ...args);
   }
   async readdir(path: string) {
     return (await this.#cap()).readdir(path);
