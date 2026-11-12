@@ -606,6 +606,42 @@ describe("R7 small objects share block reads (git's pack windows)", () => {
     expect(reader.stats.peakBlockBytes).toBeGreaterThan(0);
     expect(reader.stats.peakBlockBytes).toBeLessThanOrEqual(limit);
   });
+  it("(review) concurrent reads of one block read it once, and the accounting holds", async () => {
+    const { repo, files, packPath, idxPath } = await installed(packAll(history, true));
+    const { proxy, counter } = counting(files, packPath);
+    const limit = 2 * 65536; // the whole two-block pack fits
+    const reader = await openPack(proxy, packPath, idxPath, {
+      readCacheBytes: limit,
+      baseCacheBytes: 0,
+    });
+    const opened = counter.reads;
+    const oids = [...allObjects(repo).keys()];
+    for (let round = 0; round < 3; round++)
+      await Promise.all(oids.map(async (oid) => collect((await reader.get(oid))?.content ?? [])));
+    expect(counter.reads - opened).toBeLessThanOrEqual(2);
+    expect(reader.stats.peakBlockBytes).toBeLessThanOrEqual(limit);
+  });
+  it("(review) an entry header across a block boundary reads whole", async () => {
+    // a blob ending so that the next entry's 3-byte header starts at 65535, across 65536
+    let first: Uint8Array | undefined;
+    for (let n = 65_480; n < 65_540 && !first; n++) {
+      const data = noise(n, 7);
+      if (12 + 3 + deflateSync(data).length === 65_535) first = data;
+    }
+    expect(first).toBeDefined();
+    const second = new TextEncoder().encode("across the boundary\n".repeat(5000));
+    const { files, packPath, idxPath, result } = await installed(
+      buildPack([
+        { kind: 3, data: first as Uint8Array },
+        { kind: 3, data: second },
+      ]),
+    );
+    const entry = result.entries.find((e) => e.offset === 65_535);
+    expect(entry).toBeDefined();
+    const reader = await openPack(files, packPath, idxPath);
+    const o = await reader.get(entry?.oid as string, { verify: true });
+    expect((await collect(o?.content ?? [])).equals(Buffer.from(second))).toBe(true);
+  });
   it("readCacheBytes: 0 reads straight from the file", async () => {
     const { repo, files, packPath, idxPath } = await installed(packAll(history, true));
     const { proxy, counter } = counting(files, packPath);
