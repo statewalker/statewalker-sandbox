@@ -30,6 +30,13 @@ export interface Endpoint {
 const MAIN = "refs/heads/main";
 /** the commit the folder was last checked out at (git's index, reduced to its tree) */
 const CHECKED_OUT = "/sync/checked-out";
+/**
+ * User edits a checkout kept over paths the new head also changed, until they are merged:
+ * `{ base, paths }`, the commit the user worked from and the paths. Written before the checkout
+ * is recorded and removed once the merge holding them is in, so a merge that loses its race, or
+ * a crash, leaves them to be merged by the next `commitFolder` rather than forgotten.
+ */
+const KEPT = "/sync/kept-edits";
 const dec = new TextDecoder();
 
 export async function openEndpoint(o: {
@@ -122,6 +129,7 @@ export async function commitFolder(ep: Endpoint): Promise<string | undefined> {
   const at = await checkedOut(ep);
   const current = await headOf(ep);
   if (current && at !== current) await checkout(ep, at, current);
+  await finishKeptEdits(ep);
   const head = await headOf(ep);
   const files = await folderBytes(ep.folder);
   const tree = await writeFiles(ep.repo, Object.fromEntries(files));
@@ -139,6 +147,9 @@ export async function commitFolder(ep: Endpoint): Promise<string | undefined> {
     expected: head ?? null,
   });
   if (!result.ok) throw new Error(`${ep.name}: ${MAIN} moved`);
+  // The folder is this commit now. Left at the old record, a later checkout (a head moved by a
+  // push, X17b) would take this commit's own edits for the user's and keep them over the merge.
+  await setCheckedOut(ep, oid);
   return oid;
 }
 
@@ -200,26 +211,45 @@ async function removeEmptyParents(folder: FilesApi, path: string) {
 
 /**
  * Moves the folder from `from`'s files to `to`'s. A path is changed only where the folder still
- * holds `from`'s version (or already holds `to`'s): a path the user changed meanwhile keeps the
- * user's bytes, and the next commit records them. Then the folder is recorded as checked out at
- * `to`. Run again after a failure, it finishes what is left.
+ * holds `from`'s version (or already holds `to`'s, or `alsoOld`'s): a path the user changed
+ * meanwhile keeps the user's bytes. Then the folder is recorded as checked out at `to`. Run again
+ * after a failure, it finishes what is left.
+ *
+ * Returns the user's bytes kept on paths `to` also changed (or deleted): edits the user made
+ * against `from` that `to` knows nothing of. Committed on top of `to` they would silently replace
+ * `to`'s changes, so the caller merges them instead (`keepUserEdits`).
  */
-async function checkout(ep: Endpoint, from: string | undefined, to: string) {
+async function checkout(
+  ep: Endpoint,
+  from: string | undefined,
+  to: string,
+  alsoOld: Map<string, string> = new Map(),
+): Promise<Map<string, Uint8Array>> {
   const before = from ? await flatten(ep.repo, (await readCommit(ep.repo, from)).tree) : new Map();
   const after = await flatten(ep.repo, (await readCommit(ep.repo, to)).tree);
+  const kept = new Map<string, Uint8Array>();
   const current = async (p: string) =>
     (await ep.folder.stats(`/${p}`))?.kind === "file"
       ? blobId(await readAll(ep.folder, `/${p}`))
       : undefined;
+  const isOld = (p: string, now: string | undefined) =>
+    now === before.get(p) || (now !== undefined && now === alsoOld.get(p));
   for (const [p, oid] of before)
-    if (!after.has(p) && (await current(p)) === oid) {
-      await ep.folder.remove(`/${p}`);
-      await removeEmptyParents(ep.folder, p);
+    if (!after.has(p)) {
+      const now = await current(p);
+      if (now === oid || (now !== undefined && now === alsoOld.get(p))) {
+        await ep.folder.remove(`/${p}`);
+        await removeEmptyParents(ep.folder, p);
+      } else if (now !== undefined) kept.set(p, await readAll(ep.folder, `/${p}`)); // edited, deleted by `to`
     }
   for (const [p, oid] of after) {
     const now = await current(p);
     if (now === oid) continue;
-    if (now !== undefined && now !== before.get(p)) continue; // the user's edit: kept
+    if (now !== undefined && !isOld(p, now)) {
+      // the user's edit: kept, and reported when `to` changed this path too
+      if (before.get(p) !== oid && from) kept.set(p, await readAll(ep.folder, `/${p}`));
+      continue;
+    }
     const st = await ep.folder.stats(`/${p}`);
     if (st?.kind === "directory") {
       let empty = true;
@@ -232,27 +262,116 @@ async function checkout(ep: Endpoint, from: string | undefined, to: string) {
     }
     await ep.folder.write(`/${p}`, [await blob(ep.repo, oid)]);
   }
+  if (kept.size && from) {
+    const pending = await readKept(ep);
+    await writeKept(ep, {
+      base: pending?.base ?? from,
+      paths: [...new Set([...(pending?.paths ?? []), ...kept.keys()])].sort(),
+    });
+  }
   await setCheckedOut(ep, to);
+  return kept;
+}
+
+interface KeptEdits {
+  base: string;
+  paths: string[];
+}
+async function readKept(ep: Endpoint): Promise<KeptEdits | undefined> {
+  if (!(await ep.storage.exists(KEPT))) return undefined;
+  return JSON.parse(dec.decode(await readAll(ep.storage, KEPT))) as KeptEdits;
+}
+async function writeKept(ep: Endpoint, kept: KeptEdits): Promise<void> {
+  await ep.storage.write(KEPT, [new TextEncoder().encode(JSON.stringify(kept))]);
+}
+const finishing = new WeakSet<Endpoint>();
+/**
+ * Merges the kept user edits recorded in `KEPT`, if any: their current bytes in the folder
+ * (a path the user has since deleted is deleted) are committed on the commit the user worked
+ * from, and that commit is merged into the head. A merge that loses its race throws and leaves
+ * the record for the next call. Not re-entered: the merge's own checkout only adds to the record,
+ * and the loop here merges what it added.
+ */
+async function finishKeptEdits(ep: Endpoint): Promise<string[]> {
+  if (finishing.has(ep)) return [];
+  finishing.add(ep);
+  try {
+    const conflicts: string[] = [];
+    for (let round = 0; round < 8; round++) {
+      const pending = await readKept(ep);
+      if (!pending) return conflicts;
+      const files = new Map<string, Uint8Array>();
+      for (const [p, oid] of await flatten(ep.repo, (await readCommit(ep.repo, pending.base)).tree))
+        files.set(p, await blob(ep.repo, oid));
+      const alsoOld = new Map<string, string>();
+      for (const p of pending.paths) {
+        if ((await ep.folder.stats(`/${p}`))?.kind === "file") {
+          const bytes = await readAll(ep.folder, `/${p}`);
+          files.set(p, bytes);
+          alsoOld.set(p, blobId(bytes));
+        } else files.delete(p);
+      }
+      const tree = await writeFiles(ep.repo, Object.fromEntries(files));
+      const me: Person = {
+        name: ep.name,
+        email: `${ep.name}@sync.local`,
+        when: ep.now(),
+        tz: "+0000",
+      };
+      const user = await ep.repo.objects.put(
+        "commit",
+        encodeCommit({
+          tree,
+          parents: [pending.base],
+          author: me,
+          committer: me,
+          message: `${ep.name}: folder changes\n`,
+        }),
+      );
+      const before = JSON.stringify(pending);
+      conflicts.push(...(await mergeInto(ep, user, alsoOld)));
+      // the merge's checkout may have kept more (an edit typed meanwhile): merge that next
+      const after = await readKept(ep);
+      if (after && JSON.stringify(after) === before) await ep.storage.remove(KEPT);
+      else if (after) {
+        const rest = after.paths.filter((p) => !pending.paths.includes(p));
+        // their base stays the older one: at worst a spurious conflict, never an edit lost
+        if (rest.length) await writeKept(ep, { base: after.base, paths: rest });
+        else await ep.storage.remove(KEPT);
+      }
+    }
+    throw new Error(`${ep.name}: kept edits did not settle`);
+  } finally {
+    finishing.delete(ep);
+  }
 }
 
 /** merges `theirs` into the endpoint's head: nothing, a fast-forward, or a deterministic merge */
-async function mergeInto(ep: Endpoint, theirs: string): Promise<string[]> {
+export async function mergeInto(
+  ep: Endpoint,
+  theirs: string,
+  alsoOld: Map<string, string> = new Map(),
+): Promise<string[]> {
   const ours = await headOf(ep);
   if (ours === theirs) return [];
+  const extra: string[] = [];
   const update = async (to: string) => {
     const r = await ep.repo.refs.batch([{ name: MAIN, old: ours ?? null, new: to }]);
     if (!r.ok) throw new Error(`${ep.name}: ${MAIN} moved`);
-    await checkout(ep, ours, to);
+    // from what the folder holds, which is not `ours` when a push moved `main` meanwhile:
+    // `ours`' changes are then not in the folder yet, and must not be taken for the user's
+    await checkout(ep, (await checkedOut(ep)) ?? ours, to, alsoOld);
+    extra.push(...(await finishKeptEdits(ep)));
   };
   if (!ours) {
     await update(theirs);
-    return [];
+    return extra;
   }
   const bases = await mergeBases(ep.repo, ours, theirs);
   if (bases.includes(theirs)) return [];
   if (bases.includes(ours)) {
     await update(theirs);
-    return [];
+    return extra;
   }
   const [p1, p2] = [ours, theirs].sort() as [string, string];
   const r = await mergeCommits(ep.repo, p1, p2, {
@@ -275,7 +394,7 @@ async function mergeInto(ep: Endpoint, theirs: string): Promise<string[]> {
     encodeCommit({ tree: r.tree, parents: [p1, p2], author: sync, committer: sync, message }),
   );
   await update(oid);
-  return conflicts;
+  return [...new Set([...conflicts, ...extra])].sort();
 }
 
 /**
