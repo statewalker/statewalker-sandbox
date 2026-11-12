@@ -661,8 +661,10 @@ Every writer sends bytes as bytes:
   is encoded and decoded holder-side in its encoding (UTF-8 by default, as the store decodes:
   U+FFFD for invalid sequences, a leading U+FEFF kept). Up to 16 MiB a file is one binary call
   (`readFileBuffer`, `writeFileBuffer`, `appendFileBuffer`); a larger one moves as a files-RPC
-  stream (read, write, append), so `cat`, `grep`, `>>` and Flue's read/write/edit work on files
-  of any size. The store's text calls (`readFile`, `writeFile`, `appendFile`) remain for the
+  stream (read, write, append): writes and appends of any size (the store's limit is 1 GiB), and
+  reads up to 32 MiB, since a read is whole in the agent's memory (`EFBIG` beyond). A streamed
+  append that races another writer (`ESTALE`) is sent again; a streamed read of a file removed
+  meanwhile answers `ENOENT`, not an empty file. The store's text calls (`readFile`, `writeFile`, `appendFile`) remain for the
   callers that still use them: already-approved tool bundles' `node:fs` shim and Python's live
   `capfs` module.
 - tools' `node:fs`: Buffers and TypedArrays are written byte for byte; reads return the bytes.
@@ -672,8 +674,8 @@ Every writer sends bytes as bytes:
 Limits and notes:
 - **Size:** whole-file calls (`readFile`, `writeFileBuffer`, …) move at most 16 MiB in one
   message (`EFBIG`, HTTP 413, beyond); larger files are streamed (just-bash, Flue's tools, the
-  `stream` task, Wasmer reads and appends). A just-bash or Flue read of a large file still holds
-  it whole in the agent's memory: their APIs return whole files.
+  `stream` task, Wasmer reads and appends). just-bash and Flue read files up to 32 MiB: their
+  APIs return whole files, held in the agent's memory.
 - **Approved tool bundles:** the `node:fs` shim is inlined into every tool bundle, so bundles
   built after this change hash differently. Approve them again; bundles already approved still
   run (their shim writes text only).

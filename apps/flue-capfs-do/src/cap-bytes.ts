@@ -2,27 +2,44 @@
 // decoded by the holder (src/bytes.ts); the capability carries bytes, whatever the encoding:
 //   - up to MAX_WHOLE_FILE_BYTES: one binary call (readFileBuffer, writeFileBuffer,
 //     appendFileBuffer), which also answers ENOENT/EISDIR/EACCES as the store does;
-//   - above: a files-RPC stream (capFiles: write, append, read), so the size is no limit.
+//   - above: a files-RPC stream (capFiles: write, append, read). Writes and appends have no
+//     size limit here (the store's is 1 GiB); a read is whole in the holder's memory, so it is
+//     refused above MAX_HOLDER_READ_BYTES.
 // Used by CapFs (just-bash, Flue's tools) and by Wasmer's Flue sandbox.
 
 import { ownBytes } from "./bytes.ts";
 import { capFiles, type RpcCarrier } from "./files-rpc.ts";
+import { fsError } from "./path.ts";
 import { bytesArg, MAX_WHOLE_FILE_BYTES } from "./sql-fs.ts";
+
+/**
+ * The largest file read whole into the holder's memory (twice a whole-file call). The bytes,
+ * and the string decoded from them, stay well within an isolate's 128 MB.
+ */
+export const MAX_HOLDER_READ_BYTES = 32 * 1024 * 1024;
+/** A streamed append the store refused because the file changed meanwhile is sent this often. */
+const APPEND_ATTEMPTS = 3;
 
 /** What capBytes needs of a capability: binary calls, and files-RPC for large files. */
 export interface ByteCarrier extends RpcCarrier {
   call(method: string, path: string, ...args: unknown[]): Promise<unknown>;
 }
 
+const tooLarge = (path: string) =>
+  fsError(
+    "EFBIG",
+    `file too large to read whole here '${path}' (over ${MAX_HOLDER_READ_BYTES} bytes)`,
+  );
 const codeOf = (e: unknown) =>
   (e as { code?: string })?.code ?? /^(E[A-Z]+):/.exec(String((e as Error)?.message ?? e))?.[1];
 
-async function collect(chunks: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
+async function collect(chunks: AsyncIterable<Uint8Array>, path: string): Promise<Uint8Array> {
   const parts: Uint8Array[] = [];
   let size = 0;
   for await (const c of chunks) {
     parts.push(c);
     size += c.length;
+    if (size > MAX_HOLDER_READ_BYTES) throw tooLarge(path); // grew while being read
   }
   if (parts.length === 1) return parts[0] as Uint8Array;
   const out = new Uint8Array(size);
@@ -40,12 +57,19 @@ export function capBytes(cap: ByteCarrier) {
   return {
     /** A file's bytes (ENOENT, EISDIR, EACCES as the store answers them). */
     async read(path: string): Promise<Uint8Array> {
-      try {
-        return bytesArg(await cap.call("readFileBuffer", path));
-      } catch (e) {
-        // Larger than one call moves: the same file as a stream (its errors were answered above).
-        if (codeOf(e) !== "EFBIG") throw e;
-        return collect(files().read(path));
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return bytesArg(await cap.call("readFileBuffer", path));
+        } catch (e) {
+          if (codeOf(e) !== "EFBIG") throw e;
+        }
+        // Larger than one call moves: the same file as a stream, if the holder can hold it.
+        const { size } = (await cap.call("stat", path)) as { size: number };
+        if (size > MAX_HOLDER_READ_BYTES) throw tooLarge(path);
+        const bytes = await collect(files().read(path), path);
+        // A streamed read of a file that is gone (or is now a directory) yields nothing, where
+        // the file was over 16 MiB a moment ago: ask again, for the error or the new content.
+        if (bytes.length > 0 || attempt >= 2) return bytes;
       }
     },
     /** Replaces a file's content with `bytes`. */
@@ -57,8 +81,16 @@ export function capBytes(cap: ByteCarrier) {
     /** Adds `bytes` to the end of a file (created if missing). */
     async append(path: string, bytes: Uint8Array): Promise<void> {
       if (bytes.length <= MAX_WHOLE_FILE_BYTES)
-        await cap.call("appendFileBuffer", path, ownBytes(bytes));
-      else await files().append(path, [bytes]);
+        return void (await cap.call("appendFileBuffer", path, ownBytes(bytes)));
+      // A streamed append commits only if the file did not change meanwhile (ESTALE, refused
+      // before anything is applied); the bytes are still here, so send them again.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return await files().append(path, [bytes]);
+        } catch (e) {
+          if (codeOf(e) !== "ESTALE" || attempt >= APPEND_ATTEMPTS) throw e;
+        }
+      }
     },
   };
 }

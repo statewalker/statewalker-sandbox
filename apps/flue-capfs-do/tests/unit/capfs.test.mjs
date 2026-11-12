@@ -24,18 +24,29 @@ async function setup() {
     p.then(structuredClone, (e) => {
       throw rebuildError(structuredClone(e));
     });
+  // Test hooks: run after a call (the size check) or before a files-RPC call.
+  const hooks = { afterCall: undefined, beforeRpc: undefined };
   const capOf = (t) => ({
-    call: (m, p, ...a) => (
-      methods.push(m), over(new FsGate(store, auth, t).call(m, p, ...structuredClone(a)))
-    ),
+    call: async (m, p, ...a) => {
+      methods.push(m);
+      try {
+        return await over(new FsGate(store, auth, t).call(m, p, ...structuredClone(a)));
+      } finally {
+        await hooks.afterCall?.(m, p);
+      }
+    },
     readdir: (p) => over(new FsGate(store, auth, t).readdir(p)),
     move: (k, a, b, o) => over(new FsGate(store, auth, t).move(k, a, b, o)),
-    rpc: (m, a) => (methods.push(`rpc:${m}`), over(hub.call(t, m, structuredClone(a)))),
+    rpc: async (m, a) => {
+      methods.push(`rpc:${m}`);
+      await hooks.beforeRpc?.(m, a);
+      return over(hub.call(t, m, structuredClone(a)));
+    },
   });
   const ro = Biscuit.fromBase64(token)
     .attenuate(attenuationBlock({ readOnly: true }))
     .toBase64();
-  return { store, methods, fs: new CapFs(capOf(token)), roFs: new CapFs(capOf(ro)) };
+  return { store, methods, hooks, fs: new CapFs(capOf(token)), roFs: new CapFs(capOf(ro)) };
 }
 const code = (c) => (e) => e.code === c || String(e.message).startsWith(`${c}:`);
 const TEXT_METHODS = ["readFile", "writeFile", "appendFile"];
@@ -66,15 +77,18 @@ test("text and bytes cross the capability as bytes only", async () => {
 
 test("files larger than a whole-file call are written, appended and read as streams", async () => {
   const { fs, store, methods } = await setup();
+  // A write larger than one call, and a read of it (under the holder's ceiling).
   const big = "x".repeat(MAX_WHOLE_FILE_BYTES + 10);
   await fs.writeFile("/p1/big.txt", big);
   await fs.appendFile("/p1/big.txt", "END");
-  await fs.appendFile("/p1/big.txt", "y".repeat(MAX_WHOLE_FILE_BYTES + 1));
-  assert.equal((await store.stat("/p1/big.txt")).size, 2 * MAX_WHOLE_FILE_BYTES + 14);
   const back = await fs.readFile("/p1/big.txt");
-  assert.equal(back.length, 2 * MAX_WHOLE_FILE_BYTES + 14);
-  assert.equal(back.slice(MAX_WHOLE_FILE_BYTES + 5, MAX_WHOLE_FILE_BYTES + 16), "xxxxxENDyyy");
-  assert.equal((await fs.readFileBuffer("/p1/big.txt")).length, 2 * MAX_WHOLE_FILE_BYTES + 14);
+  assert.equal(back.length, MAX_WHOLE_FILE_BYTES + 13);
+  assert.equal(back.slice(-6), "xxxEND");
+  // An append larger than one call.
+  await fs.writeFile("/p1/log.txt", "a");
+  await fs.appendFile("/p1/log.txt", "y".repeat(MAX_WHOLE_FILE_BYTES + 1));
+  assert.equal((await store.stat("/p1/log.txt")).size, MAX_WHOLE_FILE_BYTES + 2);
+  assert.equal((await fs.readFileBuffer("/p1/log.txt"))[0], 0x61);
   for (const m of ["rpc:openWrite", "rpc:openRead"]) assert.ok(methods.includes(m), m);
 });
 
@@ -97,4 +111,64 @@ test("errors are the same as before: missing, directory, refused", async () => {
   // /dev/null stays a sink, handled here.
   await fs.writeFile("/dev/null", "gone");
   assert.equal(await fs.readFile("/dev/null"), "");
+});
+
+test("a large file removed or made a directory between the size check and the stream: ENOENT/EISDIR, not empty", async () => {
+  const { fs, store, hooks } = await setup();
+  const big = new Uint8Array(MAX_WHOLE_FILE_BYTES + 5).fill(120);
+  for (const [name, change, err] of [
+    ["gone", (p) => store.rm(p), "ENOENT"],
+    [
+      "dir",
+      async (p) => {
+        await store.rm(p);
+        await store.mkdir(p);
+      },
+      "EISDIR",
+    ],
+  ]) {
+    const path = `/p1/${name}.bin`;
+    await fs.writeFile(path, big);
+    let once = true;
+    hooks.afterCall = async (m, p) => {
+      if (m === "readFileBuffer" && p === path && once) {
+        once = false;
+        await change(p);
+      }
+    };
+    await assert.rejects(fs.readFileBuffer(path), code(err), name);
+    hooks.afterCall = undefined;
+  }
+});
+
+test("a read larger than the holder's ceiling is EFBIG, before anything is streamed", async () => {
+  const { fs, store, methods } = await setup();
+  const { MAX_HOLDER_READ_BYTES } = await import("../../src/cap-bytes.ts");
+  assert.ok(MAX_HOLDER_READ_BYTES >= 2 * MAX_WHOLE_FILE_BYTES);
+  assert.ok(MAX_HOLDER_READ_BYTES < 64 * 1024 * 1024, "well under an isolate's 128 MB");
+  await fs.writeFile("/p1/huge.bin", new Uint8Array(MAX_HOLDER_READ_BYTES + 1));
+  methods.length = 0;
+  await assert.rejects(fs.readFile("/p1/huge.bin"), code("EFBIG"));
+  await assert.rejects(fs.readFileBuffer("/p1/huge.bin"), code("EFBIG"));
+  assert.ok(!methods.includes("rpc:openRead"), "nothing streamed");
+  assert.equal((await store.stat("/p1/huge.bin")).size, MAX_HOLDER_READ_BYTES + 1);
+});
+
+test("a large append that races another writer (ESTALE) is sent again", async () => {
+  const { fs, store, hooks } = await setup();
+  await fs.writeFile("/p1/log", "a");
+  let once = true;
+  hooks.beforeRpc = async (m) => {
+    if (m === "closeWrite" && once) {
+      once = false;
+      await store.appendFile("/p1/log", "+");
+    }
+  };
+  const more = "b".repeat(MAX_WHOLE_FILE_BYTES + 1);
+  await fs.appendFile("/p1/log", more);
+  assert.equal(
+    (await store.stat("/p1/log")).size,
+    2 + more.length,
+    "appended once, after the race",
+  );
 });

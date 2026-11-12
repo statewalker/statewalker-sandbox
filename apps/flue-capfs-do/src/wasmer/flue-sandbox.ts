@@ -46,8 +46,8 @@ export function flueSandboxOnWasmer(session: WasmerSession, cap: Cap) {
     // Bytes only cross the capability (text encoded and decoded here as UTF-8); files larger
     // than a whole-file call move as files-RPC streams.
     readFile: async (p: string) => bytesToString(await bytes.read(capPath(p)), "utf8"),
-    readFileBuffer: (p: string) => bytes.read(capPath(p)),
-    writeFile: (p: string, c: string | Uint8Array) =>
+    readFileBuffer: async (p: string) => bytes.read(capPath(p)),
+    writeFile: async (p: string, c: string | Uint8Array) =>
       bytes.write(capPath(p), typeof c === "string" ? stringToBytes(c, "utf8") : c),
     stat: async (p: string) => {
       const s = (await cap.call("stat", capPath(p))) as {
