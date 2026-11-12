@@ -43,6 +43,12 @@ export interface PackReaderOptions {
   /** Largest object accepted, by its header. Default 1 GiB. */
   maxObjectSize?: number;
   /**
+   * Bytes of pack data kept in 64 KiB blocks, so reading many small objects costs a few block reads
+   * rather than two `files.read` calls each (git's core.packedGitWindowSize, scaled down). Entries
+   * larger than 256 KiB stream past it. Default 4 MiB; 0 turns it off.
+   */
+  readCacheBytes?: number;
+  /**
    * Resolves a REF_DELTA base that is not in this pack (another pack or a loose object). `visiting`
    * holds the ids being resolved on this path: a base already in it is a cycle.
    */
@@ -83,6 +89,8 @@ export interface PackReader {
   readonly stats: {
     inflations: number;
     peakCachedBytes: number;
+    /** most bytes the block cache (readCacheBytes) has held */
+    peakBlockBytes: number;
     cachedBytes: number;
     cachedEntriesBytes: number;
   };
@@ -251,10 +259,64 @@ export async function openPack(
     return lo < n ? (sorted[lo] as number) : packLen - 20;
   };
 
+  // ---- pack data: a block cache for small reads, streaming for large ones
+  const BLOCK = 64 * 1024;
+  const readCacheLimit = opts.readCacheBytes ?? 4 * 2 ** 20;
+  const blocks = new Map<number, Uint8Array>();
+  let blockBytes = 0;
+  const block = async (i: number): Promise<Uint8Array> => {
+    const hit = blocks.get(i);
+    if (hit) {
+      blocks.delete(i);
+      blocks.set(i, hit);
+      return hit;
+    }
+    const start = i * BLOCK;
+    const b = await readAll(files, packPath, start, Math.min(BLOCK, packLen - start));
+    blocks.set(i, b);
+    blockBytes += b.length;
+    for (const [k, v] of blocks) {
+      if (blockBytes <= readCacheLimit || k === i) break;
+      blocks.delete(k);
+      blockBytes -= v.length;
+    }
+    st.peakBlockBytes = Math.max(st.peakBlockBytes, blockBytes);
+    return b;
+  };
+  async function* packBytes(start: number, length: number): AsyncGenerator<Uint8Array> {
+    if (readCacheLimit < BLOCK || length > 4 * BLOCK) {
+      yield* files.read(packPath, { start, length });
+      return;
+    }
+    const end = start + length;
+    for (let at = start; at < end; ) {
+      const i = Math.floor(at / BLOCK);
+      const b = await block(i);
+      const from = at - i * BLOCK;
+      const to = Math.min(b.length, end - i * BLOCK);
+      if (to <= from) return; // short file: the caller reports the truncation
+      yield b.subarray(from, to);
+      at += to - from;
+    }
+  }
+  const packRange = async (start: number, length: number): Promise<Uint8Array> => {
+    const parts: Uint8Array[] = [];
+    for await (const c of packBytes(start, length)) parts.push(c);
+    if (parts.length === 1) return parts[0] as Uint8Array;
+    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let o = 0;
+    for (const p of parts) {
+      out.set(p, o);
+      o += p.length;
+    }
+    return out;
+  };
+
   const pool = createInflaterPool();
   const st = {
     inflations: 0,
     peakCachedBytes: 0,
+    peakBlockBytes: 0,
     /** bytes the cache accounting believes it holds */
     get cachedBytes() {
       return cached;
@@ -270,7 +332,7 @@ export async function openPack(
     const end = endOf(offset);
     if (offset < 12 || end <= offset)
       throw new PackError(`${packPath}: bad entry offset ${offset}`);
-    const h = await readAll(files, packPath, offset, Math.min(32, end - offset));
+    const h = await packRange(offset, Math.min(32, end - offset));
     let p = 0;
     const byte = () => {
       if (p >= h.length) throw new PackError(`${packPath}: entry header at ${offset} truncated`);
@@ -325,10 +387,7 @@ export async function openPack(
     let got = 0;
     let done = false;
     try {
-      for await (const c of files.read(packPath, {
-        start: e.dataStart,
-        length: e.end - e.dataStart,
-      })) {
+      for await (const c of packBytes(e.dataStart, e.end - e.dataStart)) {
         for (let at = 0; at < c.length && !done; at += SLICE) {
           let r: ReturnType<StreamInflater["push"]>;
           try {
@@ -519,10 +578,11 @@ export async function openPack(
         async *raw() {
           let crc = CRC_INIT;
           let at = offset;
-          for await (const c of files.read(packPath, { start: offset, length: e.end - offset })) {
+          for await (const c of packBytes(offset, e.end - offset)) {
             crc = crc32Update(crc, c);
             const from = Math.max(0, e.dataStart - at);
-            if (from < c.length) yield c.subarray(from);
+            // a copy: `c` may be a cached block the caller must not change
+            if (from < c.length) yield c.slice(from);
             at += c.length;
           }
           if (at !== e.end) throw new PackError(`${packPath}: entry at ${offset} truncated`);
