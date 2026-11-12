@@ -37,7 +37,7 @@ reconstructed byte differs from the reference data.
 
 Yes. `src/xet.ts` (about 290 lines), `src/lz4.ts` (an LZ4 frame decoder, about 85 lines) and
 `src/gear-table.ts` (rust-gearhash's table) implement it with no `node:` imports and no new
-dependency: BLAKE3 is X1c's (@noble/hashes). All 8 tests pass:
+dependency: BLAKE3 is X1c's (@noble/hashes). All 7 tests pass:
 
 - **H1.** The specification's hash-string example, both ways.
 - **H2.** From the reference chunk list: the xorb hash `eea25d6e…`, the file hash `118a5332…` and
