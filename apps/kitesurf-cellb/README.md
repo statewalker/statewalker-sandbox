@@ -82,8 +82,9 @@ over CDP through a `MessagePort` to the engine's `/devtools/browser` socket. Kit
 isolates are Dedicated Workers too. The pages it fetches are cross-origin, so the host worker sends
 them through the server's CORS proxy (`serve.mjs`, `/proxy`).
 
-It needs the unreleased CellB (above), so it is not a workspace package: install a build of the
-branch into it.
+It needs the unreleased CellB (above), so it is not a workspace package, and its `package.json` does
+not declare `@statewalker/cellb` (an npm install would fetch a release without the fixes): install
+a build of the branch into it, which also provides the `cellb` command `build:engine` runs.
 
 ```sh
 cd browser

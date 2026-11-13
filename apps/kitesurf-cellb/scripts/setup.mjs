@@ -36,8 +36,10 @@ const config = jsonc(readFileSync(join(ks, "packages/engine/wrangler.jsonc"), "u
 delete config.env;
 delete config.$schema;
 delete config.observability;
-config.main = join(ks, "packages/engine/src/index.ts");
-config.assets.directory = join(ks, "packages/engine/public");
+// Paths in the config are relative to the engine's folder; this config lives elsewhere.
+const engineDir = join(ks, "packages/engine");
+config.main = resolve(engineDir, config.main);
+if (config.assets?.directory) config.assets.directory = resolve(engineDir, config.assets.directory);
 config.compatibility_flags = [...new Set([...(config.compatibility_flags ?? []), "nodejs_compat"])];
 mkdirSync(join(app, "engine"), { recursive: true });
 writeFileSync(join(app, "engine/wrangler.json"), `${JSON.stringify(config, null, 2)}\n`);

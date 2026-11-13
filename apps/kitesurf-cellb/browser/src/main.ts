@@ -9,10 +9,15 @@ const result: Record<string, unknown> = { target };
 (window as any).__result = result;
 
 const worker = new Worker(new URL("./host-worker.ts", import.meta.url), { type: "module" });
-worker.onerror = (e) => {
-  result.error = `worker error: ${e.message}`;
-  log(String(result.error));
+// Any failure ends the run (run.mjs waits for `done`), before `ready` as well as after.
+const fail = (message: string) => {
+  result.error ??= message;
+  result.done = true;
+  log(String(message));
 };
+worker.onerror = (e) => fail(`worker error: ${e.message}`);
+window.addEventListener("error", (e) => fail(`page error: ${e.message}`));
+window.addEventListener("unhandledrejection", (e) => fail(`page rejection: ${e.reason}`));
 const ready = await new Promise<any>((r) =>
   worker.addEventListener("message", (e) => e.data.type === "ready" && r(e.data)),
 );
