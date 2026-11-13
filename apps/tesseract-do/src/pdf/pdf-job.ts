@@ -75,6 +75,12 @@ export class PdfJob extends DurableObject<Env> {
     super(ctx, env);
     this.#sql = ctx.storage.sql as unknown as Sql;
     this.#blobs = new BlobStore(this.#sql);
+    this.#createTables();
+  }
+
+  /** The job's tables (again after `destroy`, which drops them under this live instance). */
+  #createTables(): void {
+    this.#blobs.createTables();
     this.#sql.exec(
       "CREATE TABLE IF NOT EXISTS job (id INTEGER PRIMARY KEY CHECK (id = 1), state TEXT NOT NULL)",
     );
@@ -177,6 +183,7 @@ export class PdfJob extends DurableObject<Env> {
     await this.#closePdf();
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
+    this.#createTables();
   }
 
   #openPdf(): Promise<PDFDocumentProxy> {

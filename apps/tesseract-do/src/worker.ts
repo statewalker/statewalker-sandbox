@@ -231,8 +231,15 @@ async function jobRequest(request: Request, url: URL, env: Env): Promise<Respons
   const m = url.pathname.match(/^\/api\/pdf\/jobs\/([0-9a-f]{64})(?:\/(.*))?$/);
   if (!m) return json({ error: "not found" }, 404);
   const [, id, rest = ""] = m;
-  const job = env.PDF_JOB.get(env.PDF_JOB.idFromString(id));
   const notFound = () => json({ error: "ENOENT: no such job" }, 404);
+  let jobId: DurableObjectId;
+  try {
+    // An id this namespace did not make is refused here (ids carry a checksum).
+    jobId = env.PDF_JOB.idFromString(id);
+  } catch {
+    return notFound();
+  }
+  const job = env.PDF_JOB.get(jobId);
 
   if (rest === "" && request.method === "GET") {
     const view = await job.status();

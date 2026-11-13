@@ -10,10 +10,14 @@ const decoder = new TextDecoder();
 
 export class BlobStore {
   constructor(private readonly sql: Sql) {
-    sql.exec(
+    this.createTables();
+  }
+
+  createTables(): void {
+    this.sql.exec(
       "CREATE TABLE IF NOT EXISTS blob_chunk (key TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (key, idx))",
     );
-    sql.exec("CREATE TABLE IF NOT EXISTS blob (key TEXT PRIMARY KEY, size INTEGER NOT NULL)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS blob (key TEXT PRIMARY KEY, size INTEGER NOT NULL)");
   }
 
   put(key: string, bytes: Uint8Array): void {
