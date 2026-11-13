@@ -107,8 +107,14 @@ const hex = (b: Uint8Array) => {
   return s;
 };
 const OID = /^[0-9a-f]{40}$/;
-const oidBytes = (h: string) =>
-  Uint8Array.from(h.match(/../g) as string[], (x) => Number.parseInt(x, 16));
+/** lower-case hex (checked by OID) to bytes, by character codes: a lookup per `get` */
+const nibble = (c: number) => (c <= 57 ? c - 48 : c - 87); // '0'-'9', 'a'-'f'
+const oidBytes = (h: string) => {
+  const out = new Uint8Array(h.length >> 1);
+  for (let i = 0; i < out.length; i++)
+    out[i] = (nibble(h.charCodeAt(2 * i)) << 4) | nibble(h.charCodeAt(2 * i + 1));
+  return out;
+};
 
 async function readAll(
   files: FilesApi,
