@@ -148,9 +148,3 @@ overrides:
   # pi-ai 1.5.0 dropped the `Type` export @flue/runtime 2.3.0 imports; pi-agent-core pins the
   # same pi-ai version, so it stays on 1.4 too. Remove once @flue/runtime supports pi-ai 1.5.
   "@earendil-works/pi-agent-core": ~1.4.0
-
-# Local fixes to dependencies, as patches/ files. Each names the version it applies to.
-# @statewalker/cellb 0.8.7: the workerd differences apps/kitesurf-cellb needs (made with
-# apps/kitesurf-cellb/scripts/patch-cellb.mjs). Only that app depends on 0.8.7.
-patchedDependencies:
-  "@statewalker/cellb@0.8.7": patches/@statewalker__cellb@0.8.7.patch

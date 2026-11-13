@@ -1,6 +1,5 @@
 // Runs the Kitesurf engine Worker on CellB in Node and serves it over HTTP + WebSocket.
 //   node server.mjs <kitesurf/packages/engine> [port]
-import "./polyfills.mjs";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";

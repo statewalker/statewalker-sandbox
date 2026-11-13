@@ -9,8 +9,7 @@ import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 
 const app = fileURLToPath(new URL("..", import.meta.url));
-const ready =
-  existsSync(`${app}engine/wrangler.json`) && existsSync("/bundle/kitesurf_core_bg.wasm");
+const ready = existsSync(`${app}engine/wrangler.json`);
 const port = 8790 + Math.floor(Math.random() * 100);
 const endpoint = `ws://127.0.0.1:${port}/devtools/browser`;
 let server;

@@ -1,12 +1,10 @@
 // Prepares the host for a built Kitesurf checkout:
 //   node scripts/setup.mjs [kitesurf-dir]     (default: $KITESURF or ../../../kitesurf)
 //
-// - engine/wrangler.json: Kitesurf's engine config with absolute `main` and assets paths, plus
-//   `nodejs_compat` (Kitesurf reads its wasm with `node:fs`; with nodejs_compat CellB on Node gives
-//   Worker code the real `node:fs`).
-// - /bundle/*.wasm: workerd exposes a Worker's modules under /bundle, and Kitesurf reads its two
-//   wasm files from there. They are linked from the checkout.
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+// It writes engine/wrangler.json: Kitesurf's engine config with absolute `main` and assets paths,
+// plus `nodejs_compat`. Kitesurf reads its wasm with `node:fs` from workerd's `/bundle`, which
+// CellB provides under nodejs_compat (the bundle's own wasm modules, named as wrangler names them).
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -44,16 +42,3 @@ config.compatibility_flags = [...new Set([...(config.compatibility_flags ?? []),
 mkdirSync(join(app, "engine"), { recursive: true });
 writeFileSync(join(app, "engine/wrangler.json"), `${JSON.stringify(config, null, 2)}\n`);
 console.log(`setup: wrote engine/wrangler.json (Kitesurf at ${ks})`);
-
-try {
-  mkdirSync("/bundle", { recursive: true });
-  for (const [name, file] of Object.entries(wasm)) {
-    rmSync(join("/bundle", name), { force: true });
-    symlinkSync(file, join("/bundle", name));
-  }
-  console.log("setup: linked /bundle/kitesurf_core_bg.wasm and /bundle/renderer_core_bg.wasm");
-} catch (e) {
-  console.error(`setup: cannot write /bundle (${e.code ?? e.message}). Create it once with:
-  sudo mkdir -p /bundle && sudo ln -sf ${wasm["kitesurf_core_bg.wasm"]} ${wasm["renderer_core_bg.wasm"]} /bundle/`);
-  process.exit(1);
-}
