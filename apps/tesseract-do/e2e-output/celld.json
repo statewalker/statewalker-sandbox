@@ -19,7 +19,7 @@
       "meanConfidence": 0.582,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 1.2,
-      "seconds": 1.184,
+      "seconds": 0.691,
       "model": "fetch"
     },
     "baiona_gray.png": {
@@ -29,7 +29,7 @@
       "meanConfidence": 0.512,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 0.4,
-      "seconds": 0.278,
+      "seconds": 0.138,
       "model": "memory"
     },
     "baiona_colormapped.png": {
@@ -39,7 +39,7 @@
       "meanConfidence": 0.591,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 0.4,
-      "seconds": 0.253,
+      "seconds": 0.137,
       "model": "memory"
     },
     "baiona_alpha.png": {
@@ -49,7 +49,7 @@
       "meanConfidence": 0.582,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 1.7,
-      "seconds": 0.272,
+      "seconds": 0.167,
       "model": "memory"
     }
   },
@@ -60,7 +60,7 @@
     "meanConfidence": 0.935,
     "wasmMemoryMiB": 27.8,
     "decodedMiB": 2.2,
-    "seconds": 1.982,
+    "seconds": 0.963,
     "model": "memory"
   },
   "linn.png": {
@@ -70,7 +70,7 @@
     "meanConfidence": 0.944,
     "wasmMemoryMiB": 58.1,
     "decodedMiB": 1,
-    "seconds": 8.948,
+    "seconds": 4.48,
     "model": "fetch",
     "recall": 0.993
   },
@@ -81,12 +81,12 @@
     "meanConfidence": 0.905,
     "wasmMemoryMiB": 68.4,
     "decodedMiB": 1.4,
-    "seconds": 5.196,
+    "seconds": 2.485,
     "model": "fetch"
   },
   "engine reuse": {
-    "first": 2.214,
-    "second": 2.205
+    "first": 0.96,
+    "second": 0.907
   },
   "model downloads (first run)": {
     "eng.traineddata": 3,
@@ -96,7 +96,7 @@
   },
   "after restart": {
     "model": "sqlite",
-    "seconds": 4.742,
+    "seconds": 2.47,
     "wasmMemoryMiB": 68.4
   },
   "linn.png (isolate)": {
@@ -106,34 +106,46 @@
     "meanConfidence": 0.944,
     "wasmMemoryMiB": 58.1,
     "decodedMiB": 1,
-    "seconds": 8.55,
+    "seconds": 4.658,
     "model": "fetch",
     "recall": 0.993
   },
   "pdf multicolumn.pdf": {
     "blocks": 14,
-    "seconds": 0.323
+    "seconds": 0.159
   },
   "pdf linn.pdf": {
     "recall": 0.99,
     "words": 722,
-    "seconds": 9.738
+    "seconds": 4.572
   },
   "pdf GeoTopo.pdf (6 pages)": {
     "blocks": 64,
-    "seconds": 0.473
+    "seconds": 0.24
   },
   "job GeoTopo.pdf (117 pages)": {
-    "acceptedSeconds": 0.382,
-    "seconds": 10.45,
+    "acceptedSeconds": 0.309,
+    "seconds": 6.324,
     "blocks": 2880,
-    "assets": 10
+    "assets": 10,
+    "alarms": 30,
+    "bytesRead": 5321132,
+    "size": 5321132
   },
   "job linn.pdf": {
     "recall": 0.99
   },
   "job resumed after restart": {
     "pagesBeforeRestart": 2,
-    "pagesAtRestart": 7
+    "pagesAtRestart": 6
+  },
+  "job big-34mb.pdf": {
+    "size": 33881804,
+    "bytesRead": 392908,
+    "requests": 5,
+    "readShare": 0.0116
+  },
+  "job scan-4.pdf (4 pages at once, 3 cells)": {
+    "seconds": 23.869
   }
 }

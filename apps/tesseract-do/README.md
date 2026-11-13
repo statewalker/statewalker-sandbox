@@ -56,8 +56,8 @@ curl localhost:8787/api/runtime
 | --- | --- |
 | `POST /api/ocr?lang=eng[&cell=…][&band=rows][&engine=cell\|isolate]` | OCR of the body (PNG or JPEG, ≤ 20 MB) → `{text, words[{text, confidence, bbox}], meanConfidence, bands, wasmMemoryMiB, decodedMiB, model, cell, engine}` |
 | `POST /api/pdf?lang=auto\|eng[&engine=cell\|isolate][&maxPages=n][&stream=1][&assets=inline]` | PDF (≤ 20 MB) → `{document}` (PortableText, the library's schema), with `assets=inline` also `{assets: {id: base64 PNG}}`; `stream=1`: NDJSON, one `page` event per page then `end` |
-| `POST /api/pdf/jobs?lang=…[&engine=…][&maxPages=n][&throttleMs=ms][&name=…]` | PDF (≤ 20 MB) → 202 `{id, status, …}`: a new `PdfJob` converts it in the background |
-| `GET /api/pdf/jobs/:id` | `{status: queued\|running\|done\|failed\|cancelled, pageCount, pagesDone, language, failedPages, …}` |
+| `POST /api/pdf/jobs?lang=…[&engine=…][&maxPages=n][&pageConcurrency=n][&ocrCells=n][&throttleMs=ms][&name=…]` | PDF (≤ 64 MB, streamed in) → 202 `{id, status, …}`: a new `PdfJob` converts it in the background |
+| `GET /api/pdf/jobs/:id` | `{status: queued\|running\|done\|failed\|cancelled, pageCount, pagesDone, language, failedPages, alarms, reads, …}` |
 | `GET /api/pdf/jobs/:id/document[?assets=inline]` | the pages done so far as one document, `complete: true` once done |
 | `GET /api/pdf/jobs/:id/pages/:n`, `GET /api/pdf/jobs/:id/assets/:assetId` | one page's blocks; one PNG asset |
 | `POST /api/pdf/jobs/:id/cancel`, `DELETE /api/pdf/jobs/:id` | stop (keeping what is done); stop and remove everything |
@@ -159,26 +159,35 @@ first line differently (280 words from the PDF, 292 from the JPEG file).
 by default) and the client must stay connected. `POST /api/pdf/jobs` hands the PDF to a **`PdfJob`
 Durable Object** (`src/pdf/pdf-job.ts`, a unique id per job) and returns at once:
 
-- `start` stores the PDF in the job's SQLite (chunked, `src/blob-store.ts`: rows hold ≤ 2 MB) and
-  sets an alarm. The first alarm reads the page count and the language; **every alarm converts one
-  page** and sets the next. An alarm is an invocation with its own CPU budget, so the number of
-  pages is not bounded by any limit; OCR of the page's images runs in the language's `OcrCell`
-  over RPC, outside the job's budget.
-- Each page, its new PNG assets and the progress commit in **one transaction**, so a crash between
-  pages loses nothing and repeats nothing. The pdf.js document stays open between alarms while the
-  isolate lives, and is reopened from SQLite when it does not.
-- A page that throws is retried after 2 s and 4 s, then recorded in `failedPages` and skipped; a
-  PDF that cannot be opened fails the job. `throttleMs` spaces the pages (the tests use it to stop
-  a job half-way).
-- Alarms are durable: after a **restart** the job carries on from the next page (checked on all
-  three runtimes by the durability suite).
+- **Upload in parts**: the Worker re-cuts the request body into 1 MiB parts and appends each to the
+  job's SQLite (`src/blob-store.ts`; rows hold ≤ 2 MB). Neither side holds the whole upload; a job
+  takes PDFs up to 64 MB. An upload that is never started is removed after an hour.
+- **Range reading**: pdf.js reads the PDF by byte ranges from SQLite (`openPdfRanges`, no
+  auto-fetch), so only what the pages need is read: 1.2% of the 34 MB test file (a 3-page document
+  with 32 MB of unused data). pdf.js still allocates one zero-filled buffer of the file's size for
+  what it has read (its `ChunkedStream`), which is why the cap is 64 MB, not more.
+- **A batch of pages per alarm** (`pageConcurrency`, default 4): an alarm is an invocation with its
+  own CPU budget, so the number of pages is not bounded by any limit. The page's images are OCR'd
+  in the language's cells over RPC, spread round-robin over a pool (`ocrCells`, default 2:
+  `ocr-eng`, `ocr-eng-1`, …), outside the job's budget.
+- Each page and its new PNG assets commit in **one transaction**, so a crash loses nothing and
+  repeats nothing; a page finishing after a cancel or delete is not stored. A page that throws is
+  retried after 2 s and 4 s, then recorded in `failedPages`; an unreadable PDF fails the job.
+- Alarms are durable: after a **restart** the job reopens the PDF from SQLite and carries on with
+  the pages not done (checked on all three runtimes by the durability suite).
 
 | Job | wrangler / cellb / celld |
 | --- | --- |
-| GeoTopo.pdf, all 117 pages (text, 10 images OCR'd in `ocr-deu`) | accepted in 0.17 / 0.11 / 0.38 s; done in 8.5 / 7.4 / 10.5 s, 2880 blocks |
+| GeoTopo.pdf, all 117 pages, 4 per alarm | 30 alarms; done in 8.5 / 5.2 / 6.3 s, 2880 blocks |
+| big-34mb.pdf (3 pages + 32 MB unused) | streamed in; pdf.js read 393 KB of 33.9 MB in 5 range requests |
+| scan-4.pdf (4 scanned pages at once, 3 OCR cells) | 99% recall per page, all 3 cells used; 17 s cellb / 24 s celld |
 | linn.pdf (JBIG2 scan) | 99% recall, the PNG asset served by the job |
-| 40 pages, 1 s apart, runtime restarted after page 2 | resumed and finished, pages 1–40 in order, none failed |
+| 40 pages, 1 per alarm, runtime restarted after page 2 | resumed (PDF reopened), finished pages 1–40, none failed |
 | cancel after page 1, then delete | no page after the cancel; the job is gone (404) |
+
+Locally the concurrent batch is no faster than one page after another (4 × ≈ 4–6 s): cellb runs
+every object on one event loop, and the local runtimes do not run objects in parallel. On
+Cloudflare, cells are separate objects that can run on separate machines; that is not measured here.
 
 ## Platform limits, against what OCR needs
 
