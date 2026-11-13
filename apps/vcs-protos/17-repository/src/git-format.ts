@@ -52,6 +52,18 @@ function checkOid(oid: string, what: string) {
   if (!OID.test(oid)) throw new Error(`${what}: not an object id: ${oid}`);
 }
 
+/** a hex object id to its 20 bytes, by character codes (a regex per id was a measured cost) */
+const oidToBytes = (h: string) => {
+  // by character codes: a regex and a parseInt per byte were a measured cost on hot paths
+  const out = new Uint8Array(h.length >> 1);
+  for (let i = 0; i < out.length; i++) {
+    const a = h.charCodeAt(2 * i);
+    const b = h.charCodeAt(2 * i + 1);
+    out[i] = ((a <= 57 ? a - 48 : (a | 32) - 87) << 4) | (b <= 57 ? b - 48 : (b | 32) - 87);
+  }
+  return out;
+};
+
 export function isTreeMode(mode: string): boolean {
   return (Number.parseInt(mode, 8) & 0o170000) === 0o040000;
 }
@@ -115,7 +127,7 @@ export function encodeTree(entries: TreeEntry[]): Uint8Array {
   let n = 0;
   for (const { e, bytes } of items) {
     const head = new Uint8Array([...enc.encode(`${e.mode} `), ...bytes, 0]);
-    const id = Uint8Array.from(e.oid.match(/../g) as string[], (x) => Number.parseInt(x, 16));
+    const id = oidToBytes(e.oid);
     parts.push(head, id);
     n += head.length + 20;
   }

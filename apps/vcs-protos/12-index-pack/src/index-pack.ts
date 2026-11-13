@@ -482,8 +482,16 @@ export function writeIdx(entries: IndexedEntry[], packId: string): Uint8Array {
     v.setUint32(8 + i * 4, acc);
   }
   let p = 8 + 1024;
-  const oidBytes = (h: string) =>
-    Uint8Array.from(h.match(/../g) as string[], (x) => Number.parseInt(x, 16));
+  const oidBytes = (h: string) => {
+    // by character codes: a regex and a parseInt per byte were a measured cost on hot paths
+    const out = new Uint8Array(h.length >> 1);
+    for (let i = 0; i < out.length; i++) {
+      const a = h.charCodeAt(2 * i);
+      const b = h.charCodeAt(2 * i + 1);
+      out[i] = ((a <= 57 ? a - 48 : (a | 32) - 87) << 4) | (b <= 57 ? b - 48 : (b | 32) - 87);
+    }
+    return out;
+  };
   for (const e of sorted) {
     out.set(oidBytes(e.oid), p);
     p += 20;
