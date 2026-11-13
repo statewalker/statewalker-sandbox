@@ -29,6 +29,7 @@ reconstructed byte differs from the reference data.
 | H5 | **Portable.** `src/` has no `node:` imports. |
 | U1 | (X11b) **Shards byte for byte.** From the reference chunk list, the xorb and file hashes, the range hash and the file's SHA-256, `writeShard` gives the specification's four reference shards exactly: the base shard, the one with verification entries, the upload form (no footer) and the global-dedupe answer (keyed chunk hashes); each reference shard read and written again is the same bytes. |
 | U2 | (X11b) **Deduplication.** Every chunk of the reference file is found in the global-dedupe shard by its keyed hash, at its index; the terms built from those locations (with their range hashes) serialize to the reference upload shard. Terms split where chunks leave a xorb or skip an index; damaged shards are refused. |
+| U5 | (X11b) **Streaming verification.** With a shard's hashes (`verifierFromShard`), each chunk is checked as it is decoded, before it is yielded: the reference reconstruction passes with each reference shard (796 chunks checked, keyed ones keyed); a chunk with one byte changed stops the stream at that chunk (none after it yielded), where unchecked it passes unnoticed; with the term's verification hash only, the damage is caught at the term's end; a term inside its fetch range is checked over its own chunks. |
 | U3 | (X11b) **Xorbs written.** `writeXorb` serializes chunks (LZ4, ByteGrouping4-LZ4 or none, a chunk LZ4 would not shrink stored), ending after the last chunk; the reference file's 796 chunks written so and read back through `reconstruct` give the reference chunk hashes. LZ4 frames round trip on edge cases and keep LZ4's end-of-block rules; xxHash32 (the header checksum) matches its published values. |
 
 ## Scope
@@ -163,6 +164,55 @@ header checksum confirmed for `60 70`) found, and U4 covers:
 | R4 | Keyed hashes allowed without the key | killed (U4) |
 | R5 | No end-of-block rules | killed (U4's fuzz) |
 
+### Streaming verification (U5)
+
+The reconstruction answer carries no hashes, so the file hash could only check a whole download.
+`reconstruct(answer, fetch, { verify })` now checks as it goes, with what a shard knows:
+
+- **Chunks:** the CAS section lists each xorb chunk's hash. Each decoded chunk is hashed and
+  compared before it is yielded, so a damaged chunk stops the stream there (U5: chunk 300 of
+  796 changed by one byte; 300 chunks out, then `XetIntegrityError`). Chunks the fetch range
+  holds before the term's first are checked too. A keyed (global-dedupe) shard is compared
+  keyed.
+- **Terms:** the File Info section's verification hash of each term is compared when the term's
+  last chunk is decoded, before the next term is fetched. Its bytes are out by then, so this
+  catches damage per term, not per chunk; a `length` that ends inside a term leaves it
+  unchecked.
+- **Unknown chunks:** chunks of a xorb the shard does not list are passed unchecked.
+- **Cost:** a BLAKE3 per chunk, only when `verify` is given.
+
+| # | Mutant | Result |
+|---|---|---|
+| V1 | The chunk check's answer ignored | killed (U5) |
+| V2 | The term check skipped | killed (U5) |
+| V3 | Keyed shard hashes compared plain | killed (U5) |
+| V4 | Chunks before the term's first counted in its range hash | killed (U5) |
+
+**Review of #123** found term checks matched by position: term n of the answer was taken for
+term n of the shard's file, which a range request (starting mid-file) or a server that splits
+terms otherwise breaks, with false alarms on correct data. Now (U6, 8 synthetic chunks, a file of
+two terms):
+
+| Finding | Fix |
+|---|---|
+| Terms matched by position | matched by xorb and chunk range, in order; a term with no exact match is unchecked (a range request over [4,8), a narrowed [5,8), a split [0,2)+[2,8): no false alarm) |
+| A dropped or an extra term passed | `wholeFile`: the answer must be exactly the file's terms, each checked (`done`) |
+| A `length` ending exactly at a term's end skipped its check | checked on that path too |
+| An unknown chunk passed silently: a chunk past what the shard lists, an upper-case name | past a listed xorb's end fails; names lower-cased; `strict` fails an unlisted xorb |
+| Keyed hashes without the key fell back to plain | refused |
+| A short term was a plain `Error` under `verify` | an integrity failure |
+
+A verifier walks the file's terms in order: one per reconstruction.
+
+| # | Mutant | Result |
+|---|---|---|
+| X1 | Terms matched by position | killed (U6) |
+| X2 | `done` ignored | killed (U6) |
+| X3 | The exact-length path unchecked | killed (U6) |
+| X4 | Names not lower-cased | killed (U6) |
+| X5 | A chunk past the listed ones unknown | killed (U6) |
+| X6 | `strict` ignored | killed (U6) |
+
 ## Promotion grades
 
 | File | Grade | Why |
@@ -178,8 +228,8 @@ header checksum confirmed for `60 70`) found, and U4 covers:
    no write token here.
 2. Fetching several terms of one xorb with one request (the answer's fetch entries allow it).
 3. Reconstruction against the live CAS (tokens, signed URLs, retries, `Range` resume).
-4. Verifying a fetched xorb range by its chunk hashes as it streams (here the file hash checks the
-   whole).
+4. ~~Verifying a fetched xorb range by its chunk hashes as it streams~~ — answered (U5):
+   `reconstruct`'s `verify`, from a shard (`verifierFromShard`).
 
 ### Review
 
