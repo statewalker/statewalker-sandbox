@@ -19,7 +19,7 @@
       "meanConfidence": 0.582,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 1.2,
-      "seconds": 0.474,
+      "seconds": 0.483,
       "model": "fetch"
     },
     "baiona_gray.png": {
@@ -29,7 +29,7 @@
       "meanConfidence": 0.512,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 0.4,
-      "seconds": 0.169,
+      "seconds": 0.216,
       "model": "memory"
     },
     "baiona_colormapped.png": {
@@ -39,7 +39,7 @@
       "meanConfidence": 0.591,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 0.4,
-      "seconds": 0.193,
+      "seconds": 0.214,
       "model": "memory"
     },
     "baiona_alpha.png": {
@@ -49,7 +49,7 @@
       "meanConfidence": 0.582,
       "wasmMemoryMiB": 27.8,
       "decodedMiB": 1.7,
-      "seconds": 0.206,
+      "seconds": 0.317,
       "model": "memory"
     }
   },
@@ -60,7 +60,7 @@
     "meanConfidence": 0.935,
     "wasmMemoryMiB": 27.8,
     "decodedMiB": 2.2,
-    "seconds": 1.309,
+    "seconds": 1.606,
     "model": "memory"
   },
   "linn.png": {
@@ -70,7 +70,7 @@
     "meanConfidence": 0.944,
     "wasmMemoryMiB": 58.1,
     "decodedMiB": 1,
-    "seconds": 5.961,
+    "seconds": 7.87,
     "model": "fetch",
     "recall": 0.993
   },
@@ -81,12 +81,12 @@
     "meanConfidence": 0.905,
     "wasmMemoryMiB": 68.4,
     "decodedMiB": 1.4,
-    "seconds": 2.844,
+    "seconds": 4.422,
     "model": "fetch"
   },
   "engine reuse": {
-    "first": 1.375,
-    "second": 1.339
+    "first": 1.723,
+    "second": 1.314
   },
   "model downloads (first run)": {
     "eng.traineddata": 3,
@@ -106,21 +106,30 @@
     "meanConfidence": 0.944,
     "wasmMemoryMiB": 58.1,
     "decodedMiB": 1,
-    "seconds": 5.75,
+    "seconds": 7.405,
     "model": "fetch",
     "recall": 0.993
   },
   "pdf multicolumn.pdf": {
     "blocks": 14,
-    "seconds": 0.333
+    "seconds": 0.317
   },
   "pdf GeoTopo.pdf (6 pages)": {
     "blocks": 64,
-    "seconds": 0.308
+    "seconds": 0.673
   },
   "pdf linn.pdf": {
     "recall": 0.99,
     "words": 722,
-    "seconds": 6.301
+    "seconds": 8.482
+  },
+  "job GeoTopo.pdf (117 pages)": {
+    "acceptedSeconds": 0.18,
+    "seconds": 7.797,
+    "blocks": 2880,
+    "assets": 10
+  },
+  "job linn.pdf": {
+    "recall": 0.99
   }
 }
