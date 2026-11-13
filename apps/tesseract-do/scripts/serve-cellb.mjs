@@ -76,6 +76,11 @@ const server = createServer(async (req, res) => {
     res.end(String(e?.stack ?? e));
   }
 });
+// The Durable Objects run on this process's event loop, so an OCR call blocks it for seconds.
+// With Node's default 5 s keep-alive, the idle-socket timer fires as soon as the loop is free
+// and races a client reusing that socket (ECONNRESET): keep idle sockets longer than any call.
+server.keepAliveTimeout = 120_000;
+server.headersTimeout = 125_000;
 server.listen(Number(values.port), "127.0.0.1", () =>
   console.log(`cellb: listening on http://127.0.0.1:${values.port}`),
 );

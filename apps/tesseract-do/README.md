@@ -173,7 +173,12 @@ Durable Object** (`src/pdf/pdf-job.ts`, a unique id per job) and returns at once
 - Alarms are durable: after a **restart** the job carries on from the next page (checked on all
   three runtimes by the durability suite).
 
-Measurements: see the runtime runs below (pending).
+| Job | wrangler / cellb / celld |
+| --- | --- |
+| GeoTopo.pdf, all 117 pages (text, 10 images OCR'd in `ocr-deu`) | accepted in 0.17 / 0.13 / 0.38 s; done in 8.5 / 8.8 / 10.5 s, 2880 blocks |
+| linn.pdf (JBIG2 scan) | 99% recall, the PNG asset served by the job |
+| 40 pages, 1 s apart, runtime restarted after page 2 | resumed and finished, pages 1–40 in order, none failed |
+| cancel after page 1, then delete | no page after the cancel; the job is gone (404) |
 
 ## Platform limits, against what OCR needs
 
@@ -209,6 +214,10 @@ Measurements: see the runtime runs below (pending).
 - **celld 0.6**: refuses the `limits` and `env` config keys (hence `wrangler.production.jsonc`),
   and `WebAssembly.compile(bytes)` never settles there (`/api/runtime` reports `"hangs"`); OCR is
   unaffected because its wasm is a module.
+- **cellb on Node**: every Durable Object runs on the one process's event loop, so a cell's OCR
+  (seconds of synchronous wasm) also holds up other objects and HTTP requests meanwhile; a job's
+  status poll waits for the page's OCR to end. (`serve-cellb.mjs` keeps idle sockets 120 s, past
+  Node's default 5 s, which otherwise reset a poll arriving right after such a pause.)
 - **cellb on Node**: a Worker Loader isolate is a worker thread that can see the host; fine here
   (no untrusted code runs), but not a sandbox.
 - **Not deployed**: everything above ran on local runtimes; there was no Cloudflare account to
