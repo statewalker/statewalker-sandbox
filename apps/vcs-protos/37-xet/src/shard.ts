@@ -8,7 +8,13 @@
  */
 
 import { createBlake3 } from "../../03-sha256-blake3/src/hashes.js";
-import { type ChunkRef, hashFromString, rangeHash } from "./xet.js";
+import {
+  type ChunkRef,
+  hashFromString,
+  hashToString,
+  type ReconstructionVerifier,
+  rangeHash,
+} from "./xet.js";
 
 /** `MDB_SHARD_HEADER_TAG`, as the reference shards begin */
 export const SHARD_HEADER_TAG = Uint8Array.from([
@@ -391,4 +397,27 @@ export function termsFor(
   });
   close();
   return terms;
+}
+
+/**
+ * What a reconstruction checks, from a shard: the chunk hashes its CAS section lists (keyed ones
+ * compared keyed), and, for the file `fileHash` its File Info section holds, the terms'
+ * verification hashes (term n of the reconstruction answer is term n of the file).
+ */
+export function verifierFromShard(shard: Shard, fileHash?: Uint8Array): ReconstructionVerifier {
+  const key = shard.chunkHashesKeyed ? shard.footer?.chunkHashKey : undefined;
+  const xorbs = new Map(shard.xorbs.map((x) => [hashToString(x.xorbHash), x]));
+  const file = fileHash
+    ? shard.files.find((f) => f.fileHash.every((b, i) => b === fileHash[i]))
+    : undefined;
+  if (fileHash && !file) throw new Error("shard: the file is not in this shard");
+  return {
+    chunk: (xorb, index, hash) => {
+      const want = xorbs.get(xorb)?.chunks[index]?.hash;
+      if (!want) return undefined;
+      const got = key ? keyedChunkHash(hash, key) : hash;
+      return got.every((b, i) => b === want[i]);
+    },
+    rangeHash: (term) => file?.terms[term]?.rangeHash,
+  };
 }

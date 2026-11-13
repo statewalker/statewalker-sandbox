@@ -267,14 +267,45 @@ async function* xorbChunks(
  * length) truncates the last. This is the v1 answer (`fetch_info`, `url_range` inclusive); v2's
  * `xorbs[].ranges[]` and multipart range fetches are not implemented.
  */
+/** a chunk or a term whose bytes are not those its hash names */
+export class XetIntegrityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "XetIntegrityError";
+  }
+}
+
+/**
+ * What a reconstruction checks as it goes (X11b; open thread 4). The answer carries no hashes;
+ * they come from a shard (`verifierFromShard`): the xorbs' chunk hashes (CAS section) and the
+ * file's term verification hashes (File Info section).
+ */
+export interface ReconstructionVerifier {
+  /**
+   * Is `hash` (the decoded chunk's) the expected one for chunk `index` of `xorb`? `undefined`:
+   * not known (unchecked). Checked before the chunk is yielded, so a damaged chunk stops the
+   * stream there, chunks before the term's first included.
+   */
+  chunk?: (xorb: string, index: number, hash: Uint8Array) => boolean | undefined;
+  /**
+   * The expected verification hash of term `term` (its chunk hashes, keyed): checked when the
+   * term's last chunk is decoded, before the next term is fetched. A `length` that ends the
+   * reconstruction inside a term leaves that term unchecked.
+   */
+  rangeHash?: (term: number) => Uint8Array | undefined;
+}
+
 export async function* reconstruct(
   answer: ReconstructionAnswer,
   fetchRange: FetchRange,
-  opts: { length?: number } = {},
+  opts: { length?: number; verify?: ReconstructionVerifier } = {},
 ): AsyncGenerator<Uint8Array> {
+  const verify = opts.verify;
   let skip = answer.offset_into_first_range;
   let left = opts.length ?? Number.POSITIVE_INFINITY;
-  for (const term of answer.terms) {
+  for (const [termIndex, term] of answer.terms.entries()) {
+    const expectedRange = verify?.rangeHash?.(termIndex);
+    const termHashes: Uint8Array[] = [];
     const entry = (answer.fetch_info[term.hash] ?? []).find(
       (f) => f.range.start <= term.range.start && term.range.end <= f.range.end,
     );
@@ -287,6 +318,12 @@ export async function* reconstruct(
     const bytes = fetchRange(entry.url, entry.url_range.start, entry.url_range.end);
     for await (const chunk of xorbChunks(bytes, term.range.end - entry.range.start)) {
       const i = index++;
+      if (verify?.chunk || expectedRange) {
+        const h = chunkHash(chunk);
+        if (verify?.chunk?.(term.hash, i, h) === false)
+          throw new XetIntegrityError(`reconstruction: chunk ${i} of xorb ${term.hash} is damaged`);
+        if (i >= term.range.start) termHashes.push(h);
+      }
       if (i < term.range.start) continue;
       produced += chunk.length;
       if (skip >= chunk.length) {
@@ -306,6 +343,13 @@ export async function* reconstruct(
       throw new Error(
         `reconstruction: term ${term.hash} gave ${produced} bytes, expected ${term.unpacked_length}`,
       );
+    if (expectedRange) {
+      const got = rangeHash(termHashes);
+      if (!got.every((b, k) => b === expectedRange[k]))
+        throw new XetIntegrityError(
+          `reconstruction: term ${termIndex} (xorb ${term.hash} ${term.range.start}-${term.range.end}) does not match its verification hash`,
+        );
+    }
   }
 }
 
