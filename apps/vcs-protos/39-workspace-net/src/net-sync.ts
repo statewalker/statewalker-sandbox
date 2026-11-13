@@ -12,11 +12,14 @@ import { fetchFrom } from "../../21-smart-http/src/client.js";
 import { push } from "../../22-receive-pack/src/client.js";
 import { gitHandler } from "../../22-receive-pack/src/server.js";
 import {
-  commitFolder,
+  commitFolderReport,
   type Endpoint,
   headOf,
   mergeInto,
 } from "../../38-workspace-sync/src/workspace.js";
+
+const MAIN = "refs/heads/main";
+const ZERO = "0".repeat(40);
 
 /** Another endpoint, reached through a transport. */
 export interface Peer {
@@ -48,66 +51,83 @@ export async function idle(ep: Endpoint): Promise<void> {
   }
 }
 
-/** `commitFolder`, again if an incoming push moved `main` meanwhile (its compare-and-swap failed). */
-async function commitFolderSettled(ep: Endpoint): Promise<string | undefined> {
+/**
+ * `commitFolder` (with the conflicts it merged), again if an incoming push moved `main` meanwhile
+ * (its compare-and-swap failed).
+ */
+async function commitFolderSettled(
+  ep: Endpoint,
+): Promise<{ head: string | undefined; conflicts: string[] }> {
+  const conflicts = new Set<string>();
   for (let i = 0; ; i++) {
     try {
-      return await commitFolder(ep);
+      const r = await commitFolderReport(ep);
+      for (const c of r.conflicts) conflicts.add(c);
+      return { head: r.head, conflicts: [...conflicts].sort() };
     } catch (err) {
+      // the conflicts merged before the compare-and-swap failed are committed: kept for the report
+      for (const c of (err as { conflicts?: string[] })?.conflicts ?? []) conflicts.add(c);
       if (i >= 8 || !/moved/.test(String((err as Error)?.message))) throw err;
     }
   }
 }
 
+/** What a refresh after an incoming push did. */
+export interface RefreshReport {
+  /** the head the push left `main` at */
+  pushed: string;
+  /**
+   * `main` when the refresh finished: usually `pushed`, or a commit past it holding the serving
+   * endpoint's own folder edits merged with the push (the pusher gets it on its next sync). A
+   * later push, or a sync queued before the refresh, may have moved it further.
+   */
+  head: string | undefined;
+  /**
+   * paths this refresh committed with conflict markers. Empty when the push was already checked
+   * out by the time the refresh ran (a sync queued before it, or the refresh of an earlier push,
+   * reports those conflicts instead).
+   */
+  conflicts: string[];
+}
+
+export interface ServeOptions {
+  /** after each refresh a push queued (see `RefreshReport`) */
+  onRefresh?: (report: RefreshReport) => void;
+  /** a refresh that failed; the next sync or refresh finishes it (the checkout resumes) */
+  onError?: (err: unknown) => void;
+}
+
 /**
- * The endpoint's repository as a `FetchHandler`. A push that arrives updates `main` (receive-pack's
- * compare-and-swap) and, once its response has been sent, queues a refresh that checks the folder
- * out at the new head (X17's checkout keeps edits typed meanwhile). The response does not wait for
- * the refresh: two endpoints pushing to each other while each syncs would otherwise wait on each
+ * The endpoint's repository as a `FetchHandler`. A push that moves `main` (receive-pack's
+ * compare-and-swap) queues a refresh, from receive-pack's post-receive hook once the report is
+ * written, whether or not anyone reads it: the folder is checked out at the new head (X17's
+ * checkout keeps edits typed meanwhile and merges them). The response does not wait for the
+ * refresh: two endpoints pushing to each other while each syncs would otherwise wait on each
  * other's queues.
  */
-export function serveEndpoint(ep: Endpoint): (req: Request) => Promise<Response> {
-  const handler = gitHandler(ep.repo);
-  const refresh = () => void run(ep, () => commitFolderSettled(ep)).catch(() => undefined);
-  return async (req) => {
-    const res = await handler(req);
-    const isPush = req.method === "POST" && new URL(req.url).pathname.endsWith("/git-receive-pack");
-    if (!isPush) return res;
-    if (!res.body) {
-      refresh();
-      return res;
-    }
-    const reader = res.body.getReader();
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      refresh();
-    };
-    const body = new ReadableStream<Uint8Array>({
-      async pull(c) {
+export function serveEndpoint(
+  ep: Endpoint,
+  o: ServeOptions = {},
+): (req: Request) => Promise<Response> {
+  const refresh = (pushed: string) =>
+    void run(ep, () => commitFolderSettled(ep)).then(
+      (r) => {
         try {
-          const r = await reader.read();
-          if (r.done) {
-            c.close();
-            finish();
-          } else c.enqueue(r.value);
-        } catch (err) {
-          finish(); // the ref moved before the report was written, whatever became of the body
-          throw err;
-        }
+          o.onRefresh?.({ pushed, head: r.head, conflicts: r.conflicts });
+        } catch {}
       },
-      async cancel(reason) {
-        await reader.cancel(reason);
-        finish();
+      (err) => {
+        try {
+          o.onError?.(err);
+        } catch {}
       },
-    });
-    return new Response(body, {
-      status: res.status,
-      statusText: res.statusText,
-      headers: res.headers,
-    });
-  };
+    );
+  return gitHandler(ep.repo, {
+    postReceive: (updated) => {
+      const main = updated.findLast((c) => c.ref === MAIN);
+      if (main && main.new !== ZERO) refresh(main.new);
+    },
+  });
 }
 
 export interface SyncResult {
@@ -138,8 +158,14 @@ export async function syncWith(
   const tracking = `refs/remotes/${peer.name}/main`;
   return run(ep, async () => {
     let lastReason = "";
+    // conflicts merged while committing the folder (edits kept over a push) count too
+    const found = new Set<string>();
+    const all = (more: string[]) => {
+      for (const c of more) found.add(c);
+      return [...found].sort();
+    };
     for (let attempts = 1; attempts <= maxAttempts; attempts++) {
-      await commitFolderSettled(ep);
+      all((await commitFolderSettled(ep)).conflicts);
       await fetchFrom(peer.url, ep.repo, {
         fetch: peer.fetch,
         refspecs: [`+refs/heads/main:${tracking}`],
@@ -149,9 +175,12 @@ export async function syncWith(
       const theirs = await ep.repo.refs.resolve(tracking);
       let conflicts: string[] = [];
       try {
-        conflicts = theirs ? await mergeInto(ep, theirs) : [];
+        // committed even when the push then loses its race: reported whichever round succeeds
+        conflicts = all(theirs ? await mergeInto(ep, theirs) : []);
       } catch (err) {
-        // a push moved `main` between the merge's read and its compare-and-swap: a lost race
+        // a push moved `main` between the merge's read and its compare-and-swap: a lost race.
+        // What it committed before losing (`conflicts` on the error) is reported all the same.
+        all((err as { conflicts?: string[] })?.conflicts ?? []);
         if (!/moved/.test(String((err as Error)?.message))) throw err;
         lastReason = "main moved during the merge";
         continue;

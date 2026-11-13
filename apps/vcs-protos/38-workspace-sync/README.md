@@ -95,6 +95,7 @@ merges from copies taken before either side merged.
 | (review of #114) "a kept user edit is merged right after the checkout" | Not if that merge lost its race to a push, or the process stopped in between: the checkout had already recorded the new head, so the retry no longer saw the overlap and the peer's change was lost again. Kept edits are now recorded (`/sync/kept-edits`: base and paths) before the checkout is, and removed only once merged (S9). |
 | (review of #114) "a merge checks out from the head it read" | Over a network a push moves `main` while the folder is still at the previous commit; checking out from `main` took the push's changes for user edits and reverted them. Checkouts start from the folder's checked-out record now (39 N7). |
 | S7: "an edit typed during a sync is kept and merged" | Kept, but on the real path (typed while the peer's objects arrive) committed on top of the peer's commit, so the peer's change to that path vanished. S7 passed because its hook fired on the old record's write. A checkout now reports user edits kept over changed paths; they are committed on the commit the user worked from and merged in, conflict-marked where they collide. |
+| (X17c) "`commitFolder` only records the folder" | It also merges kept edits, and those merges can conflict; it dropped what it merged. `commitFolderReport` returns the conflicts too (also carried by the "moved" error when the final commit loses its race), and `sync` reports them (39 N9). |
 
 ## Promotion grades
 

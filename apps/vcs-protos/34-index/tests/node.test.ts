@@ -452,7 +452,16 @@ describe("W8 review cases", () => {
       git(sub, ["init", "-q"]);
       write(sub, "x", "x\n");
       git(sub, ["add", "x"]);
-      git(sub, ["commit", "-qm", "sub"]);
+      // a fixed date: the gitlink is the sub commit's id, which must not depend on the second
+      // each repository's setup ran in (it failed in CI when a second boundary fell between)
+      execFileSync("git", ["commit", "-qm", "sub"], {
+        cwd: sub,
+        env: {
+          ...gitEnv,
+          GIT_AUTHOR_DATE: "1700000000 +0000",
+          GIT_COMMITTER_DATE: "1700000000 +0000",
+        },
+      });
       execFileSync("ln", ["-s", "a", join(d, "l")]);
       git(d, ["add", "sub", "l"]);
       git(d, ["commit", "-qm", "links"]);

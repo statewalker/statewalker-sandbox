@@ -152,9 +152,9 @@ sqlRepository(db: Db): Promise<Repository>;
 
 1. **X16b**: worktree/index/checkout over FilesApi, AbortSignal, hooks, events, identity from
    config, a worker-hosted repository with a thin UI proxy.
-2. **X6c**: pack export (for push and serve) — needs a reachable-objects walk, a header-only read
-   (type, size) and raw entry access to reuse packed deltas instead of re-inflating and
-   re-deflating everything; the `ObjectStore` interface grows by those.
+2. ~~**X6c**: pack export~~ — answered: `18-pack-export` (git's `--objects-edge-aggressive` set
+   from a limited walk, streamed, cancellable), `19-delta-reuse` (packed deltas reused through
+   `ObjectStore.packedEntry`), `20-delta-search` and `24-gc` (repacking) build on it.
 3. A KV object backend (X5 has KV refs): the composition needs only a StagingBlobStore and a
    FilesApi for packs over KV.
 4. `list()` holds every id in a Set to deduplicate packs and loose objects: fine for a prototype,
