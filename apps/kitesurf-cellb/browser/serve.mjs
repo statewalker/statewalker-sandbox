@@ -10,7 +10,9 @@ const port = Number(process.argv[2] ?? 8800);
 const roots = [
   new URL("dist/", import.meta.url).pathname,
   new URL("public/", import.meta.url).pathname,
+  new URL("./", import.meta.url).pathname, // only for /demo/ (sample pages to render)
 ];
+const appRoot = roots[2];
 const types = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -75,6 +77,7 @@ createServer(async (req, res) => {
     }
     let file = normalize(join(root, path));
     if (!file.startsWith(root)) break;
+    if (root === appRoot && !file.startsWith(join(appRoot, "demo/"))) continue;
     if (existsSync(file) && statSync(file).isDirectory()) file = join(file, "index.html");
     if (existsSync(file) && statSync(file).isFile()) {
       res.writeHead(200, {

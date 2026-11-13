@@ -39,6 +39,19 @@ Response values across isolates, writable isolate globals. Earlier versions need
    todomvc.mjs`, or any CDP client at `ws://127.0.0.1:8787/devtools/browser`
    (discovery: `/json/version`).
 
+## PDF
+
+Kitesurf prints a page with CDP's `Page.printToPDF` (paper size and margins in inches,
+`printBackground`, `landscape`, CSS `@page` with `preferCSSPageSize`, page breaks). A failed print
+answers with `error` beside an empty `data`, not with a CDP error, so check it.
+
+- Node: `PDF=page.pdf node smoke.mjs <url>` prints A4 with 0.4 in margins, through a Puppeteer
+  CDP session.
+- In a tab: `node run.mjs <url> 8800 --pdf` saves `tab-<host>.pdf` beside the screenshot.
+
+`browser/demo/report.html` is a sample page to print (`http://127.0.0.1:8800/demo/report.html`
+from `serve.mjs`): two A4 pages in about 170 ms on Node and 260 ms in a tab.
+
 ## How it fits together
 
 | File | What it does |
@@ -71,7 +84,9 @@ node run.mjs https://example.com/
 Checked in Chromium: example.com, Hacker News, and React and Vue TodoMVC render (screenshots, title
 and text), the engine loads in about 2 s and a navigation takes 1.5–2.3 s.
 
-What a tab adds: a CORS proxy for the pages Kitesurf fetches (the browser drops `Set-Cookie`, and
+What a tab adds: a page needs a classic `<script>`, or Kitesurf never finishes loading it
+(CellB 0.9.1 and earlier, in a browser; the fix is in statewalker/cellb.dev's branch
+`ccr-5aa5c6fe-j28pma`); a CORS proxy for the pages Kitesurf fetches (the browser drops `Set-Cookie`, and
 forbidden request headers such as `User-Agent` never reach the proxy); CDP clients outside the tab
 cannot reach the engine's socket (the page holds it); an `import()` in code Kitesurf builds with
 `Function` resolves against the isolate worker's URL, not Kitesurf's modules (Node resolves it).

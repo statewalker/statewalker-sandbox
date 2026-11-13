@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kitesurf on CellB: PDF demo</title>
+<style>
+  body { font-family: sans-serif; color: #1d2433; margin: 0; }
+  header { background: #2b5fd9; color: white; padding: 24px 32px; }
+  header h1 { margin: 0 0 4px; font-size: 26px; }
+  main { padding: 16px 32px; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #c9d1e0; padding: 6px 10px; text-align: left; }
+  th { background: #eef2fa; }
+  td.num { text-align: right; }
+  .note { border-left: 4px solid #e8a33d; background: #fdf5e8; padding: 8px 12px; }
+  .bar { height: 14px; background: #2b5fd9; border-radius: 3px; }
+  h2 { page-break-before: auto; }
+  .page2 { break-before: page; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kitesurf on CellB</h1>
+  <div>A PDF made in a browser tab: Page.printToPDF over CDP</div>
+</header>
+<main>
+  <h2>What runs where</h2>
+  <table>
+    <tr><th>Part</th><th>Runs in</th></tr>
+    <tr><td>Kitesurf engine (Rust/wasm Worker)</td><td>CellB, a Dedicated Worker of the page</td></tr>
+    <tr><td>Page isolates (Worker Loader)</td><td>one Dedicated Worker each</td></tr>
+    <tr><td>CDP client</td><td>the page, over a MessagePort</td></tr>
+  </table>
+  <h2>Page loads (ms)</h2>
+  <table>
+    <tr><th>Page</th><th class="num">ms</th><th style="width:50%"></th></tr>
+    <tr><td>example.com</td><td class="num">1500</td><td><div class="bar" style="width:52%"></div></td></tr>
+    <tr><td>news.ycombinator.com</td><td class="num">2300</td><td><div class="bar" style="width:79%"></div></td></tr>
+    <tr><td>todomvc.com (React)</td><td class="num">2000</td><td><div class="bar" style="width:69%"></div></td></tr>
+  </table>
+  <p class="note">Text in several scripts: Привет · مرحبا · 你好 · こんにちは</p>
+  <div class="page2">
+    <h2>Second page</h2>
+    <p>This heading starts a new page (<code>break-before: page</code>).</p>
+    <ol><li>cellb build ../engine</li><li>loadProject in a Dedicated Worker</li><li>Page.navigate, then Page.printToPDF</li></ol>
+  </div>
+</main>
+<!-- A classic script: CellB 0.9.1 and earlier cannot open a page without one in a browser (fixed upstream). -->
+<script>document.documentElement.dataset.ready = "1";</script>
+</body>
+</html>
