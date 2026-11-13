@@ -505,10 +505,12 @@ describe("R4b memory bounded on deep and branching delta chains", () => {
         `R4b two-level tree, budget ${budget}: peak +${(peak / MiB).toFixed(1)} MiB live, base read ${baseReads}x`,
       );
       expect(Buffer.from(r.idx).equals(Buffer.from(gitIdx(pack))), `budget ${budget}`).toBe(true);
-      // Process memory here varies with what ran before in the run (+8 MiB alone, +24–42 MiB
-      // after the other files, on X6a's and X6b1's modules alike): a loose bound of a few 4 MiB
-      // objects; the deterministic check is the base-read count below (X6b1 review of #66).
-      expect(peak).toBeLessThan(48 * MiB);
+      // Process memory here varies with what ran before in the run (+6–8 MiB alone, +24–48 MiB
+      // after the other files in CI, on X6a's and X6b1's modules alike). It cannot tell the
+      // budget's effect anyway (an unlimited budget peaks at +8 MiB too: bases are dropped once
+      // their deltas are done): the deterministic check is the base-read count below (X6b1
+      // review of #66). This bound only catches holding every object (31 × 4 MiB = 124 MiB).
+      expect(peak).toBeLessThan(72 * MiB);
     }
     // unlimited: the base is inflated once; a 1-byte budget evicts it and re-derives it on demand
     expect(reads[1]).toBe(1);

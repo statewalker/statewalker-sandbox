@@ -14,6 +14,7 @@ import {
   readShard,
   type Shard,
   termsFor,
+  verifierFromShard,
   writeShard,
 } from "../src/shard.js";
 import {
@@ -25,9 +26,11 @@ import {
   hashFromString,
   hashToString,
   type ReconstructionAnswer,
+  type ReconstructionVerifier,
   rangeHash,
   reconstruct,
   writeXorb,
+  XetIntegrityError,
   XORB_MAX_CHUNKS,
   xorbHash,
 } from "../src/xet.js";
@@ -822,6 +825,367 @@ describe("U4 (review of #121) frames, shards and dedupe beyond the reference fil
     expect(termsFor(twice, () => ({ xorbHash: a, index: 0 })).length).toBe(2);
     // keyed hashes written without their key would reach the server as if plain
     expect(() => writeShard({ ...keyed, footer: undefined })).toThrow(/without the footer key/);
+  });
+});
+
+describe("U5 (X11b) reconstruction checks each chunk against a shard's hashes as it streams", () => {
+  /** the reference file's chunks, decoded once */
+  let chunks: Uint8Array[] | undefined;
+  const referenceChunkData = async () => {
+    if (chunks) return chunks;
+    const xorb = readFileSync(referenceXorb());
+    const answer = JSON.parse(fixture("recon.recorded.json")) as ReconstructionAnswer;
+    const out: Uint8Array[] = [];
+    for await (const c of chunkStream(
+      reconstruct(answer, async function* (_u, start, end) {
+        yield xorb.subarray(start, end + 1);
+      }),
+    ))
+      out.push(c);
+    chunks = out;
+    return out;
+  };
+  /** an answer over all 796 chunks of `xorb` (named as the reference xorb), fetched in 1 MiB pieces */
+  const run = async (xorb: Uint8Array, verify?: ReconstructionVerifier) => {
+    const answer: ReconstructionAnswer = {
+      offset_into_first_range: 0,
+      terms: [{ hash: XORB, unpacked_length: 63_527_244, range: { start: 0, end: 796 } }],
+      fetch_info: {
+        [XORB]: [
+          {
+            range: { start: 0, end: 796 },
+            url: `xorb://${XORB}`,
+            url_range: { start: 0, end: xorb.length - 1 },
+          },
+        ],
+      },
+    };
+    let yielded = 0;
+    let bytes = 0;
+    try {
+      for await (const p of reconstruct(
+        answer,
+        async function* (_u, start, end) {
+          for (let at = start; at <= end; at += 1 << 20)
+            yield xorb.subarray(at, Math.min(end + 1, at + (1 << 20)));
+        },
+        { verify },
+      )) {
+        yielded++;
+        bytes += p.length;
+      }
+      return { yielded, bytes };
+    } catch (e) {
+      return { yielded, bytes, error: e as Error };
+    }
+  };
+  /** the reference chunks stored uncompressed, chunk `k` with one byte changed (decodes fine) */
+  const damaged = (all: Uint8Array[], k: number) => {
+    const xorb = writeXorb(all, { compression: "none" });
+    let at = 0;
+    for (let i = 0; i < k; i++) at += 8 + (all[i] as Uint8Array).length;
+    xorb[at + 8 + 1000] = (xorb[at + 8 + 1000] as number) ^ 0x20;
+    return xorb;
+  };
+
+  it("the reference reconstruction passes, every chunk checked, with each reference shard", async () => {
+    const xorb = new Uint8Array(readFileSync(referenceXorb()));
+    for (const name of [SHARDS.base, SHARDS.verification, SHARDS.dedupe]) {
+      const v = verifierFromShard(readShard(fixtureBytes(name)));
+      let checked = 0;
+      const r = await run(xorb, {
+        chunk: (x, i, h) => {
+          const ok = v.chunk?.(x, i, h);
+          if (ok) checked++;
+          return ok;
+        },
+      });
+      expect(r.error, name).toBeUndefined();
+      expect(r.bytes).toBe(63_527_244);
+      expect(checked, name).toBe(796);
+    }
+  }, 300_000);
+
+  it("a damaged chunk stops the stream at that chunk; unchecked, the damage passes silently", async () => {
+    const all = await referenceChunkData();
+    const bad = damaged(all, 300);
+    const unchecked = await run(bad);
+    expect(unchecked.error).toBeUndefined(); // decodes, wrong bytes, nothing notices
+    expect(unchecked.yielded).toBe(796);
+    for (const name of [SHARDS.base, SHARDS.dedupe]) {
+      const r = await run(bad, verifierFromShard(readShard(fixtureBytes(name))));
+      expect(r.error, name).toBeInstanceOf(XetIntegrityError);
+      expect(r.error?.message).toMatch(/chunk 300 /);
+      expect(r.yielded, name).toBe(300); // chunks 0-299 out, nothing from 300 on
+    }
+  }, 300_000);
+
+  it("with the file's term verification hash only: caught when the term ends", async () => {
+    const all = await referenceChunkData();
+    const shard = readShard(fixtureBytes(SHARDS.verification));
+    const file = hashFromString(fixture(`${CSV}.xet-file-hash`).trim());
+    // one verifier per reconstruction (it walks the file's terms in order)
+    const termOnly = () => ({ rangeHash: verifierFromShard(shard, file).rangeHash });
+    const clean = await run(writeXorb(all, { compression: "none" }), termOnly());
+    expect(clean.error).toBeUndefined();
+    const r = await run(damaged(all, 700), termOnly());
+    expect(r.error).toBeInstanceOf(XetIntegrityError);
+    expect(r.error?.message).toMatch(/verification hash/);
+    expect(r.yielded).toBe(796); // the term's bytes are out before its end is checked
+    expect(() => verifierFromShard(shard, new Uint8Array(32))).toThrow(/not in this shard/);
+  }, 300_000);
+
+  it("a term inside its fetch range: its range hash covers its own chunks only", async () => {
+    const xorb = new Uint8Array(readFileSync(referenceXorb()));
+    const refs = referenceChunks();
+    const bytes = refs.slice(100, 200).reduce((n, c) => n + c.length, 0);
+    const answer: ReconstructionAnswer = {
+      offset_into_first_range: 0,
+      terms: [{ hash: XORB, unpacked_length: bytes, range: { start: 100, end: 200 } }],
+      fetch_info: {
+        [XORB]: [
+          {
+            range: { start: 0, end: 796 },
+            url: `xorb://${XORB}`,
+            url_range: { start: 0, end: xorb.length - 1 },
+          },
+        ],
+      },
+    };
+    const go = async (expected: Uint8Array) => {
+      let n = 0;
+      for await (const p of reconstruct(
+        answer,
+        async function* (_u, start, end) {
+          yield xorb.subarray(start, end + 1);
+        },
+        { verify: { rangeHash: () => expected } },
+      ))
+        n += p.length;
+      return n;
+    };
+    expect(await go(rangeHash(refs.slice(100, 200).map((c) => c.hash)))).toBe(bytes);
+    await expect(go(rangeHash(refs.slice(0, 200).map((c) => c.hash)))).rejects.toThrow(
+      XetIntegrityError,
+    );
+  }, 300_000);
+
+  it("chunks of a xorb the shard does not list are not checked", async () => {
+    const all = await referenceChunkData();
+    const other = verifierFromShard({ files: [], xorbs: [] });
+    const r = await run(damaged(all, 5), other);
+    expect(r.error).toBeUndefined();
+  }, 300_000);
+});
+
+describe("U6 (review of #123) verification over several terms, range requests and partial shards", () => {
+  // 8 chunks of about 1 KB in one xorb; a file of two terms, [0,4) and [4,8)
+  const data = Array.from({ length: 8 }, (_, k) => {
+    const c = new Uint8Array(1000 + k);
+    let x = k + 1;
+    for (let i = 0; i < c.length; i++) {
+      x = (Math.imul(x, 1103515245) + 12345) >>> 0;
+      c[i] = x >>> 24;
+    }
+    return c;
+  });
+  const refs: ChunkRef[] = data.map((c) => ({ hash: chunkHash(c), length: c.length }));
+  const xh = xorbHash(refs);
+  const X = hashToString(xh);
+  const bytesOf = (a: number, b: number) => refs.slice(a, b).reduce((n, c) => n + c.length, 0);
+  const term = (a: number, b: number) => ({
+    xorbHash: xh,
+    bytes: bytesOf(a, b),
+    start: a,
+    end: b,
+    rangeHash: rangeHash(refs.slice(a, b).map((c) => c.hash)),
+  });
+  const file = fileHash(refs);
+  const shard: Shard = {
+    files: [{ fileHash: file, terms: [term(0, 4), term(4, 8)] }],
+    xorbs: [{ xorbHash: xh, chunks: refs }],
+  };
+  const xorbOf = (damage?: number) => {
+    const x = writeXorb(data, { compression: "none" });
+    if (damage !== undefined) {
+      let at = 0;
+      for (let k = 0; k < damage; k++) at += 8 + (data[k] as Uint8Array).length;
+      x[at + 8 + 10] = (x[at + 8 + 10] as number) ^ 1;
+    }
+    return x;
+  };
+  /** an answer of `terms` ([start, end) of the xorb), named `name` */
+  const go = async (
+    terms: [number, number][],
+    verify: ReconstructionVerifier | undefined,
+    o: { damage?: number; name?: string; offset?: number; length?: number } = {},
+  ) => {
+    const xorb = xorbOf(o.damage);
+    const name = o.name ?? X;
+    const answer: ReconstructionAnswer = {
+      offset_into_first_range: o.offset ?? 0,
+      terms: terms.map(([a, b]) => ({
+        hash: name,
+        unpacked_length: bytesOf(a, b),
+        range: { start: a, end: b },
+      })),
+      fetch_info: {
+        [name]: [
+          { range: { start: 0, end: 8 }, url: "x", url_range: { start: 0, end: xorb.length - 1 } },
+        ],
+      },
+    };
+    let n = 0;
+    try {
+      for await (const p of reconstruct(
+        answer,
+        async function* (_u, a, b) {
+          yield xorb.subarray(a, b + 1);
+        },
+        { verify, length: o.length },
+      ))
+        n += p.length;
+      return { n };
+    } catch (e) {
+      return { n, error: e as Error };
+    }
+  };
+  const termsOnly = (o: { wholeFile?: boolean } = {}): ReconstructionVerifier => {
+    const v = verifierFromShard(shard, file, o);
+    return { rangeHash: v.rangeHash, done: v.done };
+  };
+
+  it("the whole file, both checks and wholeFile: passes; damage in its second term is caught", async () => {
+    expect(
+      (
+        await go(
+          [
+            [0, 4],
+            [4, 8],
+          ],
+          verifierFromShard(shard, file, { wholeFile: true }),
+        )
+      ).error,
+    ).toBeUndefined();
+    const r = await go(
+      [
+        [0, 4],
+        [4, 8],
+      ],
+      termsOnly(),
+      { damage: 6 },
+    );
+    expect(r.error).toBeInstanceOf(XetIntegrityError);
+    expect(r.error?.message).toMatch(/4-8 does not match/);
+  });
+
+  it("range requests and other term splits: no false alarm on correct data; wholeFile refuses them", async () => {
+    for (const terms of [
+      [[4, 8]],
+      [[5, 8]],
+      [
+        [0, 2],
+        [2, 8],
+      ],
+      [
+        [0, 4],
+        [4, 6],
+      ],
+    ] as [number, number][][]) {
+      expect((await go(terms, termsOnly())).error, JSON.stringify(terms)).toBeUndefined();
+      expect(
+        (await go(terms, termsOnly({ wholeFile: true }))).error,
+        JSON.stringify(terms),
+      ).toBeInstanceOf(XetIntegrityError);
+    }
+    // a range request over the second term is checked against it
+    expect((await go([[4, 8]], termsOnly(), { damage: 5 })).error).toBeInstanceOf(
+      XetIntegrityError,
+    );
+  });
+
+  it("wholeFile: a dropped trailing term and an extra term are refused", async () => {
+    expect((await go([[0, 4]], termsOnly({ wholeFile: true }))).error?.message).toMatch(
+      /not the file's/,
+    );
+    expect(
+      (
+        await go(
+          [
+            [0, 4],
+            [4, 8],
+            [4, 8],
+          ],
+          termsOnly({ wholeFile: true }),
+        )
+      ).error,
+    ).toBeInstanceOf(XetIntegrityError);
+  });
+
+  it("a length ending exactly at the file's end still checks its last term", async () => {
+    const r = await go(
+      [
+        [0, 4],
+        [4, 8],
+      ],
+      termsOnly({ wholeFile: true }),
+      {
+        damage: 6,
+        length: bytesOf(0, 8),
+      },
+    );
+    expect(r.error).toBeInstanceOf(XetIntegrityError);
+    expect(
+      (
+        await go(
+          [
+            [0, 4],
+            [4, 8],
+          ],
+          termsOnly({ wholeFile: true }),
+          { length: bytesOf(0, 8) },
+        )
+      ).error,
+    ).toBeUndefined();
+  });
+
+  it("an upper-case xorb name, a chunk past what the shard lists, an unlisted xorb under strict", async () => {
+    const r = await go([[0, 8]], verifierFromShard(shard), { damage: 3, name: X.toUpperCase() });
+    expect(r.error?.message).toMatch(/chunk 3 /);
+    const short: Shard = { files: [], xorbs: [{ xorbHash: xh, chunks: refs.slice(0, 3) }] };
+    expect((await go([[0, 8]], verifierFromShard(short))).error?.message).toMatch(/chunk 3 /);
+    const none: Shard = { files: [], xorbs: [] };
+    expect((await go([[0, 8]], verifierFromShard(none))).error).toBeUndefined();
+    expect(
+      (await go([[0, 8]], verifierFromShard(none, undefined, { strict: true }))).error?.message,
+    ).toMatch(/chunk 0 /);
+    expect(() => verifierFromShard({ ...shard, chunkHashesKeyed: true })).toThrow(
+      /without the footer key/,
+    );
+  });
+
+  it("a short term (fewer bytes than the answer says) is an integrity failure under verify", async () => {
+    const xorb = xorbOf();
+    const answer: ReconstructionAnswer = {
+      offset_into_first_range: 0,
+      terms: [{ hash: X, unpacked_length: bytesOf(0, 4) + 1, range: { start: 0, end: 4 } }],
+      fetch_info: {
+        [X]: [
+          { range: { start: 0, end: 8 }, url: "x", url_range: { start: 0, end: xorb.length - 1 } },
+        ],
+      },
+    };
+    const consume = async (verify?: ReconstructionVerifier) => {
+      for await (const _ of reconstruct(
+        answer,
+        async function* (_u, a, b) {
+          yield xorb.subarray(a, b + 1);
+        },
+        { verify },
+      ));
+    };
+    await expect(consume(verifierFromShard(shard))).rejects.toThrow(XetIntegrityError);
+    await expect(consume()).rejects.toThrow(/expected/);
   });
 });
 
