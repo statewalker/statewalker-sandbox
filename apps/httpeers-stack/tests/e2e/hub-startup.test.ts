@@ -46,17 +46,28 @@ const HUB_SEED = "httpeers-stack/e2e/hub-startup";
  */
 const ABSENT_RELAY_SEED = "httpeers-stack/e2e/relay-that-is-not-running";
 
-/** Ask the OS for a free TCP port by binding port 0 and letting go of it again. */
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (address == null || typeof address === "string") {
-    throw new Error("hub-startup: could not read a port off the probe server");
+/**
+ * Ask the OS for `n` distinct free TCP ports: each probe server binds port 0 and is let go only
+ * once all `n` are bound. Released one at a time, the OS may hand the same port out twice (it did
+ * in CI: hub and relay both 34477).
+ */
+async function freePorts(n: number): Promise<number[]> {
+  const servers = Array.from({ length: n }, () => createServer());
+  const ports: number[] = [];
+  for (const server of servers) {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address == null || typeof address === "string") {
+      throw new Error("hub-startup: could not read a port off the probe server");
+    }
+    ports.push(address.port);
   }
-  const { port } = address;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
+  await Promise.all(servers.map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
+  return ports;
+}
+/** One free TCP port (see `freePorts`). */
+async function freePort(): Promise<number> {
+  return (await freePorts(1))[0] as number;
 }
 
 /** True if `port` can be bound right now — i.e. nothing is still listening on it. */
@@ -94,8 +105,7 @@ describe("Task 20: startHub's startup unwinds what it built", () => {
 
     // Two DIFFERENT free ports: one the hub will listen on, one naming a
     // relay that is not there. Nothing is bound to either at this instant.
-    const hubPort = await freePort();
-    const absentRelayPort = await freePort();
+    const [hubPort, absentRelayPort] = (await freePorts(2)) as [number, number];
     expect(hubPort).not.toBe(absentRelayPort);
     expect(await portIsFree(hubPort)).toBe(true);
 
