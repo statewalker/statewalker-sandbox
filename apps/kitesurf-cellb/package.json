@@ -1,0 +1,27 @@
+{
+  "name": "@statewalker/kitesurf-cellb",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare's Kitesurf browser engine Worker, unchanged, on CellB in Node: a Chrome DevTools Protocol endpoint without workerd.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/kitesurf-cellb"
+  },
+  "license": "MIT",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "start": "node server.mjs engine",
+    "smoke": "node smoke.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@statewalker/cellb": "0.8.7",
+    "esbuild": "0.28.2",
+    "ws": "catalog:"
+  },
+  "devDependencies": {
+    "puppeteer-core": "25.17.0"
+  }
+}
