@@ -670,12 +670,16 @@ Every writer sends bytes as bytes:
     so a transfer still going when `run` settles stops at its next block;
   - reading a file over 16 MiB asks its size first, so it needs the `list` right on it as well
     as `read` (as for just-bash);
-  - bundles approved before the shim sent bytes still use the text calls, which keep the
-    16 MiB limit.
+  - bundles approved before the shim sent bytes still use the text calls (`readFile`,
+    `writeFile`, `appendFile`): the host answers them the same way, in UTF-8 as the store does.
+    A file over 16 MiB is streamed and decoded in its transfer's turn; its text read is refused
+    (`EFBIG`) if the reply would not fit one RPC message (a string with a character beyond
+    Latin-1 takes two bytes a character). A file read in one call is answered as before.
 - Python: binary files are synced in and written back as bytes; the live `capfs` module moves
   bytes (`read_bytes`, `write_bytes`, `append_bytes`, and the `*_text` calls on top of them).
 - The store's text calls (`readFile`, `writeFile`, `appendFile`) remain only for tool bundles
-  approved before this change: their inlined shim still sends strings.
+  approved before this change: their inlined shim still sends strings, which the tool's
+  capability turns into bytes on the host (files over 16 MiB streamed, as above).
 - Wasmer: open files are read and saved as bytes.
 
 Limits and notes:
@@ -685,7 +689,8 @@ Limits and notes:
   to 32 MiB, tools up to 30 MiB: their APIs return whole files, held in memory.
 - **Approved tool bundles:** the `node:fs` shim is inlined into every tool bundle, so bundles
   built after this change hash differently. Approve them again; bundles already approved still
-  run (their shim sends text as strings, which the store still accepts).
+  run (their shim sends text as strings, which the tool's capability turns into bytes on the
+  host).
 - **just-bash's `printf`** writes `\377` as the character U+00FF (UTF-8 `c3 bf`), as on just-bash's
   own in-memory file system; `cat`, `cp`, redirects of binary data and `base64 -d` are byte-exact.
 

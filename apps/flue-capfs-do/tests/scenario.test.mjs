@@ -184,6 +184,31 @@ export default class extends WorkerEntrypoint {
   assert.deepEqual(r.value.result, { length: size, same: true, size });
 });
 
+test("an older bundle's text calls over 16 MiB are streamed on the host side too", async (t) => {
+  const rt = (await http("/api/runtime")).value;
+  if (rt.toolIsolates !== "isolated") return t.skip("raw tool code runs only in isolates");
+  const ws = freshWs();
+  await seed(ws, { "/b/.keep": "" });
+  const { token } = await session(ws, "alice", ["/b"]);
+  // The text calls a bundle approved before the bytes-only shim still makes.
+  const code = `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class extends WorkerEntrypoint {
+  async run(files) {
+    files ??= this.env.FILES;
+    const text = "é" + "a".repeat(18 * 1024 * 1024);
+    await files.call("writeFile", "/b/big.txt", text);
+    await files.call("appendFile", "/b/big.txt", "ÿ\\n");
+    const back = await files.call("readFile", "/b/big.txt");
+    const st = await files.call("stat", "/b/big.txt");
+    return { length: back.length, same: back === text + "ÿ\\n", size: st.size };
+  }
+}`;
+  const r = await run(`btt-${ws}`, ws, token, "token", { kind: "tool", code });
+  assert.equal(r.ok, true, r.error);
+  const chars = 1 + 18 * 1024 * 1024 + 2;
+  assert.deepEqual(r.value.result, { length: chars, same: true, size: chars + 2 });
+});
+
 for (const transport of TRANSPORTS) {
   describe(`transport=${transport}`, () => {
     test("files of any size stream in chunks over the capability (files RPC)", async () => {
