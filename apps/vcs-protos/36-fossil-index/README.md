@@ -219,9 +219,11 @@ pairs with tricky names and modes: no difference on well-formed trees) found, an
 2. ~~Unindexing commits a deleted ref leaves unreachable~~ — answered for queries by X9c: with
    `tips` (the refs left, and HEAD) nothing only a deleted or rewound ref reached is listed. The
    rows themselves stay (storage, not answers); dropping them is X18's gc.
-3. Indexing speed: improved by X9d (0.93 → 0.67 ms a commit on 100,000 commits); what is left is
-   mostly X6r's object reads, which slow as a repacked pack's delta chains grow (0.04 ms a read
-   at 10,000 commits, 0.09 ms at 100,000).
+3. Indexing speed: improved by X9d (0.93 → 0.67 ms a commit on 100,000 commits) and by the
+   pack reader's id lookups (#129, #130): 30,000 commits now index at 0.48 ms a commit (0.89
+   before both). What is left is about 40% object reads (inflating and patching deltas) and 60%
+   the index's own work (parsing trees, comparing them). The SQL store's pack bytes are not a
+   cost: indexing 30,000 commits made 588 queries (324 ms); the block cache serves the rest.
 4. ~~Search across all refs only~~ — answered by X9c: `pathHistory` and `searchMessages` take
    `tips` (one branch, several, or the current refs), walking X9b's parent graph (9 ms for a path
    and a search on 100,000 commits). Generation numbers would let a walk stop early; not needed at
