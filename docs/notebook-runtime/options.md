@@ -452,7 +452,7 @@ Data flow:
 
 ### Status (2026-11-11)
 
-On cellb.dev's platform (`packages/notebooks`, merged in cellb.dev#98, #123 and #130, and on the follow-up branch):
+On cellb.dev's platform (`packages/notebooks`, merged in cellb.dev#98, #123, #130 and #132, and on the follow-up branch):
 
 - **Milestone 1** (fence attributes, inline expressions): done for themed pages. `echo`,
   `run=false`, `sql database=… output=…` and `${…}` in prose work; plain notebook-build pages still
@@ -470,10 +470,12 @@ On cellb.dev's platform (`packages/notebooks`, merged in cellb.dev#98, #123 and 
 - **Milestone 7** (data loaders): JS/TS loaders done. `data/x.csv.js` is bundled by the
   platform's bundler as a small Worker, run once in a Worker Loader isolate, its output kept until
   the loader's build changes, and read by `FileAttachment` on themed pages and in the export.
-  SQL precompute is not done.
+  SQL precompute is done on the follow-up branch: `sql database=<name>` cells run at build time on
+  `<name>.sql` (a source or a loader's output) in a Durable Object of its own, their results
+  written with notebook-db's `precomputeQueries`, hosted and in the export.
 - Open: milestone 5 (`webrun-cells` orchestration, moved to the incremental-builds work), 6 (a
-  notebook DO of its own; the platform's `NotebookSite` covers most of it), 7's SQL precompute,
-  and the PT → Markdown round trip.
+  notebook DO of its own; the platform's `NotebookSite` covers most of it), and the PT → Markdown
+  round trip.
 
 The fence-info question of Section 11 is settled: `@portabletext/markdown` keeps the
 whole info string in a code block's `language`.
