@@ -43,6 +43,7 @@ pnpm-workspace.yaml   workspace globs and the dependency catalog
 | [httpeers-shell-protos](apps/httpeers-shell-protos) | Test-suite ladder for a shell that renders apps served by peers |
 | [fm-protos](apps/fm-protos) | File-manager prototype ladder over one `fm-core` / `fm-app` / `fm-ui` |
 | [mvc-blueprint-00](apps/mvc-blueprint-00) … [03](apps/mvc-blueprint-03) | MVC blueprint TODO apps, four variants |
+| [kitesurf-cellb](apps/kitesurf-cellb) | Cloudflare's Kitesurf browser engine Worker on CellB in Node: a CDP endpoint without workerd |
 | [flue-workbench](apps/flue-workbench) | Browser Flue agent workbench over a local directory, using Gemini |
 | [notes-demo](apps/notes-demo) | React notes app served without a bundler by `@statewalker/webrun-modules-build` |
 | [openai-proxy.app](apps/openai-proxy.app) | OpenAI v1 HTTP proxy in front of a local llama.cpp server |
