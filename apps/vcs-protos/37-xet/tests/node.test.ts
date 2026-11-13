@@ -9,6 +9,7 @@ import {
   downloadXetFile,
   fetchReconstruction,
   httpRanges,
+  hubPathInfo,
   type ReconstructionAnswerV2,
   v2ToV1,
   XetHttpError,
@@ -1409,6 +1410,86 @@ describe("U7 (X11b) several terms of one fetch range in one request", () => {
     expect(late.error?.message).toMatch(/4-8 does not match/);
   });
 
+  it("(review of #125) empty terms: alone, first, or between grouped terms; checked at once", async () => {
+    for (const terms of [
+      [
+        [0, 2],
+        [2, 2],
+        [2, 4],
+      ],
+      [
+        [0, 0],
+        [0, 4],
+      ],
+      [
+        [0, 4],
+        [4, 4],
+      ],
+    ] as [number, number][][]) {
+      const r = await go(terms, [[0, 8]]);
+      expect(r.error, JSON.stringify(terms)).toBeUndefined();
+      expect(r.out.equals(want(terms))).toBe(true);
+    }
+    // an empty term's verification hash is that of no chunks: checked, a wrong one refused
+    const lone = async (expected: Uint8Array) =>
+      (await go([[3, 3]], [[0, 8]], { verify: { rangeHash: () => expected } })).error;
+    expect(await lone(rangeHash([]))).toBeUndefined();
+    expect(await lone(new Uint8Array(32))).toBeInstanceOf(XetIntegrityError);
+  });
+
+  it("(review of #125) gap chunks are checked by chunk though not output; done over grouped terms", async () => {
+    const chunkOnly = verifierFromShard({ files: [], xorbs: [{ xorbHash: xh, chunks: refs }] });
+    const r = await go(
+      [
+        [0, 2],
+        [5, 8],
+      ],
+      [[0, 8]],
+      { verify: chunkOnly, damage: 3 },
+    );
+    expect(r.error?.message).toMatch(/chunk 3 /);
+    const shard: Shard = {
+      files: [
+        {
+          fileHash: fileHash(refs),
+          terms: [
+            {
+              xorbHash: xh,
+              bytes: bytesOf(0, 4),
+              start: 0,
+              end: 4,
+              rangeHash: rangeHash(refs.slice(0, 4).map((c) => c.hash)),
+            },
+            {
+              xorbHash: xh,
+              bytes: bytesOf(4, 8),
+              start: 4,
+              end: 8,
+              rangeHash: rangeHash(refs.slice(4, 8).map((c) => c.hash)),
+            },
+          ],
+        },
+      ],
+      xorbs: [],
+    };
+    const whole = () => verifierFromShard(shard, fileHash(refs), { wholeFile: true });
+    expect(
+      (
+        await go(
+          [
+            [0, 4],
+            [4, 8],
+          ],
+          [[0, 8]],
+          { verify: whole() },
+        )
+      ).error,
+    ).toBeUndefined();
+    expect((await go([[0, 4]], [[0, 8]], { verify: whole() })).error?.message).toMatch(
+      /not the file's/,
+    );
+  });
+
   it("an offset into the first term and a length ending inside, or exactly at the end of, a later term", async () => {
     const all = want([
       [0, 4],
@@ -1564,6 +1645,113 @@ describe("U8 (X11c) the live services' protocol, offline", () => {
     });
   });
 
+  it("(review of #125) a resume answered by 200, a 206 longer than asked, Retry-After, an abort while waiting", async () => {
+    let n = 0;
+    const thenWhole = (async (_u: string, init?: RequestInit) =>
+      n++ === 0
+        ? rangedResponse(data, new Headers(init?.headers).get("range"), { cutAfter: 10_000 })
+        : rangedResponse(data, null, { ignoreRange: true })) as typeof fetch;
+    const got = await collect(httpRanges({ fetch: thenWhole, backoffMs: 1 })("u", 5000, 59_999));
+    expect(got.equals(Buffer.from(data.subarray(5000, 60_000)))).toBe(true);
+    const longer = (async () =>
+      new Response(data.subarray(100, 300), {
+        status: 206,
+        headers: { "content-range": "bytes 100-299/100000" },
+      })) as typeof fetch;
+    expect((await collect(httpRanges({ fetch: longer })("u", 100, 149))).length).toBe(50);
+    // Retry-After: 1 second asked, waited, whatever the backoff
+    let calls = 0;
+    const busy = (async (_u: string, init?: RequestInit) =>
+      calls++ === 0
+        ? new Response("", { status: 429, headers: { "retry-after": "1" } })
+        : rangedResponse(data, new Headers(init?.headers).get("range"))) as typeof fetch;
+    const t0 = Date.now();
+    await collect(httpRanges({ fetch: busy, backoffMs: 1 })("u", 0, 9));
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(950);
+    // an abort during a long pause ends it at once
+    const down = (async () => new Response("", { status: 503 })) as typeof fetch;
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(new Error("stop")), 20);
+    const t1 = Date.now();
+    await expect(
+      collect(httpRanges({ fetch: down, backoffMs: 10_000, signal: ac.signal })("u", 0, 9)),
+    ).rejects.toThrow(/stop/);
+    expect(Date.now() - t1).toBeLessThan(2000);
+  });
+
+  it("(review of #125) the reconstruction: v2 first, v1 where v2 is missing, 416 refused", async () => {
+    const token = { casUrl: "https://cas.test", accessToken: "t", exp: 0 };
+    const asked: string[] = [];
+    const v1only = (async (input: RequestInfo | URL) => {
+      asked.push(String(input));
+      return String(input).includes("/v2/")
+        ? new Response("", { status: 404 })
+        : Response.json({ offset_into_first_range: 0, terms: [], fetch_info: {} });
+    }) as typeof fetch;
+    expect((await fetchReconstruction({ token, fileHash: "ab", fetch: v1only })).terms).toEqual([]);
+    expect(asked).toEqual([
+      "https://cas.test/v2/reconstructions/ab",
+      "https://cas.test/v1/reconstructions/ab",
+    ]);
+    const unsatisfiable = (async () => new Response("", { status: 416 })) as typeof fetch;
+    await expect(
+      fetchReconstruction({
+        token,
+        fileHash: "ab",
+        range: { start: 10, end: 20 },
+        fetch: unsatisfiable,
+      }),
+    ).rejects.toThrow(/not satisfiable/);
+  });
+
+  it("(review of #125) a v2 entry of several ranges: a term in its second range reads that range", async () => {
+    const xorb = new Uint8Array(readFileSync(referenceXorb()));
+    // byte offsets of chunks 0..3 of the reference xorb, from their headers
+    const at = [0];
+    for (let k = 0; k < 3; k++) {
+      const o = at[k] as number;
+      at.push(
+        o +
+          8 +
+          ((xorb[o + 1] as number) |
+            ((xorb[o + 2] as number) << 8) |
+            ((xorb[o + 3] as number) << 16)),
+      );
+    }
+    const refs = referenceChunks();
+    const v1 = v2ToV1({
+      offset_into_first_range: 0,
+      terms: [
+        { hash: XORB, unpacked_length: refs[2]?.length as number, range: { start: 2, end: 3 } },
+      ],
+      xorbs: {
+        [XORB]: [
+          {
+            url: "xorb://x",
+            ranges: [
+              { chunks: { start: 0, end: 2 }, bytes: { start: 0, end: (at[2] as number) - 1 } },
+              {
+                chunks: { start: 2, end: 3 },
+                bytes: { start: at[2] as number, end: (at[3] as number) - 1 },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const asked: number[] = [];
+    const out = await collect(
+      reconstruct(v1, async function* (_u, a, b) {
+        asked.push(a);
+        yield xorb.subarray(a, b + 1);
+      }),
+    );
+    expect(asked).toEqual([at[2]]);
+    expect(hashToString(chunkHash(new Uint8Array(out)))).toBe(
+      hashToString(refs[2]?.hash as Uint8Array),
+    );
+  }, 300_000);
+
   it("downloadXetFile over a fake Hub, CAS and CDN (bodies cut): the reference file, checked against its shard", async () => {
     const xorb = new Uint8Array(readFileSync(referenceXorb()));
     const answer = JSON.parse(fixture("recon.recorded.json")) as ReconstructionAnswer;
@@ -1659,9 +1847,25 @@ describe.runIf(process.env.XET_LIVE === "1")("U9 (X11c) the live Hub and CAS (XE
     const part = await collect(
       downloadXetFile(repo, CSV, { range: { start: 140_000, end: 260_000 } }),
     );
-    const whole = await collect(downloadXetFile(repo, CSV, { range: { start: 0, end: 300_000 } }));
     expect(part.length).toBe(120_001);
-    expect(part.equals(whole.subarray(140_000, 260_001))).toBe(true);
+    // against the same bytes rebuilt locally from the reference xorb (another path entirely)
+    const xorb = readFileSync(referenceXorb());
+    const answer = JSON.parse(fixture("recon.recorded.json")) as ReconstructionAnswer;
+    const local = await collect(
+      reconstruct(
+        answer,
+        async function* (_u, a, b) {
+          yield xorb.subarray(a, b + 1);
+        },
+        { length: 260_001 },
+      ),
+    );
+    expect(part.equals(local.subarray(140_000, 260_001))).toBe(true);
+    // the whole file against the Hub's SHA-256 of it
+    const info = await hubPathInfo(repo, CSV);
+    const h = createHash("sha256");
+    for await (const p of downloadXetFile(repo, CSV)) h.update(p);
+    expect(h.digest("hex")).toBe(info.sha256);
   }, 600_000);
 });
 

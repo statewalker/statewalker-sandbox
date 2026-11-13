@@ -362,13 +362,23 @@ export async function* reconstruct(
   };
 
   const terms = answer.terms;
+  const empty = (t: Term) => t.range.end <= t.range.start;
   for (let first = 0; first < terms.length; ) {
-    // one fetch for the consecutive terms of one fetch entry whose chunk ranges go forward
-    // (open thread 2): the entry's bytes are fetched once, not once per term
+    if (empty(terms[first] as Term)) {
+      // no chunk to fetch: checked at once (its bytes, and its verification hash over none)
+      check(open(terms[first] as Term));
+      first++;
+      continue;
+    }
+    // One fetch for the consecutive terms of one fetch entry whose chunk ranges go forward
+    // (open thread 2): the entry's bytes are fetched once, not once per term. Forming the group
+    // looks up the next terms' fetch entries, so an answer missing one is refused before the
+    // group's bytes are yielded.
     const entry = entryOf(terms[first] as Term);
     let last = first;
     while (
       last + 1 < terms.length &&
+      !empty(terms[last + 1] as Term) &&
       (terms[last + 1] as Term).hash === (terms[first] as Term).hash &&
       entryOf(terms[last + 1] as Term) === entry &&
       (terms[last + 1] as Term).range.start >= (terms[last] as Term).range.end

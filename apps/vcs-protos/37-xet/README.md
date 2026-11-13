@@ -265,6 +265,25 @@ file.
 | M4 | v2's chunks and bytes swapped | killed (U8) |
 | M5 | A 404 tried again | killed (U8) |
 
+**Review of #125** (nothing blocking; grouping, retries, resumes, ranges, v2 and CORS checked,
+some live) found, and U7/U8/U9 now cover:
+
+| Finding | Fix |
+|---|---|
+| An empty term inside a group took the next chunks as its own (the old code accepted it) | empty terms are checked at once, never grouped; their verification hash is that of no chunks |
+| `fetchReconstruction` defaulted to v1, which the specification deprecates | v2 by default, v1 where v2 answers 404 or 501 |
+| `downloadXetFile` did not pass its signal to the first three requests | passed to all |
+| The pause's abort listener stayed after a normal wait | removed |
+| 429's `Retry-After` ignored | honoured (up to a minute) |
+| A missing fetch entry is now refused when the group is formed | documented |
+| Tests: empty terms, gap chunks checked, `done` over groups, 416, an abort, a resume answered by 200, a 206 longer than asked, a v2 entry's second range; U9 compared against another path | added; U9's range against the bytes rebuilt locally from the reference xorb, the whole file against the Hub's SHA-256 |
+
+| # | Mutant | Result |
+|---|---|---|
+| E1 | Empty terms grouped | killed (U7) |
+| E2 | No v1 fallback | killed (U8) |
+| E3 | `Retry-After` ignored | killed (U8) |
+
 ## Promotion grades
 
 | File | Grade | Why |

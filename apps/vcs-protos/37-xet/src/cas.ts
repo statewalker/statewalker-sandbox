@@ -57,10 +57,15 @@ export interface HubFile {
   sha256?: string;
 }
 
-export async function hubPathInfo(r: RepoRef, path: string): Promise<HubFile> {
+export async function hubPathInfo(
+  r: RepoRef,
+  path: string,
+  o: { signal?: AbortSignal } = {},
+): Promise<HubFile> {
   const f = r.fetch ?? fetch;
   const res = await f(`${apiBase(r)}/paths-info/${encodeURIComponent(r.revision ?? "main")}`, {
     method: "POST",
+    signal: o.signal,
     headers: { "content-type": "application/json", ...auth(r.token) },
     body: JSON.stringify({ paths: [path], expand: false }),
   });
@@ -80,10 +85,14 @@ export interface XetToken {
 }
 
 /** a read token for the CAS (anonymous for public repositories) */
-export async function xetReadToken(r: RepoRef): Promise<XetToken> {
+export async function xetReadToken(
+  r: RepoRef,
+  o: { signal?: AbortSignal } = {},
+): Promise<XetToken> {
   const f = r.fetch ?? fetch;
   const res = await f(`${apiBase(r)}/xet-read-token/${encodeURIComponent(r.revision ?? "main")}`, {
     headers: auth(r.token),
+    signal: o.signal,
   });
   return json<XetToken>(res, "xet-read-token");
 }
@@ -114,6 +123,8 @@ export function v2ToV1(a: ReconstructionAnswerV2): ReconstructionAnswer {
 /**
  * The reconstruction answer for a file hash, all of it or the bytes `range` (inclusive, as an
  * HTTP `Range`: the answer's terms then cover it, `offset_into_first_range` into the first).
+ * v2 by default, as the specification asks, falling back to the deprecated v1 where v2 answers
+ * 404 or 501; `version` forces one.
  */
 export async function fetchReconstruction(o: {
   token: XetToken;
@@ -121,12 +132,20 @@ export async function fetchReconstruction(o: {
   range?: { start: number; end: number };
   version?: 1 | 2;
   fetch?: Fetch;
+  signal?: AbortSignal;
 }): Promise<ReconstructionAnswer> {
   const f = o.fetch ?? fetch;
   const headers: Record<string, string> = { authorization: `Bearer ${o.token.accessToken}` };
   if (o.range) headers.range = `bytes=${o.range.start}-${o.range.end}`;
-  const v = o.version ?? 1;
-  const res = await f(`${o.token.casUrl}/v${v}/reconstructions/${o.fileHash}`, { headers });
+  const ask = (v: 1 | 2) =>
+    f(`${o.token.casUrl}/v${v}/reconstructions/${o.fileHash}`, { headers, signal: o.signal });
+  let v: 1 | 2 = o.version ?? 2;
+  let res = await ask(v);
+  if (o.version === undefined && (res.status === 404 || res.status === 501)) {
+    await res.body?.cancel().catch(() => {});
+    v = 1;
+    res = await ask(v);
+  }
   if (res.status === 416) {
     await res.body?.cancel().catch(() => {});
     throw new XetHttpError("reconstruction: range not satisfiable", 416);
@@ -138,15 +157,16 @@ export async function fetchReconstruction(o: {
 const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason);
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(t);
-        reject(signal.reason);
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(signal?.reason);
+    };
+    // the listener goes with the pause: a long-lived signal does not collect one per retry
+    const t = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 
 /**
@@ -166,10 +186,16 @@ export function httpRanges(
   return async function* (url, start, end) {
     let at = start;
     let failures = 0;
-    const again = async (why: unknown) => {
+    const again = async (why: unknown, retryAfter?: string | null) => {
       if (++failures > retries)
         throw why instanceof Error ? why : new XetHttpError(`${url}: ${String(why)}`);
-      await sleep(backoff * 2 ** (failures - 1), o.signal);
+      // a 429's Retry-After (seconds, up to a minute) over the growing pause
+      const asked = Number(retryAfter);
+      const wait =
+        retryAfter && Number.isFinite(asked) && asked > 0
+          ? Math.min(asked, 60) * 1000
+          : backoff * 2 ** (failures - 1);
+      await sleep(wait, o.signal);
     };
     while (at <= end) {
       let res: Response;
@@ -182,7 +208,10 @@ export function httpRanges(
       }
       if (res.status === 429 || res.status >= 500) {
         await res.body?.cancel().catch(() => {});
-        await again(new XetHttpError(`${url}: HTTP ${res.status}`, res.status));
+        await again(
+          new XetHttpError(`${url}: HTTP ${res.status}`, res.status),
+          res.headers.get("retry-after"),
+        );
         continue;
       }
       let skip = 0;
@@ -254,15 +283,16 @@ export async function* downloadXetFile(
     signal?: AbortSignal;
   } = {},
 ): AsyncGenerator<Uint8Array> {
-  const info = await hubPathInfo(r, path);
+  const info = await hubPathInfo(r, path, { signal: o.signal });
   if (!info.xetHash) throw new XetHttpError(`${path}: not stored with Xet`);
-  const token = await xetReadToken(r);
+  const token = await xetReadToken(r, { signal: o.signal });
   const answer = await fetchReconstruction({
     token,
     fileHash: info.xetHash,
     range: o.range,
     version: o.version,
     fetch: r.fetch,
+    signal: o.signal,
   });
   const length = o.range ? o.range.end - o.range.start + 1 : undefined;
   yield* reconstruct(
