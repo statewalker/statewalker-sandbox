@@ -1,1 +1,5 @@
-node_modules/\ndist/\npublic/\n*.png\n*.log\n
+node_modules/
+dist/
+public/
+*.png
+*.log
