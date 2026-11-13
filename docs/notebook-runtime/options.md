@@ -452,7 +452,7 @@ Data flow:
 
 ### Status (2026-11-11)
 
-On cellb.dev's platform (`packages/notebooks`, merged in cellb.dev#98 and on the follow-up branch):
+On cellb.dev's platform (`packages/notebooks`, merged in cellb.dev#98, #123 and #130, and on the follow-up branch):
 
 - **Milestone 1** (fence attributes, inline expressions): done for themed pages. `echo`,
   `run=false`, `sql database=… output=…` and `${…}` in prose work; plain notebook-build pages still
@@ -463,11 +463,17 @@ On cellb.dev's platform (`packages/notebooks`, merged in cellb.dev#98 and on the
   become Portable Text with `cell` and `expr` objects and deterministic keys; the model keeps it
   as `content`. A PT → Markdown round trip and an editor on it are not done.
 - **Milestone 4** (theme contract, site model): done as the page/site models and the default
-  Astro theme. A search index is not done.
+  Astro theme. Site search is done (cellb.dev#130): a `search.json` of page sections, a search
+  box in the theme, hosted and in the export.
 - **Milestone 8** (Astro theme on cellb): done on Wrangler, celld, cellb in Node and in a tab,
   including the static export.
-- Open: milestone 5 (`webrun-cells` orchestration), 6 (a notebook DO of its own; the platform's
-  `NotebookSite` covers most of it), 7 (data loaders, SQL precompute), and a search index.
+- **Milestone 7** (data loaders): JS/TS loaders done. `data/x.csv.js` is bundled by the
+  platform's bundler as a small Worker, run once in a Worker Loader isolate, its output kept until
+  the loader's build changes, and read by `FileAttachment` on themed pages and in the export.
+  SQL precompute is not done.
+- Open: milestone 5 (`webrun-cells` orchestration, moved to the incremental-builds work), 6 (a
+  notebook DO of its own; the platform's `NotebookSite` covers most of it), 7's SQL precompute,
+  and the PT → Markdown round trip.
 
 The fence-info question of Section 11 is settled: `@portabletext/markdown` keeps the
 whole info string in a code block's `language`.
