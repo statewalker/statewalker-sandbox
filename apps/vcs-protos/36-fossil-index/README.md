@@ -215,7 +215,12 @@ pairs with tricky names and modes: no difference on well-formed trees) found, an
 ## Open threads
 
 1. ~~git's default history simplification through merges~~ — answered by X9b
-   (`simplifiedPathHistory`, F1b). `--simplify-merges` (the parent-rewriting variant) is not done.
+   (`simplifiedPathHistory`, F1b). `--simplify-merges` needs nothing more here: it removes merges
+   (and rewrites parents), and the non-merge commits it lists are `--full-history`'s. Checked on
+   30 random merge-heavy histories (`-s ours`, `-X theirs`, merges by hand, deleted branches) for
+   every path: `git log --all --full-history --simplify-merges --no-merges -- <path>` lists the
+   same commits as `pathHistory` in all 120 cases, in another order (git walks the whole history
+   first, and lists a side branch's commits together).
 2. ~~Unindexing commits a deleted ref leaves unreachable~~ — answered for queries by X9c: with
    `tips` (the refs left, and HEAD) nothing only a deleted or rewound ref reached is listed. The
    rows themselves stay (storage, not answers); dropping them is X18's gc.
