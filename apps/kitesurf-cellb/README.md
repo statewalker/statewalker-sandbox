@@ -8,6 +8,17 @@ workerd, wrangler or a Cloudflare account.
 Checked (`pnpm test`): example.com renders with its Latin, Arabic, CJK and Cyrillic text and a
 full-size screenshot; React TodoMVC takes typed input and clicks. Hacker News also loads.
 
+It also runs inside a browser tab ([browser/](#in-a-browser-tab)), with CellB fixed upstream.
+
+## Two CellB states
+
+- **This app as it is: CellB 0.8.7 plus a local patch** (below). Node only, about 20 s per page
+  load.
+- **CellB with the fixes upstream** (statewalker/cellb.dev, branch `ccr-5aa5c6fe-j28pma`, not yet
+  released): Kitesurf runs with none of this app's workarounds (no patch, no polyfill, no real
+  `/bundle`), in Node at about 2.3–3.3 s per page load, and in a browser tab. Once a release has
+  them, depend on it and drop `patches/`, `polyfills.mjs` and the `/bundle` step of `setup.mjs`.
+
 ## Run
 
 1. Build Kitesurf next to this repository (Bazel and Rust; about 13 minutes on 4 CPUs the first
@@ -63,13 +74,41 @@ alone, so the patch changes no other app's CellB.
    `DataCloneError`. Patched to cross with buffered bodies.
 9. Node 22 has no `Uint8Array.prototype.toBase64` (workerd does); isolate threads get a polyfill.
 
+## In a browser tab
+
+`browser/` runs the same engine in a Dedicated Worker of a page: `cellb build` makes a browser
+folder of it, `loadProject` from `@statewalker/cellb/browser` loads it, and the page drives it
+over CDP through a `MessagePort` to the engine's `/devtools/browser` socket. Kitesurf's own page
+isolates are Dedicated Workers too. The pages it fetches are cross-origin, so the host worker sends
+them through the server's CORS proxy (`serve.mjs`, `/proxy`).
+
+It needs the unreleased CellB (above), so it is not a workspace package: install a build of the
+branch into it.
+
+```sh
+cd browser
+npm install
+npm install --no-save <path to a `pnpm pack` of cellb.dev/packages/cellb on that branch>
+npm run build:engine   # cellb build ../engine --out public/kitesurf (run scripts/setup.mjs first)
+npm run build          # vite build of the page and its workers
+node serve.mjs 8800 &  # static files, and the CORS proxy at /proxy
+node run.mjs https://example.com/
+```
+
+Checked in Chromium: example.com, Hacker News, and React and Vue TodoMVC render (screenshots, title
+and text), the engine loads in about 2 s and a navigation takes 1.5–2.3 s.
+
+What a tab adds: a CORS proxy for the pages Kitesurf fetches (the browser drops `Set-Cookie`, and
+forbidden request headers such as `User-Agent` never reach the proxy); CDP clients outside the tab
+cannot reach the engine's socket (the page holds it); an `import()` in code Kitesurf builds with
+`Function` resolves against the isolate worker's URL, not Kitesurf's modules (Node resolves it).
+
 ## Limits
 
 - CellB ignores per-isolate `limits` (CPU, subrequests), so a runaway page script is not stopped,
   and `abortIsolate` does not free an isolate.
 - Bodies crossing isolates are buffered, not streamed.
 - `global_fetch_strictly_public` is not enforced (`project.unsupported` lists it).
-- A page load takes about 18–23 s, mostly a fixed cost per load (worker threads, esbuild bundling
-  of page modules); not profiled.
-- Node only. A browser tab would also need a CORS proxy for page fetches, and CDP clients outside
-  the tab cannot reach its WebSockets.
+- With the patched 0.8.7, a page load takes about 18–23 s, mostly CellB re-encoding Kitesurf's
+  27 MB wasm as base64 module text for every page isolate (fixed upstream: compiled once, passed
+  compiled).

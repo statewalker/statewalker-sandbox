@@ -1,0 +1,8 @@
+{
+  "abi": 4,
+  "wireVersion": 16,
+  "wasm": "scene_host.wasm",
+  "retainedFrames": true,
+  "sha256": "80f381241ad874efcc1e8e64c42e8605b2134aa51b1b0bb87bf6d375c52fc402",
+  "bytes": 2303289
+}

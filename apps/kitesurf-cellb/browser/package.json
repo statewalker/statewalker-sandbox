@@ -1,0 +1,18 @@
+{
+  "name": "kitesurf-cellb-browser",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Kitesurf on CellB inside a browser tab: the engine in a Dedicated Worker, driven over CDP from the page. Not a workspace package: it needs a CellB build with the fixes not yet released (see ../README.md).",
+  "scripts": {
+    "build:engine": "cellb build ../engine --out public/kitesurf",
+    "build": "vite build",
+    "serve": "node serve.mjs",
+    "run": "node run.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright": "1.63.0",
+    "vite": "8.3.8"
+  }
+}
