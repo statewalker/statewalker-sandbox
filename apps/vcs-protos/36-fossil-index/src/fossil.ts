@@ -23,7 +23,7 @@ import type { Db } from "@statewalker/db-api";
 import type { RefDb } from "../../10-ref-transactions/src/ref-db.js";
 import { sqlRefDb } from "../../10-ref-transactions/src/sql-ref-db.js";
 import { readCommit, readTree } from "../../17-repository/src/commands.js";
-import { parseTagTarget } from "../../17-repository/src/git-format.js";
+import { isTreeMode, parseTagTarget } from "../../17-repository/src/git-format.js";
 import type { ObjectStore, Repository } from "../../17-repository/src/object-store.js";
 import { sqlRepository } from "../../17-repository/src/sql-repository.js";
 
@@ -80,9 +80,29 @@ const SCHEMA = [
 
 type Repo = Pick<Repository, "objects">;
 
-/** a few hundred parsed trees: a commit's parent tree is the previous commit's tree */
+interface TreeEntry {
+  name: string;
+  mode: string;
+  oid: string;
+  tree: boolean;
+  /** git's order of tree entries: the name's bytes, a directory's followed by "/" (as latin1) */
+  key: string;
+}
+const utf8 = new TextEncoder();
+const latin1 = (bytes: Uint8Array) => {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return s;
+};
+/** git's test (`mode & 0170000`): a legacy directory mode such as 040755 is a directory too */
+const isTree = isTreeMode;
+
+/**
+ * Parsed trees, the most recent few thousand: a commit's parent trees are mostly the previous
+ * commit's. Entries carry git's sort key and are in its order, so two trees compare in one walk.
+ */
 function treeReader(objects: ObjectStore) {
-  const cache = new Map<string, { name: string; mode: string; oid: string }[]>();
+  const cache = new Map<string, TreeEntry[]>();
   return async (oid: string) => {
     let t = cache.get(oid);
     if (t) {
@@ -90,15 +110,32 @@ function treeReader(objects: ObjectStore) {
       cache.set(oid, t);
       return t;
     }
-    t = await readTree({ objects } as Repository, oid);
+    t = (await readTree({ objects } as Repository, oid)).map((e) => {
+      const tree = isTree(e.mode);
+      const bytes = (e as { nameBytes?: Uint8Array }).nameBytes ?? utf8.encode(e.name);
+      return {
+        name: e.name,
+        mode: e.mode,
+        oid: e.oid,
+        tree,
+        key: latin1(bytes) + (tree ? "/" : ""),
+      };
+    });
+    // git writes trees in this order already; sorted anyway, so a hand-made tree compares right
+    t.sort((x, y) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0));
     cache.set(oid, t);
     if (cache.size > 4096) cache.delete(cache.keys().next().value as string);
     return t;
   };
 }
-const isTree = (mode: string) => Number.parseInt(mode, 8) === 0o40000;
 
-/** the file paths that differ between two trees (either may be absent) */
+/**
+ * The file paths that differ between two trees (either may be absent): one walk over both
+ * entry lists in git's order. A path that is a file on one side and a directory on the other
+ * has two keys (`a`, `a/`): the file is reported, and the directory's files under it. In a
+ * malformed tree a file may be named `a/` and so meet directory `a` under one key: each side is
+ * then taken for what it is (the file reported, the directory walked), as before.
+ */
 async function changedPaths(
   read: ReturnType<typeof treeReader>,
   a: string | undefined,
@@ -107,23 +144,32 @@ async function changedPaths(
   out: string[],
 ): Promise<void> {
   if (a === b) return;
-  // keyed by the name's bytes: two names that are not UTF-8 may decode alike
-  const key = (e: { name: string; nameBytes?: Uint8Array }) =>
-    e.nameBytes ? `\0${Array.from(e.nameBytes).join(",")}` : e.name;
-  const left = new Map((a ? await read(a) : []).map((e) => [key(e), e]));
-  const right = new Map((b ? await read(b) : []).map((e) => [key(e), e]));
-  for (const k of new Set([...left.keys(), ...right.keys()])) {
-    const x = left.get(k);
-    const y = right.get(k);
-    if (x && y && x.oid === y.oid && x.mode === y.mode) continue;
-    const name = (x ?? y)?.name as string;
-    const path = prefix ? `${prefix}/${name}` : name;
-    const xt = x && isTree(x.mode);
-    const yt = y && isTree(y.mode);
-    if (x && !xt) out.push(path);
-    else if (y && !yt && !(x && !xt)) out.push(path);
-    if (xt || yt)
-      await changedPaths(read, xt ? x.oid : undefined, yt ? y.oid : undefined, path, out);
+  const left = a ? await read(a) : [];
+  const right = b ? await read(b) : [];
+  let i = 0;
+  let j = 0;
+  while (i < left.length || j < right.length) {
+    const x = left[i];
+    const y = right[j];
+    const order = !x ? 1 : !y ? -1 : x.key < y.key ? -1 : x.key > y.key ? 1 : 0;
+    const l = order <= 0 ? x : undefined;
+    const r = order >= 0 ? y : undefined;
+    if (l) i++;
+    if (r) j++;
+    if (l && r && l.oid === r.oid && l.mode === r.mode) continue;
+    // each side under its own name (they differ only in a malformed tree: a file `a/`, dir `a`)
+    const at = (e: TreeEntry) => (prefix ? `${prefix}/${e.name}` : e.name);
+    const file = l && !l.tree ? l : r && !r.tree ? r : undefined;
+    if (file) out.push(at(file));
+    const dir = l?.tree ? l : r?.tree ? r : undefined;
+    if (dir)
+      await changedPaths(
+        read,
+        l?.tree ? l.oid : undefined,
+        r?.tree ? r.oid : undefined,
+        at(dir),
+        out,
+      );
   }
 }
 
@@ -147,12 +193,20 @@ async function* commitsFrom(
   known: (oid: string) => Promise<boolean>,
 ): AsyncGenerator<CommitInfo> {
   const read = treeReader(repo.objects);
-  // each commit is read once: its tree is kept for the child that diffs against it
+  // Each commit is read once. A child reads its parent's commit for the parent's tree; the
+  // parsed commit is kept until the walk reaches the parent (it used to be read again then),
+  // and its tree id for later children of the same parent.
+  type Parsed = Awaited<ReturnType<typeof readCommit>>;
+  const pending = new Map<string, Parsed>();
   const trees = new Map<string, string>();
   const treeOf = async (oid: string) => {
     let t = trees.get(oid);
     if (t === undefined) {
-      t = (await readCommit(repo as Repository, oid)).tree;
+      const c = await readCommit(repo as Repository, oid);
+      // kept for the walk's visit, unless it was visited already (an indexed commit popped
+      // before its child): it would never be taken back out
+      if (!seen.has(oid)) pending.set(oid, c);
+      t = c.tree;
       trees.set(oid, t);
     }
     return t;
@@ -167,8 +221,12 @@ async function* commitsFrom(
     const oid = stack.pop() as string;
     if (seen.has(oid)) continue;
     seen.add(oid);
-    if (await known(oid)) continue;
-    const c = await readCommit(repo as Repository, oid);
+    if (await known(oid)) {
+      pending.delete(oid);
+      continue;
+    }
+    const c = pending.get(oid) ?? (await readCommit(repo as Repository, oid));
+    pending.delete(oid);
     trees.set(oid, c.tree);
     const merge = c.parents.length > 1;
     const changes: string[] = [];

@@ -174,6 +174,37 @@ query that matches nothing); F7 checks that deleting a ref narrows `--all` in pr
 equal dates is by id, which git's walk is not (nor, with clock skew, a pure date sort): not
 modelled, as before.
 
+### X9d: indexing speed
+
+Measured with a fast-import corpus like F4's (50,000 files, one file edited per commit,
+`git repack -ad`), indexed through our SQL object store (`prepare`):
+
+| Commits | Before | After |
+|---|---|---|
+| 10,000 | 0.73 ms a commit | 0.47 ms |
+| 100,000 | 0.93 ms a commit (93 s) | 0.67 ms (67 s) |
+
+- **Each commit read once.** A child read its parent's commit for the parent's tree, and the
+  walk read it again on reaching it: 2 commit reads a commit. The parsed parent is now kept
+  until the walk reaches it.
+- **Trees compared in one walk.** `changedPaths` built a Map of each side's entries and a Set
+  of both sides' names for every tree pair: more time than reading the trees. Entries now carry
+  git's sort key (the name's bytes, a directory's followed by `/`), computed once per cached
+  tree, and two trees are compared in a single merge walk. A path that is a file on one side
+  and a directory on the other has two keys: the file is reported, and the directory's files
+  under it, as before. F1 (every path of 40 random histories, against git) checks the answers.
+- **What is left:** at 100,000 commits, 36 of the 67 s are the object store's reads (4.1 a
+  commit). Those grow with the pack (delta chains): X6r's work, not the index's.
+
+**Review of #126** (a randomized comparison of the old and new tree comparisons, 20,000 tree
+pairs with tricky names and modes: no difference on well-formed trees) found, and F8 covers:
+
+| Finding | Fix |
+|---|---|
+| In a malformed tree, a file named `a/` shares directory `a`'s key: the walk tried to read the file as a tree (indexing failed) or dropped the directory's files | each side is taken for what it is, under its own name: the file `a/` reported, directory `a` walked |
+| A legacy directory mode (`040755`) read as a file | git's test (`mode & 0170000`), `isTreeMode` |
+| A parent read for its tree after the walk had visited it (an indexed commit popped before its child) stayed in memory | not kept |
+
 ## Promotion grades
 
 | File | Grade | Why |
@@ -188,7 +219,9 @@ modelled, as before.
 2. ~~Unindexing commits a deleted ref leaves unreachable~~ — answered for queries by X9c: with
    `tips` (the refs left, and HEAD) nothing only a deleted or rewound ref reached is listed. The
    rows themselves stay (storage, not answers); dropping them is X18's gc.
-3. Indexing speed: X6r's deeper tree reads on fast-import packs.
+3. Indexing speed: improved by X9d (0.93 → 0.67 ms a commit on 100,000 commits); what is left is
+   mostly X6r's object reads, which slow as a repacked pack's delta chains grow (0.04 ms a read
+   at 10,000 commits, 0.09 ms at 100,000).
 4. ~~Search across all refs only~~ — answered by X9c: `pathHistory` and `searchMessages` take
    `tips` (one branch, several, or the current refs), walking X9b's parent graph (9 ms for a path
    and a search on 100,000 commits). Generation numbers would let a walk stop early; not needed at

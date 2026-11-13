@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { newNodeSqliteDb } from "@statewalker/db-sqlite-node";
 import { afterAll, describe, expect, it } from "vitest";
 import { gitEnv } from "../../12-index-pack/src/git-repo.js";
+import { encodeCommit } from "../../17-repository/src/git-format.js";
 import type { ObjectStore } from "../../17-repository/src/object-store.js";
 import { rng } from "../../29-merge/tests/tree-harness.js";
 import {
@@ -431,6 +432,48 @@ describe("F7 (X9c) per-branch answers, and --all without what a deleted ref left
     expect(narrower).toBeGreaterThan(20); // per-branch answers really are narrower than --all
     expect(narrowedAfterDelete).toBeGreaterThan(5); // and deleting a ref really narrows --all
   }, 900_000);
+});
+
+describe('F8 (review of #126) malformed trees: a file named "a/", legacy directory modes', () => {
+  /** a raw tree object of [mode, name, oid hex] entries, in the order given */
+  const rawTree = (entries: [string, string, string][]) =>
+    Buffer.concat(
+      entries.map(([mode, name, oid]) =>
+        Buffer.concat([Buffer.from(`${mode} ${name}\0`), Buffer.from(oid, "hex")]),
+      ),
+    );
+  const person = (when: number) => ({ name: "t", email: "t@x", when, tz: "+0000" });
+  it("a directory a becoming a file named a/ (and back): indexed, every path reported", async () => {
+    const db = await newNodeSqliteDb();
+    const { repo } = await indexedSqlRepository(db);
+    const blob = await repo.objects.put("blob", new TextEncoder().encode("x\n"));
+    const sub = await repo.objects.put("tree", rawTree([["100644", "x", blob]]));
+    const dirA = await repo.objects.put("tree", rawTree([["40000", "a", sub]]));
+    const fileA = await repo.objects.put("tree", rawTree([["100644", "a/", blob]]));
+    const legacy = await repo.objects.put("tree", rawTree([["40755", "a", sub]]));
+    const commit = (tree: string, parents: string[], when: number) =>
+      repo.objects.put(
+        "commit",
+        encodeCommit({
+          tree,
+          parents,
+          author: person(when),
+          committer: person(when),
+          message: `c${when}\n`,
+        }),
+      );
+    const c1 = await commit(dirA, [], 1);
+    const c2 = await commit(fileA, [c1], 2);
+    const c3 = await commit(dirA, [c2], 3);
+    const c4 = await commit(legacy, [c3], 4);
+    const index = await fossilIndex(await newNodeSqliteDb(), repo.objects);
+    const rows = await index.prepare([c4]);
+    const changes = Object.fromEntries(rows.map((r) => [r.oid, [...r.changes].sort()]));
+    expect(changes[c2]).toEqual(["a/", "a/x"]);
+    expect(changes[c3]).toEqual(["a/", "a/x"]);
+    // 040755 is a directory to git (mode & 0170000): same tree, nothing changed
+    expect(changes[c4]).toEqual([]);
+  });
 });
 
 describe("F2 search equals git log --all --no-merges -F --grep=<text>", () => {
