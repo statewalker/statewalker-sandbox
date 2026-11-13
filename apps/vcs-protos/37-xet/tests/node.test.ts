@@ -5,6 +5,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  downloadXetFile,
+  fetchReconstruction,
+  httpRanges,
+  type ReconstructionAnswerV2,
+  v2ToV1,
+  XetHttpError,
+  xetReadToken,
+} from "../src/cas.js";
 import { GEAR_TABLE } from "../src/gear-table.js";
 import { lz4BlockEncode, lz4FrameDecode, lz4FrameEncode, xxh32 } from "../src/lz4.js";
 import {
@@ -1425,6 +1434,235 @@ describe("U7 (X11b) several terms of one fetch range in one request", () => {
     );
     expect(exact.out.equals(all)).toBe(true);
   });
+});
+
+// ---------------------------------------------------------------- X11c: the live services
+
+/** what a ranged GET of `data` answers: 206 with its slice, cut after `cutAfter` bytes if given */
+function rangedResponse(
+  data: Uint8Array,
+  range: string | null,
+  o: { cutAfter?: number; ignoreRange?: boolean; wrongStart?: boolean } = {},
+) {
+  const m = /^bytes=(\d+)-(\d+)$/.exec(range ?? "");
+  const [a, b] = m && !o.ignoreRange ? [Number(m[1]), Number(m[2])] : [0, data.length - 1];
+  const slice = data.subarray(a, b + 1);
+  const cut = o.cutAfter ?? Number.POSITIVE_INFINITY;
+  // pieces delivered as they are pulled, then the connection reset (an error in `start` would
+  // discard what was queued before it)
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(c) {
+      if (sent >= cut) return c.error(new Error("connection reset"));
+      if (sent >= slice.length) return c.close();
+      const n = Math.min(4096, slice.length - sent, cut - sent);
+      c.enqueue(slice.subarray(sent, sent + n));
+      sent += n;
+    },
+  });
+  const start = o.wrongStart ? a + 1 : a;
+  return new Response(body, {
+    status: m && !o.ignoreRange ? 206 : 200,
+    headers: m && !o.ignoreRange ? { "content-range": `bytes ${start}-${b}/${data.length}` } : {},
+  });
+}
+const collect = async (it: AsyncIterable<Uint8Array>) => {
+  const parts: Uint8Array[] = [];
+  for await (const p of it) parts.push(p);
+  return Buffer.concat(parts.map((p) => Buffer.from(p)));
+};
+
+describe("U8 (X11c) the live services' protocol, offline", () => {
+  const data = new Uint8Array(100_000).map((_, i) => (i * 7) & 0xff);
+
+  it("a body cut twice is resumed from the next byte; the ranges asked say so", async () => {
+    const asked: string[] = [];
+    let n = 0;
+    const f = (async (_u: string, init?: RequestInit) => {
+      const range = new Headers(init?.headers).get("range");
+      asked.push(range ?? "");
+      return rangedResponse(data, range, { cutAfter: n++ < 2 ? 30_000 : undefined });
+    }) as typeof fetch;
+    const got = await collect(httpRanges({ fetch: f, backoffMs: 1 })("u", 1000, 89_999));
+    expect(got.equals(Buffer.from(data.subarray(1000, 90_000)))).toBe(true);
+    expect(asked).toEqual(["bytes=1000-89999", "bytes=31000-89999", "bytes=61000-89999"]);
+  });
+
+  it("429, 503 and a network error are tried again; past the retries the error stands", async () => {
+    const plan = ["429", "503", "throw", "ok"];
+    const f = (async (_u: string, init?: RequestInit) => {
+      const step = plan.shift();
+      if (step === "throw") throw new TypeError("fetch failed");
+      if (step === "429" || step === "503") return new Response("busy", { status: Number(step) });
+      return rangedResponse(data, new Headers(init?.headers).get("range"));
+    }) as typeof fetch;
+    const got = await collect(httpRanges({ fetch: f, backoffMs: 1 })("u", 0, 999));
+    expect(got.length).toBe(1000);
+    let calls = 0;
+    const down = (async () => {
+      calls++;
+      return new Response("busy", { status: 503 });
+    }) as typeof fetch;
+    await expect(
+      collect(httpRanges({ fetch: down, retries: 2, backoffMs: 1 })("u", 0, 9)),
+    ).rejects.toThrow(/503/);
+    expect(calls).toBe(3);
+  });
+
+  it("a server ignoring Range is read from the start, skipping; another range or a 404 is refused", async () => {
+    const ignoring = (async () =>
+      rangedResponse(data, null, { ignoreRange: true })) as typeof fetch;
+    const got = await collect(httpRanges({ fetch: ignoring })("u", 50_000, 50_999));
+    expect(got.equals(Buffer.from(data.subarray(50_000, 51_000)))).toBe(true);
+    const wrong = (async (_u: string, init?: RequestInit) =>
+      rangedResponse(data, new Headers(init?.headers).get("range"), {
+        wrongStart: true,
+      })) as typeof fetch;
+    await expect(collect(httpRanges({ fetch: wrong })("u", 10, 20))).rejects.toThrow(
+      /another range/,
+    );
+    let calls = 0;
+    const missing = (async () => {
+      calls++;
+      return new Response("no", { status: 404 });
+    }) as typeof fetch;
+    await expect(collect(httpRanges({ fetch: missing, backoffMs: 1 })("u", 0, 9))).rejects.toThrow(
+      XetHttpError,
+    );
+    expect(calls).toBe(1); // a 404 is not tried again
+  });
+
+  it("v2's xorbs[].ranges[] become v1's fetch entries", () => {
+    const v2: ReconstructionAnswerV2 = {
+      offset_into_first_range: 5,
+      terms: [{ hash: XORB, unpacked_length: 10, range: { start: 0, end: 3 } }],
+      xorbs: {
+        [XORB]: [
+          {
+            url: "https://cdn/x",
+            ranges: [
+              { chunks: { start: 0, end: 2 }, bytes: { start: 0, end: 99 } },
+              { chunks: { start: 2, end: 3 }, bytes: { start: 100, end: 149 } },
+            ],
+          },
+        ],
+      },
+    };
+    expect(v2ToV1(v2)).toEqual({
+      offset_into_first_range: 5,
+      terms: v2.terms,
+      fetch_info: {
+        [XORB]: [
+          { range: { start: 0, end: 2 }, url: "https://cdn/x", url_range: { start: 0, end: 99 } },
+          {
+            range: { start: 2, end: 3 },
+            url: "https://cdn/x",
+            url_range: { start: 100, end: 149 },
+          },
+        ],
+      },
+    });
+  });
+
+  it("downloadXetFile over a fake Hub, CAS and CDN (bodies cut): the reference file, checked against its shard", async () => {
+    const xorb = new Uint8Array(readFileSync(referenceXorb()));
+    const answer = JSON.parse(fixture("recon.recorded.json")) as ReconstructionAnswer;
+    const fileHashString = fixture(`${CSV}.xet-file-hash`).trim();
+    const seen: string[] = [];
+    let cuts = 0;
+    const f = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      seen.push(url.replace(/\?.*/, ""));
+      if (url.endsWith("/paths-info/rev"))
+        return Response.json([
+          { path: CSV, type: "file", size: 63_527_244, xetHash: fileHashString },
+        ]);
+      if (url.endsWith("/xet-read-token/rev"))
+        return Response.json({ casUrl: "https://cas.test", accessToken: "t", exp: 0 });
+      if (url.startsWith("https://cas.test/v2/reconstructions/")) {
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer t");
+        const e = answer.fetch_info[
+          XORB
+        ]?.[0] as ReconstructionAnswer["fetch_info"][string][number];
+        return Response.json({
+          offset_into_first_range: 0,
+          terms: answer.terms,
+          xorbs: {
+            [XORB]: [
+              { url: "https://cdn.test/x", ranges: [{ chunks: e.range, bytes: e.url_range }] },
+            ],
+          },
+        });
+      }
+      if (url === "https://cdn.test/x")
+        return rangedResponse(xorb, new Headers(init?.headers).get("range"), {
+          cutAfter: cuts++ < 3 ? 3_000_000 : undefined,
+        });
+      return new Response("?", { status: 404 });
+    }) as typeof fetch;
+    const verify = verifierFromShard(
+      readShard(fixtureBytes(SHARDS.verification)),
+      hashFromString(fileHashString),
+      {
+        wholeFile: true,
+      },
+    );
+    const got: ChunkRef[] = [];
+    for await (const c of chunkStream(
+      downloadXetFile({ repo: "a/b", repoType: "dataset", revision: "rev", fetch: f }, CSV, {
+        version: 2,
+        verify,
+        backoffMs: 1,
+      }),
+    ))
+      got.push({ hash: chunkHash(c), length: c.length });
+    expect(hashToString(fileHash(got))).toBe(fileHashString);
+    expect(seen.slice(0, 3)).toEqual([
+      "https://huggingface.co/api/datasets/a/b/paths-info/rev",
+      "https://huggingface.co/api/datasets/a/b/xet-read-token/rev",
+      `https://cas.test/v2/reconstructions/${fileHashString}`,
+    ]);
+    expect(seen.filter((u) => u === "https://cdn.test/x").length).toBe(4); // three cuts, resumed
+  }, 300_000);
+});
+
+describe.runIf(process.env.XET_LIVE === "1")("U9 (X11c) the live Hub and CAS (XET_LIVE=1)", () => {
+  const repo = {
+    repo: "xet-team/xet-spec-reference-files",
+    repoType: "dataset" as const,
+    revision: REVISION,
+  };
+
+  it("the reference file downloaded and checked against its shard; v1 and v2 agree; a byte range", async () => {
+    const fileHashString = fixture(`${CSV}.xet-file-hash`).trim();
+    for (const version of [1, 2] as const) {
+      const verify = verifierFromShard(
+        readShard(fixtureBytes(SHARDS.verification)),
+        hashFromString(fileHashString),
+        {
+          wholeFile: true,
+        },
+      );
+      const got: ChunkRef[] = [];
+      for await (const c of chunkStream(downloadXetFile(repo, CSV, { version, verify })))
+        got.push({ hash: chunkHash(c), length: c.length });
+      expect(hashToString(fileHash(got)), `v${version}`).toBe(fileHashString);
+    }
+    // a range: the answer's terms cover it, the bytes are the file's
+    const token = await xetReadToken(repo);
+    const narrowed = await fetchReconstruction({
+      token,
+      fileHash: fileHashString,
+      range: { start: 140_000, end: 260_000 },
+    });
+    expect(narrowed.terms.length).toBeGreaterThan(0);
+    const part = await collect(
+      downloadXetFile(repo, CSV, { range: { start: 140_000, end: 260_000 } }),
+    );
+    const whole = await collect(downloadXetFile(repo, CSV, { range: { start: 0, end: 300_000 } }));
+    expect(part.length).toBe(120_001);
+    expect(part.equals(whole.subarray(140_000, 260_001))).toBe(true);
+  }, 600_000);
 });
 
 describe("H5 portable", () => {

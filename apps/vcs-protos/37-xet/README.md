@@ -31,6 +31,8 @@ reconstructed byte differs from the reference data.
 | U2 | (X11b) **Deduplication.** Every chunk of the reference file is found in the global-dedupe shard by its keyed hash, at its index; the terms built from those locations (with their range hashes) serialize to the reference upload shard. Terms split where chunks leave a xorb or skip an index; damaged shards are refused. |
 | U5 | (X11b) **Streaming verification.** With a shard's hashes (`verifierFromShard`), each chunk is checked as it is decoded, before it is yielded: the reference reconstruction passes with each reference shard (796 chunks checked, keyed ones keyed); a chunk with one byte changed stops the stream at that chunk (none after it yielded), where unchecked it passes unnoticed; with the term's verification hash only, the damage is caught at the term's end; a term inside its fetch range is checked over its own chunks. |
 | U7 | (X11b) **One fetch for several terms.** Consecutive terms of one fetch entry whose chunk ranges go forward share one fetch (a gap between them decoded and not output); terms going backwards, repeated, or of different entries are fetched each; each term of a shared fetch is checked when it ends, before the next term's bytes; offsets and lengths across a shared fetch. |
+| U8 | (X11c) **The live services' protocol, offline.** `httpRanges` resumes a body cut mid-stream from its next byte (the `Range` asked says so), tries 429, 5xx and network errors again with growing pauses up to its retries, reads a server that ignores `Range` from the start, refuses another range and a 404 (not retried); v2 answers become v1's fetch entries; `downloadXetFile` over a fake Hub, CAS and CDN with bodies cut three times rebuilds the reference file, checked chunk by chunk and term by term against its shard (`wholeFile`). |
+| U9 | (X11c) **The live Hub and CAS** (`XET_LIVE=1`, not in CI): the reference file downloaded through `paths-info`, an anonymous read token, the reconstruction answer (v1 and v2) and the CDN, checked against its shard; a byte range equal to the same bytes of a larger range. |
 | U3 | (X11b) **Xorbs written.** `writeXorb` serializes chunks (LZ4, ByteGrouping4-LZ4 or none, a chunk LZ4 would not shrink stored), ending after the last chunk; the reference file's 796 chunks written so and read back through `reconstruct` give the reference chunk hashes. LZ4 frames round trip on edge cases and keep LZ4's end-of-block rules; xxHash32 (the header checksum) matches its published values. |
 
 ## Scope
@@ -235,6 +237,34 @@ Each term is still checked (bytes, verification hash) when its last chunk is dec
 | C3 | Terms of another fetch entry grouped | killed (U7) |
 | C4 | A grouped term checked only at the group's end | killed (U7) |
 
+### X11c: the live services (`src/cas.ts`)
+
+A portable client (only `fetch`, no `node:` imports):
+
+- **`hubPathInfo`** asks the Hub's `paths-info` for a file's Xet hash and SHA-256. The `resolve`
+  endpoint also gives them (`x-xet-hash`, `x-linked-etag`, a `link` header naming the token and
+  reconstruction URLs), but in a redirect a browser cannot read.
+- **`xetReadToken`** gets a CAS read token: anonymous for public repositories, a Hub token for
+  private ones.
+- **`fetchReconstruction`** gets the answer, v1 or v2 (`xorbs[].ranges[]`, turned into v1's fetch
+  entries by `v2ToV1`), for the whole file or a byte range. A range comes back narrowed to the
+  terms covering it: `bytes=0-1000` gave one term of one chunk.
+- **`httpRanges`** reads signed xorb URLs (no token) with `Range`. Retries and resume are
+  described in U8.
+- **`downloadXetFile`** chains these into `reconstruct`, with `verify` from a shard.
+
+Live (U9, run here, not in CI): the reference CSV through every step, both answer versions,
+checked against the verification shard; the CDN served the same bytes as the dataset's xorb
+file.
+
+| # | Mutant | Result |
+|---|---|---|
+| M1 | Resumed from the range's start | killed (U8) |
+| M2 | 5xx not tried again | killed (U8) |
+| M3 | `Content-Range` not checked | killed (U8) |
+| M4 | v2's chunks and bytes swapped | killed (U8) |
+| M5 | A 404 tried again | killed (U8) |
+
 ## Promotion grades
 
 | File | Grade | Why |
@@ -242,6 +272,7 @@ Each term is still checked (bytes, verification hash) when its last chunk is dec
 | `src/xet.ts`, `src/gear-table.ts` | **Adopt** | the specification's reference data, bit for bit |
 | `src/lz4.ts` | **Adopt** for Xet chunks | small, dependency-free; frames verified through chunk hashes, and against lz4_flex in both directions |
 | `src/shard.ts` | **Adopt** | the reference shards, byte for byte |
+| `src/cas.ts` | **Adapt** | the live services, read side; token and URL refresh for long downloads to come |
 
 ## Open threads
 
@@ -250,7 +281,9 @@ Each term is still checked (bytes, verification hash) when its last chunk is dec
    no write token here.
 2. ~~Fetching several terms of one xorb with one request~~ — answered (U7): consecutive terms of
    one fetch entry going forward share one fetch.
-3. Reconstruction against the live CAS (tokens, signed URLs, retries, `Range` resume).
+3. ~~Reconstruction against the live CAS~~ — answered by X11c (U8, U9): read tokens, v1 and v2
+   answers, signed URLs, retries and `Range` resume. Not done: refreshing a token or a signed
+   URL that expires during a long download (a new reconstruction answer would be needed).
 4. ~~Verifying a fetched xorb range by its chunk hashes as it streams~~ — answered (U5):
    `reconstruct`'s `verify`, from a shard (`verifierFromShard`).
 
