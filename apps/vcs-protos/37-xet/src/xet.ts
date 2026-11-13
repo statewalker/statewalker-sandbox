@@ -260,19 +260,20 @@ async function* xorbChunks(
   }
 }
 
-/**
- * Rebuilds a file from a reconstruction answer: for each term, the fetch entry of its xorb that
- * covers its chunk range is fetched and decoded chunk by chunk, and the term's chunks are yielded;
- * `offset_into_first_range` bytes of the first term are dropped, and `length` (a range request's
- * length) truncates the last. This is the v1 answer (`fetch_info`, `url_range` inclusive); v2's
- * `xorbs[].ranges[]` and multipart range fetches are not implemented.
- */
 /** a chunk or a term whose bytes are not those its hash names */
 export class XetIntegrityError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "XetIntegrityError";
   }
+}
+
+/** a term of the answer as the verifier sees it */
+export interface VerifiedTerm {
+  /** the xorb hash, lower case */
+  xorb: string;
+  start: number;
+  end: number;
 }
 
 /**
@@ -282,29 +283,54 @@ export class XetIntegrityError extends Error {
  */
 export interface ReconstructionVerifier {
   /**
-   * Is `hash` (the decoded chunk's) the expected one for chunk `index` of `xorb`? `undefined`:
-   * not known (unchecked). Checked before the chunk is yielded, so a damaged chunk stops the
-   * stream there, chunks before the term's first included.
+   * Is `hash` (the decoded chunk's) the expected one for chunk `index` of `xorb` (lower case)?
+   * `false` stops the reconstruction; `undefined`: not known, unchecked. Asked before the chunk
+   * is yielded, so a damaged chunk stops the stream there, chunks before the term's first too.
    */
   chunk?: (xorb: string, index: number, hash: Uint8Array) => boolean | undefined;
   /**
-   * The expected verification hash of term `term` (its chunk hashes, keyed): checked when the
-   * term's last chunk is decoded, before the next term is fetched. A `length` that ends the
-   * reconstruction inside a term leaves that term unchecked.
+   * The expected verification hash of a term (the plain hashes of its chunks, concatenated and
+   * keyed with the verification key), or `undefined` (unchecked). Matched by the term's xorb and
+   * chunk range, not by its position: a range request starts mid-file, and the server may split
+   * a file's terms otherwise. Checked when the term's last chunk is decoded.
    */
-  rangeHash?: (term: number) => Uint8Array | undefined;
+  rangeHash?: (term: VerifiedTerm) => Uint8Array | undefined;
+  /**
+   * After the last term of a reconstruction that ran to the end (not cut short by `length`
+   * inside a term): the terms it had. Throw (or return a message) to refuse it: a verifier that
+   * knows the whole file can require all of it.
+   */
+  done?: (terms: VerifiedTerm[]) => string | undefined;
 }
 
+/**
+ * Rebuilds a file from a reconstruction answer: for each term, the fetch entry of its xorb that
+ * covers its chunk range is fetched and decoded chunk by chunk, and the term's chunks are yielded;
+ * `offset_into_first_range` bytes of the first term are dropped, and `length` (a range request's
+ * length) truncates the last. This is the v1 answer (`fetch_info`, `url_range` inclusive); v2's
+ * `xorbs[].ranges[]` and multipart range fetches are not implemented. `verify` checks chunks and
+ * terms against a shard's hashes as they stream (`ReconstructionVerifier`).
+ */
 export async function* reconstruct(
   answer: ReconstructionAnswer,
   fetchRange: FetchRange,
   opts: { length?: number; verify?: ReconstructionVerifier } = {},
 ): AsyncGenerator<Uint8Array> {
   const verify = opts.verify;
+  const fail = (message: string): never => {
+    throw verify ? new XetIntegrityError(message) : new Error(message);
+  };
   let skip = answer.offset_into_first_range;
   let left = opts.length ?? Number.POSITIVE_INFINITY;
-  for (const [termIndex, term] of answer.terms.entries()) {
-    const expectedRange = verify?.rangeHash?.(termIndex);
+  const seen: VerifiedTerm[] = [];
+  for (const term of answer.terms) {
+    const vt: VerifiedTerm = {
+      xorb: term.hash.toLowerCase(),
+      start: term.range.start,
+      end: term.range.end,
+    };
+    seen.push(vt);
+    const expectedRange = verify?.rangeHash?.(vt);
     const termHashes: Uint8Array[] = [];
     const entry = (answer.fetch_info[term.hash] ?? []).find(
       (f) => f.range.start <= term.range.start && term.range.end <= f.range.end,
@@ -313,18 +339,33 @@ export async function* reconstruct(
       throw new Error(
         `reconstruction: no fetch range for ${term.hash} ${term.range.start}-${term.range.end}`,
       );
+    /** the term's own checks, once its last chunk is decoded */
+    const checkTerm = (produced: number) => {
+      if (produced !== term.unpacked_length)
+        fail(
+          `reconstruction: term ${term.hash} gave ${produced} bytes, expected ${term.unpacked_length}`,
+        );
+      if (expectedRange) {
+        const got = rangeHash(termHashes);
+        if (!got.every((b, k) => b === expectedRange[k]))
+          fail(
+            `reconstruction: term ${term.hash} ${term.range.start}-${term.range.end} does not match its verification hash`,
+          );
+      }
+    };
     let index = entry.range.start;
     let produced = 0;
     const bytes = fetchRange(entry.url, entry.url_range.start, entry.url_range.end);
     for await (const chunk of xorbChunks(bytes, term.range.end - entry.range.start)) {
       const i = index++;
-      if (verify?.chunk || expectedRange) {
+      const inTerm = i >= term.range.start;
+      if (verify?.chunk || (expectedRange && inTerm)) {
         const h = chunkHash(chunk);
-        if (verify?.chunk?.(term.hash, i, h) === false)
-          throw new XetIntegrityError(`reconstruction: chunk ${i} of xorb ${term.hash} is damaged`);
-        if (i >= term.range.start) termHashes.push(h);
+        if (verify?.chunk?.(vt.xorb, i, h) === false)
+          fail(`reconstruction: chunk ${i} of xorb ${term.hash} is damaged`);
+        if (inTerm) termHashes.push(h);
       }
-      if (i < term.range.start) continue;
+      if (!inTerm) continue;
       produced += chunk.length;
       if (skip >= chunk.length) {
         skip -= chunk.length;
@@ -334,26 +375,23 @@ export async function* reconstruct(
       skip = 0;
       if (piece.length >= left) {
         yield piece.subarray(0, left);
+        // ending exactly at the term's end: the term is whole, so it is checked (and, as the
+        // reconstruction is whole up to `length`, `done` too)
+        if (piece.length === left && i === term.range.end - 1) {
+          checkTerm(produced);
+          const refused = verify?.done?.(seen);
+          if (refused) fail(`reconstruction: ${refused}`);
+        }
         return;
       }
       left -= piece.length;
       yield piece;
     }
-    if (produced !== term.unpacked_length)
-      throw new Error(
-        `reconstruction: term ${term.hash} gave ${produced} bytes, expected ${term.unpacked_length}`,
-      );
-    if (expectedRange) {
-      const got = rangeHash(termHashes);
-      if (!got.every((b, k) => b === expectedRange[k]))
-        throw new XetIntegrityError(
-          `reconstruction: term ${termIndex} (xorb ${term.hash} ${term.range.start}-${term.range.end}) does not match its verification hash`,
-        );
-    }
+    checkTerm(produced);
   }
+  const refused = verify?.done?.(seen);
+  if (refused) fail(`reconstruction: ${refused}`);
 }
-
-// ---------------------------------------------------------------- xorbs written (X11b)
 
 /** at most this many chunks in a xorb (the specification's MUST) */
 export const XORB_MAX_CHUNKS = 8192;

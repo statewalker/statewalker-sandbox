@@ -188,6 +188,31 @@ The reconstruction answer carries no hashes, so the file hash could only check a
 | V3 | Keyed shard hashes compared plain | killed (U5) |
 | V4 | Chunks before the term's first counted in its range hash | killed (U5) |
 
+**Review of #123** found term checks matched by position: term n of the answer was taken for
+term n of the shard's file, which a range request (starting mid-file) or a server that splits
+terms otherwise breaks, with false alarms on correct data. Now (U6, 8 synthetic chunks, a file of
+two terms):
+
+| Finding | Fix |
+|---|---|
+| Terms matched by position | matched by xorb and chunk range, in order; a term with no exact match is unchecked (a range request over [4,8), a narrowed [5,8), a split [0,2)+[2,8): no false alarm) |
+| A dropped or an extra term passed | `wholeFile`: the answer must be exactly the file's terms, each checked (`done`) |
+| A `length` ending exactly at a term's end skipped its check | checked on that path too |
+| An unknown chunk passed silently: a chunk past what the shard lists, an upper-case name | past a listed xorb's end fails; names lower-cased; `strict` fails an unlisted xorb |
+| Keyed hashes without the key fell back to plain | refused |
+| A short term was a plain `Error` under `verify` | an integrity failure |
+
+A verifier walks the file's terms in order: one per reconstruction.
+
+| # | Mutant | Result |
+|---|---|---|
+| X1 | Terms matched by position | killed (U6) |
+| X2 | `done` ignored | killed (U6) |
+| X3 | The exact-length path unchecked | killed (U6) |
+| X4 | Names not lower-cased | killed (U6) |
+| X5 | A chunk past the listed ones unknown | killed (U6) |
+| X6 | `strict` ignored | killed (U6) |
+
 ## Promotion grades
 
 | File | Grade | Why |
