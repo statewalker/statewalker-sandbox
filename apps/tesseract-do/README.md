@@ -175,7 +175,7 @@ Durable Object** (`src/pdf/pdf-job.ts`, a unique id per job) and returns at once
 
 | Job | wrangler / cellb / celld |
 | --- | --- |
-| GeoTopo.pdf, all 117 pages (text, 10 images OCR'd in `ocr-deu`) | accepted in 0.17 / 0.13 / 0.38 s; done in 8.5 / 8.8 / 10.5 s, 2880 blocks |
+| GeoTopo.pdf, all 117 pages (text, 10 images OCR'd in `ocr-deu`) | accepted in 0.17 / 0.11 / 0.38 s; done in 8.5 / 7.4 / 10.5 s, 2880 blocks |
 | linn.pdf (JBIG2 scan) | 99% recall, the PNG asset served by the job |
 | 40 pages, 1 s apart, runtime restarted after page 2 | resumed and finished, pages 1–40 in order, none failed |
 | cancel after page 1, then delete | no page after the cancel; the job is gone (404) |
