@@ -1364,6 +1364,9 @@ importers:
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
+      pdf-lib:
+        specifier: ^1.17.1
+        version: 1.17.1
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

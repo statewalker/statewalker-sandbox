@@ -46,6 +46,7 @@ test("a PDF job started before the restart resumes and finishes", async (t) => {
   assert.equal(done.status, "done", JSON.stringify(done));
   assert.equal(done.pagesDone, 40);
   assert.deepEqual(done.failedPages, []);
+  assert.ok(done.reads.opens >= 2, "the PDF was opened again from SQLite after the restart");
   const { body } = await jobJson(id, "/document");
   assert.equal(body.document.pages.length, 40);
   assert.deepEqual(

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "PROTOTYPE \u2014 Tesseract OCR (tesseract-wasm) inside Durable Objects. One Worker project, run on wrangler (workerd), cellb and celld.",
+  "description": "PROTOTYPE — Tesseract OCR (tesseract-wasm) inside Durable Objects. One Worker project, run on wrangler (workerd), cellb and celld.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -35,6 +35,7 @@
     "@cloudflare/workers-types": "^4.20260702.1",
     "@statewalker/cellb": "0.8.1",
     "esbuild": "0.28.2",
+    "pdf-lib": "^1.17.1",
     "typescript": "catalog:",
     "wrangler": "4.158.0"
   }

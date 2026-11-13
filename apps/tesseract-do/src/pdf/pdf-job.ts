@@ -1,14 +1,22 @@
 /**
- * One PDF conversion as a Durable Object. `start` stores the PDF in the job's SQLite and sets
- * an alarm; every alarm converts **one page** and sets the next. Each alarm is an invocation
- * of its own, with its own CPU budget (30 s by default, up to 5 min), so a document of any
- * length is not bound by one request; the OCR of a page's images runs in the language's
- * OcrCell, outside this job's budget.
+ * One PDF conversion as a Durable Object.
  *
- * Progress, pages and PNG assets are in SQLite as they are done, so the job resumes where it
- * was after an eviction or a restart (the alarm is durable too). A page that fails is retried
- * with a growing delay, then recorded as failed and skipped. The pdf.js document is kept in
- * memory between alarms while the isolate lives, and opened again from SQLite when it does not.
+ * The PDF arrives in parts (`append`, 1 MiB each), straight into the job's SQLite: neither the
+ * Worker nor the job holds the whole upload. `start` checks it and sets an alarm. Every alarm
+ * converts a **batch of pages** (`pageConcurrency`, default 4) and sets the next: each alarm is
+ * an invocation of its own, with its own CPU budget, so a document of any length is not bound
+ * by one request. A page's images are OCR'd in the language's OcrCells over RPC, outside this
+ * job's budget; with `ocrCells` > 1 they are spread over a small pool of cells, so the pages of
+ * a batch are recognised in parallel.
+ *
+ * pdf.js reads the PDF by byte ranges from SQLite (`openPdfRanges`, no auto-fetch), so only the
+ * parts of the file that the pages need are read. pdf.js still allocates one buffer of the
+ * file's size for what it has read, which is why documents are capped at 64 MB here.
+ *
+ * Each page commits on its own (the page, its new PNG assets), so after an eviction or a
+ * restart the job resumes with the pages not done yet; the alarm is durable too. A page that
+ * fails is retried with a growing delay, then recorded as failed and skipped. The pdf.js
+ * document is kept between alarms while the isolate lives, and reopened when it does not.
  */
 import { DurableObject } from "cloudflare:workers";
 import {
@@ -19,12 +27,12 @@ import {
   type PortableTextBlock,
 } from "@statewalker/pdf-portabletext/core";
 import type { PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
-import { BlobStore } from "../blob-store.ts";
+import { BLOB_CHUNK, BlobStore } from "../blob-store.ts";
 import type { RawImage } from "../decode.ts";
 import type { Sql } from "../models.ts";
 import type { Env } from "../ocr-cell.ts";
 import { assembleDocument, convertPage, documentLanguage } from "./convert.ts";
-import { openPdf } from "./pdfjs.ts";
+import { openPdfRanges, type RangeStats } from "./pdfjs.ts";
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
@@ -33,8 +41,12 @@ export type JobOptions = {
   lang: string;
   engine: "cell" | "isolate";
   maxPages?: number;
-  /** Pause between pages (ms): spreads the OCR load; tests use it to stop a job half-way. */
+  /** Pause between batches (ms): spreads the OCR load; tests use it to stop a job half-way. */
   throttleMs?: number;
+  /** Pages converted at once by an alarm (1–8, default 4). */
+  pageConcurrency?: number;
+  /** OCR cells per language the job spreads its images over (1–8, default 2). */
+  ocrCells?: number;
 };
 
 type JobState = {
@@ -43,33 +55,42 @@ type JobState = {
   size: number;
   options: JobOptions;
   pageCount: number;
-  /** The next page to convert (1-based). */
+  /** The lowest page not done or failed yet (1-based). */
   nextPage: number;
   /** Tesseract code of the document's language, once known. */
   language?: string;
-  /** Failed attempts of `nextPage` so far. */
-  attempts: number;
+  /** Failed attempts per page not done yet. */
+  attempts: Record<string, number>;
   failedPages: { page: number; error: string }[];
+  /** How much of the PDF pdf.js has read from SQLite, over all alarms. */
+  reads: { bytesRead: number; requests: number; opens: number };
+  alarms: number;
   createdAt: string;
   finishedAt?: string;
   error?: string;
 };
 
-export type JobView = Omit<JobState, "options" | "attempts"> & {
-  pagesDone: number;
-  options: JobOptions;
-};
+export type JobView = Omit<JobState, "attempts"> & { pagesDone: number };
 
 type StoredPage = { page: PageInfo; blocks: PortableTextBlock[]; assets: string[] };
 
 /** Attempts per page before it is recorded as failed. */
 const MAX_ATTEMPTS = 3;
-const MAX_PDF_BYTES = 20 * 1024 * 1024;
+/** pdf.js allocates the file's size once (see above): keep it well inside 128 MB. */
+export const MAX_JOB_PDF_BYTES = 64 * 1024 * 1024;
+/** An upload that is never started is removed after this long. */
+const ABANDONED_UPLOAD_MS = 60 * 60 * 1000;
+
+const clamp = (n: number | undefined, fallback: number) =>
+  Math.min(8, Math.max(1, Math.floor(n ?? fallback) || fallback));
 
 export class PdfJob extends DurableObject<Env> {
   readonly #sql: Sql;
   readonly #blobs: BlobStore;
-  #pdf: Promise<PDFDocumentProxy> | undefined;
+  #pdf: Promise<{ pdf: PDFDocumentProxy; stats: RangeStats }> | undefined;
+  /** The part of the open document's read stats already added to the state. */
+  #counted = { bytesRead: 0, requests: 0 };
+  #ocrTurn = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -103,28 +124,49 @@ export class PdfJob extends DurableObject<Env> {
     return { ...rest, pagesDone };
   }
 
-  /** Stores the PDF and schedules the first page. A job starts once. */
-  async start(pdf: Uint8Array, name: string, options: JobOptions): Promise<JobView> {
+  /**
+   * Adds a part of the PDF (a multiple of 1 MiB, except the last). Returns the bytes received.
+   * An upload that is never started is removed after an hour.
+   */
+  async append(part: Uint8Array): Promise<number> {
     if (this.#state()) throw new Error("EEXIST: this job has already been started");
-    if (pdf.byteLength === 0 || pdf.byteLength > MAX_PDF_BYTES)
-      throw new Error("EINVAL: send a PDF (at most 20 MB)");
+    const before = this.#blobs.size("pdf") ?? 0;
+    if (before + part.byteLength > MAX_JOB_PDF_BYTES)
+      throw new Error(`E2BIG: a job takes PDFs of at most ${MAX_JOB_PDF_BYTES >> 20} MB`);
+    if (part.byteLength % BLOB_CHUNK !== 0 && before % BLOB_CHUNK !== 0)
+      throw new Error("EINVAL: only the last part may be shorter than 1 MiB");
+    const size = this.#blobs.append("pdf", part);
+    if (before === 0) await this.ctx.storage.setAlarm(Date.now() + ABANDONED_UPLOAD_MS);
+    return size;
+  }
+
+  /** Checks the uploaded PDF and schedules the first batch. A job starts once. */
+  async start(name: string, options: JobOptions): Promise<JobView> {
+    if (this.#state()) throw new Error("EEXIST: this job has already been started");
+    const size = this.#blobs.size("pdf") ?? 0;
+    if (size === 0) throw new Error("EINVAL: send a PDF");
+    if (new TextDecoder().decode(this.#blobs.read("pdf", 0, 5)) !== "%PDF-")
+      throw new Error("EINVAL: not a PDF");
     if (options.lang !== "auto" && !languageByTesseract(options.lang))
       throw new Error(`EINVAL: unsupported language '${options.lang}'`);
     const state: JobState = {
       status: "queued",
       name,
-      size: pdf.byteLength,
-      options,
+      size,
+      options: {
+        ...options,
+        pageConcurrency: clamp(options.pageConcurrency, 4),
+        ocrCells: clamp(options.ocrCells, 2),
+      },
       pageCount: 0,
       nextPage: 1,
-      attempts: 0,
+      attempts: {},
       failedPages: [],
+      reads: { bytesRead: 0, requests: 0, opens: 0 },
+      alarms: 0,
       createdAt: new Date().toISOString(),
     };
-    this.ctx.storage.transactionSync(() => {
-      this.#blobs.put("pdf", pdf);
-      this.#save(state);
-    });
+    this.#save(state);
     await this.ctx.storage.setAlarm(Date.now());
     return this.#view(state);
   }
@@ -186,43 +228,108 @@ export class PdfJob extends DurableObject<Env> {
     this.#createTables();
   }
 
-  #openPdf(): Promise<PDFDocumentProxy> {
-    this.#pdf ??= (async () => {
-      const bytes = this.#blobs.get("pdf");
-      if (!bytes) throw new Error("ENOENT: the job's PDF is missing");
-      return openPdf(bytes);
-    })();
-    this.#pdf.catch(() => {
-      this.#pdf = undefined;
-    });
+  #openPdf(): Promise<{ pdf: PDFDocumentProxy; stats: RangeStats }> {
+    if (!this.#pdf) {
+      const size = this.#blobs.size("pdf");
+      this.#counted = { bytesRead: 0, requests: 0 };
+      this.#pdf =
+        size === null
+          ? Promise.reject(new Error("ENOENT: the job's PDF is missing"))
+          : openPdfRanges(size, (begin, end) => this.#blobs.read("pdf", begin, end));
+      this.#pdf.catch(() => {
+        this.#pdf = undefined;
+      });
+    }
     return this.#pdf;
   }
 
   async #closePdf(): Promise<void> {
-    const pdf = this.#pdf;
+    const opened = this.#pdf;
     this.#pdf = undefined;
-    if (pdf) await (await pdf.catch(() => null))?.loadingTask.destroy();
+    if (opened) await (await opened.catch(() => null))?.pdf.loadingTask.destroy();
   }
 
-  /** One page per alarm. */
+  /** Adds what pdf.js read since the last count to the state's totals. */
+  #countReads(state: JobState, stats: RangeStats | undefined): void {
+    if (!stats) return;
+    state.reads.bytesRead += stats.bytesRead - this.#counted.bytesRead;
+    state.reads.requests += stats.requests - this.#counted.requests;
+    this.#counted = { bytesRead: stats.bytesRead, requests: stats.requests };
+  }
+
+  /** The cell for the next image: a round robin over the language's pool. */
+  #ocrCell(lang: string, cells: number): string {
+    const k = this.#ocrTurn++ % cells;
+    return k === 0 ? `ocr-${lang}` : `ocr-${lang}-${k}`;
+  }
+
+  #isDone(n: number): boolean {
+    return this.#sql.exec("SELECT 1 FROM page WHERE n = ?", n).toArray().length > 0;
+  }
+
+  /** Converts page `n` and commits it, unless the job was cancelled or removed meanwhile. */
+  async #convertAndStore(pdf: PDFDocumentProxy, n: number, state: JobState): Promise<void> {
+    const language = languageByTesseract(state.language ?? "eng") as Language;
+    const { engine, ocrCells = 2 } = state.options;
+    const ocr = (image: RawImage, lang: string) => {
+      const cell = this.#ocrCell(lang, ocrCells);
+      return this.env.OCR.get(this.env.OCR.idFromName(cell)).ocr(image, lang, { engine });
+    };
+    const known = (id: string) =>
+      this.#sql.exec("SELECT 1 FROM asset WHERE id = ?", id).toArray().length > 0;
+    const result = await convertPage(pdf, n, language, { lang: state.options.lang, ocr }, known);
+    // The page and its new assets commit together.
+    this.ctx.storage.transactionSync(() => {
+      if (this.#state()?.status !== "running") return;
+      for (const a of result.assets) {
+        this.#blobs.put(`asset:${a.meta._id}`, a.png);
+        this.#sql.exec(
+          "INSERT OR REPLACE INTO asset (id, meta) VALUES (?, ?)",
+          a.meta._id,
+          JSON.stringify(a.meta),
+        );
+      }
+      const stored: StoredPage = {
+        page: result.page,
+        blocks: result.blocks,
+        assets: result.assets.map((a) => a.meta._id),
+      };
+      this.#blobs.putJson(`page:${n}`, stored);
+      this.#sql.exec("INSERT OR REPLACE INTO page (n, ok) VALUES (?, 1)", n);
+    });
+  }
+
   async alarm(): Promise<void> {
     const state = this.#state();
-    if (!state || (state.status !== "queued" && state.status !== "running")) return;
-    let pdf: PDFDocumentProxy;
+    if (!state) {
+      // An upload that was never started.
+      await this.ctx.storage.deleteAll();
+      this.#createTables();
+      return;
+    }
+    if (state.status !== "queued" && state.status !== "running") return;
+    state.alarms += 1;
+    let opened: { pdf: PDFDocumentProxy; stats: RangeStats };
     try {
-      pdf = await this.#openPdf();
+      const first = !this.#pdf;
+      opened = await this.#openPdf();
+      if (first) state.reads.opens += 1;
       if (state.status === "queued") {
         // First alarm: the page count and the language, then the pages.
         state.pageCount = Math.min(
-          pdf.numPages,
+          opened.pdf.numPages,
           state.options.maxPages ?? Number.POSITIVE_INFINITY,
         );
         state.language = (
-          await documentLanguage(pdf, { lang: state.options.lang, maxPages: state.pageCount })
+          await documentLanguage(opened.pdf, {
+            lang: state.options.lang,
+            maxPages: state.pageCount,
+          })
         ).tesseract;
         state.status = "running";
-        this.#save(state);
       }
+      this.#countReads(state, opened.stats);
+      this.#save(state);
     } catch (e) {
       // An unreadable PDF fails the job: there is nothing to retry.
       state.status = "failed";
@@ -233,64 +340,56 @@ export class PdfJob extends DurableObject<Env> {
       return;
     }
 
-    const n = state.nextPage;
-    if (n <= state.pageCount) {
-      const language = languageByTesseract(state.language ?? "eng") as Language;
-      const { engine } = state.options;
-      const ocr = (image: RawImage, lang: string) =>
-        this.env.OCR.get(this.env.OCR.idFromName(`ocr-${lang}`)).ocr(image, lang, { engine });
-      const known = (id: string) =>
-        this.#sql.exec("SELECT 1 FROM asset WHERE id = ?", id).toArray().length > 0;
-      try {
-        const result = await convertPage(
-          pdf,
-          n,
-          language,
-          { lang: state.options.lang, ocr },
-          known,
-        );
-        // The page, its new assets and the progress commit together.
-        this.ctx.storage.transactionSync(() => {
-          for (const a of result.assets) {
-            this.#blobs.put(`asset:${a.meta._id}`, a.png);
-            this.#sql.exec(
-              "INSERT OR REPLACE INTO asset (id, meta) VALUES (?, ?)",
-              a.meta._id,
-              JSON.stringify(a.meta),
-            );
-          }
-          const stored: StoredPage = {
-            page: result.page,
-            blocks: result.blocks,
-            assets: result.assets.map((a) => a.meta._id),
-          };
-          this.#blobs.putJson(`page:${n}`, stored);
-          this.#sql.exec("INSERT OR REPLACE INTO page (n, ok) VALUES (?, 1)", n);
-          state.nextPage = n + 1;
-          state.attempts = 0;
-          this.#save(state);
-        });
-      } catch (e) {
-        state.attempts += 1;
-        if (state.attempts < MAX_ATTEMPTS) {
-          this.#save(state);
-          await this.ctx.storage.setAlarm(Date.now() + 1000 * 2 ** state.attempts);
-          return;
-        }
-        state.failedPages.push({ page: n, error: String((e as Error)?.message ?? e) });
-        state.nextPage = n + 1;
-        state.attempts = 0;
-        this.#save(state);
-      }
+    // The batch: the next pages not done or failed yet.
+    const failed = new Set(state.failedPages.map((f) => f.page));
+    const batch: number[] = [];
+    for (
+      let n = state.nextPage;
+      n <= state.pageCount && batch.length < (state.options.pageConcurrency ?? 4);
+      n++
+    ) {
+      if (!failed.has(n) && !this.#isDone(n)) batch.push(n);
     }
+    const outcomes = await Promise.allSettled(
+      batch.map((n) => this.#convertAndStore(opened.pdf, n, state)),
+    );
 
-    if (state.nextPage > state.pageCount) {
-      state.status = "done";
-      state.finishedAt = new Date().toISOString();
-      this.#save(state);
+    // Cancelled or removed while the batch ran: nothing more to do.
+    const now = this.#state();
+    if (now?.status !== "running") return;
+    now.alarms = state.alarms;
+    now.reads = state.reads;
+    this.#countReads(now, opened.stats);
+    let retry = 0;
+    outcomes.forEach((outcome, i) => {
+      if (outcome.status === "fulfilled") return;
+      const n = batch[i];
+      const attempts = (now.attempts[n] ?? 0) + 1;
+      if (attempts < MAX_ATTEMPTS) {
+        now.attempts[n] = attempts;
+        retry = Math.max(retry, attempts);
+      } else {
+        delete now.attempts[n];
+        now.failedPages.push({ page: n, error: String(outcome.reason?.message ?? outcome.reason) });
+      }
+    });
+    for (const n of batch) if (this.#isDone(n)) delete now.attempts[n];
+    const settled = new Set(now.failedPages.map((f) => f.page));
+    while (
+      now.nextPage <= now.pageCount &&
+      (settled.has(now.nextPage) || this.#isDone(now.nextPage))
+    )
+      now.nextPage += 1;
+
+    if (now.nextPage > now.pageCount) {
+      now.status = "done";
+      now.finishedAt = new Date().toISOString();
+      this.#save(now);
       await this.#closePdf();
       return;
     }
-    await this.ctx.storage.setAlarm(Date.now() + (state.options.throttleMs ?? 0));
+    this.#save(now);
+    const delay = retry > 0 ? 1000 * 2 ** retry : (now.options.throttleMs ?? 0);
+    await this.ctx.storage.setAlarm(Date.now() + delay);
   }
 }

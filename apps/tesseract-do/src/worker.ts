@@ -5,8 +5,10 @@
  *        body: a PNG or JPEG image → OCR result (JSON)
  *   POST /api/pdf?lang=auto|eng[&engine=cell|isolate][&maxPages=n][&stream=1][&assets=inline]
  *        body: a PDF → PortableText document (JSON), or page events (NDJSON) with stream=1
- *   POST /api/pdf/jobs?lang=…[&engine=…][&maxPages=n][&throttleMs=ms][&name=…]
- *        body: a PDF → 202 { id, … }: a PdfJob Durable Object converts it, one page per alarm
+ *   POST /api/pdf/jobs?lang=…[&engine=…][&maxPages=n][&pageConcurrency=n][&ocrCells=n]
+ *                      [&throttleMs=ms][&name=…]
+ *        body: a PDF (≤ 64 MB) → 202 { id, … }: a PdfJob Durable Object converts it, a batch
+ *        of pages per alarm
  *   GET  /api/pdf/jobs/:id               the job's status and progress
  *   GET  /api/pdf/jobs/:id/document[?assets=inline]   the pages done so far as one document
  *   GET  /api/pdf/jobs/:id/pages/:n      one converted page (blocks, asset ids)
@@ -21,10 +23,12 @@
  * `engine=isolate` runs recognition in a Worker Loader isolate instead of the cell's own (needs
  * WASM_URL).
  */
+
+import { BLOB_CHUNK } from "./blob-store.ts";
 import type { RawImage } from "./decode.ts";
 import { type CellOcrResult, type Env, OcrCell } from "./ocr-cell.ts";
 import { convertPdfInWorker, type PageResult } from "./pdf/convert.ts";
-import { PdfJob } from "./pdf/pdf-job.ts";
+import { MAX_JOB_PDF_BYTES, PdfJob } from "./pdf/pdf-job.ts";
 
 export { OcrCell, PdfJob };
 
@@ -215,15 +219,25 @@ async function readPdf(request: Request): Promise<Uint8Array | Response> {
  */
 async function jobRequest(request: Request, url: URL, env: Env): Promise<Response> {
   if (url.pathname === "/api/pdf/jobs" && request.method === "POST") {
-    const bytes = await readPdf(request);
-    if (bytes instanceof Response) return bytes;
+    const length = Number(request.headers.get("content-length") ?? 0);
+    if (length > MAX_JOB_PDF_BYTES)
+      return json(
+        { error: `E2BIG: a job takes PDFs of at most ${MAX_JOB_PDF_BYTES >> 20} MB` },
+        413,
+      );
+    if (!request.body) return json({ error: "EINVAL: send a PDF" }, 400);
     const id = env.PDF_JOB.newUniqueId();
     const job = env.PDF_JOB.get(id);
-    const view = await job.start(bytes, url.searchParams.get("name") ?? "document.pdf", {
+    // The body goes to the job in 1 MiB parts as it arrives: no side holds the whole upload.
+    for await (const part of inParts(request.body, BLOB_CHUNK)) await job.append(part);
+    const num = (name: string) => Number(url.searchParams.get(name)) || undefined;
+    const view = await job.start(url.searchParams.get("name") ?? "document.pdf", {
       lang: url.searchParams.get("lang") ?? "auto",
       engine: url.searchParams.get("engine") === "isolate" ? "isolate" : "cell",
-      maxPages: Number(url.searchParams.get("maxPages")) || undefined,
-      throttleMs: Math.max(0, Number(url.searchParams.get("throttleMs")) || 0),
+      maxPages: num("maxPages"),
+      throttleMs: Math.max(0, num("throttleMs") ?? 0),
+      pageConcurrency: num("pageConcurrency"),
+      ocrCells: num("ocrCells"),
     });
     return json({ id: id.toString(), ...view }, 202);
   }
@@ -279,4 +293,28 @@ async function jobRequest(request: Request, url: URL, env: Env): Promise<Respons
       : json({ error: "ENOENT: no such asset" }, 404);
   }
   return json({ error: "not found" }, 404);
+}
+
+/** A byte stream re-cut into parts of exactly `size` bytes (the last one may be shorter). */
+async function* inParts(body: ReadableStream<Uint8Array>, size: number) {
+  let buffer = new Uint8Array(size);
+  let filled = 0;
+  const reader = body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    let offset = 0;
+    while (offset < value.byteLength) {
+      const n = Math.min(size - filled, value.byteLength - offset);
+      buffer.set(value.subarray(offset, offset + n), filled);
+      filled += n;
+      offset += n;
+      if (filled === size) {
+        yield buffer;
+        buffer = new Uint8Array(size);
+        filled = 0;
+      }
+    }
+  }
+  if (filled > 0) yield buffer.subarray(0, filled);
 }

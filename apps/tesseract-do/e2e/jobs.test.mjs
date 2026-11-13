@@ -4,10 +4,10 @@
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { test } from "node:test";
-import { BASE_URL, fixture, recall, recordMetric } from "./helpers.mjs";
+import { BASE_URL, fixture, getJson, recall, recordMetric } from "./helpers.mjs";
 import { jobJson, startJob, text, waitForJob } from "./jobs-helpers.mjs";
 
-test("a 117-page document: one page per alarm, the whole document at the end", async () => {
+test("a 117-page document: four pages per alarm, the whole document at the end", async () => {
   const started = Date.now();
   const job = await startJob("GeoTopo.pdf");
   const accepted = (Date.now() - started) / 1000;
@@ -26,6 +26,8 @@ test("a 117-page document: one page per alarm, the whole document at the end", a
   assert.deepEqual(done.failedPages, []);
   assert.equal(done.language, "deu");
   assert.ok(sawProgress, "progress is visible while the job runs");
+  assert.equal(done.alarms, Math.ceil(117 / 4), "batches of four pages");
+  assert.equal(done.reads.opens, 1, "opened once, kept between alarms");
   const { body } = await jobJson(job.id, "/document");
   assert.equal(body.complete, true);
   assert.equal(body.document.pages.length, 117);
@@ -39,6 +41,9 @@ test("a 117-page document: one page per alarm, the whole document at the end", a
     seconds,
     blocks: body.document.blocks.length,
     assets: Object.keys(body.document.assets).length,
+    alarms: done.alarms,
+    bytesRead: done.reads.bytesRead,
+    size: done.size,
   });
 });
 
@@ -60,8 +65,60 @@ test("a scan via a job: OCR in the language's cell, the PNG asset served by the 
   recordMetric("job linn.pdf", { recall: Math.round(rec * 1000) / 1000 });
 });
 
+test("a 34 MB upload streams into the job; pdf.js reads only what the pages need", async () => {
+  const size = fixture("big-34mb.pdf").length;
+  const job = await startJob("big-34mb.pdf", { lang: "deu" });
+  assert.equal(job.size, size, "every byte arrived");
+  const done = await waitForJob(job.id);
+  assert.equal(done.status, "done", JSON.stringify(done));
+  assert.equal(done.pagesDone, 3);
+  const { bytesRead, requests } = done.reads;
+  assert.ok(bytesRead < size / 10, `read ${bytesRead} of ${size} bytes`);
+  const { body } = await jobJson(job.id, "/document");
+  assert.ok(text(body.document).includes("Topologie"));
+  recordMetric("job big-34mb.pdf", {
+    size,
+    bytesRead,
+    requests,
+    readShare: Math.round((bytesRead / size) * 10000) / 10000,
+  });
+});
+
+test("four scanned pages at once, their images spread over three OCR cells", async () => {
+  const started = Date.now();
+  const job = await startJob("scan-4.pdf", { lang: "eng", pageConcurrency: "4", ocrCells: "3" });
+  const done = await waitForJob(job.id);
+  assert.equal(done.status, "done", JSON.stringify(done));
+  assert.equal(done.pagesDone, 4);
+  assert.equal(done.alarms, 1, "one batch");
+  const { body } = await jobJson(job.id, "/document");
+  const truth = fixture("linn.txt").toString();
+  const pages = body.document.pages.map((p) => p.number);
+  assert.deepEqual(pages, [1, 2, 3, 4]);
+  for (const n of pages) {
+    const page = body.document.blocks.filter((b) => b._key.startsWith(`p${n}-`));
+    const rec = recall(truth, text({ blocks: page }));
+    assert.ok(rec > 0.95, `page ${n}: recall ${rec}`);
+  }
+  for (const cell of ["ocr-eng", "ocr-eng-1", "ocr-eng-2"]) {
+    const stats = await getJson(`/api/cells/${cell}`);
+    assert.deepEqual(
+      stats.models.map((m) => m.lang),
+      ["eng"],
+      `${cell} took part`,
+    );
+  }
+  recordMetric("job scan-4.pdf (4 pages at once, 3 cells)", {
+    seconds: (Date.now() - started) / 1000,
+  });
+});
+
 test("cancel keeps what is done; delete removes the job", async () => {
-  const job = await startJob("GeoTopo.pdf", { lang: "deu", throttleMs: "1000" });
+  const job = await startJob("GeoTopo.pdf", {
+    lang: "deu",
+    throttleMs: "1000",
+    pageConcurrency: "1",
+  });
   await waitForPages(job.id, 1);
   const cancel = await fetch(`${BASE_URL}/api/pdf/jobs/${job.id}/cancel`, { method: "POST" });
   const cancelled = await cancel.json();
@@ -75,7 +132,12 @@ test("cancel keeps what is done; delete removes the job", async () => {
   assert.equal((await jobJson(job.id)).status, 404);
 });
 
-test("refusals: not a PDF, an unknown job", async () => {
+test("refusals: not a PDF, too large, an unknown job", async () => {
+  const tooLarge = await fetch(`${BASE_URL}/api/pdf/jobs`, {
+    method: "POST",
+    body: new Uint8Array(65 * 1024 * 1024),
+  });
+  assert.equal(tooLarge.status, 413);
   const res = await fetch(`${BASE_URL}/api/pdf/jobs`, {
     method: "POST",
     body: fixture("baiona.png"),
@@ -86,7 +148,12 @@ test("refusals: not a PDF, an unknown job", async () => {
 
 test("a job left running for the restart", async () => {
   // Slow on purpose: a second per page, so it is half-way when the runtime stops.
-  const job = await startJob("GeoTopo.pdf", { lang: "deu", maxPages: "40", throttleMs: "1000" });
+  const job = await startJob("GeoTopo.pdf", {
+    lang: "deu",
+    maxPages: "40",
+    throttleMs: "1000",
+    pageConcurrency: "1",
+  });
   const before = await waitForPages(job.id, 2);
   assert.equal(before.status, "running");
   writeFileSync(

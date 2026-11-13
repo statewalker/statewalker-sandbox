@@ -97,6 +97,40 @@ if (!existsSync(jpegPath)) {
   console.log("wrote c03-29.jpg");
 }
 
+// Built from the fixtures above (pdf-lib) for the PDF job suites:
+//   scan-4.pdf  linn.pdf's scanned page four times: four pages to OCR at once
+//   big-34mb.pdf  GeoTopo.pdf's first 3 pages plus 32 MB of random bytes in an unreferenced
+//                 stream: an upload above the synchronous route's 20 MB, of which pdf.js
+//                 needs only a little
+const { PDFDocument, PDFName } = await import("pdf-lib");
+const scanPath = join(dir, "scan-4.pdf");
+if (!existsSync(scanPath)) {
+  const src = await PDFDocument.load(readFileSync(join(dir, "linn.pdf")));
+  const out = await PDFDocument.create();
+  for (let i = 0; i < 4; i++) out.addPage((await out.copyPages(src, [0]))[0]);
+  writeFileSync(scanPath, await out.save({ useObjectStreams: false }));
+  console.log("built scan-4.pdf");
+}
+const bigPath = join(dir, "big-34mb.pdf");
+if (!existsSync(bigPath)) {
+  const src = await PDFDocument.load(readFileSync(join(dir, "GeoTopo.pdf")));
+  const out = await PDFDocument.create();
+  for (const page of await out.copyPages(src, [0, 1, 2])) out.addPage(page);
+  // Deterministic noise (xorshift), so the file is the same on every machine.
+  const noise = new Uint8Array(32 * 1024 * 1024);
+  let x = 0x2545f491;
+  for (let i = 0; i < noise.length; i++) {
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    noise[i] = x & 0xff;
+  }
+  const filler = out.context.stream(noise, { Type: PDFName.of("XObject") });
+  out.context.register(filler);
+  writeFileSync(bigPath, await out.save({ useObjectStreams: false }));
+  console.log("built big-34mb.pdf");
+}
+
 writeFileSync(
   join(dir, "LICENSES.txt"),
   IMAGES.map(
@@ -105,6 +139,7 @@ writeFileSync(
   ).join("\n") +
     "\nc03-29.jpg\n  the JPEG stream of c03-29.pdf (public domain)\n" +
     PDFS.map((p) => `\n${p.file}\n  source: ${p.url}\n  license: ${p.license}\n`).join("") +
+    "\nscan-4.pdf, big-34mb.pdf\n  built from linn.pdf and GeoTopo.pdf (licenses as above)\n" +
     `\nmodels/*.traineddata\n  source: ${TESSDATA}\n  license: Apache-2.0 (tesseract-ocr/tessdata_fast)\n`,
 );
 console.log(`fixtures ready in ${dir}`);
