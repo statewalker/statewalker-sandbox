@@ -96,7 +96,7 @@
   },
   "after restart": {
     "model": "sqlite",
-    "seconds": 3.164,
+    "seconds": 5.319,
     "wasmMemoryMiB": 68.4
   },
   "linn.png (isolate)": {
@@ -116,7 +116,7 @@
   },
   "pdf GeoTopo.pdf (6 pages)": {
     "blocks": 64,
-    "seconds": 0.673
+    "seconds": 0.425
   },
   "pdf linn.pdf": {
     "recall": 0.99,
@@ -124,12 +124,16 @@
     "seconds": 8.482
   },
   "job GeoTopo.pdf (117 pages)": {
-    "acceptedSeconds": 0.18,
-    "seconds": 7.797,
+    "acceptedSeconds": 0.166,
+    "seconds": 8.519,
     "blocks": 2880,
     "assets": 10
   },
   "job linn.pdf": {
     "recall": 0.99
+  },
+  "job resumed after restart": {
+    "pagesBeforeRestart": 2,
+    "pagesAtRestart": 5
   }
 }
