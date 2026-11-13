@@ -70,23 +70,42 @@ export function capBytes(cap: ByteCarrier, options: CapBytesOptions = {}) {
   const streamed = options.streamed ?? ((transfer) => transfer());
   let remote: ReturnType<typeof capFiles> | undefined;
   const files = () => (remote ??= capFiles(cap));
+  /**
+   * A file's bytes turned into what the caller needs (`finish`). For a streamed file, `finish`
+   * runs inside the streamed transfer (its slot, if `streamed` limits them), so the copy it
+   * makes is counted with the transfer's; `isStreamed` tells which way the file came.
+   */
+  async function readAs<T>(
+    path: string,
+    finish: (bytes: Uint8Array, isStreamed: boolean) => T,
+  ): Promise<T> {
+    for (let attempt = 1; ; attempt++) {
+      let whole: Uint8Array | undefined;
+      try {
+        whole = bytesArg(await cap.call("readFileBuffer", path));
+      } catch (e) {
+        if (codeOf(e) !== "EFBIG") throw e;
+      }
+      if (whole) return finish(whole, false);
+      // Larger than one call moves: the same file as a stream, if the holder can hold it.
+      const { size } = (await cap.call("stat", path)) as { size: number };
+      if (size > maxRead) throw tooLarge(path, maxRead);
+      const last = attempt >= 2;
+      const done = await streamed(async () => {
+        const bytes = await collect(files().read(path), path, maxRead);
+        // A streamed read of a file that is gone (or is now a directory) yields nothing,
+        // where the file was over 16 MiB a moment ago: ask again, for the error or the new
+        // content.
+        return bytes.length > 0 || last ? { value: finish(bytes, true) } : undefined;
+      });
+      if (done) return done.value;
+    }
+  }
   return {
+    readAs,
     /** A file's bytes (ENOENT, EISDIR, EACCES as the store answers them). */
     async read(path: string): Promise<Uint8Array> {
-      for (let attempt = 1; ; attempt++) {
-        try {
-          return bytesArg(await cap.call("readFileBuffer", path));
-        } catch (e) {
-          if (codeOf(e) !== "EFBIG") throw e;
-        }
-        // Larger than one call moves: the same file as a stream, if the holder can hold it.
-        const { size } = (await cap.call("stat", path)) as { size: number };
-        if (size > maxRead) throw tooLarge(path, maxRead);
-        const bytes = await streamed(() => collect(files().read(path), path, maxRead));
-        // A streamed read of a file that is gone (or is now a directory) yields nothing, where
-        // the file was over 16 MiB a moment ago: ask again, for the error or the new content.
-        if (bytes.length > 0 || attempt >= 2) return bytes;
-      }
+      return readAs(path, (bytes) => bytes);
     },
     /** Replaces a file's content with `bytes`. */
     async write(path: string, bytes: Uint8Array): Promise<void> {
@@ -166,9 +185,12 @@ export function largeFileCalls(cap: ByteCarrier) {
       // The store's text calls, still sent by tool bundles approved before the shim sent bytes:
       // UTF-8 as the store encodes and decodes it, here on the host.
       case "readFile":
-        return b()
-          .read(path)
-          .then((bytes) => fitsReply(bytesToString(bytes, "utf8"), path));
+        // A file read in one call (up to 16 MiB) is answered as the store answered it; a
+        // streamed one is decoded in its transfer's slot and must fit the reply.
+        return b().readAs(path, (bytes, isStreamed) => {
+          const text = bytesToString(bytes, "utf8");
+          return isStreamed ? fitsReply(text, path) : text;
+        });
       case "writeFile":
         return b().write(path, stringToBytes(String(args[0] ?? ""), "utf8"));
       case "appendFile":

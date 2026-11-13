@@ -292,3 +292,23 @@ test("a text read whose reply would not fit JS RPC is EFBIG (two-byte strings)",
   await fs.writeFile("/p1/l.txt", `ÿ${"a".repeat(20 * 1024 * 1024)}`);
   assert.equal((await largeFileCalls(cap)("readFile", "/p1/l.txt")).length, 20 * 1024 * 1024 + 1);
 });
+
+test("an older bundle's text read of a file read in one call is answered as before", async () => {
+  const { cap, store } = await setup();
+  const { largeFileCalls } = await import("../../src/cap-bytes.ts");
+  // Under 16 MiB, ASCII and one "€": a two-byte string of about 31 MiB. The store answered it
+  // in one call before; it still is (no reply-size refusal for files read in one call).
+  const text = `€${"a".repeat(15.5 * 1024 * 1024)}`;
+  await store.writeFile("/p1/csv.txt", text);
+  assert.equal(await largeFileCalls(cap)("readFile", "/p1/csv.txt"), text);
+});
+
+test("an older bundle's text append over 16 MiB is streamed", async () => {
+  const { cap, store, methods } = await setup();
+  const { largeFileCalls } = await import("../../src/cap-bytes.ts");
+  await store.writeFile("/p1/log.txt", "start\n");
+  methods.length = 0;
+  await largeFileCalls(cap)("appendFile", "/p1/log.txt", "é".repeat(MAX_WHOLE_FILE_BYTES / 2 + 1));
+  assert.ok(methods.includes("rpc:openWrite"), "streamed");
+  assert.equal((await store.stat("/p1/log.txt")).size, 6 + MAX_WHOLE_FILE_BYTES + 2);
+});
