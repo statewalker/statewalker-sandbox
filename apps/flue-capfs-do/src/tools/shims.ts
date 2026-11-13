@@ -11,9 +11,11 @@ export const PROCESS_ID = "@capfs/process";
 export const PROCESS_GLOBAL = "__capfs_process";
 
 /**
- * node:fs over the capability. The store keeps bytes: reads return a Buffer-like Uint8Array of
- * the stored bytes (`toString(encoding)`), strings are written as UTF-8 or in the encoding
- * given (latin1/binary, ascii, base64, hex), and binary data is stored byte for byte.
+ * node:fs over the capability, in bytes only: reads return a Buffer-like Uint8Array of the stored
+ * bytes (`toString(encoding)`), strings are encoded here as UTF-8 or in the encoding given
+ * (latin1/binary, ascii, base64, hex), and every write and append sends bytes. UTF-8 is decoded
+ * as the store decodes it: U+FFFD for invalid sequences, a leading U+FEFF kept. The capability
+ * streams a file over 16 MiB on the host side (largeFileCalls); a read is refused over 30 MiB.
  */
 export const FS_SHIM = String.raw`
 let files;
@@ -39,7 +41,7 @@ const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const norm = (e) => String(e || "utf8").toLowerCase().replace("-", "");
 function encode(bytes, enc) {
   switch (norm(enc)) {
-    case "utf8": return new TextDecoder().decode(bytes);
+    case "utf8": return new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
     case "latin1": case "binary": return Array.from(bytes, (b) => String.fromCharCode(b)).join("");
     case "ascii": return Array.from(bytes, (b) => String.fromCharCode(b & 127)).join("");
     case "hex": return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -74,15 +76,14 @@ function decode(s, enc) {
     default: throw err("EINVAL: unsupported encoding '" + enc + "'");
   }
 }
-/** What is stored: a UTF-8 string as text; bytes (or a string in a byte encoding) byte for byte. */
+/** The bytes stored: a string in its encoding (UTF-8 by default), binary data byte for byte. */
 function content(d, enc) {
-  if (typeof d === "string") return norm(enc) === "utf8" ? { text: d } : { bytes: decode(d, enc) };
+  if (typeof d === "string") return norm(enc) === "utf8" ? new TextEncoder().encode(d) : decode(d, enc);
   // Exactly the view's bytes: RPC would otherwise copy its whole buffer (a wasm heap, a pool).
-  if (ArrayBuffer.isView(d)) return { bytes: new Uint8Array(d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength)) };
-  if (d instanceof ArrayBuffer) return { bytes: new Uint8Array(d) };
+  if (ArrayBuffer.isView(d)) return new Uint8Array(d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength));
+  if (d instanceof ArrayBuffer) return new Uint8Array(d);
   throw err("EINVAL: data must be a string, a TypedArray or an ArrayBuffer");
 }
-const put = (method, path, c) => (c.bytes ? cap(method + "Buffer", path, c.bytes) : cap(method, path, c.text));
 const encodingOf = (o) => (typeof o === "string" ? o : o && o.encoding) || null;
 const stats = (s) => {
   const t = new Date(s.mtime);
@@ -92,14 +93,13 @@ const stats = (s) => {
 
 async function readFile(path, o) {
   const enc = encodingOf(o);
-  if (enc && norm(enc) === "utf8") return cap("readFile", p(path));
   let raw;
   try { raw = await need().call("readFileBuffer", p(path)); } catch (e) { throw err(e, "readFile", p(path)); }
   const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
   return enc ? encode(bytes, enc) : toBuffer(bytes);
 }
-async function writeFile(path, data, o) { await put("writeFile", p(path), content(data, encodingOf(o))); }
-async function appendFile(path, data, o) { await put("appendFile", p(path), content(data, encodingOf(o))); }
+async function writeFile(path, data, o) { await cap("writeFileBuffer", p(path), content(data, encodingOf(o))); }
+async function appendFile(path, data, o) { await cap("appendFileBuffer", p(path), content(data, encodingOf(o))); }
 async function readdir(path, o) {
   let names;
   try { names = await need().readdir(p(path)); } catch (e) { throw err(e, "scandir", p(path)); }

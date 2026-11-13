@@ -33,19 +33,6 @@ makes them a real deployment shape:
 
 ## How to run it
 
-`@statewalker/webrun-files-rpc` with appends (0.2.0) is not on npm yet: it is linked from a
-[webrun-files](https://github.com/statewalker/webrun-files) checkout beside this repository
-(`link:../../../webrun-files/packages/webrun-files-rpc`), built before installing here:
-
-```sh
-git clone https://github.com/statewalker/webrun-files ../webrun-files   # beside statewalker-sandbox
-git -C ../webrun-files checkout --detach 71b538341c1e3707d402dd1c886efd84e78a2e84   # what CI builds
-(cd ../webrun-files && pnpm install --filter '@statewalker/webrun-files-rpc...' \
-  && pnpm --filter '@statewalker/webrun-files-rpc...' run build)
-```
-
-Then:
-
 ```sh
 pnpm install                                        # at the repository root
 pnpm --filter @statewalker/flue-capfs-do test       # unit + cellb + cellb(celld bucket) + wrangler
@@ -61,7 +48,7 @@ again.
 |---|---|
 | `test:unit` | the authorization core and the store on `node:sqlite`, without a runtime |
 | `test:wrangler` | `wrangler dev` (workerd 2026-11-04) |
-| `test:cellb` | `@statewalker/cellb` 0.8.3 `loadProject`, cells in `node:sqlite` files |
+| `test:cellb` | `@statewalker/cellb` 0.8.8 `loadProject`, cells in `node:sqlite` files |
 | `test:cellb-bundled-only` | cellb with `TOOL_BUNDLE={"hostFsRuntimes":"bundled-only","allowedBundles":[<hash of tests/fixtures/todo-tool.ts>]}`: that approved bundle runs, other bundles and raw tools are refused |
 | `test:cellb-celld-bucket` | cellb with `celldBucket(sqliteObjectStore(...))`: cells as celld writes them (LTX logs, `own.json` ownership records), in the object store `celld dev` keeps |
 | `test:browser` | the project in Chromium on cellb (Playwright): builds `dist/`, serves it, runs the capability checks and the Python cases through the page |
@@ -334,9 +321,13 @@ engine of its own, never in the cell's realm. It works on the same filtered file
    `/`) into the engine's `/workspace`. Files the capability hides are simply not there.
 2. **The code runs** with `/workspace` (or `cwd`) as its working directory: ordinary `open`,
    `os`, `csv`, `json`, `sqlite3` and so on work on that copy. `import capfs` gives live,
-   authorized calls (`await capfs.read_text(p)`, `write_text`, `append_text`, `listdir`,
-   `exists`, `stat`, `mkdir`, `remove`), with paths in the capability's namespace (a
-   `/workspace/…` path is accepted too).
+   authorized calls (`await capfs.read_text(p)`, `write_text`, `append_text`, `read_bytes`,
+   `write_bytes`, `append_bytes`, `listdir`, `exists`, `stat`, `mkdir`, `remove`), with paths in
+   the capability's namespace (a `/workspace/…` path is accepted too). Content reaches the
+   capability as bytes only: the `*_text` calls encode and decode UTF-8 in the engine (as the
+   store decodes: U+FFFD for invalid sequences), and large files move as files-RPC streams. A
+   live call carries at most 256 MiB (one JSON message to the kernel, binary data as base64);
+   reads stop at 32 MiB, as elsewhere.
 3. **After the run**, the engine reports what changed. The Agent writes it back through the
    capability: each new directory, write and deletion (a removed tree as one recursive delete)
    is authorized again. The result lists what was `written`, `deleted` and `denied` (with the
@@ -657,22 +648,44 @@ Writing bytes is a `write` operation like writing text, authorized the same way.
 TEXT before BLOBs are read as `CAST(data AS BLOB)`, so they come back whole too.
 
 Every writer sends bytes as bytes:
-- just-bash (`CapFs`): `Uint8Array` content, and strings in a byte encoding (`binary`/`latin1`,
-  `base64`, `hex`), go to `writeFileBuffer`; `readFileBuffer` reads the stored bytes.
-- tools' `node:fs`: Buffers and TypedArrays are written byte for byte; reads return the bytes.
-- Python: binary files are synced in and written back as bytes.
+- just-bash (`CapFs`) and Flue's tools on Wasmer exchange bytes only (`src/cap-bytes.ts`): text
+  is encoded and decoded holder-side in its encoding (UTF-8 by default, as the store decodes:
+  U+FFFD for invalid sequences, a leading U+FEFF kept). Up to 16 MiB a file is one binary call
+  (`readFileBuffer`, `writeFileBuffer`, `appendFileBuffer`); a larger one moves as a files-RPC
+  stream (read, write, append): writes and appends of any size (the store's limit is 1 GiB), and
+  reads up to 32 MiB, since a read is whole in the agent's memory (`EFBIG` beyond). A streamed
+  append that races another writer (`ESTALE`) is sent again; a streamed read of a file removed
+  meanwhile answers `ENOENT`, not an empty file.
+- tools' `node:fs`: bytes only too. Strings are encoded in the shim (UTF-8 or the encoding given),
+  Buffers and TypedArrays written byte for byte, UTF-8 decoded as the store decodes. The shim
+  makes whole-file calls (it is inlined into each bundle, without the files-RPC client); the
+  tool's capability (`ToolFiles`, `ToolFilesEntrypoint`) answers them through `capBytes` on the
+  host side (`largeFileCalls`), so a file over 16 MiB is streamed there:
+  - a call's bytes cross JS RPC between the tool's isolate and the host (workerd: 32 MiB a
+    message), so a tool reads files up to 30 MiB (`EFBIG` beyond, before anything is
+    streamed), and writes what one message carries;
+  - one such streamed transfer runs at a time in an isolate, the others wait: each holds a few
+    copies of the file in the host's memory;
+  - through `ToolFilesEntrypoint` the tool's run is checked before every call of the stream,
+    so a transfer still going when `run` settles stops at its next block;
+  - reading a file over 16 MiB asks its size first, so it needs the `list` right on it as well
+    as `read` (as for just-bash);
+  - bundles approved before the shim sent bytes still use the text calls, which keep the
+    16 MiB limit.
+- Python: binary files are synced in and written back as bytes; the live `capfs` module moves
+  bytes (`read_bytes`, `write_bytes`, `append_bytes`, and the `*_text` calls on top of them).
+- The store's text calls (`readFile`, `writeFile`, `appendFile`) remain only for tool bundles
+  approved before this change: their inlined shim still sends strings.
 - Wasmer: open files are read and saved as bytes.
-- Flue's tools on Wasmer: `writeFile(Uint8Array)` and `readFileBuffer`.
 
 Limits and notes:
 - **Size:** whole-file calls (`readFile`, `writeFileBuffer`, …) move at most 16 MiB in one
-  message (`EFBIG`, HTTP 413, beyond); larger files are streamed. Wasmer refuses larger files at
-  the write.
+  message (`EFBIG`, HTTP 413, beyond); larger files are streamed (just-bash, Flue's tools, the
+  `stream` task, Wasmer reads and appends, tools' `node:fs`). just-bash and Flue read files up
+  to 32 MiB, tools up to 30 MiB: their APIs return whole files, held in memory.
 - **Approved tool bundles:** the `node:fs` shim is inlined into every tool bundle, so bundles
   built after this change hash differently. Approve them again; bundles already approved still
-  run (their shim writes text only).
-- **Python's live `capfs` module** (`read_text`, `write_text`, …) is text-only: a binary file
-  read there comes back with U+FFFD. Files under `/workspace` are synced as bytes.
+  run (their shim sends text as strings, which the store still accepts).
 - **just-bash's `printf`** writes `\377` as the character U+00FF (UTF-8 `c3 bf`), as on just-bash's
   own in-memory file system; `cat`, `cp`, redirects of binary data and `base64 -d` are byte-exact.
 
@@ -773,6 +786,7 @@ src/files-rpc.ts    holder side of streaming: capFiles(cap), the webrun-files-rp
 src/files-rpc-hub.ts  owner side: a webrun-files-rpc server per token, in the Workspace
 src/guarded-files-api.ts  the FilesApi those servers serve: the store through FsGate
 src/capfs.ts        just-bash IFileSystem over a capability; /dev/null sink; safeExec
+src/cap-bytes.ts    whole-file reads/writes/appends in bytes: one binary call, or a files-RPC stream
 src/agent.ts        Agent DO: bash, Flue tools, Worker Loader tools, delegation chain
 src/flue-compat.ts  `rg` shim so Flue's grep tool works on just-bash
 src/agent-loop.ts   the `agent` task: pi-agent-core loop, Flue's tools over the capability, sessions

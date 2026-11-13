@@ -111,6 +111,45 @@ f"{names}|{text}|{denied}"`,
     );
 
     add(
+      `[${transport}] capfs moves bytes: binary files byte for byte, text decoded in the engine`,
+      async () => {
+        const { ws, token } = await setup();
+        const r = ok(
+          await py(ws, token, transport, {
+            code: `import capfs
+await capfs.write_bytes("/proj/b.bin", bytes([255, 254, 0, 1]))
+await capfs.append_bytes("/workspace/proj/b.bin", b"\\x02")
+back = await capfs.read_bytes("/proj/b.bin")
+await capfs.write_text("/proj/t.txt", "h\\u00e9")
+await capfs.append_text("/proj/t.txt", "!")
+text = await capfs.read_text("/proj/t.txt")
+lossy = await capfs.read_text("/proj/b.bin")
+try:
+    await capfs.write_bytes("/proj/n.bin", 5)
+    refused = "no"
+except TypeError:
+    refused = "TypeError"
+f"{type(back).__name__}|{list(back)}|{text}|{lossy.count(chr(0xfffd))}|{refused}"`,
+          }),
+        );
+        assert.equal(r.error, undefined, r.error);
+        const [kind, back, text, replaced, refused] = String(r.value).split("|");
+        assert.equal(
+          refused,
+          "TypeError",
+          "an int is not bytes (bytes(5) would be five zero bytes)",
+        );
+        assert.equal(kind, "bytes");
+        assert.equal(back, "[255, 254, 0, 1, 2]");
+        assert.equal(text, "hé!");
+        assert.equal(replaced, "2", "invalid UTF-8 reads as U+FFFD, as the store decodes it");
+        const b64 = await admin(`/api/w/${ws}/files?encoding=base64`);
+        assert.equal(b64["/proj/b.bin"], Buffer.from([255, 254, 0, 1, 2]).toString("base64"));
+        assert.equal((await files(ws))["/proj/t.txt"], "hé!");
+      },
+    );
+
+    add(
       `[${transport}] a delegated read-only scope: only that subtree, and no write gets through`,
       async () => {
         const { ws, token } = await setup(["/proj"]);

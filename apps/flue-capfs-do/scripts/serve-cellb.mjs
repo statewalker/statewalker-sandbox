@@ -87,12 +87,12 @@ if (values["celld-bucket"]) {
   const file = values["celld-bucket"];
   mkdirSync(dirname(file), { recursive: true });
   const { runtime, unsupported } = await loadNodeProject(dir, {
-    openSql: nodeSqliteOpener(), // in memory: every cell is restored from the bucket on first use
+    // Every cell starts empty and is restored from the bucket on first use. pageCapture logs each
+    // commit's pages from the WAL (O(changed pages)); without it each commit imaged and diffed the
+    // cell's whole database, long enough on a large cell for the node lease's renewal to lapse.
+    openSql: nodeSqliteOpener(undefined, { pageCapture: true }),
     files: new MemFilesApi(),
-    // A longer lease than the default 10 s: each commit of a cell diffs the cell's whole database
-    // image on Node (no page hook), so streaming a file of tens of MiB keeps the process busy for
-    // seconds at a time, and a renewal can land after a 10 s lease has lapsed.
-    storage: celldBucket(sqliteObjectStore(file), { node: "cellb-1", leaseTtlMs: 30_000 }),
+    storage: celldBucket(sqliteObjectStore(file), { node: "cellb-1" }),
   });
   project = { fetch: (r) => runtime.fetch(r), close: () => runtime.close(), unsupported };
 } else {

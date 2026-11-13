@@ -252,6 +252,7 @@ describe("R4 delta chains through the base cache", () => {
         }
       })();
     const inflations: number[] = [];
+    const peaks: number[] = [];
     for (const cache of [16 * MiB, 0]) {
       const reader = await openPack(files, packPath, idxPath, { baseCacheBytes: cache });
       gc();
@@ -266,21 +267,26 @@ describe("R4 delta chains through the base cache", () => {
         peak = Math.max(peak, live() - base);
       }
       inflations.push(reader.stats.inflations);
+      peaks.push(peak);
       console.log(
         `R4 cache ${cache >> 20} MiB: ${reader.stats.inflations} inflations, peak +${(peak / MiB).toFixed(1)} MiB live`,
       );
       // The cache itself stays within its budget (deterministic). Process memory = the budget + a
       // working set of a few objects (the base being patched, the result, the caller's copy) plus
-      // buffers awaiting release after a forced GC, which varies by Node version (≈ 30–34 MiB on
-      // Node 22, 42–64 MiB on Node 24 in CI): only a loose sanity bound is asserted (an
-      // unbounded cache of this chain would hold 50 × 4 MiB = 200 MiB). The criterion's
-      // "< 24 MiB" forgot the working set and is recorded as not met in the README.
+      // evicted 4 MiB buffers whose memory is released lazily after a forced GC: ≈ 30 MiB in all
+      // on Node 22, 42–92 MiB on Node 24 in CI (the eviction churn exists only with a cache; the
+      // run without one stays near 4 MiB). So only a sanity bound is asserted, on what the cache
+      // adds over the same reads without it, midway between the noise and an unbounded cache.
+      // The criterion's "< 24 MiB" forgot the working set and is recorded as not met in the
+      // README.
       expect(reader.stats.peakCachedBytes).toBeLessThanOrEqual(cache);
       // the accounting matches what the cache really holds, and the cache was used
       expect(reader.stats.cachedBytes).toBe(reader.stats.cachedEntriesBytes);
       if (cache > 0) expect(reader.stats.peakCachedBytes).toBeGreaterThan(0);
-      if (cache > 0) expect(peak).toBeLessThan(cache + 16 * 4 * MiB);
     }
+    // what the cache adds to the process: its budget plus eviction churn (≤ ≈ 80 MiB seen in CI);
+    // an unbounded cache of this chain adds 50 × 4 MiB ≈ 205 MiB
+    expect((peaks[0] as number) - (peaks[1] as number)).toBeLessThan(16 * MiB + 112 * MiB);
     expect((inflations[0] as number) * 2).toBeLessThanOrEqual(inflations[1] as number);
   }, 300_000);
 });
@@ -551,6 +557,108 @@ describe("R2b review: cached objects are not shared with callers", () => {
     for await (const c of second?.content ?? []) c.fill(0);
     const third = await reader.get(child, { verify: true });
     await expect(collect(third?.content ?? [])).resolves.toBeDefined();
+  });
+});
+
+describe("R7 small objects share block reads (git's pack windows)", () => {
+  /** counts the reads that reach the pack file */
+  const counting = (files: StreamingNodeFilesApi, packPath: string) => {
+    const counter = { reads: 0 };
+    const proxy = new Proxy(files, {
+      get(t, k, r) {
+        if (k === "read")
+          return (path: string, o?: { start?: number; length?: number }) => {
+            if (path === packPath) counter.reads++;
+            return t.read(path, o);
+          };
+        const v = Reflect.get(t, k, r);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    return { proxy, counter };
+  };
+  it("reading every object of a 60-commit pack costs far fewer reads than objects, and the same bytes", async () => {
+    const { repo, files, packPath, idxPath } = await installed(packAll(history, true));
+    const expected = allObjects(repo);
+    const { proxy, counter } = counting(files, packPath);
+    const reader = await openPack(proxy, packPath, idxPath, { baseCacheBytes: 0 });
+    const opened = counter.reads;
+    for (const [oid, e] of expected) {
+      const o = await reader.get(oid);
+      expect((await collect(o?.content ?? [])).equals(e.content), oid).toBe(true);
+      const raw = await collect((await reader.entry(oid))?.raw() ?? []);
+      expect(raw.length, oid).toBeGreaterThan(0);
+    }
+    expect(counter.reads - opened).toBeLessThan(expected.size / 8);
+  }, 60_000);
+  it("raw() chunks are copies: changing one does not change the next read", async () => {
+    const { files, packPath, idxPath, result } = await installed(packAll(history, true));
+    const reader = await openPack(files, packPath, idxPath);
+    const oid = result.entries[0]?.oid as string;
+    const first = await collect((await reader.entry(oid))?.raw() ?? []);
+    for await (const c of (await reader.entry(oid))?.raw() ?? []) c.fill(0);
+    const again = await collect((await reader.entry(oid))?.raw() ?? []);
+    expect(again.equals(first)).toBe(true);
+    await expect(
+      collect((await reader.get(oid, { verify: true }))?.content ?? []),
+    ).resolves.toBeDefined();
+  });
+  it("the block cache stays within readCacheBytes", async () => {
+    const { repo, files, packPath, idxPath } = await installed(packAll(history, true));
+    const limit = 65536; // the pack is two blocks: holding both exceeds it
+    const reader = await openPack(files, packPath, idxPath, { readCacheBytes: limit });
+    for (const oid of allObjects(repo).keys())
+      await collect((await reader.get(oid))?.content ?? []);
+    expect(reader.stats.peakBlockBytes).toBeGreaterThan(0);
+    expect(reader.stats.peakBlockBytes).toBeLessThanOrEqual(limit);
+  });
+  it("(review) concurrent reads of one block read it once, and the accounting holds", async () => {
+    const { repo, files, packPath, idxPath } = await installed(packAll(history, true));
+    const { proxy, counter } = counting(files, packPath);
+    const limit = 2 * 65536; // the whole two-block pack fits
+    const reader = await openPack(proxy, packPath, idxPath, {
+      readCacheBytes: limit,
+      baseCacheBytes: 0,
+    });
+    const opened = counter.reads;
+    const oids = [...allObjects(repo).keys()];
+    for (let round = 0; round < 3; round++)
+      await Promise.all(oids.map(async (oid) => collect((await reader.get(oid))?.content ?? [])));
+    expect(counter.reads - opened).toBeLessThanOrEqual(2);
+    expect(reader.stats.peakBlockBytes).toBeLessThanOrEqual(limit);
+  });
+  it("(review) an entry header across a block boundary reads whole", async () => {
+    // a blob ending so that the next entry's 3-byte header starts at 65535, across 65536
+    let first: Uint8Array | undefined;
+    for (let n = 65_480; n < 65_540 && !first; n++) {
+      const data = noise(n, 7);
+      if (12 + 3 + deflateSync(data).length === 65_535) first = data;
+    }
+    expect(first).toBeDefined();
+    const second = new TextEncoder().encode("across the boundary\n".repeat(5000));
+    const { files, packPath, idxPath, result } = await installed(
+      buildPack([
+        { kind: 3, data: first as Uint8Array },
+        { kind: 3, data: second },
+      ]),
+    );
+    const entry = result.entries.find((e) => e.offset === 65_535);
+    expect(entry).toBeDefined();
+    const reader = await openPack(files, packPath, idxPath);
+    const o = await reader.get(entry?.oid as string, { verify: true });
+    expect((await collect(o?.content ?? [])).equals(Buffer.from(second))).toBe(true);
+  });
+  it("readCacheBytes: 0 reads straight from the file", async () => {
+    const { repo, files, packPath, idxPath } = await installed(packAll(history, true));
+    const { proxy, counter } = counting(files, packPath);
+    const reader = await openPack(proxy, packPath, idxPath, {
+      readCacheBytes: 0,
+      baseCacheBytes: 0,
+    });
+    const opened = counter.reads;
+    const oids = [...allObjects(repo).keys()];
+    for (const oid of oids) await collect((await reader.get(oid))?.content ?? []);
+    expect(counter.reads - opened).toBeGreaterThanOrEqual(oids.length);
   });
 });
 

@@ -47,6 +47,11 @@ export interface ReceivePackOptions {
   authorize?: (commands: PushCommand[]) => Promise<(string | undefined)[]>;
   /** refuse one ref: a message, or undefined to accept */
   update?: (command: PushCommand) => Promise<string | undefined>;
+  /**
+   * git's post-receive: the commands whose refs moved, once the report is written (whether or not
+   * anyone reads it). It cannot change the outcome; what it throws is ignored.
+   */
+  postReceive?: (updated: PushCommand[]) => void | Promise<void>;
   /** more commands in one push are refused (400). Default 65536. */
   maxCommands?: number;
   /** a request body silent this long is abandoned (a stalled upload). Default 60 s. */
@@ -199,6 +204,7 @@ export function receivePackHandler(
     // The head goes out now, the report when the pack is in and the refs are updated: a relay that
     // bounds a call until its response head (httpeers' bridge: 30 s) must not time out a long push.
     const authorized = opts.authorize ? await opts.authorize(commands) : [];
+    const updated: PushCommand[] = []; // the refs moved, in command order, for postReceive
     const finish = async (): Promise<Uint8Array> => {
       // --- the pack (unless every command is a delete); a status per command (a ref may appear twice)
       let unpack = "ok";
@@ -295,12 +301,14 @@ export function receivePackHandler(
               const own = res.rejected.find((x) => x.name === c.ref);
               fail(i, own ? reasonOf(own.reason) : "atomic push failure");
             });
+          else updated.push(...todo);
         }
       } else
         for (const [c, i] of open()) {
           if (noop(c)) continue;
           const res = await repo.refs.batch([toCommand(c)], { message: "push" });
           if (!res.ok) fail(i, reasonOf(res.rejected[0]?.reason));
+          else updated.push(c);
         }
 
       // --- report-status
@@ -341,6 +349,16 @@ export function receivePackHandler(
           } catch (e) {
             ctrl.error(e);
           }
+          // as git and JGit do: after the report (queued into the response here, not necessarily
+          // read yet), for the refs that moved, even after an error.
+          // Apart from the stream: a hook that throws must not error a report not yet read.
+          const hook = opts.postReceive;
+          if (hook && updated.length)
+            void (async () => {
+              try {
+                await hook([...updated]);
+              } catch {}
+            })();
         },
       }),
       {

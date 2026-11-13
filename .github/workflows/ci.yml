@@ -16,6 +16,9 @@ jobs:
     env:
       # apps/vcs-protos/28-gitea runs Gitea (a pinned release, SHA-256 checked) as a test oracle
       GITEA_CACHE_DIR: /home/runner/.cache/gitea-1.22.6
+      # apps/vcs-protos/37-xet checks Hugging Face's Xet reference xorb (a pinned dataset revision,
+      # SHA-256 checked): cached, so huggingface.co is reached only on a cache miss
+      XET_REFERENCE_CACHE: /home/runner/.cache/xet-reference
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -23,25 +26,15 @@ jobs:
         with:
           node-version: "24"
           cache: pnpm
-      # flue-capfs-do links @statewalker/webrun-files-rpc from a webrun-files checkout beside this
-      # repository (`link:../../../webrun-files/packages/webrun-files-rpc`) until the version it
-      # needs (0.2.0, appends) is on npm: clone it there and build the package (and what it
-      # builds against) first.
-      # Pinned (webrun-files main with appends, #22), so a later push there cannot change this CI.
-      - name: webrun-files beside this repository
-        run: |
-          git clone --filter=blob:none https://github.com/statewalker/webrun-files ../webrun-files
-          git -C ../webrun-files checkout --detach 71b538341c1e3707d402dd1c886efd84e78a2e84
-      - name: Build webrun-files-rpc in it
-        working-directory: ../webrun-files
-        run: |
-          pnpm install --frozen-lockfile --filter '@statewalker/webrun-files-rpc...'
-          pnpm --filter '@statewalker/webrun-files-rpc...' run build
       - run: pnpm install --frozen-lockfile
       - uses: actions/cache@v4
         with:
           path: ${{ env.GITEA_CACHE_DIR }}
           key: gitea-1.22.6-linux-amd64
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.XET_REFERENCE_CACHE }}
+          key: xet-reference-e72f4e05b9c4b96f1c6b2213d93de00ab943585a2f7c049fd127ba72ec1ff413
       # The browser suites (vitest browser mode in fm-protos and mvc-blueprint-*,
       # httpeers-stack's two-browser e2e) launch real browsers through the one
       # Playwright version in the lockfile. A fresh runner has none installed.

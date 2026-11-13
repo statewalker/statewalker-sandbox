@@ -1,5 +1,5 @@
 // Strings and bytes in file encodings (src/bytes.ts), checked against Node's Buffer; CapFs
-// sends exactly a view's bytes.
+// sends bytes only, exactly a view's bytes.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { bytesToString, stringToBytes } from "../../src/bytes.ts";
@@ -36,7 +36,7 @@ test("bytes encode to the strings Node's Buffer gives", () => {
   assert.throws(() => stringToBytes("x", "utf16le"), /EINVAL/);
 });
 
-test("CapFs sends exactly a view's bytes, not its whole buffer", async () => {
+test("CapFs sends bytes only (text encoded here), exactly a view's bytes", async () => {
   const sent = [];
   const fs = new CapFs({ call: async (m, p, b) => sent.push([m, p, b]) });
   const heap = new Uint8Array(1 << 20);
@@ -49,7 +49,7 @@ test("CapFs sends exactly a view's bytes, not its whole buffer", async () => {
     [
       ["writeFileBuffer", "/a", [3, 1, 2, 3]],
       ["writeFileBuffer", "/b", [2, 255, 254]],
-      ["writeFile", "/c", "text"],
+      ["writeFileBuffer", "/c", [4, ...new TextEncoder().encode("text")]],
     ],
   );
 });
