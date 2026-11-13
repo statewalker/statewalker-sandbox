@@ -1,0 +1,23 @@
+{
+  "name": "@statewalker/html-pdf-cdp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PROTOTYPE — print an HTML page to PDF over the Chrome DevTools Protocol, on Cloudflare Browser Run's Kitesurf engine or any CDP browser.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/html-pdf-cdp"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
+    "print": "node --experimental-strip-types --no-warnings src/cli.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "pdfjs-dist": "^6.5.438",
+    "typescript": "catalog:"
+  }
+}
