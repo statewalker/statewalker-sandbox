@@ -32,6 +32,7 @@ import {
 
 export interface Env {
   OCR: DurableObjectNamespace<OcrCell>;
+  PDF_JOB: DurableObjectNamespace<import("./pdf/pdf-job.ts").PdfJob>;
   LOADER?: unknown;
   /** Directory URL of `<lang>.traineddata` files. */
   MODEL_BASE_URL?: string;

@@ -5,6 +5,14 @@
  *        body: a PNG or JPEG image → OCR result (JSON)
  *   POST /api/pdf?lang=auto|eng[&engine=cell|isolate][&maxPages=n][&stream=1][&assets=inline]
  *        body: a PDF → PortableText document (JSON), or page events (NDJSON) with stream=1
+ *   POST /api/pdf/jobs?lang=…[&engine=…][&maxPages=n][&throttleMs=ms][&name=…]
+ *        body: a PDF → 202 { id, … }: a PdfJob Durable Object converts it, one page per alarm
+ *   GET  /api/pdf/jobs/:id               the job's status and progress
+ *   GET  /api/pdf/jobs/:id/document[?assets=inline]   the pages done so far as one document
+ *   GET  /api/pdf/jobs/:id/pages/:n      one converted page (blocks, asset ids)
+ *   GET  /api/pdf/jobs/:id/assets/:asset an image asset (PNG)
+ *   POST /api/pdf/jobs/:id/cancel        stops the job (keeps what is done)
+ *   DELETE /api/pdf/jobs/:id             stops the job and removes everything it stored
  *   GET  /api/cells/:name                the cell's engines and stored models
  *   GET  /api/runtime                    what this runtime allows (wasm compilation, loader, …)
  *
@@ -16,8 +24,9 @@
 import type { RawImage } from "./decode.ts";
 import { type CellOcrResult, type Env, OcrCell } from "./ocr-cell.ts";
 import { convertPdfInWorker, type PageResult } from "./pdf/convert.ts";
+import { PdfJob } from "./pdf/pdf-job.ts";
 
-export { OcrCell };
+export { OcrCell, PdfJob };
 
 /** Request bodies above this are refused (Workers accept 100 MB; images this large do not fit in memory). */
 const MAX_BODY = 20 * 1024 * 1024;
@@ -29,7 +38,13 @@ const json = (value: unknown, status = 200) =>
   });
 
 const errorStatus = (message: string) =>
-  /^EINVAL|^E2BIG/.test(message) ? 400 : /^EIO/.test(message) ? 502 : 500;
+  /^(Error: )?(EINVAL|E2BIG)/.test(message)
+    ? 400
+    : /^(Error: )?EEXIST/.test(message)
+      ? 409
+      : /^(Error: )?EIO/.test(message)
+        ? 502
+        : 500;
 
 /**
  * Whether this runtime compiles WebAssembly from bytes: workerd refuses, Node (cellb) allows,
@@ -103,6 +118,10 @@ export default {
         return await convertPdfRequest(request, url, env);
       }
 
+      if (url.pathname.startsWith("/api/pdf/jobs")) {
+        return await jobRequest(request, url, env);
+      }
+
       return json({ error: "not found" }, 404);
     } catch (e) {
       const message = String((e as Error)?.message ?? e);
@@ -124,13 +143,8 @@ function base64(bytes: Uint8Array): string {
  * soon as it is done (NDJSON: `page` events, then `end` with the document's metadata).
  */
 async function convertPdfRequest(request: Request, url: URL, env: Env): Promise<Response> {
-  const length = Number(request.headers.get("content-length") ?? 0);
-  if (length > MAX_BODY) return json({ error: "E2BIG: PDF too large" }, 413);
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength === 0 || bytes.byteLength > MAX_BODY)
-    return json({ error: "EINVAL: send a PDF (at most 20 MB)" }, 400);
-  if (String.fromCharCode(...bytes.subarray(0, 5)) !== "%PDF-")
-    return json({ error: "EINVAL: not a PDF" }, 400);
+  const bytes = await readPdf(request);
+  if (bytes instanceof Response) return bytes;
   const lang = url.searchParams.get("lang") ?? "auto";
   const engine = url.searchParams.get("engine") === "isolate" ? "isolate" : "cell";
   const inline = url.searchParams.get("assets") === "inline";
@@ -180,4 +194,82 @@ async function convertPdfRequest(request: Request, url: URL, env: Env): Promise<
     },
   });
   return json(inline ? { document, assets: pngs } : { document });
+}
+
+/** Reads a PDF request body: at most MAX_BODY bytes, starting with `%PDF-`. */
+async function readPdf(request: Request): Promise<Uint8Array | Response> {
+  const length = Number(request.headers.get("content-length") ?? 0);
+  if (length > MAX_BODY) return json({ error: "E2BIG: PDF too large" }, 413);
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_BODY)
+    return json({ error: "EINVAL: send a PDF (at most 20 MB)" }, 400);
+  if (String.fromCharCode(...bytes.subarray(0, 5)) !== "%PDF-")
+    return json({ error: "EINVAL: not a PDF" }, 400);
+  return bytes;
+}
+
+/**
+ * PDF conversion jobs. Each job is a PdfJob Durable Object of its own (a unique id), which keeps
+ * the PDF and the results in its SQLite and converts one page per alarm: the request that
+ * creates it returns at once, and the job is not bound by any request's CPU time.
+ */
+async function jobRequest(request: Request, url: URL, env: Env): Promise<Response> {
+  if (url.pathname === "/api/pdf/jobs" && request.method === "POST") {
+    const bytes = await readPdf(request);
+    if (bytes instanceof Response) return bytes;
+    const id = env.PDF_JOB.newUniqueId();
+    const job = env.PDF_JOB.get(id);
+    const view = await job.start(bytes, url.searchParams.get("name") ?? "document.pdf", {
+      lang: url.searchParams.get("lang") ?? "auto",
+      engine: url.searchParams.get("engine") === "isolate" ? "isolate" : "cell",
+      maxPages: Number(url.searchParams.get("maxPages")) || undefined,
+      throttleMs: Math.max(0, Number(url.searchParams.get("throttleMs")) || 0),
+    });
+    return json({ id: id.toString(), ...view }, 202);
+  }
+
+  const m = url.pathname.match(/^\/api\/pdf\/jobs\/([0-9a-f]{64})(?:\/(.*))?$/);
+  if (!m) return json({ error: "not found" }, 404);
+  const [, id, rest = ""] = m;
+  const job = env.PDF_JOB.get(env.PDF_JOB.idFromString(id));
+  const notFound = () => json({ error: "ENOENT: no such job" }, 404);
+
+  if (rest === "" && request.method === "GET") {
+    const view = await job.status();
+    return view ? json({ id, ...view }) : notFound();
+  }
+  if (rest === "" && request.method === "DELETE") {
+    const view = await job.status();
+    if (!view) return notFound();
+    await job.destroy();
+    return json({ id, deleted: true });
+  }
+  if (rest === "cancel" && request.method === "POST") {
+    const view = await job.cancel();
+    return view ? json({ id, ...view }) : notFound();
+  }
+  if (rest === "document" && request.method === "GET") {
+    const result = await job.document();
+    if (!result) return notFound();
+    if (url.searchParams.get("assets") !== "inline") return json(result);
+    const pngs: Record<string, string> = {};
+    for (const assetId of Object.keys(result.document.assets)) {
+      const png = await job.asset(assetId);
+      if (png) pngs[assetId] = base64(png);
+    }
+    return json({ ...result, assets: pngs });
+  }
+  const page = rest.match(/^pages\/(\d+)$/);
+  if (page && request.method === "GET") {
+    const stored = await job.page(Number(page[1]));
+    return stored ? json(stored) : json({ error: "ENOENT: page not converted (yet)" }, 404);
+  }
+  const asset = rest.match(/^assets\/(image-[0-9a-f]{40}-\d+x\d+-png)$/);
+  if (asset && request.method === "GET") {
+    const png = await job.asset(asset[1]);
+    return png
+      ? new Response(png, { headers: { "content-type": "image/png" } })
+      : json({ error: "ENOENT: no such asset" }, 404);
+  }
+  return json({ error: "not found" }, 404);
 }

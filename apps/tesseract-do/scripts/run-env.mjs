@@ -1,5 +1,5 @@
 // Start one runtime serving this Worker project, run the OCR scenario against it, restart it on
-// the same state and check what must survive (the cached models), stop it.
+// the same state and check what must survive (the cached models, a PDF job half-way), stop it.
 //   node scripts/run-env.mjs wrangler | cellb | celld
 // Models come from a local server (fixtures/models, see scripts/fetch-fixtures.mjs) that counts
 // requests, so the restart check can tell a model read from the cell's SQLite from a download.
@@ -229,6 +229,7 @@ function runTests(file, extraEnv = {}) {
       RUNTIME: env,
       MODEL_HITS_URL: `${MODEL_BASE_URL}hits`,
       METRICS_FILE: join(outDir, `${env}.json`),
+      JOB_FILE: join(state, "pending-job.json"),
       ...extraEnv,
     },
   });
@@ -261,6 +262,7 @@ console.log(
 const failed = (code) => code !== 0;
 let code = await runTests("e2e/scenario.test.mjs");
 if (!failed(code)) code = await runTests("e2e/pdf.test.mjs");
+if (!failed(code)) code = await runTests("e2e/jobs.test.mjs");
 await stopRuntime(child);
 child = undefined;
 if (!failed(code)) {

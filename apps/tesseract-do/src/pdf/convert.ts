@@ -36,6 +36,7 @@ import {
   tableToBlock,
 } from "@statewalker/pdf-portabletext/core";
 import { encode as encodePng } from "fast-png";
+import type { PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { RawImage } from "../decode.ts";
 import type { OcrResult } from "../ocr.ts";
 import { openPdf } from "./pdfjs.ts";
@@ -103,6 +104,171 @@ function rawToPng(raw: RawImage): Uint8Array {
   return encodePng({ width, height, data, channels: raw.kind === 2 ? 3 : 4, depth: 8 });
 }
 
+/** The options a page needs (no callbacks for whole-document streaming). */
+export type PageOptions = Pick<
+  PdfConvertOptions,
+  "lang" | "ocrImages" | "minImageSize" | "minConfidence" | "ocr"
+>;
+
+/** The document's language: the one asked for, or detected from a text sample of the first pages. */
+export async function documentLanguage(
+  pdf: PDFDocumentProxy,
+  options: Pick<PdfConvertOptions, "lang" | "fallbackLang" | "maxPages">,
+): Promise<Language> {
+  const pageCount = Math.min(pdf.numPages, options.maxPages ?? Number.POSITIVE_INFINITY);
+  const fallback = languageByTesseract(options.fallbackLang ?? "") ?? DEFAULT_LANGUAGE;
+  // The language: given, or detected from a text-only sample of the first pages.
+  let language: Language | undefined;
+  if (options.lang === "auto") {
+    let sample = "";
+    for (let n = 1; n <= Math.min(pageCount, LANGUAGE_SAMPLE_PAGES); n++) {
+      const content = await (await pdf.getPage(n)).getTextContent();
+      for (const item of content.items) if ("str" in item) sample += `${item.str} `;
+      if (sample.length >= LANGUAGE_SAMPLE_CHARS) break;
+    }
+    sample = sample.slice(0, LANGUAGE_SAMPLE_CHARS);
+    if (letterCount(sample) >= MIN_TEXT_LAYER_LETTERS) language = detectLanguage(sample);
+    language ??= fallback;
+  } else {
+    language = languageByTesseract(options.lang);
+    if (!language) throw new Error(`EINVAL: unsupported language '${options.lang}'`);
+  }
+
+  return language;
+}
+
+/**
+ * Converts page `n`: its text layer, its images (PNG assets, OCR in the language's cell) in
+ * reading order. `knownAsset` tells which images earlier pages already stored: those are
+ * referenced, not returned again.
+ */
+export async function convertPage(
+  pdf: PDFDocumentProxy,
+  n: number,
+  language: Language,
+  options: PageOptions,
+  knownAsset: (id: string) => boolean,
+): Promise<PageResult> {
+  const page = await pdf.getPage(n);
+  const size = pageSize(page);
+  const pageInfo = { number: n, width: round2(size.width), height: round2(size.height) };
+  const keyGen = createKeyGen(`p${n}-`);
+  const items: { box: OrderBox; blocks: PortableTextBlock[] }[] = [];
+  const pageAssets: PageResult["assets"] = [];
+
+  // Text layer: invisible text (an earlier OCR) is dropped, the images are OCR'd here.
+  const runs = (await extractTextRuns(page)).filter((r) => !r.invisible);
+  const { paragraphs, tables } = layoutText(runs);
+  const bodySize = bodyFontSize(paragraphs);
+  for (const p of paragraphs) {
+    const block = paragraphToBlock(p, { keyGen, page: n, bodySize });
+    block.language = (detectLanguage(p.text) ?? language).bcp47;
+    items.push({ box: p.bbox, blocks: [block] });
+  }
+  for (const t of tables)
+    items.push({ box: t.bbox, blocks: [tableToBlock(t, { keyGen, page: n })] });
+
+  // Images: raw pixels from pdf.js → asset (PNG) and OCR in the language's cell.
+  const jobs: Promise<void>[] = [];
+  for (const placement of await scanImagePlacements(page, {
+    minSize: options.minImageSize ?? 48,
+  })) {
+    const raw = toRaw(placement);
+    if (!raw) continue;
+    const png = rawToPng(raw);
+    const sha1hash = await sha1Hex(png);
+    const id = `image-${sha1hash}-${raw.width}x${raw.height}-png`;
+    if (!knownAsset(id)) {
+      const meta: ImageAsset = {
+        _id: id,
+        _type: "sanity.imageAsset",
+        mimeType: "image/png",
+        extension: "png",
+        size: png.byteLength,
+        sha1hash,
+        path: `assets/${id}.png`,
+        metadata: {
+          dimensions: {
+            width: raw.width,
+            height: raw.height,
+            aspectRatio: Math.round((raw.width / raw.height) * 10000) / 10000,
+          },
+        },
+      };
+      pageAssets.push({ meta, png });
+    }
+    const asset = { _type: "reference" as const, _ref: id };
+    const imageBlock: ImageBlock = {
+      _type: "image",
+      _key: keyGen("img"),
+      asset,
+      width: raw.width,
+      height: raw.height,
+      mimeType: "image/png",
+      source: {
+        type: "pdfImage",
+        page: n,
+        bbox: roundBox(placement.bbox),
+        ...(placement.transform ? { transform: placement.transform } : {}),
+        ...(placement.stencil ? { stencil: true } : {}),
+      },
+    };
+    const item = {
+      box: placement.bbox as OrderBox,
+      blocks: [imageBlock] as PortableTextBlock[],
+    };
+    items.push(item);
+    if (options.ocrImages === false || raw.data.byteLength > MAX_RAW_BYTES) continue;
+    const lang = language;
+    jobs.push(
+      options.ocr(raw, lang.tesseract).then((r) => {
+        const words: OcrWord[] = r.words.map((w) => ({
+          text: w.text,
+          confidence: w.confidence,
+          rect: {
+            left: w.bbox.x,
+            top: w.bbox.y,
+            right: w.bbox.x + w.bbox.width,
+            bottom: w.bbox.y + w.bbox.height,
+          },
+          startOfLine: w.startOfLine,
+          endOfLine: w.endOfLine,
+        }));
+        const textBlocks = ocrWordsToBlocks(words, {
+          keyGen,
+          page: n,
+          imageKey: imageBlock._key,
+          asset,
+          minConfidence: options.minConfidence ?? 0.3,
+          language: lang.bcp47,
+          imageWidth: raw.width,
+          imageHeight: raw.height,
+        });
+        imageBlock.ocr = {
+          engine: "tesseract-wasm (durable object)",
+          language: lang.bcp47,
+          model: lang.tesseract,
+          languageSource: options.lang === "auto" ? "document" : "user",
+          attempts: [
+            { model: lang.tesseract, confidence: r.meanConfidence, words: r.words.length },
+          ],
+          rotation: 0,
+          blocks: textBlocks.map((b) => b._key),
+          wordCount: textBlocks.reduce((s, b) => s + b.children.length, 0),
+          confidence: round3(r.meanConfidence),
+          durationMs: 0,
+        };
+        item.blocks.push(...textBlocks);
+      }),
+    );
+  }
+  await Promise.all(jobs);
+
+  const pageBlocks = readingOrder(items.map((i) => i.box)).flatMap((i) => items[i].blocks);
+  page.cleanup();
+  return { page: pageInfo, blocks: pageBlocks, assets: pageAssets };
+}
+
 export async function convertPdfInWorker(
   bytes: Uint8Array,
   name: string,
@@ -110,164 +276,41 @@ export async function convertPdfInWorker(
 ): Promise<PdfPortableTextDocument> {
   const pdf = await openPdf(bytes);
   const pageCount = Math.min(pdf.numPages, options.maxPages ?? Number.POSITIVE_INFINITY);
-  const fallback = languageByTesseract(options.fallbackLang ?? "") ?? DEFAULT_LANGUAGE;
   const pages: PageInfo[] = [];
   const blocks: PortableTextBlock[] = [];
   const assets: Record<string, ImageAsset> = {};
   try {
-    // The language: given, or detected from a text-only sample of the first pages.
-    let language: Language | undefined;
-    if (options.lang === "auto") {
-      let sample = "";
-      for (let n = 1; n <= Math.min(pageCount, LANGUAGE_SAMPLE_PAGES); n++) {
-        const content = await (await pdf.getPage(n)).getTextContent();
-        for (const item of content.items) if ("str" in item) sample += `${item.str} `;
-        if (sample.length >= LANGUAGE_SAMPLE_CHARS) break;
-      }
-      sample = sample.slice(0, LANGUAGE_SAMPLE_CHARS);
-      if (letterCount(sample) >= MIN_TEXT_LAYER_LETTERS) language = detectLanguage(sample);
-      language ??= fallback;
-    } else {
-      language = languageByTesseract(options.lang);
-      if (!language) throw new Error(`EINVAL: unsupported language '${options.lang}'`);
-    }
-
+    const language = await documentLanguage(pdf, options);
     for (let n = 1; n <= pageCount; n++) {
-      const page = await pdf.getPage(n);
-      const size = pageSize(page);
-      const pageInfo = { number: n, width: round2(size.width), height: round2(size.height) };
-      const keyGen = createKeyGen(`p${n}-`);
-      const items: { box: OrderBox; blocks: PortableTextBlock[] }[] = [];
-      const pageAssets: PageResult["assets"] = [];
-
-      // Text layer: invisible text (an earlier OCR) is dropped, the images are OCR'd here.
-      const runs = (await extractTextRuns(page)).filter((r) => !r.invisible);
-      const { paragraphs, tables } = layoutText(runs);
-      const bodySize = bodyFontSize(paragraphs);
-      for (const p of paragraphs) {
-        const block = paragraphToBlock(p, { keyGen, page: n, bodySize });
-        block.language = (detectLanguage(p.text) ?? language).bcp47;
-        items.push({ box: p.bbox, blocks: [block] });
-      }
-      for (const t of tables)
-        items.push({ box: t.bbox, blocks: [tableToBlock(t, { keyGen, page: n })] });
-
-      // Images: raw pixels from pdf.js → asset (PNG) and OCR in the language's cell.
-      const jobs: Promise<void>[] = [];
-      for (const placement of await scanImagePlacements(page, {
-        minSize: options.minImageSize ?? 48,
-      })) {
-        const raw = toRaw(placement);
-        if (!raw) continue;
-        const png = rawToPng(raw);
-        const sha1hash = await sha1Hex(png);
-        const id = `image-${sha1hash}-${raw.width}x${raw.height}-png`;
-        if (!assets[id]) {
-          const meta: ImageAsset = {
-            _id: id,
-            _type: "sanity.imageAsset",
-            mimeType: "image/png",
-            extension: "png",
-            size: png.byteLength,
-            sha1hash,
-            path: `assets/${id}.png`,
-            metadata: {
-              dimensions: {
-                width: raw.width,
-                height: raw.height,
-                aspectRatio: Math.round((raw.width / raw.height) * 10000) / 10000,
-              },
-            },
-          };
-          assets[id] = meta;
-          pageAssets.push({ meta, png });
-        }
-        const asset = { _type: "reference" as const, _ref: id };
-        const imageBlock: ImageBlock = {
-          _type: "image",
-          _key: keyGen("img"),
-          asset,
-          width: raw.width,
-          height: raw.height,
-          mimeType: "image/png",
-          source: {
-            type: "pdfImage",
-            page: n,
-            bbox: roundBox(placement.bbox),
-            ...(placement.transform ? { transform: placement.transform } : {}),
-            ...(placement.stencil ? { stencil: true } : {}),
-          },
-        };
-        const item = {
-          box: placement.bbox as OrderBox,
-          blocks: [imageBlock] as PortableTextBlock[],
-        };
-        items.push(item);
-        if (options.ocrImages === false || raw.data.byteLength > MAX_RAW_BYTES) continue;
-        const lang = language;
-        jobs.push(
-          options.ocr(raw, lang.tesseract).then((r) => {
-            const words: OcrWord[] = r.words.map((w) => ({
-              text: w.text,
-              confidence: w.confidence,
-              rect: {
-                left: w.bbox.x,
-                top: w.bbox.y,
-                right: w.bbox.x + w.bbox.width,
-                bottom: w.bbox.y + w.bbox.height,
-              },
-              startOfLine: w.startOfLine,
-              endOfLine: w.endOfLine,
-            }));
-            const textBlocks = ocrWordsToBlocks(words, {
-              keyGen,
-              page: n,
-              imageKey: imageBlock._key,
-              asset,
-              minConfidence: options.minConfidence ?? 0.3,
-              language: lang.bcp47,
-              imageWidth: raw.width,
-              imageHeight: raw.height,
-            });
-            imageBlock.ocr = {
-              engine: "tesseract-wasm (durable object)",
-              language: lang.bcp47,
-              model: lang.tesseract,
-              languageSource: options.lang === "auto" ? "document" : "user",
-              attempts: [
-                { model: lang.tesseract, confidence: r.meanConfidence, words: r.words.length },
-              ],
-              rotation: 0,
-              blocks: textBlocks.map((b) => b._key),
-              wordCount: textBlocks.reduce((s, b) => s + b.children.length, 0),
-              confidence: round3(r.meanConfidence),
-              durationMs: 0,
-            };
-            item.blocks.push(...textBlocks);
-          }),
-        );
-      }
-      await Promise.all(jobs);
-
-      const pageBlocks = readingOrder(items.map((i) => i.box)).flatMap((i) => items[i].blocks);
-      page.cleanup();
-      pages.push(pageInfo);
-      blocks.push(...pageBlocks);
-      await options.onPage?.({ page: pageInfo, blocks: pageBlocks, assets: pageAssets });
+      const result = await convertPage(pdf, n, language, options, (id) => id in assets);
+      for (const a of result.assets) assets[a.meta._id] = a.meta;
+      pages.push(result.page);
+      blocks.push(...result.blocks);
+      await options.onPage?.(result);
     }
-
-    return {
-      _type: "pdfDocument",
-      version: 1,
-      title: name.replace(/\.pdf$/i, ""),
-      language: language.bcp47,
-      source: { fileName: name, size: bytes.byteLength, pageCount: pages.length },
-      createdAt: new Date().toISOString(),
-      pages,
-      blocks,
-      assets,
-    };
+    return assembleDocument(name, bytes.byteLength, language, pages, blocks, assets);
   } finally {
     await pdf.loadingTask.destroy();
   }
+}
+
+export function assembleDocument(
+  name: string,
+  size: number,
+  language: Language,
+  pages: PageInfo[],
+  blocks: PortableTextBlock[],
+  assets: Record<string, ImageAsset>,
+): PdfPortableTextDocument {
+  return {
+    _type: "pdfDocument",
+    version: 1,
+    title: name.replace(/\.pdf$/i, ""),
+    language: language.bcp47,
+    source: { fileName: name, size, pageCount: pages.length },
+    createdAt: new Date().toISOString(),
+    pages,
+    blocks,
+    assets,
+  };
 }

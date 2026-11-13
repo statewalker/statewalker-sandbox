@@ -20,7 +20,9 @@ runs in the Worker without a Web Worker or canvas, the text layer is laid out by
 library's canvas-free core (`@statewalker/pdf-portabletext/core`: headings, lists, tables,
 bold/italic, invisible OCR layers, column-aware reading order), and every raster image is OCR'd
 by the OCR cell of the document's language. JBIG2 and JPEG 2000 images decode through pdf.js's
-own wasm decoders, precompiled. See [PDF → PortableText](#pdf--portabletext).
+own wasm decoders, precompiled. Long documents go to a **`PdfJob` Durable Object** of their own
+(`POST /api/pdf/jobs`), which keeps the PDF and the results in its SQLite and converts one page
+per alarm. See [PDF → PortableText](#pdf--portabletext) and [PDF jobs](#pdf-jobs-one-durable-object-per-document).
 
 ## How to run it
 
@@ -33,8 +35,9 @@ pnpm --filter @statewalker/tesseract-do test:celld      # celld 0.6.0 in Docker 
 
 `scripts/run-env.mjs <wrangler|cellb|celld>` starts the runtime on a free port with fresh state,
 serves the models and `tesseract-core.wasm` from a local server that counts downloads, runs
-`e2e/scenario.test.mjs` (OCR) and `e2e/pdf.test.mjs` (PDF), **restarts the runtime on the same
-state** and runs `e2e/durability.test.mjs`. Metrics of each run land in `e2e-output/<runtime>.json`.
+`e2e/scenario.test.mjs` (OCR), `e2e/pdf.test.mjs` (PDF) and `e2e/jobs.test.mjs` (PDF jobs, the
+last one left half-way), **restarts the runtime on the same state** and runs
+`e2e/durability.test.mjs` (models from SQLite, the half-way job resumes and finishes). Metrics of each run land in `e2e-output/<runtime>.json`.
 
 Interactively: `pnpm dev:wrangler` (port 8787) or `pnpm dev:cellb` (8788), then
 
@@ -43,6 +46,9 @@ curl --data-binary @fixtures/linn.png 'localhost:8787/api/ocr?lang=eng'
 curl --data-binary @fixtures/typewriter.png 'localhost:8787/api/ocr?lang=nld&engine=isolate'
 curl --data-binary @fixtures/multicolumn.pdf 'localhost:8787/api/pdf?lang=auto'
 curl --data-binary @fixtures/linn.pdf 'localhost:8787/api/pdf?lang=eng&stream=1'
+curl --data-binary @fixtures/GeoTopo.pdf 'localhost:8787/api/pdf/jobs?name=GeoTopo.pdf'   # → {id, status}
+curl localhost:8787/api/pdf/jobs/<id>                 # progress: pagesDone / pageCount
+curl localhost:8787/api/pdf/jobs/<id>/document
 curl localhost:8787/api/runtime
 ```
 
@@ -50,6 +56,11 @@ curl localhost:8787/api/runtime
 | --- | --- |
 | `POST /api/ocr?lang=eng[&cell=…][&band=rows][&engine=cell\|isolate]` | OCR of the body (PNG or JPEG, ≤ 20 MB) → `{text, words[{text, confidence, bbox}], meanConfidence, bands, wasmMemoryMiB, decodedMiB, model, cell, engine}` |
 | `POST /api/pdf?lang=auto\|eng[&engine=cell\|isolate][&maxPages=n][&stream=1][&assets=inline]` | PDF (≤ 20 MB) → `{document}` (PortableText, the library's schema), with `assets=inline` also `{assets: {id: base64 PNG}}`; `stream=1`: NDJSON, one `page` event per page then `end` |
+| `POST /api/pdf/jobs?lang=…[&engine=…][&maxPages=n][&throttleMs=ms][&name=…]` | PDF (≤ 20 MB) → 202 `{id, status, …}`: a new `PdfJob` converts it in the background |
+| `GET /api/pdf/jobs/:id` | `{status: queued\|running\|done\|failed\|cancelled, pageCount, pagesDone, language, failedPages, …}` |
+| `GET /api/pdf/jobs/:id/document[?assets=inline]` | the pages done so far as one document, `complete: true` once done |
+| `GET /api/pdf/jobs/:id/pages/:n`, `GET /api/pdf/jobs/:id/assets/:assetId` | one page's blocks; one PNG asset |
+| `POST /api/pdf/jobs/:id/cancel`, `DELETE /api/pdf/jobs/:id` | stop (keeping what is done); stop and remove everything |
 | `GET /api/cells/:name` | the cell's loaded engines and the models in its SQLite |
 | `GET /api/runtime` | what the runtime allows: wasm compilation from bytes, Worker Loader, image APIs |
 
@@ -142,6 +153,28 @@ Decoders matter more than expected: pdf.js's JPEG decoder and jpeg-js differ by 
 on average on the book page `c03-29`, and that is enough for Tesseract to segment its decorated
 first line differently (280 words from the PDF, 292 from the JPEG file).
 
+## PDF jobs: one Durable Object per document
+
+`POST /api/pdf` converts in the request, so a document must fit in one request's CPU budget (30 s
+by default) and the client must stay connected. `POST /api/pdf/jobs` hands the PDF to a **`PdfJob`
+Durable Object** (`src/pdf/pdf-job.ts`, a unique id per job) and returns at once:
+
+- `start` stores the PDF in the job's SQLite (chunked, `src/blob-store.ts`: rows hold ≤ 2 MB) and
+  sets an alarm. The first alarm reads the page count and the language; **every alarm converts one
+  page** and sets the next. An alarm is an invocation with its own CPU budget, so the number of
+  pages is not bounded by any limit; OCR of the page's images runs in the language's `OcrCell`
+  over RPC, outside the job's budget.
+- Each page, its new PNG assets and the progress commit in **one transaction**, so a crash between
+  pages loses nothing and repeats nothing. The pdf.js document stays open between alarms while the
+  isolate lives, and is reopened from SQLite when it does not.
+- A page that throws is retried after 2 s and 4 s, then recorded in `failedPages` and skipped; a
+  PDF that cannot be opened fails the job. `throttleMs` spaces the pages (the tests use it to stop
+  a job half-way).
+- Alarms are durable: after a **restart** the job carries on from the next page (checked on all
+  three runtimes by the durability suite).
+
+Measurements: see the runtime runs below (pending).
+
 ## Platform limits, against what OCR needs
 
 | Limit (Cloudflare docs, Nov 2026) | Value | This prototype |
@@ -192,7 +225,8 @@ first line differently (280 words from the PDF, 292 from the JPEG file).
 | `src/decode.ts` | PNG / JPEG decoding to compact sources with RGBA rows on demand |
 | `src/models.ts` | model download and SQLite chunk cache |
 | `src/isolate/program.ts`, `src/isolate-client.ts` | OCR in a Worker Loader isolate (`pnpm build:isolate` generates `program.gen.js`) |
-| `src/pdf/pdfjs.ts`, `src/pdf/convert.ts` | pdf.js in-thread with precompiled decoders; PDF → PortableText with OCR in the cells |
+| `src/pdf/pdfjs.ts`, `src/pdf/convert.ts` | pdf.js in-thread with precompiled decoders; PDF → PortableText page by page, OCR in the cells |
+| `src/pdf/pdf-job.ts`, `src/blob-store.ts` | the `PdfJob` Durable Object (one page per alarm); byte strings of any size in SQLite |
 | `scripts/run-env.mjs`, `scripts/serve-cellb.mjs` | runtimes under test |
 | `scripts/fetch-fixtures.mjs` | test images (OCRmyPDF test resources, licenses in `fixtures/LICENSES.txt`) and models |
 | `e2e/`, `test/` | scenario and durability suites per runtime; unit tests (decoding, banding) |
