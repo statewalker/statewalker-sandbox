@@ -188,6 +188,14 @@ interface PackReader { packId; count; has(oid); get(oid, { verify? }); ids(); st
 function openObjectDatabase(files: FilesApi, objectsDir: string, opts?): Promise<{ get; has; list }>;
 ```
 
+### Object-id lookups (from X9's indexing profile)
+
+Every `get` turns the asked id from hex into bytes for the idx's binary search. That was a regex
+split and a `parseInt` per byte pair: in a profile of indexing 30,000 commits through the SQL
+store (157,328 reads), the largest single cost in this module. A loop over character codes does
+the same: the indexing run went from 0.887 to 0.742 ms a commit (reads from 9.8 to 7.0 s). A
+larger read cache (32 MiB rather than 4) changed nothing there, so the default stays.
+
 ## Promotion grades
 
 | File | Grade | Why |
