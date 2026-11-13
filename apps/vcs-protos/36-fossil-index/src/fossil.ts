@@ -23,7 +23,7 @@ import type { Db } from "@statewalker/db-api";
 import type { RefDb } from "../../10-ref-transactions/src/ref-db.js";
 import { sqlRefDb } from "../../10-ref-transactions/src/sql-ref-db.js";
 import { readCommit, readTree } from "../../17-repository/src/commands.js";
-import { parseTagTarget } from "../../17-repository/src/git-format.js";
+import { isTreeMode, parseTagTarget } from "../../17-repository/src/git-format.js";
 import type { ObjectStore, Repository } from "../../17-repository/src/object-store.js";
 import { sqlRepository } from "../../17-repository/src/sql-repository.js";
 
@@ -94,7 +94,8 @@ const latin1 = (bytes: Uint8Array) => {
   for (const b of bytes) s += String.fromCharCode(b);
   return s;
 };
-const isTree = (mode: string) => Number.parseInt(mode, 8) === 0o40000;
+/** git's test (`mode & 0170000`): a legacy directory mode such as 040755 is a directory too */
+const isTree = isTreeMode;
 
 /**
  * Parsed trees, the most recent few thousand: a commit's parent trees are mostly the previous
@@ -131,7 +132,9 @@ function treeReader(objects: ObjectStore) {
 /**
  * The file paths that differ between two trees (either may be absent): one walk over both
  * entry lists in git's order. A path that is a file on one side and a directory on the other
- * has two keys (`a`, `a/`): the file is reported, and the directory's files under it.
+ * has two keys (`a`, `a/`): the file is reported, and the directory's files under it. In a
+ * malformed tree a file may be named `a/` and so meet directory `a` under one key: each side is
+ * then taken for what it is (the file reported, the directory walked), as before.
  */
 async function changedPaths(
   read: ReturnType<typeof treeReader>,
@@ -154,10 +157,19 @@ async function changedPaths(
     if (l) i++;
     if (r) j++;
     if (l && r && l.oid === r.oid && l.mode === r.mode) continue;
-    const e = (l ?? r) as TreeEntry;
-    const path = prefix ? `${prefix}/${e.name}` : e.name;
-    if (!e.tree) out.push(path);
-    else await changedPaths(read, l?.oid, r?.oid, path, out);
+    // each side under its own name (they differ only in a malformed tree: a file `a/`, dir `a`)
+    const at = (e: TreeEntry) => (prefix ? `${prefix}/${e.name}` : e.name);
+    const file = l && !l.tree ? l : r && !r.tree ? r : undefined;
+    if (file) out.push(at(file));
+    const dir = l?.tree ? l : r?.tree ? r : undefined;
+    if (dir)
+      await changedPaths(
+        read,
+        l?.tree ? l.oid : undefined,
+        r?.tree ? r.oid : undefined,
+        at(dir),
+        out,
+      );
   }
 }
 
@@ -191,7 +203,9 @@ async function* commitsFrom(
     let t = trees.get(oid);
     if (t === undefined) {
       const c = await readCommit(repo as Repository, oid);
-      pending.set(oid, c);
+      // kept for the walk's visit, unless it was visited already (an indexed commit popped
+      // before its child): it would never be taken back out
+      if (!seen.has(oid)) pending.set(oid, c);
       t = c.tree;
       trees.set(oid, t);
     }

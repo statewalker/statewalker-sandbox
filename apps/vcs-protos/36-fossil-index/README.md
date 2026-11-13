@@ -196,6 +196,15 @@ Measured with a fast-import corpus like F4's (50,000 files, one file edited per 
 - **What is left:** at 100,000 commits, 36 of the 67 s are the object store's reads (4.1 a
   commit). Those grow with the pack (delta chains): X6r's work, not the index's.
 
+**Review of #126** (a randomized comparison of the old and new tree comparisons, 20,000 tree
+pairs with tricky names and modes: no difference on well-formed trees) found, and F8 covers:
+
+| Finding | Fix |
+|---|---|
+| In a malformed tree, a file named `a/` shares directory `a`'s key: the walk tried to read the file as a tree (indexing failed) or dropped the directory's files | each side is taken for what it is, under its own name: the file `a/` reported, directory `a` walked |
+| A legacy directory mode (`040755`) read as a file | git's test (`mode & 0170000`), `isTreeMode` |
+| A parent read for its tree after the walk had visited it (an indexed commit popped before its child) stayed in memory | not kept |
+
 ## Promotion grades
 
 | File | Grade | Why |
