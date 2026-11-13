@@ -323,15 +323,9 @@ export async function* reconstruct(
   let skip = answer.offset_into_first_range;
   let left = opts.length ?? Number.POSITIVE_INFINITY;
   const seen: VerifiedTerm[] = [];
-  for (const term of answer.terms) {
-    const vt: VerifiedTerm = {
-      xorb: term.hash.toLowerCase(),
-      start: term.range.start,
-      end: term.range.end,
-    };
-    seen.push(vt);
-    const expectedRange = verify?.rangeHash?.(vt);
-    const termHashes: Uint8Array[] = [];
+  type Term = ReconstructionAnswer["terms"][number];
+  type Entry = ReconstructionAnswer["fetch_info"][string][number];
+  const entryOf = (term: Term): Entry => {
     const entry = (answer.fetch_info[term.hash] ?? []).find(
       (f) => f.range.start <= term.range.start && term.range.end <= f.range.end,
     );
@@ -339,55 +333,92 @@ export async function* reconstruct(
       throw new Error(
         `reconstruction: no fetch range for ${term.hash} ${term.range.start}-${term.range.end}`,
       );
-    /** the term's own checks, once its last chunk is decoded */
-    const checkTerm = (produced: number) => {
-      if (produced !== term.unpacked_length)
-        fail(
-          `reconstruction: term ${term.hash} gave ${produced} bytes, expected ${term.unpacked_length}`,
-        );
-      if (expectedRange) {
-        const got = rangeHash(termHashes);
-        if (!got.every((b, k) => b === expectedRange[k]))
-          fail(
-            `reconstruction: term ${term.hash} ${term.range.start}-${term.range.end} does not match its verification hash`,
-          );
-      }
+    return entry;
+  };
+  /** a term being decoded: what it produced, its chunk hashes, its expected range hash */
+  const open = (term: Term) => {
+    const vt: VerifiedTerm = {
+      xorb: term.hash.toLowerCase(),
+      start: term.range.start,
+      end: term.range.end,
     };
-    let index = entry.range.start;
-    let produced = 0;
-    const bytes = fetchRange(entry.url, entry.url_range.start, entry.url_range.end);
-    for await (const chunk of xorbChunks(bytes, term.range.end - entry.range.start)) {
-      const i = index++;
-      const inTerm = i >= term.range.start;
-      if (verify?.chunk || (expectedRange && inTerm)) {
-        const h = chunkHash(chunk);
-        if (verify?.chunk?.(vt.xorb, i, h) === false)
-          fail(`reconstruction: chunk ${i} of xorb ${term.hash} is damaged`);
-        if (inTerm) termHashes.push(h);
-      }
-      if (!inTerm) continue;
-      produced += chunk.length;
-      if (skip >= chunk.length) {
-        skip -= chunk.length;
-        continue;
-      }
-      const piece = skip ? chunk.subarray(skip) : chunk;
-      skip = 0;
-      if (piece.length >= left) {
-        yield piece.subarray(0, left);
-        // ending exactly at the term's end: the term is whole, so it is checked (and, as the
-        // reconstruction is whole up to `length`, `done` too)
-        if (piece.length === left && i === term.range.end - 1) {
-          checkTerm(produced);
-          const refused = verify?.done?.(seen);
-          if (refused) fail(`reconstruction: ${refused}`);
-        }
-        return;
-      }
-      left -= piece.length;
-      yield piece;
+    seen.push(vt);
+    return { term, vt, expected: verify?.rangeHash?.(vt), hashes: [] as Uint8Array[], produced: 0 };
+  };
+  /** a term's own checks, once its last chunk is decoded */
+  const check = (t: ReturnType<typeof open>) => {
+    if (t.produced !== t.term.unpacked_length)
+      fail(
+        `reconstruction: term ${t.term.hash} gave ${t.produced} bytes, expected ${t.term.unpacked_length}`,
+      );
+    if (t.expected) {
+      const got = rangeHash(t.hashes);
+      const want = t.expected;
+      if (!got.every((b, k) => b === want[k]))
+        fail(
+          `reconstruction: term ${t.term.hash} ${t.term.range.start}-${t.term.range.end} does not match its verification hash`,
+        );
     }
-    checkTerm(produced);
+  };
+
+  const terms = answer.terms;
+  for (let first = 0; first < terms.length; ) {
+    // one fetch for the consecutive terms of one fetch entry whose chunk ranges go forward
+    // (open thread 2): the entry's bytes are fetched once, not once per term
+    const entry = entryOf(terms[first] as Term);
+    let last = first;
+    while (
+      last + 1 < terms.length &&
+      (terms[last + 1] as Term).hash === (terms[first] as Term).hash &&
+      entryOf(terms[last + 1] as Term) === entry &&
+      (terms[last + 1] as Term).range.start >= (terms[last] as Term).range.end
+    )
+      last++;
+    let k = first;
+    let current = open(terms[k] as Term);
+    let index = entry.range.start;
+    const bytes = fetchRange(entry.url, entry.url_range.start, entry.url_range.end);
+    const upTo = (terms[last] as Term).range.end - entry.range.start;
+    for await (const chunk of xorbChunks(bytes, upTo)) {
+      const i = index++;
+      const inTerm = i >= current.term.range.start;
+      if (verify?.chunk || (current.expected && inTerm)) {
+        const h = chunkHash(chunk);
+        if (verify?.chunk?.(current.vt.xorb, i, h) === false)
+          fail(`reconstruction: chunk ${i} of xorb ${current.term.hash} is damaged`);
+        if (inTerm) current.hashes.push(h);
+      }
+      if (!inTerm) continue; // before the term (its fetch range starts earlier, or a gap)
+      current.produced += chunk.length;
+      const endsTerm = i === current.term.range.end - 1;
+      if (skip >= chunk.length) skip -= chunk.length;
+      else {
+        const piece = skip ? chunk.subarray(skip) : chunk;
+        skip = 0;
+        if (piece.length >= left) {
+          yield piece.subarray(0, left);
+          // ending exactly at the term's end: the term is whole, so it is checked (and, as the
+          // reconstruction is whole up to `length`, `done` too)
+          if (piece.length === left && endsTerm) {
+            check(current);
+            if (k === terms.length - 1) {
+              const refused = verify?.done?.(seen);
+              if (refused) fail(`reconstruction: ${refused}`);
+            }
+          }
+          return;
+        }
+        left -= piece.length;
+        yield piece;
+      }
+      if (endsTerm) {
+        check(current);
+        if (k === last) break;
+        current = open(terms[++k] as Term);
+      }
+    }
+    if (k !== last || current.produced < current.term.unpacked_length) check(current);
+    first = last + 1;
   }
   const refused = verify?.done?.(seen);
   if (refused) fail(`reconstruction: ${refused}`);

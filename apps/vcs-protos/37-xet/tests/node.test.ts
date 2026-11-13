@@ -1189,6 +1189,244 @@ describe("U6 (review of #123) verification over several terms, range requests an
   });
 });
 
+describe("U7 (X11b) several terms of one fetch range in one request", () => {
+  const data = Array.from({ length: 8 }, (_, k) => {
+    const c = new Uint8Array(500 + k);
+    let x = k + 11;
+    for (let i = 0; i < c.length; i++) {
+      x = (Math.imul(x, 1103515245) + 12345) >>> 0;
+      c[i] = x >>> 24;
+    }
+    return c;
+  });
+  const refs: ChunkRef[] = data.map((c) => ({ hash: chunkHash(c), length: c.length }));
+  const xh = xorbHash(refs);
+  const X = hashToString(xh);
+  const bytesOf = (a: number, b: number) => refs.slice(a, b).reduce((n, c) => n + c.length, 0);
+  const concat = (parts: Uint8Array[]) => Buffer.concat(parts.map((p) => Buffer.from(p)));
+  /** fetch entries: [chunk range, as a list]; the xorb's byte offsets computed from the chunks */
+  const offsets = [0];
+  for (const c of data) offsets.push((offsets[offsets.length - 1] as number) + 8 + c.length);
+  const entry = (a: number, b: number) => ({
+    range: { start: a, end: b },
+    url: `xorb://${a}-${b}`,
+    url_range: { start: offsets[a] as number, end: (offsets[b] as number) - 1 },
+  });
+  const go = async (
+    terms: [number, number][],
+    entries: [number, number][],
+    o: { damage?: number; offset?: number; length?: number; verify?: ReconstructionVerifier } = {},
+  ) => {
+    const xorb = writeXorb(data, { compression: "none" });
+    if (o.damage !== undefined) {
+      const at = (offsets[o.damage] as number) + 8 + 3;
+      xorb[at] = (xorb[at] as number) ^ 1;
+    }
+    const answer: ReconstructionAnswer = {
+      offset_into_first_range: o.offset ?? 0,
+      terms: terms.map(([a, b]) => ({
+        hash: X,
+        unpacked_length: bytesOf(a, b),
+        range: { start: a, end: b },
+      })),
+      fetch_info: { [X]: entries.map(([a, b]) => entry(a, b)) },
+    };
+    const fetches: string[] = [];
+    const out: Uint8Array[] = [];
+    let error: Error | undefined;
+    try {
+      for await (const p of reconstruct(
+        answer,
+        async function* (url, a, b) {
+          fetches.push(url);
+          yield xorb.subarray(a, b + 1);
+        },
+        { length: o.length, verify: o.verify },
+      ))
+        out.push(p);
+    } catch (e) {
+      error = e as Error;
+    }
+    return { fetches, out: concat(out), error };
+  };
+  const want = (terms: [number, number][]) => concat(terms.flatMap(([a, b]) => data.slice(a, b)));
+
+  it("consecutive terms of one fetch range: one fetch, their bytes in order", async () => {
+    const r = await go(
+      [
+        [0, 4],
+        [4, 8],
+      ],
+      [[0, 8]],
+    );
+    expect(r.fetches).toEqual(["xorb://0-8"]);
+    expect(
+      r.out.equals(
+        want([
+          [0, 4],
+          [4, 8],
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it("a gap between terms: still one fetch; the chunks between are not output", async () => {
+    const r = await go(
+      [
+        [0, 2],
+        [5, 8],
+      ],
+      [[0, 8]],
+    );
+    expect(r.fetches).toEqual(["xorb://0-8"]);
+    expect(
+      r.out.equals(
+        want([
+          [0, 2],
+          [5, 8],
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it("terms going backwards, a term twice, terms of different fetch ranges: a fetch each", async () => {
+    expect(
+      (
+        await go(
+          [
+            [4, 8],
+            [0, 4],
+          ],
+          [[0, 8]],
+        )
+      ).fetches.length,
+    ).toBe(2);
+    const twice = await go(
+      [
+        [0, 4],
+        [0, 4],
+      ],
+      [[0, 8]],
+    );
+    expect(twice.fetches.length).toBe(2);
+    expect(
+      twice.out.equals(
+        want([
+          [0, 4],
+          [0, 4],
+        ]),
+      ),
+    ).toBe(true);
+    const split = await go(
+      [
+        [0, 4],
+        [4, 8],
+      ],
+      [
+        [0, 4],
+        [4, 8],
+      ],
+    );
+    expect(split.fetches).toEqual(["xorb://0-4", "xorb://4-8"]);
+    expect(
+      split.out.equals(
+        want([
+          [0, 4],
+          [4, 8],
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it("each term of a shared fetch is checked when it ends, before the next term's bytes", async () => {
+    const shard: Shard = {
+      files: [
+        {
+          fileHash: fileHash(refs),
+          terms: [
+            {
+              xorbHash: xh,
+              bytes: bytesOf(0, 4),
+              start: 0,
+              end: 4,
+              rangeHash: rangeHash(refs.slice(0, 4).map((c) => c.hash)),
+            },
+            {
+              xorbHash: xh,
+              bytes: bytesOf(4, 8),
+              start: 4,
+              end: 8,
+              rangeHash: rangeHash(refs.slice(4, 8).map((c) => c.hash)),
+            },
+          ],
+        },
+      ],
+      xorbs: [],
+    };
+    const termsOnly = () => {
+      const v = verifierFromShard(shard, fileHash(refs), { wholeFile: true });
+      return { rangeHash: v.rangeHash, done: v.done };
+    };
+    expect(
+      (
+        await go(
+          [
+            [0, 4],
+            [4, 8],
+          ],
+          [[0, 8]],
+          { verify: termsOnly() },
+        )
+      ).error,
+    ).toBeUndefined();
+    const r = await go(
+      [
+        [0, 4],
+        [4, 8],
+      ],
+      [[0, 8]],
+      { verify: termsOnly(), damage: 2 },
+    );
+    expect(r.error?.message).toMatch(/0-4 does not match/);
+    expect(r.out.length).toBe(bytesOf(0, 4)); // nothing of the second term
+    const late = await go(
+      [
+        [0, 4],
+        [4, 8],
+      ],
+      [[0, 8]],
+      { verify: termsOnly(), damage: 6 },
+    );
+    expect(late.error?.message).toMatch(/4-8 does not match/);
+  });
+
+  it("an offset into the first term and a length ending inside, or exactly at the end of, a later term", async () => {
+    const all = want([
+      [0, 4],
+      [4, 8],
+    ]);
+    const r = await go(
+      [
+        [0, 4],
+        [4, 8],
+      ],
+      [[0, 8]],
+      { offset: 700, length: 1500 },
+    );
+    expect(r.fetches.length).toBe(1);
+    expect(r.out.equals(all.subarray(700, 2200))).toBe(true);
+    const exact = await go(
+      [
+        [0, 4],
+        [4, 8],
+      ],
+      [[0, 8]],
+      { length: bytesOf(0, 8) },
+    );
+    expect(exact.out.equals(all)).toBe(true);
+  });
+});
+
 describe("H5 portable", () => {
   it("src/ has no node: imports", () => {
     for (const f of readdirSync(join(here, "../src")))
