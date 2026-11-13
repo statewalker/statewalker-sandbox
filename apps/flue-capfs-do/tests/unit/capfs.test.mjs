@@ -262,3 +262,33 @@ test("everyCall checks before each call and files-RPC call (a tool's run still a
   await assert.rejects(largeFileCalls(ending)("readFileBuffer", "/p1/l.bin"), code("EACCES"));
   assert.equal((await store.stat("/p1/l.bin")).size, MAX_WHOLE_FILE_BYTES + 1);
 });
+
+test("an older bundle's text calls over 16 MiB are streamed too (UTF-8, as the store's)", async () => {
+  const { cap, store, methods } = await setup();
+  const { largeFileCalls } = await import("../../src/cap-bytes.ts");
+  const call = largeFileCalls(cap);
+  const big = `é${"a".repeat(MAX_WHOLE_FILE_BYTES)}`;
+  await call("writeFile", "/p1/t.txt", big);
+  await call("appendFile", "/p1/t.txt", "ÿ\n");
+  assert.equal((await store.stat("/p1/t.txt")).size, MAX_WHOLE_FILE_BYTES + 2 + 3);
+  const back = await call("readFile", "/p1/t.txt");
+  assert.equal(back.length, big.length + 2);
+  assert.ok(back.startsWith("éaaa") && back.endsWith("aaÿ\n"));
+  assert.ok(methods.includes("rpc:openWrite") && methods.includes("rpc:openRead"), "streamed");
+  // Small text reads as the store reads it (U+FFFD for invalid UTF-8, a leading U+FEFF kept).
+  await store.writeFileBuffer("/p1/s.txt", new Uint8Array([0xef, 0xbb, 0xbf, 0x61, 0xff]));
+  assert.equal(await call("readFile", "/p1/s.txt"), await store.readFile("/p1/s.txt"));
+  await assert.rejects(call("readFile", "/p1/none"), code("ENOENT"));
+  await assert.rejects(call("writeFile", "/p2/x", "x"), code("EACCES"));
+});
+
+test("a text read whose reply would not fit JS RPC is EFBIG (two-byte strings)", async () => {
+  const { cap, fs } = await setup();
+  const { largeFileCalls } = await import("../../src/cap-bytes.ts");
+  // 20 MiB of ASCII and one character outside Latin-1: a two-byte string of about 40 MiB.
+  await fs.writeFile("/p1/w.txt", `Ā${"a".repeat(20 * 1024 * 1024)}`);
+  await assert.rejects(largeFileCalls(cap)("readFile", "/p1/w.txt"), code("EFBIG"));
+  // The same size in Latin-1 text fits (one byte a character).
+  await fs.writeFile("/p1/l.txt", `ÿ${"a".repeat(20 * 1024 * 1024)}`);
+  assert.equal((await largeFileCalls(cap)("readFile", "/p1/l.txt")).length, 20 * 1024 * 1024 + 1);
+});

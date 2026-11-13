@@ -7,7 +7,7 @@
 //     refused above MAX_HOLDER_READ_BYTES.
 // Used by CapFs (just-bash, Flue's tools) and by Wasmer's Flue sandbox.
 
-import { ownBytes } from "./bytes.ts";
+import { bytesToString, ownBytes, stringToBytes } from "./bytes.ts";
 import { capFiles, type RpcCarrier } from "./files-rpc.ts";
 import { fsError } from "./path.ts";
 import { bytesArg, MAX_WHOLE_FILE_BYTES } from "./sql-fs.ts";
@@ -126,12 +126,29 @@ function oneToolTransfer<T>(transfer: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * A text read's reply as JS RPC carries it: one byte a character if every character is in
+ * Latin-1, else two. EFBIG if it would not fit MAX_TOOL_READ_BYTES (UTF-8 on disk can be
+ * half that: ASCII with one character beyond Latin-1).
+ */
+function fitsReply(text: string, path: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the Latin-1 range, from U+0000
+  const size = /[^\u0000-\u00ff]/.test(text) ? text.length * 2 : text.length;
+  if (size > MAX_TOOL_READ_BYTES)
+    throw fsError(
+      "EFBIG",
+      `file too large to read whole here '${path}' (its text is over ${MAX_TOOL_READ_BYTES} bytes as a string)`,
+    );
+  return text;
+}
+
+/**
  * `cap.call` for a holder that forwards whole-file calls it did not make itself (a tool's
  * capability: ToolFiles, ToolFilesEntrypoint). readFileBuffer, writeFileBuffer and
  * appendFileBuffer go through capBytes, so a file over MAX_WHOLE_FILE_BYTES is streamed here
  * instead of refused with EFBIG (one such transfer at a time in the isolate; reads up to
- * MAX_TOOL_READ_BYTES, which the reply to the tool can carry); every other call is passed on
- * as it is.
+ * MAX_TOOL_READ_BYTES, which the reply to the tool can carry). The store's text calls
+ * (readFile, writeFile, appendFile) are answered the same way, in UTF-8. Every other call is
+ * passed on as it is.
  */
 export function largeFileCalls(cap: ByteCarrier) {
   let bytes: ReturnType<typeof capBytes> | undefined;
@@ -146,6 +163,16 @@ export function largeFileCalls(cap: ByteCarrier) {
         return b().write(path, bytesArg(args[0]));
       case "appendFileBuffer":
         return b().append(path, bytesArg(args[0]));
+      // The store's text calls, still sent by tool bundles approved before the shim sent bytes:
+      // UTF-8 as the store encodes and decodes it, here on the host.
+      case "readFile":
+        return b()
+          .read(path)
+          .then((bytes) => fitsReply(bytesToString(bytes, "utf8"), path));
+      case "writeFile":
+        return b().write(path, stringToBytes(String(args[0] ?? ""), "utf8"));
+      case "appendFile":
+        return b().append(path, stringToBytes(String(args[0] ?? ""), "utf8"));
       default:
         return cap.call(method, path, ...args);
     }

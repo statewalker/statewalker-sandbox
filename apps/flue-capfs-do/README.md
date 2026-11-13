@@ -670,12 +670,15 @@ Every writer sends bytes as bytes:
     so a transfer still going when `run` settles stops at its next block;
   - reading a file over 16 MiB asks its size first, so it needs the `list` right on it as well
     as `read` (as for just-bash);
-  - bundles approved before the shim sent bytes still use the text calls, which keep the
-    16 MiB limit.
+  - bundles approved before the shim sent bytes still use the text calls (`readFile`,
+    `writeFile`, `appendFile`): the host answers them the same way, in UTF-8 as the store does.
+    A text read is refused (`EFBIG`) if its reply would not fit one RPC message: a string with
+    a character beyond Latin-1 takes two bytes a character.
 - Python: binary files are synced in and written back as bytes; the live `capfs` module moves
   bytes (`read_bytes`, `write_bytes`, `append_bytes`, and the `*_text` calls on top of them).
 - The store's text calls (`readFile`, `writeFile`, `appendFile`) remain only for tool bundles
-  approved before this change: their inlined shim still sends strings.
+  approved before this change: their inlined shim still sends strings, which the tool's
+  capability turns into bytes on the host (files over 16 MiB streamed, as above).
 - Wasmer: open files are read and saved as bytes.
 
 Limits and notes:
