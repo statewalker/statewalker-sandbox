@@ -1,12 +1,21 @@
 import { escapeHTML, toHTML } from "@portabletext/to-html";
-import type { ImageBlock, OcrBoxMark, PdfPortableTextDocument, TextBlock } from "./schema.ts";
+import type {
+  ImageBlock,
+  OcrBoxMark,
+  PdfPortableTextDocument,
+  TableBlock,
+  TextBlock,
+} from "./schema.ts";
 
 /**
  * Renders the document with @portabletext/to-html. Images get an SVG overlay
  * with the bbox of every word recognised in them; OCR words are wrapped in
  * spans that carry their bbox so the page can highlight it on hover.
  */
-export function renderPreview(doc: PdfPortableTextDocument, urls: Map<string, string>): string {
+export function renderPreview(
+  doc: Pick<PdfPortableTextDocument, "blocks">,
+  urls: Map<string, string>,
+): string {
   const wordsByImage = new Map<string, OcrBoxMark[]>();
   for (const block of doc.blocks) {
     if (block._type !== "block") continue;
@@ -20,6 +29,16 @@ export function renderPreview(doc: PdfPortableTextDocument, urls: Map<string, st
   return toHTML(doc.blocks as never, {
     components: {
       types: {
+        table: ({ value }: { value: TableBlock }) => {
+          const header = value.headerRows ?? 0;
+          const rows = value.rows
+            .map((row, i) => {
+              const tag = i < header ? "th" : "td";
+              return `<tr>${row.cells.map((c) => `<${tag}>${escapeHTML(c)}</${tag}>`).join("")}</tr>`;
+            })
+            .join("");
+          return `<table class="pt-table" data-key="${value._key}">${rows}</table>`;
+        },
         image: ({ value }: { value: ImageBlock }) => {
           const url = urls.get(value.asset._ref) ?? "";
           const boxes = (wordsByImage.get(value._key) ?? [])

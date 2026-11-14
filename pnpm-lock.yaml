@@ -615,6 +615,21 @@ importers:
         specifier: 'catalog:'
         version: 5.1.0(@types/node@26.6.6)(@vitest/browser-playwright@5.1.0)(@vitest/ui@5.1.0)(happy-dom@21.0.4(bufferutil@4.2.0))(jsdom@31.0.0(@napi-rs/canvas@1.1.0)(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
 
+  apps/html-pdf-cdp:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.6
+      pdfjs-dist:
+        specifier: ^6.5.438
+        version: 6.5.438
+      playwright:
+        specifier: 'catalog:'
+        version: 1.63.0
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+
   apps/httpeers-lib-protos:
     dependencies:
       '@biscuit-auth/biscuit-wasm':
@@ -1258,25 +1273,10 @@ importers:
 
   apps/pdf-portabletext-prototype:
     dependencies:
-      '@portabletext/to-html':
-        specifier: ^6.0.0
-        version: 6.0.0
-      fflate:
-        specifier: ^0.8.3
-        version: 0.8.3
-      franc-all:
-        specifier: ^7.2.0
-        version: 7.2.0
-      pdfjs-dist:
-        specifier: ^6.4.299
-        version: 6.5.438
-      tesseract-wasm:
-        specifier: ^0.11.0
-        version: 0.11.0
+      '@statewalker/pdf-portabletext':
+        specifier: workspace:*
+        version: link:../../packages/pdf-portabletext
     devDependencies:
-      '@portabletext/types':
-        specifier: ^4.0.2
-        version: 4.0.2
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
@@ -1450,6 +1450,43 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 5.1.0(@types/node@26.6.6)(@vitest/browser-playwright@5.1.0)(@vitest/ui@5.1.0)(happy-dom@21.0.4(bufferutil@4.2.0))(jsdom@31.0.0(@napi-rs/canvas@1.1.0)(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+
+  apps/tesseract-do:
+    dependencies:
+      '@statewalker/pdf-portabletext':
+        specifier: workspace:*
+        version: link:../../packages/pdf-portabletext
+      fast-png:
+        specifier: ^8.0.0
+        version: 8.0.0
+      jpeg-js:
+        specifier: ^0.4.4
+        version: 0.4.4
+      pdfjs-dist:
+        specifier: ^6.5.438
+        version: 6.5.438
+      tesseract-wasm:
+        specifier: ^0.11.0
+        version: 0.11.0
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20260702.1
+        version: 4.20260702.1
+      '@statewalker/cellb':
+        specifier: 0.8.1
+        version: 0.8.1(@statewalker/webrun-bundler@0.1.1(esbuild-wasm@0.28.2))(@statewalker/webrun-modules@0.3.6)(@statewalker/webrun-site-builder@0.2.2(@statewalker/webrun-files@0.10.5))(@statewalker/webrun-site-host@0.3.0(@statewalker/webrun-files@0.10.5))(bufferutil@4.2.0)(esbuild@0.28.2)
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      pdf-lib:
+        specifier: ^1.17.1
+        version: 1.17.1
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      wrangler:
+        specifier: 4.158.0
+        version: 4.158.0(@cloudflare/workers-types@4.20260702.1)(@types/node@26.6.6)(bufferutil@4.2.0)
 
   apps/vcs-protos:
     dependencies:
@@ -1628,6 +1665,55 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.0(@types/node@26.6.6)(@vitest/browser-playwright@5.1.0)(@vitest/ui@5.1.0)(happy-dom@21.0.4(bufferutil@4.2.0))(jsdom@31.0.0(@napi-rs/canvas@1.1.0)(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+
+  packages/pdf-portabletext:
+    dependencies:
+      '@gutenye/ocr-browser':
+        specifier: ^1.4.9
+        version: 1.4.9
+      '@gutenye/ocr-models':
+        specifier: ^1.4.2
+        version: 1.4.2
+      '@portabletext/to-html':
+        specifier: ^6.0.0
+        version: 6.0.0
+      '@techstark/opencv-js':
+        specifier: 4.9.0-release.3
+        version: 4.9.0-release.3
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
+      franc-all:
+        specifier: ^7.2.0
+        version: 7.2.0
+      onnxruntime-web:
+        specifier: 1.31.1
+        version: 1.31.1
+      pdf-lib:
+        specifier: ^1.17.1
+        version: 1.17.1
+      pdfjs-dist:
+        specifier: ^6.4.299
+        version: 6.5.438
+      tesseract-wasm:
+        specifier: ^0.11.0
+        version: 0.11.0
+    devDependencies:
+      '@portabletext/types':
+        specifier: ^4.0.2
+        version: 4.0.2
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.6
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.2(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)
       vitest:
         specifier: 'catalog:'
         version: 5.1.0(@types/node@26.6.6)(@vitest/browser-playwright@5.1.0)(@vitest/ui@5.1.0)(happy-dom@21.0.4(bufferutil@4.2.0))(jsdom@31.0.0(@napi-rs/canvas@1.1.0)(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
@@ -2213,6 +2299,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@cloudflare/workers-types@4.20260702.1':
+    resolution: {integrity: sha512-mOhf5TUEB1m2vPrxtqoIGfz0fUC9xyxRDx5gWHy5s+OCo6dcV+g7wI1R7gYCMFohhqF/2y2xeKVwMwCJjfn/WA==}
+
   '@cloudflare/workers-types@5.20261107.1':
     resolution: {integrity: sha512-Q23LVprqgqdoxBYaH3YyTrtmeJZMzVarvcTZjZC6FnQIqrr+Vm/ASdWtezOQ+oq3FvhoGr1Xe7BAU3XZfkqUQw==}
 
@@ -2450,6 +2539,15 @@ packages:
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
+
+  '@gutenye/ocr-browser@1.4.9':
+    resolution: {integrity: sha512-CpPIRddvmao2XgxxZW+Hr9c6dx0RGUodP/SZdbG50IRqDd2gkJUxIkokSy5xnFU7q2Ufmj7uIzVJEtkAKKkKNg==}
+
+  '@gutenye/ocr-common@1.4.9':
+    resolution: {integrity: sha512-1ry8Uw5fWZBZ/TsYB31x/YH04cOk7cO2PyLcauW9rmrK+0bxV0IeBRWngeje+fhdVJ99L1s+Y0BZwrjEVCxgOA==}
+
+  '@gutenye/ocr-models@1.4.2':
+    resolution: {integrity: sha512-y7cLEpGFOeroavopfCd/ejyZB/UeF6xdn0mBFqVHNOI5wQTv2My+/nKxvxKTtG4DVMBzt9TpOfaX7aZGbuciUw==}
 
   '@hono/node-server@2.1.8':
     resolution: {integrity: sha512-jdf7FHh6A1lzjpHHQUgxsg2GeER2vMetnAOfeActzcoli6jamlK+NAwL6Dsr5Fl3BS3tYUQzCdtZjU8Qxv7bEA==}
@@ -4304,6 +4402,28 @@ packages:
   '@statewalker/ai-openai-compat.core@0.4.2':
     resolution: {integrity: sha512-K15khwQsA53g1/EohRcoXFsr/qR6DtnyDC56DF6U2P63AkIgqgn/cIvCPre13ro0pPxA+aQLKTQg+P/NhSHrNQ==}
 
+  '@statewalker/cellb@0.8.1':
+    resolution: {integrity: sha512-OyfejVSmjJ9c0hy+DHAmpIqAtH/dLfkZdIpjxjhpOwfoBxFza+zsqGq7y0g/VdKdEEaaN4o1kkX71y9WBQi6QA==}
+    engines: {node: '>=22.13'}
+    hasBin: true
+    peerDependencies:
+      '@statewalker/webrun-bundler': ^0.1.1
+      '@statewalker/webrun-modules': ^0.3.5
+      '@statewalker/webrun-site-builder': ^0.2.0
+      '@statewalker/webrun-site-host': ^0.3.0
+      esbuild: '>=0.25'
+    peerDependenciesMeta:
+      '@statewalker/webrun-bundler':
+        optional: true
+      '@statewalker/webrun-modules':
+        optional: true
+      '@statewalker/webrun-site-builder':
+        optional: true
+      '@statewalker/webrun-site-host':
+        optional: true
+      esbuild:
+        optional: true
+
   '@statewalker/cellb@0.8.8':
     resolution: {integrity: sha512-pJauvbrpkD/O8YH7r2JIKgEQrJSMOVykKPTdDEKyFj8MKXr8DHO5j8d3Nz/a/+e9Y8NKsGIUufaDaPLVsICv+w==}
     engines: {node: '>=22.13'}
@@ -4755,6 +4875,9 @@ packages:
     resolution: {integrity: sha512-yYU8cogLeSh/ms2jh8Fj7jaba/EWa7Ja6GoUqYZaraEuCI5YS6ms6ObZgjjedm+jm6XZjdNRWBpPP6Z86oOxcw==}
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
+
+  '@techstark/opencv-js@4.9.0-release.3':
+    resolution: {integrity: sha512-y+KoLLlkXVUHWozYlN1vmMD9TQMPJObqml5nPA5vPWgHtOgm8q5O74UtzM23eayidvmeFX6tF5e2gDdyxcpy3Q==}
 
   '@testing-library/dom@10.4.2':
     resolution: {integrity: sha512-yzr2S9HyAIdhz2/6qHgbs665Q7PKVcDF05vsOlHPxG1mo36gKVesdYVeDLnXgfjJ03CrKRk08knc6+E/9m8v2Q==}
@@ -5883,6 +6006,9 @@ packages:
   extend@3.0.2:
     resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
 
+  fast-png@8.0.0:
+    resolution: {integrity: sha512-gCysNasJ8KEMgfdYIKd/wTDo6ENK1PWT0RJO7O+0pgmuHPw2O6tA1WvdxFRJoLf9V8yFYpG0FA1YgI8X97OhJA==}
+
   fast-sha256@1.3.0:
     resolution: {integrity: sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ==}
 
@@ -5941,6 +6067,9 @@ packages:
   finalhandler@1.1.2:
     resolution: {integrity: sha512-aAWcW57uxVNrQZqFXjITpW3sIUQmHGG3qSb9mUah9MgMC4NeWhNOlNjXEYq3HjRAvL6arUviZGGJsBg6z0zsWA==}
     engines: {node: '>= 0.8'}
+
+  flatbuffers@25.9.23:
+    resolution: {integrity: sha512-MI1qs7Lo4Syw0EOzUl0xjs2lsoeqFku44KpngfIduHBYvzm8h2+7K8YMQh1JtVVVrUvhLpNwqVi4DERegUJhPQ==}
 
   flatted@3.4.4:
     resolution: {integrity: sha512-5+ybhBZANEJxaH3X5evAFatUxLfEHSr7n6kYJ+1Qd0mUqr4eu9gIf6GDbWHf8RJijHrjjO8G+la14SlL2SeS1Q==}
@@ -6047,6 +6176,9 @@ packages:
   guarded-fetch@0.1.3:
     resolution: {integrity: sha512-PSaNyJk8VJlUVEhMHPXT/Z/WgNrLBh43WaYQJiu1qvyCuPQA+kgFMNmAOxI3GU3uXrCkO/xRW11XjcswrksYOA==}
     engines: {node: '>=20.19'}
+
+  guid-typescript@1.0.9:
+    resolution: {integrity: sha512-Y8T4vYhEfwJOTbouREvG+3XDsjr8E3kIr7uf+JZ0BYloFsttiHU0WfvANVsR7TxNUJa/WpCnw/Ino/p+DeBhBQ==}
 
   happy-dom@21.0.4:
     resolution: {integrity: sha512-tFm+GaLBgo6o0awHnvHaNoraVo27qJ+2tZEtZ+cIa08hXbeitrxAJajLI05hsUy/2/YTKcUjQYzHe5mCcraLBw==}
@@ -6165,6 +6297,9 @@ packages:
 
   invariant@2.2.4:
     resolution: {integrity: sha512-phJfQVBuaJM5raOpJjSfkiD6BpbCE4Ns//LaXl6wGYtUBY83nWS6Rf9tXm2e8VaK60JEjYldbPif/A2B1C2gNA==}
+
+  iobuffer@6.0.1:
+    resolution: {integrity: sha512-SZWYkWNfjIXIBYSDpXDYIgshqtbOPsi4lviawAEceR1Kqk+sHDlcQjWrzNQsii80AyBY0q5c8HCTNjqo74ul+Q==}
 
   ipaddr.js@2.2.0:
     resolution: {integrity: sha512-Ag3wB2o37wslZS19hZqorUnrnzSkpOVy+IiiDEiTqNubEYpYuHWIf6K4psgN2ZWKExS4xhVCrRVfb/wfW8fWJA==}
@@ -6357,6 +6492,12 @@ packages:
 
   jose@6.2.12:
     resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
+
+  jpeg-js@0.4.4:
+    resolution: {integrity: sha512-WZzeDOEtTOBK4Mdsar0IqEU5sMr3vSV2RqkAIzUEV2BHnUfKGyswWFPFwK5EeDo93K3FohSHbLAjj0s1Wzd+dg==}
+
+  js-clipper@1.0.1:
+    resolution: {integrity: sha512-0XYAS0ZoCki5K0fWwj8j8ug4mgxHXReW3ayPbVqr4zXPJuIs2pyvemL1sALadsEiAywZwW5Ify1XfU4bNJvokg==}
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -6910,6 +7051,12 @@ packages:
   once@1.4.0:
     resolution: {integrity: sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==}
 
+  onnxruntime-common@1.31.1:
+    resolution: {integrity: sha512-F+nnYNiQtmNJ95V6R/isBJqiVpdANCrsMEg1OaF+Bkbl3GAtzWLR7Ng17Ld0QtYtYJyotOHPJzOQn1Y6PLZjpg==}
+
+  onnxruntime-web@1.31.1:
+    resolution: {integrity: sha512-5GeH+bWQ+HxM10z7erGlsWqryrwMbSvm/1tkIsKTT48g0fI19VXVVC435t4t7VsPdSQeS7NmuZPXrQ73k82URw==}
+
   open@10.2.0:
     resolution: {integrity: sha512-YgBpdJHPyQ2UE5x+hlSXcnejzAvD0b22U2OuAP+8OnlJT+PjWPxtgmGqKKc+RgTM63U9gN0YzrYc71R2WT/hTA==}
     engines: {node: '>=18'}
@@ -7120,6 +7267,9 @@ packages:
   pkce-challenge@5.0.1:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
     engines: {node: '>=16.20.0'}
+
+  platform@1.3.6:
+    resolution: {integrity: sha512-fnWVljUchTro6RiCFvCXBbNhJc2NijN7oIQxbwsyL0buWJPG85v81ehlHI9fXrJsMNgTofEoWIQeClKpgxFLrg==}
 
   playwright-core@1.63.0:
     resolution: {integrity: sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==}
@@ -8927,6 +9077,8 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20261104.1':
     optional: true
 
+  '@cloudflare/workers-types@4.20260702.1': {}
+
   '@cloudflare/workers-types@5.20261107.1': {}
 
   '@cspotcode/source-map-support@0.8.1':
@@ -9153,6 +9305,20 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
+
+  '@gutenye/ocr-browser@1.4.9':
+    dependencies:
+      '@gutenye/ocr-common': 1.4.9
+      '@gutenye/ocr-models': 1.4.2
+      onnxruntime-web: 1.31.1
+
+  '@gutenye/ocr-common@1.4.9':
+    dependencies:
+      '@techstark/opencv-js': 4.9.0-release.3
+      js-clipper: 1.0.1
+      tiny-invariant: 1.3.3
+
+  '@gutenye/ocr-models@1.4.2': {}
 
   '@hono/node-server@2.1.8(hono@4.13.18)':
     dependencies:
@@ -11079,6 +11245,37 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
+  '@statewalker/cellb@0.8.1(@statewalker/webrun-bundler@0.1.1(esbuild-wasm@0.28.2))(@statewalker/webrun-modules@0.3.6)(@statewalker/webrun-site-builder@0.2.2(@statewalker/webrun-files@0.10.5))(@statewalker/webrun-site-host@0.3.0(@statewalker/webrun-files@0.10.5))(bufferutil@4.2.0)(esbuild@0.28.2)':
+    dependencies:
+      '@noble/hashes': 2.4.0
+      '@sqlite.org/sqlite-wasm': 3.53.4-build2
+      '@statewalker/webrun-files': 0.10.5
+      '@statewalker/webrun-files-browser': 0.10.4
+      '@statewalker/webrun-files-mem': 0.10.4
+      '@statewalker/webrun-files-node': 0.10.4
+      '@statewalker/webrun-http-browser': 0.12.5
+      '@statewalker/webrun-http-streams': 0.4.2
+      '@statewalker/webrun-rpc': 0.10.2
+      '@statewalker/webrun-streams': 0.2.3
+      acorn: 8.19.0
+      assert: 2.1.0
+      buffer: 6.0.3
+      events: 3.3.0
+      path-browserify: 1.0.1
+      sqlite-vec: 0.1.9
+      util: 0.12.5
+      worker-timers: 8.0.34
+      ws: 8.22.2(bufferutil@4.2.0)
+    optionalDependencies:
+      '@statewalker/webrun-bundler': 0.1.1(esbuild-wasm@0.28.2)
+      '@statewalker/webrun-modules': 0.3.6
+      '@statewalker/webrun-site-builder': 0.2.2(@statewalker/webrun-files@0.10.5)
+      '@statewalker/webrun-site-host': 0.3.0(@statewalker/webrun-files@0.10.5)
+      esbuild: 0.28.2
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
   '@statewalker/cellb@0.8.8(@statewalker/webrun-bundler@0.1.1(esbuild-wasm@0.28.2))(@statewalker/webrun-modules@0.3.6)(@statewalker/webrun-site-builder@0.2.2(@statewalker/webrun-files@0.10.4))(@statewalker/webrun-site-host@0.3.0(@statewalker/webrun-files@0.10.4))(bufferutil@4.2.0)(esbuild@0.28.2)':
     dependencies:
       '@noble/hashes': 2.4.0
@@ -11309,7 +11506,7 @@ snapshots:
   '@statewalker/webrun-builder@0.2.1':
     dependencies:
       '@statewalker/webrun-dataflow': 0.1.3
-      '@statewalker/webrun-files': 0.10.4
+      '@statewalker/webrun-files': 0.10.5
 
   '@statewalker/webrun-bundler@0.1.1(esbuild-wasm@0.28.2)':
     dependencies:
@@ -11429,7 +11626,7 @@ snapshots:
   '@statewalker/webrun-modules@0.3.6':
     dependencies:
       '@jspm/core': 2.1.0
-      '@statewalker/webrun-files': 0.10.4
+      '@statewalker/webrun-files': 0.10.5
       '@statewalker/webrun-files-mem': 0.10.4
       acorn: 8.19.0
       acorn-globals: 7.0.1
@@ -11505,7 +11702,7 @@ snapshots:
 
   '@statewalker/webrun-tailwind@0.2.1':
     dependencies:
-      '@statewalker/webrun-files': 0.10.4
+      '@statewalker/webrun-files': 0.10.5
       '@statewalker/webrun-modules': 0.3.3
       tailwindcss: 4.3.3
 
@@ -11666,6 +11863,8 @@ snapshots:
       '@tailwindcss/oxide': 4.3.3
       tailwindcss: 4.3.3
       vite: 8.3.2(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)
+
+  '@techstark/opencv-js@4.9.0-release.3': {}
 
   '@testing-library/dom@10.4.2':
     dependencies:
@@ -12672,6 +12871,11 @@ snapshots:
 
   extend@3.0.2: {}
 
+  fast-png@8.0.0:
+    dependencies:
+      fflate: 0.8.3
+      iobuffer: 6.0.1
+
   fast-sha256@1.3.0: {}
 
   fast-string-truncated-width@3.0.3: {}
@@ -12747,6 +12951,8 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
     optional: true
+
+  flatbuffers@25.9.23: {}
 
   flatted@3.4.4: {}
 
@@ -12862,6 +13068,8 @@ snapshots:
     dependencies:
       ipaddr.js: 2.2.0
       undici: 7.30.1
+
+  guid-typescript@1.0.9: {}
 
   happy-dom@21.0.4(bufferutil@4.2.0):
     dependencies:
@@ -12996,6 +13204,8 @@ snapshots:
     dependencies:
       loose-envify: 1.4.0
     optional: true
+
+  iobuffer@6.0.1: {}
 
   ipaddr.js@2.2.0: {}
 
@@ -13216,6 +13426,10 @@ snapshots:
   jju@1.4.0: {}
 
   jose@6.2.12: {}
+
+  jpeg-js@0.4.4: {}
+
+  js-clipper@1.0.1: {}
 
   js-tokens@4.0.0: {}
 
@@ -13903,6 +14117,17 @@ snapshots:
       wrappy: 1.0.2
     optional: true
 
+  onnxruntime-common@1.31.1: {}
+
+  onnxruntime-web@1.31.1:
+    dependencies:
+      flatbuffers: 25.9.23
+      guid-typescript: 1.0.9
+      long: 5.3.2
+      onnxruntime-common: 1.31.1
+      platform: 1.3.6
+      protobufjs: 7.6.6
+
   open@10.2.0:
     dependencies:
       default-browser: 5.5.1
@@ -14102,6 +14327,8 @@ snapshots:
   pirates@4.0.7: {}
 
   pkce-challenge@5.0.1: {}
+
+  platform@1.3.6: {}
 
   playwright-core@1.63.0: {}
 
@@ -15308,6 +15535,25 @@ snapshots:
       '@cloudflare/workerd-linux-64': 1.20261104.1
       '@cloudflare/workerd-linux-arm64': 1.20261104.1
       '@cloudflare/workerd-windows-64': 1.20261104.1
+
+  wrangler@4.158.0(@cloudflare/workers-types@4.20260702.1)(@types/node@26.6.6)(bufferutil@4.2.0):
+    dependencies:
+      '@cloudflare/kv-asset-handler': 0.5.0
+      '@cloudflare/unenv-preset': 2.16.2(unenv@2.0.0-rc.24)(workerd@1.20261104.1)
+      '@cspotcode/source-map-support': 0.8.1
+      blake3-wasm: 2.1.5
+      esbuild: 0.28.2
+      miniflare: 5.20261104.0-beta(@types/node@26.6.6)(bufferutil@4.2.0)
+      path-to-regexp: 6.3.0
+      unenv: 2.0.0-rc.24
+      workerd: 1.20261104.1
+    optionalDependencies:
+      '@cloudflare/workers-types': 4.20260702.1
+      fsevents: 2.3.3
+    transitivePeerDependencies:
+      - '@types/node'
+      - bufferutil
+      - utf-8-validate
 
   wrangler@4.158.0(@cloudflare/workers-types@5.20261107.1)(@types/node@26.6.6)(bufferutil@4.2.0):
     dependencies:

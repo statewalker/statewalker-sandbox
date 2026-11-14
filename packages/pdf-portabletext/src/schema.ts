@@ -62,6 +62,10 @@ export type TextBlock = {
   style: "normal" | "h1" | "h2" | "h3";
   /** BCP 47 language of the block's text, when known. */
   language?: string;
+  /** Standard PortableText list fields. */
+  listItem?: "bullet" | "number";
+  level?: number;
+  /** Marks on spans are `ocrBox` keys or the decorators `strong` / `em`. */
   markDefs: OcrBoxMark[];
   children: Span[];
   source: BlockSource;
@@ -80,6 +84,10 @@ export type ImageBlock = {
     page: number;
     /** Axis-aligned bounds of the image on the page; may extend past the page edges. */
     bbox: PageBox;
+    /**
+     * A 1-bit stencil mask (painted pixels black, the rest transparent).
+     */
+    stencil?: boolean;
     /**
      * Only for images not drawn upright (rotated, flipped, skewed): matrix mapping the image's unit
      * square to page points; (0,1) is the image's top-left corner.
@@ -106,7 +114,17 @@ export type ImageBlock = {
   };
 };
 
-export type PortableTextBlock = TextBlock | ImageBlock;
+/** Table in the shape of `@sanity/table`: rows of plain-text cells. */
+export type TableBlock = {
+  _type: "table";
+  _key: string;
+  rows: { _type: "tableRow"; _key: string; cells: string[] }[];
+  /** Leading rows set entirely in bold (column headers). */
+  headerRows?: number;
+  source: { type: "pdfText"; page: number; bbox: PageBox };
+};
+
+export type PortableTextBlock = TextBlock | ImageBlock | TableBlock;
 
 /** Asset metadata, shaped like a Sanity `sanity.imageAsset` document. */
 export type ImageAsset = {

@@ -15,6 +15,8 @@ export type OcrRequest = {
   scale: number;
   /** Estimate the page orientation and turn the image upright first. */
   detectOrientation: boolean;
+  /** Directory URL of the engine's runtime files (onnxruntime wasm for PaddleOCR). */
+  runtimeBaseUrl?: string;
 };
 
 export type OcrResponse =

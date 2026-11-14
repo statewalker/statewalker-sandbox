@@ -31,6 +31,7 @@ pnpm-workspace.yaml   workspace globs and the dependency catalog
 | [@statewalker/service-rpc](packages/service-rpc) | evaluate | RPC over `MessagePort` and WebSocket, built on Comlink, with streaming |
 | [@statewalker/service-pg](packages/service-pg) | replace | PostgreSQL pool stored in a context object; no consumer here |
 | [@statewalker/layout-reconstructor-core](packages/layout-reconstructor-core) | evaluate | Rebuilds a CSS-grid layout from absolutely positioned blocks |
+| [@statewalker/pdf-portabletext](packages/pdf-portabletext) | prototype | In-browser PDF → PortableText: text layer with formatting, reading order, images, worker OCR, language detection |
 
 ### Apps
 
@@ -48,7 +49,8 @@ pnpm-workspace.yaml   workspace globs and the dependency catalog
 | [notes-demo](apps/notes-demo) | React notes app served without a bundler by `@statewalker/webrun-modules-build` |
 | [openai-proxy.app](apps/openai-proxy.app) | OpenAI v1 HTTP proxy in front of a local llama.cpp server |
 | [byok-config-prototype](apps/byok-config-prototype) | Throwaway UI prototype for editing an LLM connections config file |
-| [pdf-portabletext-prototype](apps/pdf-portabletext-prototype) | In-browser PDF → PortableText conversion: OCR of embedded images (tesseract-wasm, one worker per language) with in-browser language detection (franc) |
+| [pdf-portabletext-prototype](apps/pdf-portabletext-prototype) | Demo UI and openly licensed test corpus for `@statewalker/pdf-portabletext` |
+| [tesseract-do](apps/tesseract-do) | Tesseract OCR inside Durable Objects: one Worker project on wrangler, cellb and celld, with the platform limits measured |
 
 Each folder has a README with its own run instructions.
 

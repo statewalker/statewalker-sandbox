@@ -11,6 +11,8 @@ export const DEFAULT_MODEL_BASE_URL =
 export type OcrResult = {
   /** Tesseract language the text was recognised with. */
   language: string;
+  /** Engine that produced the words; tesseract-wasm when absent. */
+  engine?: string;
   words: OcrWord[];
   rotation: number;
   durationMs: number;
@@ -30,7 +32,9 @@ type Pending = {
   onProgress?: (percent: number) => void;
 };
 
-/** One worker, one language. */
+export type OcrEngine = "tesseract" | "paddle";
+
+/** One worker, one language (or, for PaddleOCR, all of them). */
 class LanguageWorker {
   readonly worker: Worker;
   readonly pending = new Map<number, Pending>();
@@ -39,11 +43,18 @@ class LanguageWorker {
   constructor(
     readonly language: string,
     readonly modelBaseUrl: string,
+    readonly engine: OcrEngine = "tesseract",
   ) {
-    this.worker = new Worker(new URL("./ocr.worker.ts", import.meta.url), {
-      type: "module",
-      name: language,
-    });
+    this.worker =
+      engine === "paddle"
+        ? new Worker(new URL("./paddle.worker.ts", import.meta.url), {
+            type: "module",
+            name: language,
+          })
+        : new Worker(new URL("./ocr.worker.ts", import.meta.url), {
+            type: "module",
+            name: language,
+          });
     this.worker.onmessage = (event: MessageEvent<OcrResponse>) => {
       const msg = event.data;
       const p = this.pending.get(msg.id);
@@ -59,6 +70,7 @@ class LanguageWorker {
           this.pending.delete(msg.id);
           p.resolve({
             language,
+            ...(engine === "paddle" ? { engine: "paddle-ocr" } : {}),
             words: msg.words,
             rotation: msg.rotation,
             durationMs: msg.durationMs,
@@ -70,7 +82,11 @@ class LanguageWorker {
           break;
       }
     };
-    this.worker.onerror = (event) => this.fail(new Error(`OCR worker failed: ${event.message}`));
+    this.worker.onerror = (event) => {
+      // A worker that failed (its script did not load, it crashed) is not used again.
+      this.dead = true;
+      this.fail(new Error(`OCR worker failed: ${event.message}`));
+    };
   }
 
   recognize(id: number, image: ImageBitmap, options: RecognizeOptions): Promise<OcrResult> {
@@ -79,6 +95,7 @@ class LanguageWorker {
       type: "recognize",
       id,
       modelBaseUrl: this.modelBaseUrl,
+      runtimeBaseUrl: new URL("ort/", document.baseURI).href,
       image,
       scale: options.scale,
       detectOrientation: options.detectOrientation ?? true,
@@ -94,6 +111,9 @@ class LanguageWorker {
     });
   }
 
+  /** Set when the worker failed: the pool replaces it on the next request. */
+  dead = false;
+
   fail(error: Error) {
     for (const p of this.pending.values()) p.reject(error);
     this.pending.clear();
@@ -106,6 +126,9 @@ class LanguageWorker {
 }
 
 export type OcrPool = {
+  readonly engine: OcrEngine;
+  /** The engine reads every language with one model: re-running in another language is pointless. */
+  readonly languageIndependent: boolean;
   /** Recognises `image` with the worker dedicated to `language` (created on demand). */
   recognize(language: string, image: ImageBitmap, options: RecognizeOptions): Promise<OcrResult>;
   /** Languages that currently have a worker. */
@@ -120,16 +143,23 @@ export type OcrPool = {
  * worker is dropped to make room.
  */
 export function createOcrPool(
-  options: { modelBaseUrl?: string; maxWorkers?: number } = {},
+  options: { modelBaseUrl?: string; maxWorkers?: number; engine?: OcrEngine } = {},
 ): OcrPool {
+  const engine = options.engine ?? "tesseract";
   const modelBaseUrl = options.modelBaseUrl ?? DEFAULT_MODEL_BASE_URL;
   const maxWorkers = options.maxWorkers ?? 4;
   const workers = new Map<string, LanguageWorker>();
   let nextId = 1;
 
-  function get(language: string): LanguageWorker {
+  function get(requested: string): LanguageWorker {
+    // PaddleOCR's model covers every language: one worker for all.
+    const language = engine === "paddle" ? "paddle" : requested;
     let w = workers.get(language);
-    if (w) return w;
+    if (w && !w.dead) return w;
+    if (w) {
+      w.terminate();
+      workers.delete(language);
+    }
     if (workers.size >= maxWorkers) {
       const idle = [...workers.values()]
         .filter((x) => x.pending.size === 0)
@@ -139,12 +169,14 @@ export function createOcrPool(
         workers.delete(idle.language);
       }
     }
-    w = new LanguageWorker(language, modelBaseUrl);
+    w = new LanguageWorker(language, modelBaseUrl, engine);
     workers.set(language, w);
     return w;
   }
 
   return {
+    engine,
+    languageIndependent: engine === "paddle",
     recognize(language, image, opts) {
       return get(language).recognize(nextId++, image, opts);
     },

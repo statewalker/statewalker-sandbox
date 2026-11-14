@@ -1,0 +1,43 @@
+{
+  "name": "@statewalker/tesseract-do",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PROTOTYPE — Tesseract OCR (tesseract-wasm) inside Durable Objects. One Worker project, run on wrangler (workerd), cellb and celld.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/tesseract-do"
+  },
+  "scripts": {
+    "test": "pnpm run test:unit",
+    "test:e2e": "pnpm run test:wrangler && pnpm run test:cellb",
+    "test:unit": "node --experimental-strip-types --no-warnings --test test/*.test.mjs",
+    "test:wrangler": "node scripts/run-env.mjs wrangler",
+    "test:cellb": "node scripts/run-env.mjs cellb",
+    "test:celld": "node scripts/run-env.mjs celld",
+    "dev:wrangler": "node scripts/build-isolate.mjs && wrangler dev",
+    "dev:cellb": "node scripts/build-isolate.mjs && node scripts/serve-cellb.mjs",
+    "fixtures": "NODE_USE_ENV_PROXY=1 node scripts/fetch-fixtures.mjs",
+    "typecheck": "tsc --noEmit",
+    "build:isolate": "node scripts/build-isolate.mjs",
+    "predeploy": "node scripts/build-isolate.mjs",
+    "deploy": "wrangler deploy -c wrangler.production.jsonc"
+  },
+  "dependencies": {
+    "@statewalker/pdf-portabletext": "workspace:*",
+    "fast-png": "^8.0.0",
+    "jpeg-js": "^0.4.4",
+    "pdfjs-dist": "^6.5.438",
+    "tesseract-wasm": "^0.11.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@statewalker/cellb": "0.8.1",
+    "esbuild": "0.28.2",
+    "pdf-lib": "^1.17.1",
+    "typescript": "catalog:",
+    "wrangler": "4.158.0"
+  }
+}

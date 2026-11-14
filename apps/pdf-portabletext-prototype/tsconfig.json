@@ -17,9 +17,11 @@
     "noEmit": true,
     "types": ["vite/client", "node"],
     "paths": {
-      "tesseract-wasm": ["./node_modules/tesseract-wasm/dist/index.d.ts"]
+      "tesseract-wasm": [
+        "../../packages/pdf-portabletext/node_modules/tesseract-wasm/dist/index.d.ts"
+      ]
     }
   },
-  "include": ["src", "test", "scripts", "e2e-browser", "vite.config.ts"],
+  "include": ["src", "scripts", "e2e-browser", "vite.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

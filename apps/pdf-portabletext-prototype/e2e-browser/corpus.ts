@@ -10,18 +10,30 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { PdfPortableTextDocument } from "@statewalker/pdf-portabletext/schema";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 import { CORPUS, type CorpusEntry } from "../scripts/corpus-manifest.ts";
-import type { PdfPortableTextDocument } from "../src/schema.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const corpusDir = join(root, "fixtures", "corpus");
-const outDir = join(root, "e2e-output", "corpus");
+const args = process.argv.slice(2);
+/** OCR engine for every run: `--engine=paddle` compares PaddleOCR with the default tesseract. */
+const engine =
+  args.find((a) => a.startsWith("--engine="))?.slice("--engine=".length) ?? "tesseract";
+const outDir = join(root, "e2e-output", engine === "tesseract" ? "corpus" : `corpus-${engine}`);
 mkdirSync(outDir, { recursive: true });
-const filter = process.argv[2];
+const filter = args.find((a) => !a.startsWith("--"));
 
-type ImageStat = { id: string; width: number; height: number; mean: number; stddev: number };
+type ImageStat = {
+  id: string;
+  width: number;
+  height: number;
+  mean: number;
+  stddev: number;
+  /** Share of pixels that are not fully opaque. */
+  alpha: number;
+};
 type Check = { name: string; ok: boolean; detail: string };
 type Row = { entry: CorpusEntry; seconds: number; checks: Check[]; doc?: PdfPortableTextDocument };
 
@@ -30,6 +42,23 @@ const words = (text: string) =>
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
     .filter((w) => w.length >= 2);
+
+/** Fraction of the ground truth's adjacent word pairs (as a multiset) found in `text`. */
+function orderRecall(truth: string, text: string): number {
+  const pairs = (ws: string[]) => ws.slice(1).map((w, i) => `${ws[i]} ${w}`);
+  const bag = new Map<string, number>();
+  for (const p of pairs(words(text))) bag.set(p, (bag.get(p) ?? 0) + 1);
+  const expected = pairs(words(truth));
+  let hit = 0;
+  for (const p of expected) {
+    const n = bag.get(p) ?? 0;
+    if (n > 0) {
+      hit++;
+      bag.set(p, n - 1);
+    }
+  }
+  return expected.length === 0 ? 1 : hit / expected.length;
+}
 
 /** Fraction of ground-truth words (as a multiset) found in `text`. */
 function recall(truth: string, text: string): number {
@@ -49,12 +78,69 @@ function recall(truth: string, text: string): number {
 
 function blockText(doc: PdfPortableTextDocument, page?: number): string {
   return doc.blocks
-    .filter((b) => b._type === "block" && (page === undefined || b.source.page === page))
-    .map((b) => (b._type === "block" ? b.children.map((c) => c.text).join("") : ""))
+    .filter((b) => b._type !== "image" && (page === undefined || b.source.page === page))
+    .map((b) => {
+      if (b._type === "table") return b.rows.map((r) => r.cells.join(" ")).join("\n");
+      if (b._type === "block") return b.children.map((c) => c.text).join("");
+      return "";
+    })
     .join("\n");
 }
 
-function check(doc: PdfPortableTextDocument, entry: CorpusEntry, stats: ImageStat[]): Check[] {
+function checkFormatting(
+  doc: PdfPortableTextDocument,
+  f: NonNullable<CorpusEntry["expect"]["formatting"]>,
+  add: (name: string, ok: boolean, detail?: string) => void,
+) {
+  const blocks = doc.blocks.filter((b) => b._type === "block");
+  const spans = blocks.flatMap((b) => (b._type === "block" ? b.children : []));
+  const marked = (mark: string) =>
+    spans
+      .filter((s) => s.marks.includes(mark))
+      .map((s) => s.text.trim())
+      .join(" | ");
+  for (const [mark, phrases] of [
+    ["strong", f.strong],
+    ["em", f.em],
+  ] as const) {
+    for (const phrase of phrases ?? []) {
+      add(`${mark} "${phrase}"`, marked(mark).includes(phrase), "");
+    }
+  }
+  if (f.minStrong !== undefined) {
+    const n = spans.filter((s) => s.marks.includes("strong")).length;
+    add("strong spans", n >= f.minStrong, `${n}`);
+  }
+  if (f.listItems) {
+    for (const type of ["bullet", "number"] as const) {
+      const want = f.listItems[type];
+      if (want === undefined) continue;
+      const n = blocks.filter((b) => b._type === "block" && b.listItem === type).length;
+      add(`${type} items`, n === want, `${n}`);
+    }
+  }
+  if (f.maxLevel !== undefined) {
+    const max = Math.max(0, ...blocks.map((b) => (b._type === "block" ? (b.level ?? 0) : 0)));
+    add("list levels", max === f.maxLevel, `${max}`);
+  }
+  if (f.tables) {
+    const tables = doc.blocks.filter((b) => b._type === "table");
+    const shapes = tables.map((t) =>
+      t._type === "table"
+        ? `${t.rows.length}×${t.rows[0]?.cells.length ?? 0}/h${t.headerRows ?? 0}`
+        : "",
+    );
+    const want = f.tables.map((t) => `${t.rows}×${t.cols}/h${t.headerRows ?? 0}`);
+    add("tables", shapes.join() === want.join(), shapes.join() || "none");
+  }
+}
+
+function check(
+  doc: PdfPortableTextDocument,
+  entry: CorpusEntry,
+  stats: ImageStat[],
+  heapMB?: number,
+): Check[] {
   const checks: Check[] = [];
   const add = (name: string, ok: boolean, detail = "") => checks.push({ name, ok, detail });
   const { expect } = entry;
@@ -121,24 +207,74 @@ function check(doc: PdfPortableTextDocument, entry: CorpusEntry, stats: ImageSta
     });
     add("placement", actual.join() === expect.placementRotations.join(), actual.join("/"));
   }
+  for (const [phrase, max] of Object.entries(expect.maxOccurrences ?? {})) {
+    const n = text.toLowerCase().split(phrase.toLowerCase()).length - 1;
+    add(`"${phrase}" ≤ ${max}×`, n <= max, `${n}×`);
+  }
+  if (expect.ocrEngine) {
+    const engines = images.filter((i) => i.ocr?.wordCount).map((i) => i.ocr?.engine);
+    add(
+      "engine",
+      engines.length > 0 && engines.every((e) => e === expect.ocrEngine),
+      engines.join("/"),
+    );
+  }
+  if (expect.pages !== undefined) {
+    add("pages", doc.pages.length === expect.pages, `${doc.pages.length}`);
+  }
+  if (expect.maxHeapMB !== undefined && heapMB !== undefined) {
+    add("heap", heapMB <= expect.maxHeapMB, `${heapMB.toFixed(0)} MB`);
+  }
+  if (expect.imageChecks) {
+    const actual = images.map((img) => {
+      const stat = stats.find((s) => s.id === img.asset._ref);
+      return {
+        mimeType: img.mimeType,
+        alpha: (stat?.alpha ?? 0) > 0.01,
+        stencil: !!img.source.stencil,
+      };
+    });
+    const show = (x: { mimeType?: string; alpha?: boolean; stencil?: boolean }) =>
+      `${x.mimeType?.replace("image/", "") ?? "?"}${x.alpha ? "+alpha" : ""}${x.stencil ? "+stencil" : ""}`;
+    const ok = expect.imageChecks.every((want, i) => {
+      const got = actual[i];
+      return (
+        got &&
+        (want.mimeType === undefined || want.mimeType === got.mimeType) &&
+        (want.alpha === undefined || want.alpha === got.alpha) &&
+        (want.stencil === undefined || want.stencil === got.stencil)
+      );
+    });
+    add("image types", ok, actual.map(show).join(", "));
+  }
+  if (expect.formatting) checkFormatting(doc, expect.formatting, add);
   for (const phrase of expect.contains ?? []) {
     add(`contains "${phrase}"`, text.toLowerCase().includes(phrase.toLowerCase()));
   }
   if (expect.groundTruth) {
-    const truth = readFileSync(
-      join(corpusDir, expect.groundTruth.url.split("/").pop() as string),
-      "utf8",
-    );
-    const pages = expect.groundTruth.perPage ? doc.pages.map((p) => p.number) : [undefined];
+    const gt = expect.groundTruth;
+    const truth = readFileSync(join(corpusDir, gt.file), "utf8");
+    const pages = gt.perPage ? doc.pages.map((p) => p.number) : [undefined];
     for (const page of pages) {
-      const r = recall(truth, blockText(doc, page));
+      const output = blockText(doc, page);
+      const r = recall(truth, output);
+      const suffix = page ? ` p${page}` : "";
       add(
-        `recall${page ? ` p${page}` : ""}`,
-        r >= expect.groundTruth.minRecall,
-        `${(r * 100).toFixed(1)}% (min ${expect.groundTruth.minRecall * 100}%)`,
+        `recall${suffix}`,
+        r >= gt.minRecall,
+        `${(r * 100).toFixed(1)}% (min ${gt.minRecall * 100}%)`,
       );
+      if (gt.minOrder !== undefined) {
+        const o = orderRecall(truth, output);
+        add(
+          `order${suffix}`,
+          o >= gt.minOrder,
+          `${(o * 100).toFixed(1)}% (min ${gt.minOrder * 100}%)`,
+        );
+      }
     }
   }
+
   return checks;
 }
 
@@ -155,11 +291,20 @@ try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   page.on("pageerror", (e) => console.error("[pageerror]", e.message));
   await page.goto("http://localhost:5198/");
-  for (const entry of CORPUS.filter((e) => !filter || e.file.includes(filter))) {
+  // The filter is a comma-separated list of substrings of run names.
+  const wanted = filter?.split(",") ?? [];
+  const selected = CORPUS.filter(
+    (e) => wanted.length === 0 || wanted.some((w) => (e.id ?? e.file).includes(w)),
+  );
+  for (const entry of selected) {
     const started = Date.now();
     await page.reload();
     await page.selectOption("#language", "auto");
+    await page.selectOption("#engine", engine);
     await page.fill("#max-pages", String(entry.maxPages ?? 50));
+    for (const [id, value] of Object.entries(entry.options ?? {})) {
+      await page.selectOption(`#${id}`, value);
+    }
     await page.setInputFiles("#file", join(corpusDir, entry.file));
     await page.click("#convert");
     await page.waitForFunction(
@@ -169,7 +314,7 @@ try {
     );
     const seconds = (Date.now() - started) / 1000;
     const log = (await page.textContent("#log")) ?? "";
-    const base = join(outDir, entry.file.replace(/\.pdf$/, ""));
+    const base = join(outDir, (entry.id ?? entry.file).replace(/\.pdf$/, ""));
     writeFileSync(`${base}.log`, log);
     if (/error:/.test(log)) {
       rows.push({
@@ -177,7 +322,7 @@ try {
         seconds,
         checks: [{ name: "conversion", ok: false, detail: log.split("error:")[1].trim() }],
       });
-      console.log(`✗ ${entry.file}: ${log.split("error:")[1].trim()}`);
+      console.log(`✗ ${entry.id ?? entry.file}: ${log.split("error:")[1].trim()}`);
       continue;
     }
     const doc = JSON.parse((await page.textContent("#json pre")) ?? "") as PdfPortableTextDocument;
@@ -190,7 +335,15 @@ try {
         try {
           const bmp = await createImageBitmap(blob);
           const w = Math.min(bmp.width, 512), h = Math.max(1, Math.round(bmp.height * w / bmp.width));
+          const clear = new OffscreenCanvas(w, h).getContext("2d");
+          clear.drawImage(bmp, 0, 0, w, h);
+          const a = clear.getImageData(0, 0, w, h).data;
+          let transparent = 0;
+          for (let i = 3; i < a.length; i += 4) if (a[i] < 250) transparent++;
+          // Luminance over white, as the image would be seen on a page.
           const ctx = new OffscreenCanvas(w, h).getContext("2d");
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, w, h);
           ctx.drawImage(bmp, 0, 0, w, h);
           const d = ctx.getImageData(0, 0, w, h).data;
           let sum = 0, sq = 0, n = 0;
@@ -199,7 +352,7 @@ try {
             sum += l; sq += l * l; n++;
           }
           const mean = sum / n;
-          out.push({ id, width: bmp.width, height: bmp.height, mean: Math.round(mean), stddev: Math.round(Math.sqrt(sq / n - mean * mean) * 10) / 10 });
+          out.push({ id, width: bmp.width, height: bmp.height, mean: Math.round(mean), stddev: Math.round(Math.sqrt(sq / n - mean * mean) * 10) / 10, alpha: transparent / n });
         } catch (e) {}
       }
       return out;
@@ -208,11 +361,14 @@ try {
       .locator("#preview")
       .screenshot({ path: `${base}.png` })
       .catch(() => {});
-    const checks = check(doc, entry, stats);
+    const heapMB = (await page.evaluate(
+      "performance.memory ? performance.memory.usedJSHeapSize / 1048576 : undefined",
+    )) as number | undefined;
+    const checks = check(doc, entry, stats, heapMB);
     rows.push({ entry, seconds, checks, doc });
     const failed = checks.filter((c) => !c.ok);
     console.log(
-      `${failed.length ? "✗" : "✓"} ${entry.file} (${seconds.toFixed(1)}s, lang ${doc.language ?? "-"}) ` +
+      `${failed.length ? "✗" : "✓"} ${entry.id ?? entry.file} (${seconds.toFixed(1)}s, lang ${doc.language ?? "-"}) ` +
         checks
           .map((c) => `${c.ok ? "" : "!"}${c.name}${c.detail ? `=${c.detail}` : ""}`)
           .join(", "),
@@ -243,7 +399,7 @@ const report = [
     const result = failed.length
       ? `✗ ${failed.map((c) => `${c.name} ${c.detail}`).join("; ")}`
       : `✓ ${checks.map((c) => `${c.name}${c.detail ? ` ${c.detail}` : ""}`).join("; ")}`;
-    return `| [${entry.file}](${entry.url}) | ${entry.purpose} | ${doc?.language ?? "-"} | ${images.length} | ${ocr || "-"} | ${seconds.toFixed(1)}s | ${result} |`;
+    return `| [${entry.id ?? entry.file}](${entry.url}) | ${entry.purpose} | ${doc?.language ?? "-"} | ${images.length} | ${ocr || "-"} | ${seconds.toFixed(1)}s | ${result} |`;
   }),
   "",
 ].join("\n");
