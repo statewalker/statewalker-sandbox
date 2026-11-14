@@ -24,10 +24,11 @@
  * WASM_URL).
  */
 
+import { DEFAULT_LANGUAGE, languageByTesseract } from "@statewalker/pdf-portabletext/core";
 import { BLOB_CHUNK } from "./blob-store.ts";
 import type { RawImage } from "./decode.ts";
 import { type CellOcrResult, type Env, OcrCell } from "./ocr-cell.ts";
-import { convertPdfInWorker, type PageResult } from "./pdf/convert.ts";
+import { assembleDocument, convertPdfInWorker, type PageResult } from "./pdf/convert.ts";
 import { MAX_JOB_PDF_BYTES, PdfJob } from "./pdf/pdf-job.ts";
 
 export { OcrCell, PdfJob };
@@ -42,13 +43,15 @@ const json = (value: unknown, status = 200) =>
   });
 
 const errorStatus = (message: string) =>
-  /^(Error: )?(EINVAL|E2BIG)/.test(message)
-    ? 400
-    : /^(Error: )?EEXIST/.test(message)
-      ? 409
-      : /^(Error: )?EIO/.test(message)
-        ? 502
-        : 500;
+  /^(Error: )?E2BIG/.test(message)
+    ? 413
+    : /^(Error: )?EINVAL/.test(message)
+      ? 400
+      : /^(Error: )?EEXIST/.test(message)
+        ? 409
+        : /^(Error: )?EIO/.test(message)
+          ? 502
+          : 500;
 
 /**
  * Whether this runtime compiles WebAssembly from bytes: workerd refuses, Node (cellb) allows,
@@ -112,7 +115,7 @@ export default {
         const engine = url.searchParams.get("engine") === "isolate" ? "isolate" : "cell";
         const options = {
           engine: engine as "cell" | "isolate",
-          ...(band === null ? {} : { bandHeight: Math.max(0, Number(band) || 0) }),
+          ...(band === null ? {} : { bandHeight: Number(band) }),
         };
         const result: CellOcrResult = await stub.ocr(image, lang, options);
         return json({ ...result, cellName: cell });
@@ -153,6 +156,8 @@ async function convertPdfRequest(request: Request, url: URL, env: Env): Promise<
   const engine = url.searchParams.get("engine") === "isolate" ? "isolate" : "cell";
   const inline = url.searchParams.get("assets") === "inline";
   const maxPages = Number(url.searchParams.get("maxPages")) || undefined;
+  if (maxPages !== undefined && !(Number.isInteger(maxPages) && maxPages > 0))
+    return json({ error: "EINVAL: maxPages is a positive integer" }, 400);
   const name = url.searchParams.get("name") ?? "document.pdf";
   const ocr = (image: RawImage, language: string) =>
     env.OCR.get(env.OCR.idFromName(`ocr-${language}`)).ocr(image, language, { engine });
@@ -270,15 +275,9 @@ async function jobRequest(request: Request, url: URL, env: Env): Promise<Respons
     return view ? json({ id, ...view }) : notFound();
   }
   if (rest === "document" && request.method === "GET") {
-    const result = await job.document();
-    if (!result) return notFound();
-    if (url.searchParams.get("assets") !== "inline") return json(result);
-    const pngs: Record<string, string> = {};
-    for (const assetId of Object.keys(result.document.assets)) {
-      const png = await job.asset(assetId);
-      if (png) pngs[assetId] = base64(png);
-    }
-    return json({ ...result, assets: pngs });
+    const parts = await job.documentParts();
+    if (!parts) return notFound();
+    return streamDocument(job, parts, url.searchParams.get("assets") === "inline");
   }
   const page = rest.match(/^pages\/(\d+)$/);
   if (page && request.method === "GET") {
@@ -287,10 +286,11 @@ async function jobRequest(request: Request, url: URL, env: Env): Promise<Respons
   }
   const asset = rest.match(/^assets\/(image-[0-9a-f]{40}-\d+x\d+-png)$/);
   if (asset && request.method === "GET") {
-    const png = await job.asset(asset[1]);
-    return png
-      ? new Response(png, { headers: { "content-type": "image/png" } })
-      : json({ error: "ENOENT: no such asset" }, 404);
+    const size = await job.assetSize(asset[1]);
+    if (size === null) return json({ error: "ENOENT: no such asset" }, 404);
+    return new Response(assetStream(job, asset[1], size), {
+      headers: { "content-type": "image/png", "content-length": String(size) },
+    });
   }
   return json({ error: "not found" }, 404);
 }
@@ -317,4 +317,89 @@ async function* inParts(body: ReadableStream<Uint8Array>, size: number) {
     }
   }
   if (filled > 0) yield buffer.subarray(0, filled);
+}
+
+/** Asset bytes are read from the job in 3 MiB pieces: a multiple of 3, so base64 pieces join. */
+const ASSET_PIECE = 3 * 1024 * 1024;
+
+type JobStub = DurableObjectStub<PdfJob>;
+
+/** An asset as a byte stream, one piece per RPC. */
+function assetStream(job: JobStub, id: string, size: number): ReadableStream<Uint8Array> {
+  let offset = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (offset >= size) return controller.close();
+      const piece = await job.assetRange(id, offset, Math.min(size, offset + ASSET_PIECE));
+      offset += piece.byteLength;
+      controller.enqueue(piece);
+    },
+  });
+}
+
+/**
+ * A job's document as streamed JSON: `{status, complete, document: {…, blocks, pages, assets}}`
+ * (and `assets: {id: base64}` with inline assets), fetched from the job a page and an asset
+ * piece at a time. Neither the RPC message limit nor this Worker's memory bounds its size.
+ */
+function streamDocument(
+  job: JobStub,
+  parts: NonNullable<Awaited<ReturnType<PdfJob["documentParts"]>>>,
+  inline: boolean,
+): Response {
+  const language = languageByTesseract(parts.language) ?? DEFAULT_LANGUAGE;
+  const {
+    pages: _p,
+    blocks: _b,
+    assets: _a,
+    ...head
+  } = assembleDocument(parts.name, parts.size, language, [], [], {});
+  head.source.pageCount = parts.pages.length;
+  const encoder = new TextEncoder();
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const write = (text: string) => writer.write(encoder.encode(text));
+  (async () => {
+    try {
+      const status = { status: parts.status, complete: parts.status === "done" };
+      await write(
+        `${JSON.stringify(status).slice(0, -1)},"document":${JSON.stringify(head).slice(0, -1)},"blocks":[`,
+      );
+      const pageInfos: unknown[] = [];
+      let first = true;
+      for (const n of parts.pages) {
+        const stored = await job.page(n);
+        if (!stored) continue;
+        pageInfos.push(stored.page);
+        for (const block of stored.blocks) {
+          await write(`${first ? "" : ","}${JSON.stringify(block)}`);
+          first = false;
+        }
+      }
+      await write(
+        `],"pages":${JSON.stringify(pageInfos)},"assets":${JSON.stringify(parts.assets)}}`,
+      );
+      if (inline) {
+        await write(`,"assets":{`);
+        let firstAsset = true;
+        for (const id of Object.keys(parts.assets)) {
+          const size = await job.assetSize(id);
+          if (size === null) continue;
+          await write(`${firstAsset ? "" : ","}${JSON.stringify(id)}:"`);
+          firstAsset = false;
+          for (let offset = 0; offset < size; offset += ASSET_PIECE)
+            await write(
+              base64(await job.assetRange(id, offset, Math.min(size, offset + ASSET_PIECE))),
+            );
+          await write(`"`);
+        }
+        await write("}");
+      }
+      await write("}");
+      await writer.close();
+    } catch (e) {
+      await writer.abort(e);
+    }
+  })();
+  return new Response(readable, { headers: { "content-type": "application/json" } });
 }

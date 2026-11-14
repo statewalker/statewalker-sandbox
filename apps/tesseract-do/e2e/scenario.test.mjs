@@ -110,4 +110,21 @@ test("bad input is refused", async () => {
     body: fixture("baiona_gray.png"),
   });
   assert.equal(lang.status, 400);
+  // A PNG whose header declares 60000×60000: refused from the header, never decoded.
+  const bomb = new Uint8Array(33);
+  bomb.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 73, 72, 68, 82]);
+  new DataView(bomb.buffer).setUint32(16, 60000);
+  new DataView(bomb.buffer).setUint32(20, 60000);
+  bomb.set([8, 0, 0, 0, 0], 24);
+  const big = await fetch(`${process.env.BASE_URL}/api/ocr?lang=eng`, {
+    method: "POST",
+    body: bomb,
+  });
+  assert.equal(big.status, 413);
+  // One recognition per row would hold the cell for minutes.
+  const thin = await fetch(`${process.env.BASE_URL}/api/ocr?lang=eng&band=1`, {
+    method: "POST",
+    body: fixture("baiona_gray.png"),
+  });
+  assert.equal(thin.status, 400);
 });

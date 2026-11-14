@@ -91,7 +91,21 @@ function jpegSource(bytes: Uint8Array): PixelSource {
   };
 }
 
+/**
+ * The size a PNG declares in its IHDR, read before decoding: a small file can inflate to
+ * gigabytes (a decompression bomb), so the pixel limit must hold before fast-png allocates.
+ */
+function pngDeclaredSize(bytes: Uint8Array): { width: number; height: number } {
+  const tag = String.fromCharCode(...bytes.subarray(12, 16));
+  if (bytes.byteLength < 24 || tag !== "IHDR") throw new Error("EINVAL: not a PNG (no IHDR)");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { width: view.getUint32(16), height: view.getUint32(20) };
+}
+
 function pngSource(bytes: Uint8Array): PixelSource {
+  const declared = pngDeclaredSize(bytes);
+  if (declared.width * declared.height > MAX_PIXELS)
+    throw new Error(`E2BIG: ${declared.width}×${declared.height} is too large`);
   const png = decodePng(bytes);
   const { width, height, depth } = png;
   if (width * height > MAX_PIXELS) throw new Error(`E2BIG: ${width}×${height} is too large`);

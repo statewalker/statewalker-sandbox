@@ -149,6 +149,11 @@ export class PdfJob extends DurableObject<Env> {
       throw new Error("EINVAL: not a PDF");
     if (options.lang !== "auto" && !languageByTesseract(options.lang))
       throw new Error(`EINVAL: unsupported language '${options.lang}'`);
+    if (
+      options.maxPages !== undefined &&
+      !(Number.isInteger(options.maxPages) && options.maxPages > 0)
+    )
+      throw new Error("EINVAL: maxPages is a positive integer");
     const state: JobState = {
       status: "queued",
       name,
@@ -182,6 +187,39 @@ export class PdfJob extends DurableObject<Env> {
 
   async asset(id: string): Promise<Uint8Array | null> {
     return this.#blobs.get(`asset:${id}`);
+  }
+
+  /** An asset's size, or null; with `assetRange`, assets of any size are read in pieces. */
+  async assetSize(id: string): Promise<number | null> {
+    return this.#blobs.size(`asset:${id}`);
+  }
+
+  async assetRange(id: string, begin: number, end: number): Promise<Uint8Array> {
+    return this.#blobs.read(`asset:${id}`, begin, end);
+  }
+
+  /**
+   * What the document is made of, without its pages: the Worker fetches the pages one by one
+   * (`page`) and streams the document, so its size is not bound by one RPC message (32 MiB).
+   */
+  async documentParts() {
+    const state = this.#state();
+    if (!state) return null;
+    const pages = this.#sql
+      .exec("SELECT n FROM page WHERE ok = 1 ORDER BY n")
+      .toArray()
+      .map((r) => Number(r.n));
+    const assets: Record<string, ImageAsset> = {};
+    for (const row of this.#sql.exec("SELECT id, meta FROM asset").toArray())
+      assets[String(row.id)] = JSON.parse(String(row.meta));
+    return {
+      status: state.status,
+      name: state.name,
+      size: state.size,
+      language: state.language ?? "eng",
+      pages,
+      assets,
+    };
   }
 
   /** The PortableText document of the pages done so far (all of them once the job is done). */
@@ -300,56 +338,78 @@ export class PdfJob extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
-    const state = this.#state();
-    if (!state) {
+    const initial = this.#state();
+    if (!initial) {
       // An upload that was never started.
       await this.ctx.storage.deleteAll();
       this.#createTables();
       return;
     }
-    if (state.status !== "queued" && state.status !== "running") return;
-    state.alarms += 1;
+    if (initial.status !== "queued" && initial.status !== "running") return;
     let opened: { pdf: PDFDocumentProxy; stats: RangeStats };
+    let state: JobState;
     try {
       const first = !this.#pdf;
       opened = await this.#openPdf();
-      if (first) state.reads.opens += 1;
-      if (state.status === "queued") {
+      let pageCount = initial.pageCount;
+      let language = initial.language;
+      if (initial.status === "queued") {
         // First alarm: the page count and the language, then the pages.
-        state.pageCount = Math.min(
+        pageCount = Math.min(
           opened.pdf.numPages,
-          state.options.maxPages ?? Number.POSITIVE_INFINITY,
+          initial.options.maxPages ?? Number.POSITIVE_INFINITY,
         );
-        state.language = (
+        language = (
           await documentLanguage(opened.pdf, {
-            lang: state.options.lang,
-            maxPages: state.pageCount,
+            lang: initial.options.lang,
+            maxPages: pageCount,
           })
         ).tesseract;
-        state.status = "running";
       }
+      // Read again after the awaits: a cancel or delete may have come in meanwhile.
+      const current = this.#state();
+      if (current?.status !== "queued" && current?.status !== "running") return;
+      state = current;
+      state.pageCount = pageCount;
+      state.language = language;
+      state.status = "running";
+      state.alarms += 1;
+      if (first) state.reads.opens += 1;
       this.#countReads(state, opened.stats);
       this.#save(state);
     } catch (e) {
       // An unreadable PDF fails the job: there is nothing to retry.
-      state.status = "failed";
-      state.error = String((e as Error)?.message ?? e);
-      state.finishedAt = new Date().toISOString();
-      this.#save(state);
+      const current = this.#state();
+      if (current?.status !== "queued" && current?.status !== "running") return;
+      current.status = "failed";
+      current.error = String((e as Error)?.message ?? e);
+      current.finishedAt = new Date().toISOString();
+      this.#save(current);
       await this.#closePdf();
       return;
     }
 
-    // The batch: the next pages not done or failed yet.
+    // Pages whose attempts are used up (attempts that crashed the isolate count too: they are
+    // recorded before the page runs) are failed and skipped.
+    for (const [key, attempts] of Object.entries(state.attempts)) {
+      if (attempts < MAX_ATTEMPTS) continue;
+      delete state.attempts[key];
+      state.failedPages.push({ page: Number(key), error: "EIO: failed or crashed every attempt" });
+    }
+    this.#advance(state);
+    if (state.nextPage > state.pageCount) return this.#finish(state);
+
+    // The batch: the next pages not done or failed yet. After a crash (a page with attempts
+    // but no recorded error), the page is retried alone.
     const failed = new Set(state.failedPages.map((f) => f.page));
+    const size = Object.keys(state.attempts).length > 0 ? 1 : (state.options.pageConcurrency ?? 4);
     const batch: number[] = [];
-    for (
-      let n = state.nextPage;
-      n <= state.pageCount && batch.length < (state.options.pageConcurrency ?? 4);
-      n++
-    ) {
+    for (let n = state.nextPage; n <= state.pageCount && batch.length < size; n++) {
       if (!failed.has(n) && !this.#isDone(n)) batch.push(n);
     }
+    for (const n of batch) state.attempts[n] = (state.attempts[n] ?? 0) + 1;
+    this.#save(state);
+
     const outcomes = await Promise.allSettled(
       batch.map((n) => this.#convertAndStore(opened.pdf, n, state)),
     );
@@ -357,39 +417,43 @@ export class PdfJob extends DurableObject<Env> {
     // Cancelled or removed while the batch ran: nothing more to do.
     const now = this.#state();
     if (now?.status !== "running") return;
-    now.alarms = state.alarms;
-    now.reads = state.reads;
     this.#countReads(now, opened.stats);
     let retry = 0;
     outcomes.forEach((outcome, i) => {
-      if (outcome.status === "fulfilled") return;
       const n = batch[i];
-      const attempts = (now.attempts[n] ?? 0) + 1;
+      if (outcome.status === "fulfilled") {
+        delete now.attempts[n];
+        return;
+      }
+      const attempts = now.attempts[n] ?? 1;
       if (attempts < MAX_ATTEMPTS) {
-        now.attempts[n] = attempts;
         retry = Math.max(retry, attempts);
       } else {
         delete now.attempts[n];
         now.failedPages.push({ page: n, error: String(outcome.reason?.message ?? outcome.reason) });
       }
     });
-    for (const n of batch) if (this.#isDone(n)) delete now.attempts[n];
-    const settled = new Set(now.failedPages.map((f) => f.page));
-    while (
-      now.nextPage <= now.pageCount &&
-      (settled.has(now.nextPage) || this.#isDone(now.nextPage))
-    )
-      now.nextPage += 1;
-
-    if (now.nextPage > now.pageCount) {
-      now.status = "done";
-      now.finishedAt = new Date().toISOString();
-      this.#save(now);
-      await this.#closePdf();
-      return;
-    }
+    this.#advance(now);
+    if (now.nextPage > now.pageCount) return this.#finish(now);
     this.#save(now);
     const delay = retry > 0 ? 1000 * 2 ** retry : (now.options.throttleMs ?? 0);
     await this.ctx.storage.setAlarm(Date.now() + delay);
+  }
+
+  /** Moves `nextPage` past the pages done or failed. */
+  #advance(state: JobState): void {
+    const failed = new Set(state.failedPages.map((f) => f.page));
+    while (
+      state.nextPage <= state.pageCount &&
+      (failed.has(state.nextPage) || this.#isDone(state.nextPage))
+    )
+      state.nextPage += 1;
+  }
+
+  async #finish(state: JobState): Promise<void> {
+    state.status = "done";
+    state.finishedAt = new Date().toISOString();
+    this.#save(state);
+    await this.#closePdf();
   }
 }

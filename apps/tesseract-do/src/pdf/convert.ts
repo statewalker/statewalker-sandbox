@@ -36,7 +36,7 @@ import {
   tableToBlock,
 } from "@statewalker/pdf-portabletext/core";
 import { encode as encodePng } from "fast-png";
-import type { PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
+import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { RawImage } from "../decode.ts";
 import type { OcrResult } from "../ocr.ts";
 import { openPdf } from "./pdfjs.ts";
@@ -150,6 +150,21 @@ export async function convertPage(
   knownAsset: (id: string) => boolean,
 ): Promise<PageResult> {
   const page = await pdf.getPage(n);
+  try {
+    return await convertLoadedPage(page, n, language, options, knownAsset);
+  } finally {
+    // Also when the page fails: a cached document must not keep its decoded images.
+    page.cleanup();
+  }
+}
+
+async function convertLoadedPage(
+  page: PDFPageProxy,
+  n: number,
+  language: Language,
+  options: PageOptions,
+  knownAsset: (id: string) => boolean,
+): Promise<PageResult> {
   const size = pageSize(page);
   const pageInfo = { number: n, width: round2(size.width), height: round2(size.height) };
   const keyGen = createKeyGen(`p${n}-`);
@@ -265,7 +280,6 @@ export async function convertPage(
   await Promise.all(jobs);
 
   const pageBlocks = readingOrder(items.map((i) => i.box)).flatMap((i) => items[i].blocks);
-  page.cleanup();
   return { page: pageInfo, blocks: pageBlocks, assets: pageAssets };
 }
 

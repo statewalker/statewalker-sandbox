@@ -56,6 +56,11 @@ export async function loadModel(
     let offset = 0;
     for (const r of rows) {
       const chunk = new Uint8Array(r.data as ArrayBuffer);
+      // More chunks than the size says (left from an interrupted store): damaged, fetch again.
+      if (offset + chunk.byteLength > bytes.byteLength) {
+        offset = -1;
+        break;
+      }
       bytes.set(chunk, offset);
       offset += chunk.byteLength;
     }
@@ -72,6 +77,10 @@ export async function loadModel(
   if (!res.ok) throw new Error(`EIO: model ${url}: HTTP ${res.status}`);
   const bytes = new Uint8Array(await res.arrayBuffer());
   if (bytes.byteLength > MAX_MODEL_BYTES) throw new Error(`EIO: model ${url} is too large`);
+  const digest = await sha256(bytes);
+  // No await from here on: the chunks and the row are written in one synchronous run, and old
+  // chunks of the language go first.
+  sql.exec("DELETE FROM model_chunk WHERE lang = ?", lang);
   for (let i = 0; i * CHUNK < bytes.byteLength; i++) {
     sql.exec(
       "INSERT OR REPLACE INTO model_chunk (lang, idx, data) VALUES (?, ?, ?)",
@@ -84,7 +93,7 @@ export async function loadModel(
     "INSERT OR REPLACE INTO model (lang, size, sha256, source) VALUES (?, ?, ?, ?)",
     lang,
     bytes.byteLength,
-    await sha256(bytes),
+    digest,
     url,
   );
   return { bytes, source: "fetch" };

@@ -54,6 +54,8 @@ export type RecognizeOptions = {
 
 export const DEFAULT_BAND_PIXELS = 3_000_000;
 export const DEFAULT_OVERLAP = 120;
+/** The thinnest band a caller may ask for. */
+export const MIN_BAND_ROWS = 256;
 
 /**
  * Recognises the image band by band. A word is kept from the band whose core
@@ -67,6 +69,11 @@ export function recognize(
 ): OcrResult & { bands: number } {
   const { width, height } = source;
   const overlap = options.overlap ?? DEFAULT_OVERLAP;
+  if (options.bandHeight !== undefined && options.bandHeight !== 0) {
+    // Thin bands mean one recognition per few rows: minutes of CPU in the cell. Whole rows only.
+    if (!Number.isInteger(options.bandHeight) || options.bandHeight < MIN_BAND_ROWS)
+      throw new Error(`EINVAL: band is 0 or a whole number of rows ≥ ${MIN_BAND_ROWS}`);
+  }
   const bandHeight =
     options.bandHeight === 0
       ? height
