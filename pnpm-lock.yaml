@@ -623,6 +623,9 @@ importers:
       pdfjs-dist:
         specifier: ^6.5.438
         version: 6.5.438
+      playwright:
+        specifier: 'catalog:'
+        version: 1.63.0
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

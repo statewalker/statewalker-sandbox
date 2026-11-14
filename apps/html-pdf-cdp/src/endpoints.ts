@@ -43,12 +43,27 @@ const CHROMIUM_CANDIDATES = [
 ];
 
 /** Starts a headless Chromium with CDP on a free port; `close` stops it and removes its profile. */
+/** Playwright's Chromium, when Playwright and its browser are installed (as on CI). */
+async function playwrightChromium(): Promise<string | undefined> {
+  try {
+    const { chromium } = await import("playwright");
+    return chromium.executablePath();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function launchLocalChromium(): Promise<{
   endpoint: CdpEndpoint;
   version: string;
   close: () => Promise<void>;
 }> {
-  const bin = CHROMIUM_CANDIDATES.find((p) => p && existsSync(p));
+  const candidates = [
+    process.env.CHROMIUM_PATH,
+    await playwrightChromium(),
+    ...CHROMIUM_CANDIDATES.slice(1),
+  ];
+  const bin = candidates.find((p) => p && existsSync(p));
   if (!bin) throw new Error("ENOENT: no Chromium found (set CHROMIUM_PATH)");
   const profile = mkdtempSync(join(tmpdir(), "html-pdf-cdp-"));
   const child = spawn(
@@ -96,7 +111,8 @@ export async function launchLocalChromium(): Promise<{
         await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
         if (child.exitCode === null) child.kill("SIGKILL");
       }
-      rmSync(profile, { recursive: true, force: true });
+      // Chromium's helper processes may still be writing to the profile for a moment.
+      rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     },
   };
 }

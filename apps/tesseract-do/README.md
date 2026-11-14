@@ -29,7 +29,8 @@ per alarm. See [PDF → PortableText](#pdf--portabletext) and [PDF jobs](#pdf-jo
 ```sh
 pnpm install                                            # at the repository root
 pnpm --filter @statewalker/tesseract-do fixtures        # test images and models into fixtures/
-pnpm --filter @statewalker/tesseract-do test            # unit + wrangler + cellb
+pnpm --filter @statewalker/tesseract-do test            # unit tests (what CI runs)
+pnpm --filter @statewalker/tesseract-do test:e2e        # wrangler + cellb: runtimes, fixtures
 pnpm --filter @statewalker/tesseract-do test:celld      # celld 0.6.0 in Docker (or CELLD_BIN)
 ```
 

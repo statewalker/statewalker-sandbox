@@ -11,7 +11,8 @@
     "directory": "apps/tesseract-do"
   },
   "scripts": {
-    "test": "pnpm run test:unit && pnpm run test:wrangler && pnpm run test:cellb",
+    "test": "pnpm run test:unit",
+    "test:e2e": "pnpm run test:wrangler && pnpm run test:cellb",
     "test:unit": "node --experimental-strip-types --no-warnings --test test/*.test.mjs",
     "test:wrangler": "node scripts/run-env.mjs wrangler",
     "test:cellb": "node scripts/run-env.mjs cellb",

@@ -113,11 +113,19 @@ describe("local Chromium", () => {
   });
 
   test("targets are closed after printing", async () => {
-    const before = await cdp.send<{ targetInfos: { type: string }[] }>("Target.getTargets");
+    type Targets = { targetInfos: { type: string }[] };
+    const pages = async () =>
+      (await cdp.send<Targets>("Target.getTargets")).targetInfos.filter((t) => t.type === "page")
+        .length;
+    const before = await pages();
     await printHtmlToPdf(cdp, { html });
-    const after = await cdp.send<{ targetInfos: { type: string }[] }>("Target.getTargets");
-    const pages = (l: typeof before) => l.targetInfos.filter((t) => t.type === "page").length;
-    assert.equal(pages(after), pages(before));
+    // Target.closeTarget answers before the target is gone from the list.
+    let after = await pages();
+    for (let i = 0; i < 20 && after !== before; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      after = await pages();
+    }
+    assert.equal(after, before);
   });
 });
 

@@ -58,7 +58,7 @@ export function recordMetric(name, value) {
   if (!file) return;
   const all = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
   all[name] = value;
-  writeFileSync(file, JSON.stringify(all, null, 2));
+  writeFileSync(file, `${JSON.stringify(all, null, 2)}\n`);
 }
 
 export const summary = (r) => ({
