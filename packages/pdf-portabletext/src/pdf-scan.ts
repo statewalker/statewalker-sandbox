@@ -15,11 +15,20 @@ export function pageSize(page: PDFPageProxy): { width: number; height: number } 
 }
 
 /** Text drawn by a page, split by visibility (letters and digits only, no spaces). */
-export type TextVisibility = { visible: string; invisible: string };
+/** A show-text operation's text (compacted), in content-stream order. */
+export type TextSegment = { text: string; invisible: boolean };
+
+export type TextVisibility = {
+  visible: string;
+  invisible: string;
+  /** The operations in order, for classifying runs in order (`createRunClassifier`). */
+  segments?: TextSegment[];
+};
 
 /** Text rendering modes that paint nothing: 3 (invisible) and 7 (clip only). */
 const INVISIBLE_MODES = new Set([3, 7]);
-const compact = (s: string) => s.replace(/[^\p{L}\p{N}]+/gu, "");
+// NFKC on both sides: text content is NFKC-normalised ("ﬁ" → "fi"), glyph unicode is not.
+const compact = (s: string) => s.normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, "");
 
 /**
  * Collects the text of every show-text operation, split by text rendering
@@ -32,14 +41,20 @@ export async function scanTextVisibility(page: PDFPageProxy): Promise<TextVisibi
   const stack: number[] = [];
   const visible: string[] = [];
   const invisible: string[] = [];
+  const segments: TextSegment[] = [];
   for (let i = 0; i < opList.fnArray.length; i++) {
     const fn = opList.fnArray[i];
     const args = opList.argsArray[i];
     switch (fn) {
+      // Forms and annotation appearances get their own graphics state, as when painted.
       case OPS.save:
+      case OPS.paintFormXObjectBegin:
+      case OPS.beginAnnotation:
         stack.push(mode);
         break;
       case OPS.restore:
+      case OPS.paintFormXObjectEnd:
+      case OPS.endAnnotation:
         mode = stack.pop() ?? mode;
         break;
       case OPS.setTextRenderingMode:
@@ -53,20 +68,50 @@ export async function scanTextVisibility(page: PDFPageProxy): Promise<TextVisibi
         if (!Array.isArray(glyphs)) break;
         let text = "";
         for (const g of glyphs) if (g && typeof g === "object" && g.unicode) text += g.unicode;
-        (INVISIBLE_MODES.has(mode) ? invisible : visible).push(compact(text));
+        const piece = compact(text);
+        const hidden = INVISIBLE_MODES.has(mode);
+        (hidden ? invisible : visible).push(piece);
+        if (piece) segments.push({ text: piece, invisible: hidden });
         break;
       }
     }
   }
-  return { visible: visible.join(""), invisible: invisible.join("") };
+  return { visible: visible.join(""), invisible: invisible.join(""), segments };
 }
 
-/** Whether a text run belongs to the invisible part of the page's text. */
+/** Whether a text run belongs to the invisible part of the page's text (no order known). */
 export function isInvisibleRun(str: string, visibility: TextVisibility): boolean {
   if (visibility.invisible === "") return false;
   const s = compact(str);
   if (s === "") return visibility.visible === "";
   return visibility.invisible.includes(s) && !visibility.visible.includes(s);
+}
+
+/**
+ * Classifies the page's text runs in order. Text content items follow the content stream, as
+ * the show-text operations do, so each run is looked up from where the previous one matched:
+ * a short visible word ("the") is not taken for the same word in an invisible layer elsewhere,
+ * nor the reverse. A run not found in order falls back to `isInvisibleRun`.
+ */
+export function createRunClassifier(visibility: TextVisibility): (str: string) => boolean {
+  if (visibility.invisible === "" || !visibility.segments)
+    return (str) => isInvisibleRun(str, visibility);
+  const stream = visibility.segments.map((g) => g.text).join("");
+  const hidden = new Uint8Array(stream.length);
+  let at = 0;
+  for (const g of visibility.segments) {
+    if (g.invisible) hidden.fill(1, at, at + g.text.length);
+    at += g.text.length;
+  }
+  let cursor = 0;
+  return (str) => {
+    const s = compact(str);
+    if (s === "") return isInvisibleRun(str, visibility);
+    const found = stream.indexOf(s, cursor);
+    if (found < 0) return isInvisibleRun(str, visibility);
+    cursor = found + s.length;
+    return hidden[found] === 1;
+  };
 }
 
 type FontInfo = { name?: string; bold?: boolean; black?: boolean; italic?: boolean };
@@ -103,6 +148,7 @@ export async function extractTextRuns(page: PDFPageProxy): Promise<TextRun[]> {
     }
     return style;
   };
+  const invisibleRun = createRunClassifier(visibility);
   const runs: TextRun[] = [];
   for (const item of content.items) {
     if (!("str" in item)) continue;
@@ -118,7 +164,7 @@ export async function extractTextRuns(page: PDFPageProxy): Promise<TextRun[]> {
       width: item.width * scaleX,
       fontSize,
       hasEOL: item.hasEOL,
-      ...(isInvisibleRun(item.str, visibility) ? { invisible: true } : {}),
+      ...(invisibleRun(item.str) ? { invisible: true } : {}),
       ...(item.fontName && styleOf(item.fontName).bold ? { bold: true } : {}),
       ...(item.fontName && styleOf(item.fontName).italic ? { italic: true } : {}),
     });
@@ -147,7 +193,12 @@ function getObject(page: PDFPageProxy, objId: string): Promise<PdfjsImage | null
   const store = objId.startsWith("g_") ? page.commonObjs : page.objs;
   return new Promise((resolve) => {
     try {
-      store.get(objId, (obj: PdfjsImage) => resolve(obj ?? null));
+      // A rejected object (pdf.js could not decode it) is skipped, not waited for forever.
+      store.get(
+        objId,
+        (obj: PdfjsImage) => resolve(obj ?? null),
+        () => resolve(null),
+      );
     } catch {
       resolve(null);
     }
@@ -226,8 +277,20 @@ export async function scanImagePlacements(
         break;
       case OPS.paintFormXObjectBegin:
         stack.push(ctm);
-        if (Array.isArray(args[0]) && args[0].length === 6)
-          ctm = Util.transform(ctm, args[0]) as Matrix;
+        // pdf.js 6 passes the form's /Matrix as a Float32Array: any 6-number array-like.
+        if (args[0] && args[0].length === 6)
+          ctm = Util.transform(ctm, Array.from(args[0] as ArrayLike<number>)) as Matrix;
+        break;
+      case OPS.beginAnnotation:
+        // An appearance stream is painted at the annotation: [id, rect, transform, matrix, …].
+        stack.push(ctm);
+        ctm = Util.transform(
+          Util.transform(viewport.transform, Array.from(args[2] as ArrayLike<number>)),
+          Array.from(args[3] as ArrayLike<number>),
+        ) as Matrix;
+        break;
+      case OPS.endAnnotation:
+        ctm = stack.pop() ?? ctm;
         break;
       case OPS.paintFormXObjectEnd:
         ctm = stack.pop() ?? ctm;

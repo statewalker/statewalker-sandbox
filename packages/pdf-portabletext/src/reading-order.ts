@@ -103,11 +103,12 @@ export function readingOrder(boxes: OrderBox[], options: ReadingOrderOptions = {
           freeIntervals(prev.map(xs), lo, hi),
           freeIntervals(band.map(xs), lo, hi),
         ).filter(([s, e]) => e - s >= minGutter && s > lo && e < hi);
-        // Both sides of the shared gutter must hold content in the merged band.
-        const both = shared.some(([s, e]) => {
-          const all = [...prev, ...band];
-          return all.some((i) => xs(i)[1] <= s) && all.some((i) => xs(i)[0] >= e);
-        });
+        // One of the two bands must already hold content on both sides of the shared gutter
+        // (a column body; the other band may be a column's tail). Two one-sided bands (a
+        // right-aligned date, then a short left line) are rows, not columns.
+        const twoSided = (b: number[], s: number, e: number) =>
+          b.some((i) => xs(i)[1] <= s) && b.some((i) => xs(i)[0] >= e);
+        const both = shared.some(([s, e]) => twoSided(prev, s, e) || twoSided(band, s, e));
         if (both) {
           prev.push(...band);
           continue;

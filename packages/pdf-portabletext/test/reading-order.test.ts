@@ -44,3 +44,15 @@ describe("readingOrder", () => {
     expect(readingOrder([box(103, 50, 50, 10), box(50, 50, 50, 10)])).toEqual([1, 0]);
   });
 });
+
+describe("readingOrder: one-sided lines are rows, not columns", () => {
+  it("keeps a right-aligned date before the salutation below it", () => {
+    const boxes = [
+      box(72, 72, 450, 14), // 0 letterhead
+      box(420, 110, 100, 12), // 1 date, right-aligned
+      box(72, 140, 60, 12), // 2 "Dear Sir,"
+      box(72, 170, 450, 60), // 3 body
+    ];
+    expect(readingOrder(boxes)).toEqual([0, 1, 2, 3]);
+  });
+});

@@ -82,7 +82,11 @@ class LanguageWorker {
           break;
       }
     };
-    this.worker.onerror = (event) => this.fail(new Error(`OCR worker failed: ${event.message}`));
+    this.worker.onerror = (event) => {
+      // A worker that failed (its script did not load, it crashed) is not used again.
+      this.dead = true;
+      this.fail(new Error(`OCR worker failed: ${event.message}`));
+    };
   }
 
   recognize(id: number, image: ImageBitmap, options: RecognizeOptions): Promise<OcrResult> {
@@ -106,6 +110,9 @@ class LanguageWorker {
       this.worker.postMessage(req, [image]);
     });
   }
+
+  /** Set when the worker failed: the pool replaces it on the next request. */
+  dead = false;
 
   fail(error: Error) {
     for (const p of this.pending.values()) p.reject(error);
@@ -148,7 +155,11 @@ export function createOcrPool(
     // PaddleOCR's model covers every language: one worker for all.
     const language = engine === "paddle" ? "paddle" : requested;
     let w = workers.get(language);
-    if (w) return w;
+    if (w && !w.dead) return w;
+    if (w) {
+      w.terminate();
+      workers.delete(language);
+    }
     if (workers.size >= maxWorkers) {
       const idle = [...workers.values()]
         .filter((x) => x.pending.size === 0)

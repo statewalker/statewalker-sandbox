@@ -18,6 +18,7 @@ export {
 } from "./languages.ts";
 export { type OcrWord, ocrWordsToBlocks, uprightToImage } from "./ocr-layout.ts";
 export {
+  createRunClassifier,
   extractTextRuns,
   fontStyle,
   IMAGE_KIND,

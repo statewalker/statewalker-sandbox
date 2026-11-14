@@ -278,7 +278,8 @@ export async function* convertPdfStream(
     sample = sample.slice(0, LANGUAGE_SAMPLE_CHARS);
     if (letterCount(sample) >= MIN_TEXT_LAYER_LETTERS) textLanguage = detectLanguage(sample);
     if (textLanguage) log(`text layer language: ${textLanguage.name}`);
-    const invisibleMode = options.invisibleText ?? "replace";
+    // Without OCR nothing would replace or reuse an invisible text layer: keep it as text.
+    const invisibleMode = options.ocrImages ? (options.invisibleText ?? "replace") : "keep";
 
     // Blocks, images and OCR, page by page.
     for (let n = 1; n <= pageCount; n++) {
@@ -291,13 +292,31 @@ export async function* convertPdfStream(
       const items: PageItem[] = [];
 
       const runs = await extractTextRuns(page);
-      const invisibleRuns = invisibleMode === "keep" ? [] : runs.filter((r) => r.invisible);
+      let images: PageImage[] = (await extractImages(page, { minSize: options.minImageSize })).map(
+        (img) => ({ ...img, kind: "pdfImage" as const }),
+      );
+      // Invisible runs stand for the text of the images under them; runs over no image have
+      // nothing to replace or reuse them, so they stay in the text layer.
+      const overImage = (r: (typeof runs)[number]) => {
+        const cx = r.x + r.width / 2;
+        const cy = r.y - r.fontSize / 2;
+        return images.some(
+          (img) =>
+            cx >= img.bbox.x &&
+            cx <= img.bbox.x + img.bbox.width &&
+            cy >= img.bbox.y &&
+            cy <= img.bbox.y + img.bbox.height,
+        );
+      };
+      const invisibleRuns =
+        invisibleMode === "keep" ? [] : runs.filter((r) => r.invisible && overImage(r));
       if (invisibleRuns.length > 0) {
         log(
           `page ${n}: invisible text layer (${invisibleRuns.length} runs) ${invisibleMode === "reuse" ? "reused as OCR" : "replaced by OCR"}`,
         );
       }
-      const layout = layoutText(invisibleMode === "keep" ? runs : runs.filter((r) => !r.invisible));
+      const dropped = new Set(invisibleRuns);
+      const layout = layoutText(runs.filter((r) => !dropped.has(r)));
       const paragraphs = layout.paragraphs;
       const pageLanguage = detectLanguage(paragraphs.map((p) => p.text).join(" ")) ?? textLanguage;
       const bodySize = bodyFontSize(paragraphs);
@@ -311,9 +330,6 @@ export async function* convertPdfStream(
         items.push({ box: t.bbox, blocks: [tableToBlock(t, { keyGen, page: n })] });
       }
 
-      let images: PageImage[] = (await extractImages(page, { minSize: options.minImageSize })).map(
-        (img) => ({ ...img, kind: "pdfImage" as const }),
-      );
       if (paragraphs.length === 0 && images.length === 0 && options.ocrEmptyPages) {
         log(`page ${n}: no text layer or images, rendering the page for OCR`);
         const bitmap = await renderPage(page);
@@ -332,106 +348,118 @@ export async function* convertPdfStream(
 
       // Images of a page are recognised concurrently: one worker per language.
       const ocrJobs: Promise<void>[] = [];
-      for (const img of images) {
-        options.signal?.throwIfAborted();
-        const original =
-          originals && img.kind === "pdfImage" && !img.stencil
-            ? await matchOriginalJpeg(originals.get(n), img.bitmap)
-            : null;
-        const stored = original
-          ? await jpegAsset(original, img.width, img.height)
-          : await encodeImageAsset(
-              img.bitmap,
-              options.imageFormat === "original" ? "png" : options.imageFormat,
-            );
-        const assetId = stored.meta._id;
-        if (!seenAssets.has(assetId)) {
-          seenAssets.add(assetId);
-          pageAssets.push(stored);
-        }
-        const asset = { _type: "reference" as const, _ref: assetId };
-        const imageBlock: ImageBlock = {
-          _type: "image",
-          _key: keyGen("img"),
-          asset,
-          width: img.width,
-          height: img.height,
-          mimeType: stored.meta.mimeType,
-          source: {
-            type: img.kind,
-            page: n,
-            bbox: roundBox(img.bbox),
-            ...(img.transform ? { transform: img.transform } : {}),
-            ...(img.stencil ? { stencil: true } : {}),
-          },
-        };
-        const pageItem: PageItem = { box: img.bbox, blocks: [imageBlock] };
-        items.push(pageItem);
-        if (!options.ocrImages) {
-          img.bitmap.close();
-          continue;
-        }
+      // Bitmaps not yet handed to an OCR job (or closed): released if the page fails.
+      const unreleased = new Set(images);
+      try {
+        for (const img of images) {
+          options.signal?.throwIfAborted();
+          const original =
+            originals && img.kind === "pdfImage" && !img.stencil
+              ? await matchOriginalJpeg(originals.get(n), img.bitmap)
+              : null;
+          const stored = original
+            ? await jpegAsset(original, img.width, img.height)
+            : await encodeImageAsset(
+                img.bitmap,
+                options.imageFormat === "original" ? "png" : options.imageFormat,
+              );
+          const assetId = stored.meta._id;
+          if (!seenAssets.has(assetId)) {
+            seenAssets.add(assetId);
+            pageAssets.push(stored);
+          }
+          const asset = { _type: "reference" as const, _ref: assetId };
+          const imageBlock: ImageBlock = {
+            _type: "image",
+            _key: keyGen("img"),
+            asset,
+            width: img.width,
+            height: img.height,
+            mimeType: stored.meta.mimeType,
+            source: {
+              type: img.kind,
+              page: n,
+              bbox: roundBox(img.bbox),
+              ...(img.transform ? { transform: img.transform } : {}),
+              ...(img.stencil ? { stencil: true } : {}),
+            },
+          };
+          const pageItem: PageItem = { box: img.bbox, blocks: [imageBlock] };
+          items.push(pageItem);
+          if (!options.ocrImages) {
+            unreleased.delete(img);
+            img.bitmap.close();
+            continue;
+          }
 
-        let outcome = ocrCache.get(assetId);
-        if (!outcome && invisibleMode === "reuse" && !img.transform) {
-          const words = runsToImageWords(invisibleRuns, img);
-          if (words.length >= 3) {
-            log(`page ${n}: reusing ${words.length} words of the invisible text layer`);
-            outcome = Promise.resolve(
-              reusedOutcome(words, paragraphs, documentLanguage() ?? fallback),
-            );
+          let outcome = ocrCache.get(assetId);
+          if (!outcome && invisibleMode === "reuse" && !img.transform) {
+            const words = runsToImageWords(invisibleRuns, img);
+            if (words.length >= 3) {
+              log(`page ${n}: reusing ${words.length} words of the invisible text layer`);
+              outcome = Promise.resolve(
+                reusedOutcome(words, paragraphs, documentLanguage() ?? fallback),
+              );
+              ocrCache.set(assetId, outcome);
+            }
+          }
+          if (!outcome) {
+            outcome = ocrImage(img, n, paragraphs.map((p) => p.text).join(" "));
             ocrCache.set(assetId, outcome);
           }
+          ocrJobs.push(
+            outcome
+              .then(({ result, language, languageSource, attempts }) => {
+                const textBlocks: TextBlock[] = ocrWordsToBlocks(result.words, {
+                  keyGen,
+                  page: n,
+                  imageKey: imageBlock._key,
+                  asset,
+                  minConfidence: options.minConfidence,
+                  language: language.bcp47,
+                  rotation: result.rotation,
+                  imageWidth: img.width,
+                  imageHeight: img.height,
+                });
+                const recognised = textBlocks.map((b) => b.children.map((c) => c.text).join(""));
+                ocrTally.add(
+                  languageSource === "detected" ? language : undefined,
+                  recognised.join(" ").length,
+                );
+                const wordCount = textBlocks.reduce((s, b) => s + b.children.length, 0);
+                const kept = result.words.filter(
+                  (w) => w.text.trim() !== "" && w.confidence >= options.minConfidence,
+                );
+                imageBlock.ocr = {
+                  engine: result.engine ?? "tesseract-wasm",
+                  language: language.bcp47,
+                  model: result.engine === "pdf-text-layer" ? "" : language.tesseract,
+                  languageSource,
+                  attempts,
+                  rotation: result.rotation,
+                  blocks: textBlocks.map((b) => b._key),
+                  wordCount,
+                  confidence: round3(meanConfidence(kept)),
+                  durationMs: result.durationMs,
+                };
+                pageItem.blocks.push(...textBlocks);
+                const rotated = result.rotation ? `, rotated ${result.rotation}°` : "";
+                log(
+                  `page ${n}: ${wordCount} words in ${textBlocks.length} paragraphs (${language.name}, ${languageSource}${rotated})`,
+                );
+              })
+              .finally(() => img.bitmap.close()),
+          );
+          unreleased.delete(img);
         }
-        if (!outcome) {
-          outcome = ocrImage(img, n, paragraphs.map((p) => p.text).join(" "));
-          ocrCache.set(assetId, outcome);
-        }
-        ocrJobs.push(
-          outcome
-            .then(({ result, language, languageSource, attempts }) => {
-              const textBlocks: TextBlock[] = ocrWordsToBlocks(result.words, {
-                keyGen,
-                page: n,
-                imageKey: imageBlock._key,
-                asset,
-                minConfidence: options.minConfidence,
-                language: language.bcp47,
-                rotation: result.rotation,
-                imageWidth: img.width,
-                imageHeight: img.height,
-              });
-              const recognised = textBlocks.map((b) => b.children.map((c) => c.text).join(""));
-              ocrTally.add(
-                languageSource === "detected" ? language : undefined,
-                recognised.join(" ").length,
-              );
-              const wordCount = textBlocks.reduce((s, b) => s + b.children.length, 0);
-              const kept = result.words.filter(
-                (w) => w.text.trim() !== "" && w.confidence >= options.minConfidence,
-              );
-              imageBlock.ocr = {
-                engine: result.engine ?? "tesseract-wasm",
-                language: language.bcp47,
-                model: result.engine === "pdf-text-layer" ? "" : language.tesseract,
-                languageSource,
-                attempts,
-                rotation: result.rotation,
-                blocks: textBlocks.map((b) => b._key),
-                wordCount,
-                confidence: round3(meanConfidence(kept)),
-                durationMs: result.durationMs,
-              };
-              pageItem.blocks.push(...textBlocks);
-              const rotated = result.rotation ? `, rotated ${result.rotation}°` : "";
-              log(
-                `page ${n}: ${wordCount} words in ${textBlocks.length} paragraphs (${language.name}, ${languageSource}${rotated})`,
-              );
-            })
-            .finally(() => img.bitmap.close()),
-        );
+        // Cancel interrupts the page's OCR too, not only the loop between images.
+        await untilAborted(Promise.all(ocrJobs), options.signal);
+      } catch (e) {
+        for (const img of unreleased) img.bitmap.close();
+        // Jobs still running settle later; nobody waits for them (that would undo a cancel).
+        for (const job of ocrJobs) job.catch(() => {});
+        throw e;
       }
-      await Promise.all(ocrJobs);
 
       // Reading order: XY-cut over the page's paragraphs and images (columns
       // left to right, rows top to bottom); OCR text stays after its image.
@@ -470,4 +498,24 @@ function attempt(result: OcrResult) {
     confidence: round3(meanConfidence(result.words)),
     words: result.words.length,
   };
+}
+
+/** `promise`, or a rejection as soon as `signal` aborts. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
 }

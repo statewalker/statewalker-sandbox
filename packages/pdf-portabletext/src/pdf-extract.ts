@@ -11,6 +11,7 @@ import { IMAGE_KIND, type PdfjsImage, scanImagePlacements } from "./pdf-scan.ts"
 import type { PageBox } from "./schema.ts";
 
 export {
+  createRunClassifier,
   extractTextRuns,
   fontStyle,
   isInvisibleRun,
