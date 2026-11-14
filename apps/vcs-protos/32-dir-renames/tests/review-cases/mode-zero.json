@@ -1,0 +1,64 @@
+{
+  "base": {
+    "k": [
+      "100644",
+      "k line 0\nk line 1\nk line 2\nk line 3\nk line 4\nk line 5\nk line 6\nk line 7\nk line 8\nk line 9\n"
+    ],
+    "d/a": [
+      "100644",
+      "d/a line 0\nd/a line 1\nd/a line 2\nd/a line 3\nd/a line 4\nd/a line 5\nd/a line 6\nd/a line 7\nd/a line 8\nd/a line 9\n"
+    ],
+    "d/b": [
+      "100644",
+      "d/b line 0\nd/b line 1\nd/b line 2\nd/b line 3\nd/b line 4\nd/b line 5\nd/b line 6\nd/b line 7\nd/b line 8\nd/b line 9\n"
+    ],
+    "d/c": [
+      "100644",
+      "d/c line 0\nd/c line 1\nd/c line 2\nd/c line 3\nd/c line 4\nd/c line 5\nd/c line 6\nd/c line 7\nd/c line 8\nd/c line 9\n"
+    ],
+    "d/x/f": [
+      "100644",
+      "d/x/f line 0\nd/x/f line 1\nd/x/f line 2\nd/x/f line 3\nd/x/f line 4\nd/x/f line 5\nd/x/f line 6\nd/x/f line 7\nd/x/f line 8\nd/x/f line 9\n"
+    ]
+  },
+  "ours": {
+    "k": [
+      "100644",
+      "k line 0\nk line 1\nk line 2\nk line 3\nk line 4\nk line 5\nk line 6\nk line 7\nk line 8\nk line 9\n"
+    ],
+    "d/a": [
+      "100644",
+      "d/a line 0\nd/a line 1\nd/a line 2\nd/a line 3\nd/a line 4\nd/a line 5\nd/a line 6\nd/a line 7\nd/a line 8\nd/a line 9\n"
+    ],
+    "d/b": [
+      "100644",
+      "d/b line 0\nd/b line 1\nd/b line 2\nd/b line 3\nd/b line 4\nd/b line 5\nd/b line 6\nd/b line 7\nd/b line 8\nd/b line 9\n"
+    ],
+    "d/c": [
+      "100644",
+      "d/c line 0\nd/c line 1\nd/c line 2\nd/c line 3\nd/c line 4\nd/c line 5\nd/c line 6\nd/c line 7\nd/c line 8\nd/c line 9\n"
+    ],
+    "d/x": [
+      "100644",
+      "xfile line 0\nxfile line 1\nxfile line 2\nxfile line 3\nxfile line 4\nxfile line 5\nxfile line 6\nxfile line 7\nxfile line 8\nxfile line 9\n"
+    ]
+  },
+  "theirs": {
+    "k": [
+      "100644",
+      "k line 0\nk line 1\nk line 2\nk line 3\nk line 4\nk line 5\nk line 6\nk line 7\nk line 8\nk line 9\n"
+    ],
+    "e/a": [
+      "100644",
+      "d/a line 0\nd/a line 1\nd/a line 2\nd/a line 3\nd/a line 4\nd/a line 5\nd/a line 6\nd/a line 7\nd/a line 8\nd/a line 9\n"
+    ],
+    "e/b": [
+      "100644",
+      "d/b line 0\nd/b line 1\nd/b line 2\nd/b line 3\nd/b line 4\nd/b line 5\nd/b line 6\nd/b line 7\nd/b line 8\nd/b line 9\n"
+    ],
+    "e/c": [
+      "100644",
+      "d/c line 0\nd/c line 1\nd/c line 2\nd/c line 3\nd/c line 4\nd/c line 5\nd/c line 6\nd/c line 7\nd/c line 8\nd/c line 9\n"
+    ]
+  }
+}

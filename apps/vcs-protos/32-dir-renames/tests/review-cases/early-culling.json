@@ -1,0 +1,59 @@
+{
+  "base": {
+    "k": ["100644", "k\n"],
+    "d/a": [
+      "100644",
+      "a line 0\na line 1\na line 2\na line 3\na line 4\na line 5\na line 6\na line 7\na line 8\na line 9\n"
+    ],
+    "d/b": [
+      "100644",
+      "b line 0\nb line 1\nb line 2\nb line 3\nb line 4\nb line 5\nb line 6\nb line 7\nb line 8\nb line 9\n"
+    ],
+    "d/s": [
+      "100644",
+      "A line 0\nA line 1\nA line 2\nA line 3\nA line 4\nA line 5\nA line 6\nA line 7\nA line 8\nA line 9\n"
+    ],
+    "x/t": [
+      "100644",
+      "A line 0\nA line 1\nA line 2\nA line 3\nA line 4\nA line 5\nA line 6\nB1\nB2\nB3\n"
+    ],
+    "x/keep": ["100644", "x\n"]
+  },
+  "ours": {
+    "k": ["100644", "k\n"],
+    "e/a": [
+      "100644",
+      "a line 0\na line 1\na line 2\na line 3\na line 4\na line 5\na line 6\na line 7\na line 8\na line 9\n"
+    ],
+    "e/b": [
+      "100644",
+      "b line 0\nb line 1\nb line 2\nb line 3\nb line 4\nb line 5\nb line 6\nb line 7\nb line 8\nb line 9\n"
+    ],
+    "e/q": [
+      "100644",
+      "A line 0\nA line 1\nA line 2\nA line 3\nA line 4\nA line 5\nA line 6\nA line 7\nA line 8\nC\n"
+    ],
+    "x/keep": ["100644", "x\n"]
+  },
+  "theirs": {
+    "k": ["100644", "k\n"],
+    "d/a": [
+      "100644",
+      "a line 0\na line 1\na line 2\na line 3\na line 4\na line 5\na line 6\na line 7\na line 8\na line 9\n"
+    ],
+    "d/b": [
+      "100644",
+      "b line 0\nb line 1\nb line 2\nb line 3\nb line 4\nb line 5\nb line 6\nb line 7\nb line 8\nb line 9\n"
+    ],
+    "d/s": [
+      "100644",
+      "A line 0\nA line 1\nA line 2\nA line 3\nA line 4\nA line 5\nA line 6\nA line 7\nA line 8\nA line 9\n"
+    ],
+    "x/t": [
+      "100644",
+      "A line 0\nA line 1\nA line 2\nA line 3\nA line 4\nA line 5\nA line 6\nB1\nB2\nB3 theirs\n"
+    ],
+    "x/keep": ["100644", "x\n"],
+    "d/new": ["100644", "new\n"]
+  }
+}

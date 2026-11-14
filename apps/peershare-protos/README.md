@@ -7,7 +7,7 @@ local HTTP service which I want to securely share to invited peers."* It is buil
 [HTTPeers](https://github.com/statewalker/httpeers).
 
 Status: **every rung answered** (01–14, 16; 15 is a spike with its premises answered and
-the transport open), 142 tests. See the ladder in [docs/PLAN.md](docs/PLAN.md#3-prototype-ladder).
+the transport open), 142 tests. See the ladder in [docs/PLAN.md](https://github.com/statewalker/statewalker-sandbox/blob/959911cd29fd396579ce3593cf2950c0384afb28/apps/peershare-protos/docs/PLAN.md#3-prototype-ladder).
 The UI is prototyped in Storybook: [`../peershare-ui-protos`](../peershare-ui-protos).
 
 **The application moved out of this sandbox (decision 3.7):**
@@ -21,14 +21,14 @@ The UI is prototyped in Storybook: [`../peershare-ui-protos`](../peershare-ui-pr
 Each was built here first (branch `claude/peershare-design-prototypes-kv03pi`, history kept)
 and moved with its tests.
 The design was settled in a
-grilling session (three rounds); the record is in [docs/decisions.md](docs/decisions.md).
+grilling session (three rounds); the record is in [docs/decisions.md](https://github.com/statewalker/statewalker-sandbox/blob/959911cd29fd396579ce3593cf2950c0384afb28/apps/peershare-protos/docs/decisions.md).
 
 | File | What it holds |
 | --- | --- |
-| [docs/PLAN.md](docs/PLAN.md) | Architecture, the prototype ladder, the application milestones, and the seams to confirm before the first red test |
-| [docs/decisions.md](docs/decisions.md) | Every question asked while grilling the draft, with the answer agreed |
+| [docs/PLAN.md](https://github.com/statewalker/statewalker-sandbox/blob/959911cd29fd396579ce3593cf2950c0384afb28/apps/peershare-protos/docs/PLAN.md) | Architecture, the prototype ladder, the application milestones, and the seams to confirm before the first red test |
+| [docs/decisions.md](https://github.com/statewalker/statewalker-sandbox/blob/959911cd29fd396579ce3593cf2950c0384afb28/apps/peershare-protos/docs/decisions.md) | Every question asked while grilling the draft, with the answer agreed |
 | [GLOSSARY.md](GLOSSARY.md) | The domain words: Sharer, Guest, Service, Upstream, Bridge, Invite, Viewer… |
-| [docs/adr/](docs/adr/) | The three decisions that are hard to reverse |
+| [docs/adr/](https://github.com/statewalker/statewalker-sandbox/tree/959911cd29fd396579ce3593cf2950c0384afb28/apps/peershare-protos/docs/adr) | The three decisions that are hard to reverse |
 
 ## How to run it
 

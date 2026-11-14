@@ -1,0 +1,458 @@
+// An LLM agent on the capability file system: the model loop Flue is built on (pi-agent-core)
+// with Flue's own model-facing tools (read, write, edit, grep, glob, bash) over the same
+// capability-backed sandbox the `flue` task uses. Every file access the model asks for is a
+// capability call, authorized in the Workspace cell.
+//
+// The model is the deployment's: the `LLM` var (JSON or object) names an OpenAI-compatible
+// endpoint ({ baseUrl, model, api?, contextWindow?, maxTokens?, headers?, callerToken?,
+// callerTokenHeader? }) and the `LLM_API_KEY` secret holds its key. Nothing in a request chooses
+// the endpoint or sees the key.
+//
+// A caller can bring its own credential for the model (`llmToken`, handed down the delegation
+// chain by Agent.run; a hop can replace it). `callerToken` says whether the deployment accepts
+// one ("allow", the default), insists on one ("require") or refuses one ("forbid"). The token is
+// sent as the API key, or, with `callerTokenHeader`, in that header beside the deployment's key
+// (for a gateway that authenticates the caller and holds the provider key itself).
+//
+// A conversation can be kept in the Agent cell (`session`), stored per capability: the messages
+// hold file contents read with that capability, so another capability starts its own
+// conversation even under the same session name. The key is the capability the request brought
+// (its revocation id) and the delegation chain it named (`scope`, from Agent.run), not the token
+// the last hop holds: attenuation mints fresh block keys on every run.
+
+import { Agent as LoopAgent } from "@earendil-works/pi-agent-core";
+import * as anthropicMessages from "@earendil-works/pi-ai/api/anthropic-messages";
+import * as openaiCompletions from "@earendil-works/pi-ai/api/openai-completions";
+import * as openaiResponses from "@earendil-works/pi-ai/api/openai-responses";
+import { registerApiProvider, streamSimple } from "@earendil-works/pi-ai/compat";
+import {
+  createBashTool,
+  createEditTool,
+  createGlobTool,
+  createGrepTool,
+  createReadTool,
+  createWriteTool,
+  bash as flueBash,
+} from "@flue/runtime";
+import { Bash } from "just-bash/browser";
+import { trimHistory } from "./agent-history.ts";
+import { CapFs } from "./capfs.ts";
+import type { Cap } from "./caps.ts";
+import { rgForFlue } from "./flue-compat.ts";
+import { type LlmConfig, llmConfig, llmCredentials, redactor } from "./llm-config.ts";
+import { flueSandboxOnWasmer } from "./wasmer/flue-sandbox.ts";
+import type { WasmerSession } from "./wasmer/kernel.ts";
+
+export interface AgentLoopRequest {
+  prompt: string;
+  /** System instructions (default: a short description of the file system). */
+  instructions?: string;
+  /** Model turns before the run is stopped (default 12, at most 50). */
+  maxTurns?: number;
+  /** Wall-clock limit in ms (default 120 s, at most 600 s). */
+  timeoutMs?: number;
+  /** Keep the conversation under this name (per capability) and continue it next time. */
+  session?: string;
+  cwd?: string;
+  /**
+   * Where Flue's tools run: "just-bash" (default: a shell in this cell over the capability) or
+   * "wasmer" (real bash, coreutils, grep, ripgrep and find in a Wasmer sandbox whose /workspace
+   * is the capability; paths are then under /workspace). Wasmer is on cellb only.
+   */
+  sandbox?: "just-bash" | "wasmer";
+}
+
+export interface AgentLoopOptions {
+  /** Where the session is kept: the requester's revocation id and chain (see Agent.run). */
+  scope: string;
+  sandboxId: string;
+  /** The caller's model credential (see the header comment). */
+  llmToken?: string;
+  /** Opens a Wasmer sandbox on the capability (for `sandbox: "wasmer"`). */
+  wasmer?: (cap: Cap) => Promise<WasmerSession>;
+}
+
+export { llmConfig };
+
+export interface AgentLoopEnv {
+  LLM?: unknown;
+  LLM_API_KEY?: string;
+}
+
+interface Storage {
+  get<T>(key: string): Promise<T | undefined>;
+  put(key: string, value: unknown): Promise<void>;
+  delete(key: string): Promise<unknown>;
+}
+
+const SESSION_MESSAGES = 200;
+const SESSION_BYTES = 1024 * 1024;
+/** Sessions kept per Agent cell; the least recently used one is dropped beyond this. */
+const SESSIONS_PER_CELL = 32;
+const SESSION_INDEX = "agent-sessions";
+const TEXT_LIMIT = 4000;
+const ERROR_LIMIT = 500;
+/** prompt and instructions, each. */
+const INPUT_LIMIT = 100_000;
+/** After the timeout aborts the loop, how long it may take to wind down. */
+const GRACE_MS = 5000;
+/** Rough characters per token, to keep a stored history within the model's context. */
+const CHARS_PER_TOKEN = 3;
+
+let providersRegistered = false;
+
+function modelOf(c: LlmConfig, extraHeaders: Record<string, string> = {}) {
+  if (!providersRegistered) {
+    // Only the APIs an LLM config can name (registering every built-in one pulls in providers
+    // that import node:fs and friends, which a browser cannot load).
+    for (const [api, m] of [
+      ["openai-completions", openaiCompletions],
+      ["openai-responses", openaiResponses],
+      ["anthropic-messages", anthropicMessages],
+    ] as const) {
+      registerApiProvider(
+        { api, stream: m.stream as never, streamSimple: m.streamSimple as never },
+        "flue-capfs-do",
+      );
+    }
+    providersRegistered = true;
+  }
+  return {
+    id: c.model,
+    name: c.model,
+    api: c.api ?? "openai-completions",
+    provider: "deployment",
+    baseUrl: c.baseUrl,
+    headers: { ...c.headers, ...extraHeaders },
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    reasoning: false,
+    contextWindow: c.contextWindow ?? 128_000,
+    maxTokens: c.maxTokens ?? 4096,
+  };
+}
+
+const clip = (s: string, n = TEXT_LIMIT) =>
+  s.length > n ? `${s.slice(0, n)}… [${s.length - n} more]` : s;
+type Content = { type: string; text?: string; name?: string; arguments?: unknown; id?: string };
+type Message = {
+  role: string;
+  content?: Content[] | string;
+  toolName?: string;
+  toolCallId?: string;
+  isError?: boolean;
+  stopReason?: string;
+  errorMessage?: string;
+  usage?: { input?: number; output?: number };
+};
+const textOf = (m: Message | undefined) =>
+  typeof m?.content === "string" ? m.content : (m?.content ?? []).map((c) => c.text ?? "").join("");
+
+// One run at a time per session (per Agent cell: a cell runs in one isolate). `hold` keeps
+// the session locked past the return, until a run that outlived its deadline has settled.
+const sessionLocks = new Map<string, Promise<unknown>>();
+async function withSessionLock<T>(
+  key: string | undefined,
+  fn: (hold: (p: Promise<unknown>) => void) => Promise<T>,
+): Promise<T> {
+  let held: Promise<unknown> = Promise.resolve();
+  const hold = (p: Promise<unknown>) => {
+    held = p;
+  };
+  if (!key) return fn(hold);
+  const prev = sessionLocks.get(key) ?? Promise.resolve();
+  const run = prev.catch(() => {}).then(() => fn(hold));
+  const tail = run.catch(() => {}).then(() => held.catch(() => {}));
+  sessionLocks.set(key, tail);
+  tail.then(() => {
+    if (sessionLocks.get(key) === tail) sessionLocks.delete(key);
+  });
+  return run;
+}
+
+// The cell's session index is updated one run at a time (sessions have locks of their own).
+let indexQueue: Promise<unknown> = Promise.resolve();
+function touchSession(storage: Storage, key: string) {
+  const next = indexQueue.catch(() => {}).then(() => updateIndex(storage, key));
+  indexQueue = next;
+  return next;
+}
+async function updateIndex(storage: Storage, key: string) {
+  const index = ((await storage.get<string[]>(SESSION_INDEX)) ?? []).filter((k) => k !== key);
+  index.push(key);
+  for (const old of index.splice(0, Math.max(0, index.length - SESSIONS_PER_CELL)))
+    await storage.delete(old);
+  await storage.put(SESSION_INDEX, index);
+}
+
+export async function runAgentLoop(
+  cap: Cap,
+  req: AgentLoopRequest,
+  env: AgentLoopEnv,
+  storage: Storage,
+  opts: AgentLoopOptions,
+) {
+  if (typeof req.prompt !== "string" || !req.prompt)
+    throw new Error("EINVAL: agent: prompt is required");
+  if (req.session !== undefined && String(req.session).length > 200)
+    throw new Error("EINVAL: agent: session name is too long");
+  if (req.prompt.length > INPUT_LIMIT) throw new Error("EINVAL: agent: prompt is too long");
+  const { scope, sandboxId, llmToken } = opts;
+  if (req.instructions !== undefined && String(req.instructions).length > INPUT_LIMIT)
+    throw new Error("EINVAL: agent: instructions are too long");
+  const configured = llmConfig(env);
+  if (!configured) throw new Error("ENOSYS: no model configured for this deployment (LLM)");
+  const config: LlmConfig = configured;
+  const credentials = llmCredentials(config, env.LLM_API_KEY, llmToken);
+  // Neither credential may come back in an error.
+  const redact = redactor([credentials.apiKey, llmToken, env.LLM_API_KEY]);
+  // A run spends the session's budget, unless the caller's own token is the API key AND the
+  // deployment says such runs are the caller's to pay (callerTokenUnmetered): a token is any
+  // string until the provider rejects it, and some endpoints take none.
+  const metered = !(
+    llmToken !== undefined &&
+    !config.callerTokenHeader &&
+    config.callerTokenUnmetered === true
+  );
+  // The capability must carry the model right (decided in the Workspace cell, like a file
+  // access), and a metered run needs budget left.
+  const grant = (await cap.model("grant", metered)) as {
+    turnsLeft: number | null;
+    tokensLeft: number | null;
+  };
+  const cwd = req.cwd ?? "/";
+  if (req.sandbox !== undefined && req.sandbox !== "just-bash" && req.sandbox !== "wasmer")
+    throw new Error("EINVAL: agent: sandbox is just-bash or wasmer");
+  const openWasmer = opts.wasmer;
+  if (req.sandbox === "wasmer" && !openWasmer) throw new Error("ENOSYS: agent: no wasmer here");
+
+  const sessionKey = req.session ? `agent-session:${scope}:${String(req.session)}` : undefined;
+  // Whatever fails below, its message carries no credential.
+  return withSessionLock(sessionKey && `${sandboxId}\n${sessionKey}`, async (hold) => {
+    // Opened once the run holds its session: a waiting run holds no sandbox.
+    const session = req.sandbox === "wasmer" ? await openWasmer?.(cap) : undefined;
+    try {
+      return await loop(session, hold);
+    } finally {
+      await session?.close();
+    }
+  }).catch((e: unknown) => {
+    throw new Error(redact(String((e as Error)?.message ?? e)));
+  });
+
+  async function loop(session: WasmerSession | undefined, hold: (p: Promise<unknown>) => void) {
+    const sandbox = session
+      ? flueSandboxOnWasmer(session, cap)
+      : await flueBash(
+          () =>
+            new Bash({ fs: new CapFs(cap) as never, cwd, customCommands: [rgForFlue] }) as never,
+        ).createSandbox({ id: sandboxId });
+    const tools = [
+      createReadTool,
+      createWriteTool,
+      createEditTool,
+      createGrepTool,
+      createGlobTool,
+      createBashTool,
+    ].map((make) => make(sandbox));
+
+    {
+      const model = modelOf(config, credentials.headers);
+      // What is sent back each turn stays within the context, leaving room for the reply.
+      const contextBytes = Math.max(
+        (model.contextWindow - model.maxTokens) * CHARS_PER_TOKEN,
+        16 * 1024,
+      );
+      const stored = (sessionKey ? await storage.get<Message[]>(sessionKey) : undefined) ?? [];
+      const history = trimHistory(stored, SESSION_MESSAGES, Math.min(SESSION_BYTES, contextBytes));
+      const agent = new LoopAgent({
+        streamFn: streamSimple as never,
+        // pi-agent-core awaits this before every model request: the turn is reserved there (the
+        // right checked again, a turn taken from the budget), so neither a revoked right nor a
+        // spent budget, nor concurrent runs, get a request through.
+        getApiKey: async () => {
+          // A run already stopped (maxTurns, timeout) reserves nothing: pi-agent-core asks for
+          // the key before it looks at the abort.
+          if (stopped) throw new Error("stopped");
+          // The previous request's tokens are charged first, so the reservation sees them.
+          await charges;
+          try {
+            budgetLeft = (await cap.model("reserve", metered)) as typeof budgetLeft;
+          } catch (e) {
+            const message = String((e as Error)?.message ?? e);
+            // A refusal (no right, no budget) ends the run as a limit; anything else is an error.
+            if (/EACCES/.test(message))
+              stopped ??= clip(redact(message).replace(/^(Error: )?E[A-Z]+: /, ""), ERROR_LIMIT);
+            throw e;
+          }
+          return credentials.apiKey;
+        },
+        initialState: {
+          systemPrompt:
+            req.instructions ??
+            "You work on a file system through your tools. Paths are absolute; you see only what you are allowed to.",
+          model: model as never,
+          tools: tools as never,
+          messages: history as never,
+        },
+      } as never);
+
+      const maxTurns = Math.min(Math.max(Number(req.maxTurns) || 12, 1), 50);
+      // The tokens of each request are charged after it, in order (input counts cached and
+      // cache-written prompt tokens). Usage is recorded even if the right is gone by then.
+      let charges: Promise<unknown> = Promise.resolve();
+      let chargeError: string | undefined;
+      const charge = (usage: Message["usage"]) => {
+        const u = (usage ?? {}) as Record<string, number | undefined>;
+        const input = (u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
+        const output = u.output ?? 0;
+        charges = charges
+          .then(() => cap.model("charge", metered, { input, output }))
+          .then((r) => {
+            budgetLeft = r as typeof budgetLeft;
+          })
+          .catch((e) => {
+            chargeError ??= `usage not recorded: ${redact(String((e as Error)?.message ?? e))}`;
+          });
+      };
+      const timeoutMs = Math.min(Math.max(Number(req.timeoutMs) || 120_000, 1000), 600_000);
+      let turns = 0;
+      let stopped: string | undefined;
+      let budgetLeft: { turnsLeft: number | null; tokensLeft: number | null } = grant;
+      agent.subscribe((e: { type: string; message?: Message; toolResults?: unknown[] }) => {
+        if (e.type !== "turn_end") return;
+        charge(e.message?.usage); // every request's tokens, the aborted one's too
+        if (stopped) return; // the turn cut short by the abort does not count
+        turns += 1;
+        // Only a turn that asked for tools leads to another one: a run that ends on its last
+        // allowed turn is not a limit stop.
+        if (
+          turns >= maxTurns &&
+          (e.message?.stopReason === "toolUse" || (e.toolResults?.length ?? 0) > 0)
+        ) {
+          stopped = `stopped after ${maxTurns} turns`;
+          agent.abort();
+        }
+      });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let hard: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          stopped ??= `stopped after ${timeoutMs} ms`;
+          agent.abort();
+          // A tool that ignores the abort does not hold the run past the grace period.
+          hard = setTimeout(resolve, GRACE_MS);
+        }, timeoutMs);
+      });
+      const loop = (async () => {
+        try {
+          await agent.prompt(req.prompt);
+          await agent.waitForIdle();
+        } catch (e) {
+          if (!stopped) throw e; // a refused reservation ends the run, it does not fail it
+        }
+      })();
+      // A run that outlives the grace period keeps its session locked until it settles (and its
+      // last charges are made): a tool that ignores the abort may still finish a write, but no
+      // other run on the session starts.
+      hold(
+        loop.then(
+          () => charges,
+          () => charges,
+        ),
+      );
+      try {
+        await Promise.race([loop, deadline]);
+      } finally {
+        clearTimeout(timer);
+        clearTimeout(hard);
+      }
+      await charges;
+
+      const messages = (agent.state.messages as unknown as Message[]).filter(
+        (m) => m.role !== "system",
+      );
+      const fresh = messages.slice(history.length);
+      const toolCalls: {
+        tool: string;
+        arguments: unknown;
+        isError: boolean;
+        result: string;
+        id?: string;
+        done?: boolean;
+      }[] = [];
+      for (const m of fresh) {
+        if (m.role === "assistant" && Array.isArray(m.content)) {
+          for (const c of m.content)
+            if (c.type === "toolCall")
+              toolCalls.push({
+                tool: String(c.name),
+                arguments: c.arguments,
+                isError: false,
+                result: "",
+                id: c.id,
+              });
+        } else if (m.role === "toolResult") {
+          const call = toolCalls.find(
+            (t) => !t.done && t.id !== undefined && t.id === m.toolCallId,
+          );
+          if (call) {
+            call.done = true;
+            call.isError = !!m.isError;
+            call.result = clip(textOf(m));
+          }
+        }
+      }
+      const assistants = fresh.filter((m) => m.role === "assistant");
+      const last = assistants.at(-1);
+      // The reply is the last real answer: an abort appends an empty "aborted" message.
+      const answer = [...assistants]
+        .reverse()
+        .find((m) => m.stopReason !== "aborted" && m.stopReason !== "error");
+      const usage = fresh.reduce(
+        (u, m) => ({
+          input: u.input + (m.usage?.input ?? 0),
+          output: u.output + (m.usage?.output ?? 0),
+        }),
+        { input: 0, output: 0 },
+      );
+      for (const c of toolCalls)
+        if (!c.done) {
+          c.isError = true;
+          c.result = "no result (the run was stopped)";
+        }
+      // The provider's message, without the URLs it may name, and clipped.
+      const providerError =
+        last?.stopReason === "error"
+          ? clip(
+              redact(String(last.errorMessage ?? "error")).replace(/\b\w+:\/\/\S+/g, "<url>"),
+              ERROR_LIMIT,
+            )
+          : undefined;
+      // The provider error repeats a refused reservation (stopped): reported once.
+      const repeats = !!stopped && !!providerError && providerError.includes(stopped);
+      const errors = [stopped, repeats ? undefined : providerError, chargeError].filter(
+        (e): e is string => !!e,
+      );
+
+      let kept = messages.length;
+      if (sessionKey) {
+        const keep = trimHistory(messages, SESSION_MESSAGES, SESSION_BYTES);
+        kept = keep.length;
+        await storage.put(sessionKey, keep);
+        await touchSession(storage, sessionKey);
+      }
+      return {
+        reply: clip(textOf(answer)),
+        stopReason: stopped ? "limit" : (last?.stopReason ?? "unknown"),
+        error: errors.length ? errors.join("; ") : undefined,
+        turns,
+        toolCalls: toolCalls.map(({ id: _id, done: _done, ...c }) => c),
+        usage,
+        // What is left of the session's model budget (null: unlimited), when this run spent it.
+        budget: metered ? budgetLeft : undefined,
+        session: req.session ? { name: String(req.session), messages: kept } : undefined,
+      };
+    }
+  }
+}

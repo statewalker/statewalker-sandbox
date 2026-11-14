@@ -1,0 +1,809 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { newNodeSqliteDb } from "@statewalker/db-sqlite-node";
+import { afterAll, describe, expect, it } from "vitest";
+import { gitEnv } from "../../12-index-pack/src/git-repo.js";
+import { encodeCommit } from "../../17-repository/src/git-format.js";
+import type { ObjectStore } from "../../17-repository/src/object-store.js";
+import { rng } from "../../29-merge/tests/tree-harness.js";
+import {
+  type CommitInfo,
+  fossilIndex,
+  indexedSqlRepository,
+  walkPathHistory,
+  walkSearch,
+  walkSimplifiedPathHistory,
+} from "../src/fossil.js";
+
+const dirs: string[] = [];
+afterAll(() => {
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+const tmp = (p: string) => {
+  const d = mkdtempSync(join(tmpdir(), p));
+  dirs.push(d);
+  return d;
+};
+let clock = 1_600_000_000;
+const git = (cwd: string, args: string[], input?: string | Buffer) => {
+  clock += 61; // distinct committer dates: the order is by date alone
+  return execFileSync("git", args, {
+    cwd,
+    input,
+    maxBuffer: 1 << 30,
+    env: { ...gitEnv, GIT_AUTHOR_DATE: `${clock} +0000`, GIT_COMMITTER_DATE: `${clock} +0000` },
+    stdio: ["pipe", "pipe", "pipe"],
+  }).toString();
+};
+const write = (d: string, p: string, c: string) => {
+  mkdirSync(dirname(join(d, p)), { recursive: true });
+  writeFileSync(join(d, p), c);
+};
+const WORDS = ["merge", "fix", "Rename", "walk", "index", "Speed", "tree", "base"];
+
+/** random histories: branches, merges, adds, edits, deletes, a file becoming a directory */
+function history(seed: number): string {
+  const rand = rng(seed);
+  const pick = <T>(xs: T[]) => xs[Math.floor(rand() * xs.length)] as T;
+  const d = tmp("x9-");
+  git(d, ["init", "-q", "-b", "main"]);
+  const paths = ["a", "b", "d/e", "d/f", "d/g/h", "x"];
+  for (const p of paths.slice(0, 4)) write(d, p, `${p}\n`);
+  git(d, ["add", "-A"]);
+  git(d, ["commit", "-qm", "base commit"]);
+  let n = 0;
+  const work = (k: number) => {
+    for (let i = 0; i < k; i++) {
+      const p = pick(paths);
+      const full = join(d, p);
+      const r = rand();
+      try {
+        if (r < 0.6) write(d, p, `${p} ${n++}\n`);
+        else if (r < 0.75) rmSync(full, { recursive: true, force: true });
+        else if (r < 0.85) {
+          rmSync(full, { recursive: true, force: true });
+          write(d, `${p}/inner`, `inner ${n++}\n`);
+        } else write(d, `${p}.${n++}`, "new\n");
+      } catch {}
+      git(d, ["add", "-A"]);
+      const msg = `${pick(WORDS)} ${p} ${n}\n\n${pick(WORDS).toLowerCase()} body line ${n}`;
+      git(d, ["commit", "-q", "--allow-empty", "-m", msg]);
+    }
+  };
+  work(2 + Math.floor(rand() * 3));
+  git(d, ["checkout", "-qb", "side"]);
+  work(1 + Math.floor(rand() * 4));
+  git(d, ["checkout", "-q", "main"]);
+  work(1 + Math.floor(rand() * 3));
+  if (rand() < 0.6) {
+    try {
+      git(d, ["merge", "-q", "--no-edit", "side"]);
+    } catch {
+      git(d, ["add", "-A"]);
+      git(d, ["commit", "-qm", "merge side by hand"]);
+    }
+    work(Math.floor(rand() * 3));
+  }
+  if (rand() < 0.5) {
+    git(d, ["checkout", "-qb", "topic", "HEAD~1"]);
+    work(1 + Math.floor(rand() * 2));
+  }
+  return d;
+}
+
+/**
+ * Histories where git's simplification matters: side branches merged as usual, with `-s ours`
+ * (their changes discarded), or after the same change on both sides, and an edit reverted on one
+ * side; most side branches are deleted after their merge, so only the merge reaches them.
+ */
+function mergyHistory(seed: number): string {
+  const rand = rng(seed);
+  const pick = <T>(xs: T[]) => xs[Math.floor(rand() * xs.length)] as T;
+  const d = tmp("x9b-");
+  git(d, ["init", "-q", "-b", "main"]);
+  const paths = ["a", "b", "d/e", "d/f", "x"];
+  for (const p of paths) write(d, p, `${p}\n`);
+  git(d, ["add", "-A"]);
+  git(d, ["commit", "-qm", "base commit"]);
+  let n = 0;
+  const commit = (msg: string) => {
+    git(d, ["add", "-A"]);
+    git(d, ["commit", "-q", "--allow-empty", "-m", `${msg} ${n++}`]);
+  };
+  const edit = (p: string, text = `${p} ${n}\n`) => {
+    write(d, p, text);
+    commit(`fix ${p}`);
+  };
+  for (let round = 0; round < 3 + Math.floor(rand() * 3); round++) {
+    const branch = `b${round}`;
+    git(d, ["checkout", "-qb", branch]);
+    const touched: string[] = [];
+    for (let i = 0; i < 1 + Math.floor(rand() * 3); i++) {
+      const p = pick(paths);
+      touched.push(p);
+      edit(p);
+    }
+    const same = pick(paths);
+    const sameText = `same ${n}\n`;
+    const kind = pick(["merge", "ours", "same", "revert"] as const);
+    if (kind === "same") edit(same, sameText);
+    if (kind === "revert") {
+      const p = touched[0] as string;
+      git(d, ["checkout", "-q", `HEAD~${touched.length}`, "--", p]);
+      commit(`revert ${p}`);
+    }
+    git(d, ["checkout", "-q", "main"]);
+    if (rand() < 0.7) edit(pick(paths));
+    if (kind === "same") edit(same, sameText);
+    try {
+      git(d, ["merge", "-q", "--no-edit", ...(kind === "ours" ? ["-s", "ours"] : []), branch]);
+    } catch {
+      git(d, ["checkout", "-q", "--ours", "--", "."]);
+      commit("merge by hand");
+    }
+    if (rand() < 0.75) git(d, ["branch", "-qD", branch]);
+  }
+  // an annotated tag on a commit only the tag reaches (review of #119: tips are peeled)
+  git(d, ["checkout", "-qb", "tagged"]);
+  edit(pick(paths));
+  git(d, ["tag", "-a", "-m", "release", "v1"]);
+  git(d, ["checkout", "-q", "main"]);
+  git(d, ["branch", "-qD", "tagged"]);
+  return d;
+}
+
+/** every path and directory any commit's tree has had, plus one never present */
+function allPaths(d: string): string[] {
+  const out = new Set<string>(["never/there"]);
+  for (const c of git(d, ["rev-list", "--all"]).split("\n").filter(Boolean))
+    for (const p of git(d, ["ls-tree", "-r", "--name-only", c]).split("\n").filter(Boolean)) {
+      out.add(p);
+      const parts = p.split("/");
+      for (let i = 1; i < parts.length; i++) out.add(parts.slice(0, i).join("/"));
+    }
+  return [...out].sort();
+}
+
+/** the history's objects and refs in a SQL repository with the index: one pack, one ref batch */
+async function loadSql(d: string) {
+  const db = await newNodeSqliteDb();
+  const { repo, index } = await indexedSqlRepository(db);
+  const pack = execFileSync("git", ["pack-objects", "--all", "--stdout", "-q"], {
+    cwd: d,
+    input: "",
+    maxBuffer: 1 << 30,
+  });
+  await repo.objects.installPack(
+    (async function* () {
+      yield new Uint8Array(pack);
+    })(),
+  );
+  const refs = git(d, ["for-each-ref", "--format=%(refname) %(objectname)"])
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => l.split(" ") as [string, string]);
+  const r = await repo.refs.batch(refs.map(([name, oid]) => ({ name, old: null, new: oid })));
+  expect(r.ok).toBe(true);
+  return { db, repo, index, refs };
+}
+const lines = (s: string) => s.split("\n").filter(Boolean);
+
+const SEEDS = Array.from({ length: Number(process.env.X9_SEEDS ?? 40) }, (_, i) => 900 + i);
+
+describe("F1 path history equals git log --all --full-history --no-merges -- <path>", () => {
+  it("40 random histories, every path and directory, indexed and walked", async () => {
+    const wrong: string[] = [];
+    let checked = 0;
+    for (const seed of SEEDS) {
+      const d = history(seed);
+      const { repo, index } = await loadSql(d);
+      for (const path of allPaths(d)) {
+        const want = lines(
+          git(d, ["log", "--all", "--full-history", "--no-merges", "--format=%H", "--", path]),
+        );
+        const indexed = await index.pathHistory(path);
+        const walked = await walkPathHistory(repo, path);
+        checked++;
+        if (JSON.stringify(indexed) !== JSON.stringify(want))
+          wrong.push(`${seed} ${path} indexed\n git:  ${want}\n ours: ${indexed}`);
+        if (JSON.stringify(walked) !== JSON.stringify(want))
+          wrong.push(`${seed} ${path} walked\n git:  ${want}\n ours: ${walked}`);
+      }
+    }
+    expect(wrong.slice(0, 3)).toEqual([]);
+    expect(checked).toBeGreaterThan(300);
+  }, 600_000);
+});
+
+describe("F1b (X9b) simplified path history equals git log --all --no-merges -- <path>", () => {
+  it("40 random histories, every path and directory, indexed and walked", async () => {
+    const wrong: string[] = [];
+    let checked = 0;
+    let differs = 0;
+    for (const seed of SEEDS) {
+      const d = seed % 2 ? mergyHistory(seed) : history(seed);
+      const { repo, index } = await loadSql(d);
+      const tips = lines(git(d, ["for-each-ref", "--format=%(objectname)"]));
+      tips.push(git(d, ["rev-parse", "HEAD"]).trim());
+      for (const path of allPaths(d)) {
+        const want = lines(git(d, ["log", "--all", "--no-merges", "--format=%H", "--", path]));
+        const full = lines(
+          git(d, ["log", "--all", "--full-history", "--no-merges", "--format=%H", "--", path]),
+        );
+        if (JSON.stringify(want) !== JSON.stringify(full)) differs++;
+        const indexed = await index.simplifiedPathHistory(path, tips);
+        const walked = await walkSimplifiedPathHistory(repo, path);
+        checked++;
+        if (JSON.stringify(indexed) !== JSON.stringify(want))
+          wrong.push(`${seed} ${path} indexed\n git:  ${want}\n ours: ${indexed}`);
+        if (JSON.stringify(walked) !== JSON.stringify(want))
+          wrong.push(`${seed} ${path} walked\n git:  ${want}\n ours: ${walked}`);
+      }
+    }
+    expect(wrong.slice(0, 3)).toEqual([]);
+    expect(checked).toBeGreaterThan(300);
+    // the corpus exercises the simplification: some answers differ from --full-history
+    expect(differs).toBeGreaterThan(10);
+    console.log(`F1b: ${checked} paths, ${differs} where simplification changes the answer`);
+  }, 600_000);
+});
+
+describe("F1c (X9b) the walk's parent graph follows commits indexed after it was loaded", () => {
+  it("a commit and a merge pushed after the first query are walked by the next", async () => {
+    const d = mergyHistory(3);
+    const { repo, index } = await loadSql(d);
+    const tipsOf = () => [
+      ...lines(git(d, ["for-each-ref", "--format=%(objectname)"])),
+      git(d, ["rev-parse", "HEAD"]).trim(),
+    ];
+    const want = (p: string) =>
+      lines(git(d, ["log", "--all", "--no-merges", "--format=%H", "--", p]));
+    expect(await index.simplifiedPathHistory("a", tipsOf())).toEqual(want("a"));
+    // more history: a side branch editing a, merged with -s ours (its edit discarded), then an edit
+    const old = git(d, ["rev-parse", "main"]).trim();
+    git(d, ["checkout", "-qb", "late"]);
+    write(d, "a", "late side\n");
+    git(d, ["commit", "-qam", "late side edit"]);
+    git(d, ["checkout", "-q", "main"]);
+    git(d, ["merge", "-q", "-s", "ours", "--no-edit", "late"]);
+    git(d, ["branch", "-qD", "late"]);
+    write(d, "a", "late main\n");
+    git(d, ["commit", "-qam", "late main edit"]);
+    const pack = execFileSync("git", ["pack-objects", "--all", "--stdout", "-q"], {
+      cwd: d,
+      input: "",
+      maxBuffer: 1 << 30,
+    });
+    await repo.objects.installPack(
+      (async function* () {
+        yield new Uint8Array(pack);
+      })(),
+    );
+    const now = git(d, ["rev-parse", "main"]).trim();
+    expect((await repo.refs.batch([{ name: "refs/heads/main", old, new: now }])).ok).toBe(true);
+    const after = await index.simplifiedPathHistory("a", tipsOf());
+    expect(after).toEqual(want("a"));
+    expect(after[0]).toBe(now); // the new edit; the discarded side's edit is not listed
+    expect(after).not.toContain(git(d, ["rev-parse", "main~1^2"]).trim());
+  }, 120_000);
+});
+
+describe("F1d (review of #119) the walk against concurrent writes, old indexes, unindexed tips", () => {
+  const tipsOf = (d: string) => [
+    ...lines(git(d, ["for-each-ref", "--format=%(objectname)"])),
+    git(d, ["rev-parse", "HEAD"]).trim(),
+  ];
+  const want = (d: string, p: string) =>
+    lines(git(d, ["log", "--all", "--no-merges", "--format=%H", "--", p]));
+
+  it("a query while rows are being written does not poison later answers", async () => {
+    const d = mergyHistory(5);
+    const db = await newNodeSqliteDb();
+    const { repo } = await indexedSqlRepository(db); // objects only; refs written below
+    const pack = execFileSync("git", ["pack-objects", "--all", "--stdout", "-q"], {
+      cwd: d,
+      input: "",
+      maxBuffer: 1 << 30,
+    });
+    await repo.objects.installPack(
+      (async function* () {
+        yield new Uint8Array(pack);
+      })(),
+    );
+    const index = await fossilIndex(db, repo.objects);
+    const rows = await index.prepare(tipsOf(d));
+    // a Db whose every insert is followed by a query on the same connection, mid-write
+    const meddling = new Proxy(db, {
+      get(target, key) {
+        if (key !== "query") return Reflect.get(target, key).bind(target);
+        return async (sql: string, params?: unknown[]) => {
+          const out = await target.query(sql, params as never);
+          if (/^\s*INSERT/.test(sql))
+            await index.simplifiedPathHistory("a", tipsOf(d)).catch(() => {});
+          return out;
+        };
+      },
+    });
+    await index.write(meddling, rows);
+    for (const p of ["a", "b", "d", "x"])
+      expect(await index.simplifiedPathHistory(p, tipsOf(d)), p).toEqual(want(d, p));
+  }, 120_000);
+
+  it("an index written before X9b (no parents, no merge differences) is backfilled", async () => {
+    const d = mergyHistory(7);
+    const { db, repo } = await loadSql(d);
+    // what an index of the old schema holds: commits, changes, text; no parents
+    await db.exec("DELETE FROM fossil_parent");
+    await db.exec("DELETE FROM fossil_merge_change");
+    await db.exec("UPDATE fossil_commit SET parents = NULL");
+    const reopened = await fossilIndex(db, repo.objects);
+    for (const p of ["a", "b", "d", "x", "d/e"])
+      expect(await reopened.simplifiedPathHistory(p, tipsOf(d)), p).toEqual(want(d, p));
+  }, 120_000);
+
+  it("a tip that is not indexed is refused, not walked as a root", async () => {
+    const d = mergyHistory(9);
+    const { index } = await loadSql(d);
+    await expect(index.simplifiedPathHistory("a", ["0".repeat(40)])).rejects.toThrow(/object id/);
+  });
+});
+
+describe("F7 (X9c) per-branch answers, and --all without what a deleted ref left behind", () => {
+  it("40 random histories: path history and search from each ref, and after a ref is deleted", async () => {
+    const wrong: string[] = [];
+    let checked = 0;
+    let narrower = 0;
+    let narrowedAfterDelete = 0;
+    for (const seed of SEEDS) {
+      const d = seed % 2 ? mergyHistory(seed) : history(seed);
+      const { index } = await loadSql(d);
+      const refs = lines(git(d, ["for-each-ref", "--format=%(refname)"]));
+      const paths = allPaths(d).filter((_, i) => i % 3 === 0);
+      const check = (what: string, ours: string[], want: string[]) => {
+        checked++;
+        if (JSON.stringify(ours) !== JSON.stringify(want))
+          wrong.push(`${seed} ${what}\n git:  ${want}\n ours: ${ours}`);
+      };
+      for (const ref of refs) {
+        const tip = git(d, ["rev-parse", ref]).trim();
+        for (const path of paths) {
+          const want = lines(
+            git(d, ["log", "--full-history", "--no-merges", "--format=%H", ref, "--", path]),
+          );
+          const all = await index.pathHistory(path);
+          if (want.length < all.length) narrower++;
+          check(`${ref} -- ${path}`, await index.pathHistory(path, { tips: [tip] }), want);
+          check(
+            `${ref} simplified -- ${path}`,
+            await index.simplifiedPathHistory(path, [tip]),
+            lines(git(d, ["log", "--no-merges", "--format=%H", ref, "--", path])),
+          );
+        }
+        for (const q of ["fix", "base", "Rename", "x"])
+          check(
+            `${ref} --grep=${q}`,
+            await index.searchMessages(q, { tips: [tip] }),
+            lines(git(d, ["log", "--no-merges", "--format=%H", "-F", `--grep=${q}`, ref])),
+          );
+        // a pattern with an empty line matches every commit the tip reaches (review of #120)
+        check(
+          `${ref} --grep=zzzq --grep=`,
+          await index.searchMessages("zzzq\n", { tips: [tip, tip] }),
+          lines(git(d, ["log", "--no-merges", "--format=%H", "-F", "--grep=zzzq", "--grep=", ref])),
+        );
+      }
+      // tips that are no commit: a tree or a blob is skipped (`git log <tree>` lists nothing), an
+      // id that is no object is refused, and no tips at all reach nothing (review of #120)
+      const tree = git(d, ["rev-parse", "HEAD^{tree}"]).trim();
+      const first = lines(git(d, ["ls-tree", "--name-only", "HEAD"]))[0];
+      const blob = git(d, ["rev-parse", `HEAD:${first}`]).trim();
+      check("tree and blob tips", await index.pathHistory(".", { tips: [tree, blob] }), []);
+      check("no tips", await index.searchMessages("fix", { tips: [] }), []);
+      await expect(index.pathHistory(".", { tips: ["f".repeat(40)] })).rejects.toThrow(/object id/);
+      // a ref deleted after indexing: --all from the refs left does not list what only it reached
+      const victim = refs.find((r) => r !== "refs/heads/main");
+      if (victim) {
+        git(d, ["update-ref", "-d", victim]);
+        const tips = lines(git(d, ["for-each-ref", "--format=%(objectname)"]));
+        tips.push(git(d, ["rev-parse", "HEAD"]).trim());
+        for (const path of paths) {
+          const after = await index.pathHistory(path, { tips });
+          if (after.length < (await index.pathHistory(path)).length) narrowedAfterDelete++;
+          check(
+            `after deleting ${victim} -- ${path}`,
+            after,
+            lines(
+              git(d, ["log", "--all", "--full-history", "--no-merges", "--format=%H", "--", path]),
+            ),
+          );
+        }
+        check(
+          `after deleting ${victim} --grep=fix`,
+          await index.searchMessages("fix", { tips }),
+          lines(git(d, ["log", "--all", "--no-merges", "--format=%H", "-F", "--grep=fix"])),
+        );
+      }
+    }
+    expect(wrong.slice(0, 3)).toEqual([]);
+    expect(checked).toBeGreaterThan(1000);
+    expect(narrower).toBeGreaterThan(20); // per-branch answers really are narrower than --all
+    expect(narrowedAfterDelete).toBeGreaterThan(5); // and deleting a ref really narrows --all
+  }, 900_000);
+});
+
+describe('F8 (review of #126) malformed trees: a file named "a/", legacy directory modes', () => {
+  /** a raw tree object of [mode, name, oid hex] entries, in the order given */
+  const rawTree = (entries: [string, string, string][]) =>
+    Buffer.concat(
+      entries.map(([mode, name, oid]) =>
+        Buffer.concat([Buffer.from(`${mode} ${name}\0`), Buffer.from(oid, "hex")]),
+      ),
+    );
+  const person = (when: number) => ({ name: "t", email: "t@x", when, tz: "+0000" });
+  it("a directory a becoming a file named a/ (and back): indexed, every path reported", async () => {
+    const db = await newNodeSqliteDb();
+    const { repo } = await indexedSqlRepository(db);
+    const blob = await repo.objects.put("blob", new TextEncoder().encode("x\n"));
+    const sub = await repo.objects.put("tree", rawTree([["100644", "x", blob]]));
+    const dirA = await repo.objects.put("tree", rawTree([["40000", "a", sub]]));
+    const fileA = await repo.objects.put("tree", rawTree([["100644", "a/", blob]]));
+    const legacy = await repo.objects.put("tree", rawTree([["40755", "a", sub]]));
+    const commit = (tree: string, parents: string[], when: number) =>
+      repo.objects.put(
+        "commit",
+        encodeCommit({
+          tree,
+          parents,
+          author: person(when),
+          committer: person(when),
+          message: `c${when}\n`,
+        }),
+      );
+    const c1 = await commit(dirA, [], 1);
+    const c2 = await commit(fileA, [c1], 2);
+    const c3 = await commit(dirA, [c2], 3);
+    const c4 = await commit(legacy, [c3], 4);
+    const index = await fossilIndex(await newNodeSqliteDb(), repo.objects);
+    const rows = await index.prepare([c4]);
+    const changes = Object.fromEntries(rows.map((r) => [r.oid, [...r.changes].sort()]));
+    expect(changes[c2]).toEqual(["a/", "a/x"]);
+    expect(changes[c3]).toEqual(["a/", "a/x"]);
+    // 040755 is a directory to git (mode & 0170000): same tree, nothing changed
+    expect(changes[c4]).toEqual([]);
+  });
+});
+
+describe("F2 search equals git log --all --no-merges -F --grep=<text>", () => {
+  it("40 random histories: words, phrases, short and long substrings, absent text", async () => {
+    const wrong: string[] = [];
+    for (const seed of SEEDS) {
+      const d = history(seed);
+      const { repo, index } = await loadSql(d);
+      const queries = [
+        ...WORDS,
+        "me",
+        "x",
+        "fix d",
+        "body line",
+        "rename",
+        "nowhere at all",
+        "line 1",
+      ];
+      for (const q of queries) {
+        const want = lines(
+          git(d, ["log", "--all", "--no-merges", "--format=%H", "-F", `--grep=${q}`]),
+        );
+        const indexed = await index.searchMessages(q);
+        const walked = await walkSearch(repo, q);
+        if (JSON.stringify(indexed) !== JSON.stringify(want))
+          wrong.push(`${seed} "${q}" indexed\n git:  ${want}\n ours: ${indexed}`);
+        if (JSON.stringify(walked) !== JSON.stringify(want))
+          wrong.push(`${seed} "${q}" walked\n git:  ${want}\n ours: ${walked}`);
+      }
+    }
+    expect(wrong.slice(0, 3)).toEqual([]);
+  }, 600_000);
+});
+
+describe("F3 index rows in the ref batch's transaction", () => {
+  const count = async (db: Awaited<ReturnType<typeof newNodeSqliteDb>>) =>
+    Number(((await db.query("SELECT count(*) AS n FROM fossil_commit")) as { n: number }[])[0]?.n);
+
+  it("a failing indexer leaves neither the ref nor any index row", async () => {
+    const d = history(901);
+    const db = await newNodeSqliteDb();
+    const { repo } = await indexedSqlRepository(db, { failAfter: 2 });
+    const pack = execFileSync("git", ["pack-objects", "--all", "--stdout", "-q"], {
+      cwd: d,
+      input: "",
+    });
+    await repo.objects.installPack(
+      (async function* () {
+        yield new Uint8Array(pack);
+      })(),
+    );
+    const tip = git(d, ["rev-parse", "main"]).trim();
+    await expect(
+      repo.refs.batch([{ name: "refs/heads/main", old: null, new: tip }]),
+    ).rejects.toThrow();
+    expect(await repo.refs.resolve("refs/heads/main")).toBeUndefined();
+    expect(await count(db)).toBe(0);
+  });
+
+  it("a rejected batch writes no index row; a commit reached twice is indexed once", async () => {
+    const d = history(902);
+    const { db, repo, refs } = await loadSql(d);
+    const before = await count(db);
+    expect(before).toBe(Number(git(d, ["rev-list", "--all", "--count"]).trim()));
+    const [name, oid] = refs[0] as [string, string];
+    // a mismatched old value: rejected
+    const r = await repo.refs.batch([{ name: "refs/heads/other", old: oid, new: oid }]);
+    expect(r.ok).toBe(false);
+    // the same commits under another name: nothing new to index
+    expect((await repo.refs.batch([{ name: `${name}-copy`, old: null, new: oid }])).ok).toBe(true);
+    expect(await count(db)).toBe(before);
+  });
+
+  it("concurrent batches: on one handle each indexes its own commits; on two handles none twice", async () => {
+    // three unrelated histories: rows written for the wrong batch leave commits out
+    const d = tmp("x9c-");
+    git(d, ["init", "-q", "-b", "main"]);
+    for (const branch of ["one", "two", "three"]) {
+      git(d, ["checkout", "-q", "--orphan", branch]);
+      git(d, ["rm", "-rq", "--cached", "--ignore-unmatch", "."]);
+      for (let i = 0; i < 4; i++) {
+        write(d, `${branch}.txt`, `${branch} ${i}\n`);
+        git(d, ["add", `${branch}.txt`]);
+        git(d, ["commit", "-qm", `${branch} ${i}`]);
+      }
+    }
+    const tips = git(d, ["for-each-ref", "--format=%(refname) %(objectname)"])
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => l.split(" ") as [string, string]);
+    const all = Number(git(d, ["rev-list", "--all", "--count"]).trim());
+    const pack = execFileSync("git", ["pack-objects", "--all", "--stdout", "-q"], {
+      cwd: d,
+      input: "",
+    });
+    const install = async (repo: {
+      objects: { installPack: (s: AsyncIterable<Uint8Array>) => Promise<unknown> };
+    }) =>
+      repo.objects.installPack(
+        (async function* () {
+          yield new Uint8Array(pack);
+        })(),
+      );
+    // one handle, the refs in separate batches at once
+    const db1 = await newNodeSqliteDb();
+    const one = await indexedSqlRepository(db1);
+    await install(one.repo);
+    const r1 = await Promise.all(
+      tips.map(([name, oid]) => one.repo.refs.batch([{ name, old: null, new: oid }])),
+    );
+    expect(r1.every((r) => r.ok)).toBe(true);
+    expect(await count(db1)).toBe(all);
+    // two handles on one database, the same refs at once (each under its own name)
+    const db2 = await newNodeSqliteDb();
+    const a = await indexedSqlRepository(db2);
+    const b = await indexedSqlRepository(db2);
+    await install(a.repo);
+    const r2 = await Promise.all([
+      ...tips.map(([name, oid]) => a.repo.refs.batch([{ name: `${name}-a`, old: null, new: oid }])),
+      ...tips.map(([name, oid]) => b.repo.refs.batch([{ name: `${name}-b`, old: null, new: oid }])),
+    ]);
+    expect(r2.every((r) => r.ok)).toBe(true);
+    expect(await count(db2)).toBe(all);
+  });
+});
+
+describe("F6 review cases", () => {
+  it("refs to annotated tags and to a blob: peeled or skipped, as git log --all does", async () => {
+    const d = history(904);
+    git(d, ["tag", "-a", "-m", "release", "v1", "main"]);
+    const blob = git(d, ["hash-object", "-w", "--stdin"], "a key\n").trim();
+    git(d, ["tag", "key", blob]);
+    const { repo, index } = await loadSql(d);
+    for (const path of ["a", "d", "never/there"]) {
+      const want = lines(
+        git(d, ["log", "--all", "--full-history", "--no-merges", "--format=%H", "--", path]),
+      );
+      expect(await index.pathHistory(path), path).toEqual(want);
+      expect(await walkPathHistory(repo, path), path).toEqual(want);
+    }
+  });
+
+  it("pathspecs: a trailing slash, ./ and . as git reads them; magic and empty pathspecs refused", async () => {
+    const d = history(905);
+    const { repo, index } = await loadSql(d);
+    const forms: [string, string][] = [
+      ["d/", "d/"],
+      ["./d", "./d"],
+      ["d/.", "d/."],
+      [".", "."],
+      ["./", "./"],
+    ];
+    for (const [ours, theirs] of forms) {
+      const want = lines(
+        git(d, ["log", "--all", "--full-history", "--no-merges", "--format=%H", "--", theirs]),
+      );
+      expect(await index.pathHistory(ours), ours).toEqual(want);
+      expect(await walkPathHistory(repo, ours), ours).toEqual(want);
+    }
+    for (const bad of ["a*", "a?", "a[b]", ":(literal)a", ""]) {
+      await expect(index.pathHistory(bad), bad).rejects.toThrow(/pathspec/);
+      await expect(walkPathHistory(repo, bad), bad).rejects.toThrow(/pathspec/);
+    }
+  });
+
+  it("search text with newlines: any of its lines, as git splits the pattern", async () => {
+    const d = history(906);
+    const { repo, index } = await loadSql(d);
+    for (const q of ["fix\nwalk", "body line\n", "x\n\ny", "tree\nnowhere at all"]) {
+      const want = lines(
+        git(d, ["log", "--all", "--no-merges", "--format=%H", "-F", `--grep=${q}`]),
+      );
+      expect(await index.searchMessages(q), JSON.stringify(q)).toEqual(want);
+      expect(await walkSearch(repo, q), JSON.stringify(q)).toEqual(want);
+    }
+  });
+
+  it("text of three code units but two characters is not sent to the trigram index", async () => {
+    const d = tmp("x9u-");
+    git(d, ["init", "-q", "-b", "main"]);
+    write(d, "a", "1\n");
+    git(d, ["add", "a"]);
+    git(d, ["commit", "-qm", "accent é😀 here"]);
+    const { repo, index } = await loadSql(d);
+    const want = lines(git(d, ["log", "--all", "--no-merges", "--format=%H", "-F", "--grep=é😀"]));
+    expect(want.length).toBe(1);
+    expect(await index.searchMessages("é😀")).toEqual(want);
+    expect(await walkSearch(repo, "é😀")).toEqual(want);
+  });
+
+  it("equal commit dates: the index and the walk answer in one order", async () => {
+    const d = tmp("x9e-");
+    const at = {
+      ...gitEnv,
+      GIT_AUTHOR_DATE: "1700000000 +0000",
+      GIT_COMMITTER_DATE: "1700000000 +0000",
+    };
+    const g = (args: string[]) => execFileSync("git", args, { cwd: d, env: at }).toString();
+    g(["init", "-q", "-b", "main"]);
+    for (let i = 0; i < 6; i++) {
+      write(d, "f", `${i}\n`);
+      g(["add", "f"]);
+      g(["commit", "-qm", `same second ${i}`]);
+    }
+    const { repo, index } = await loadSql(d);
+    expect(await index.pathHistory("f")).toEqual(await walkPathHistory(repo, "f"));
+    expect(await index.searchMessages("same")).toEqual(await walkSearch(repo, "same"));
+  });
+});
+
+describe("F4 speed: 100,000 commits over 50,000 files", () => {
+  it("a path history and a search each under 100 ms", async () => {
+    const d = tmp("x9big-");
+    git(d, ["init", "-q", "-b", "main"]);
+    // fast-import: 50 x 50 x 20 files, then 100,000 commits editing one file each
+    const rand = rng(77);
+    const file = (i: number) => `d${Math.floor(i / 1000)}/e${Math.floor(i / 20) % 50}/f${i % 20}`;
+    const parts: string[] = [];
+    let t = 1_500_000_000;
+    // each commit continues the branch: fast-import starts from its current tip
+    const commit = (msg: string, ops: string) =>
+      `commit refs/heads/main\ncommitter C <c@x> ${t++} +0000\ndata ${Buffer.byteLength(msg)}\n${msg}\n${ops}\n`;
+    let ops = "";
+    for (let i = 0; i < 50_000; i++) ops += `M 100644 inline ${file(i)}\ndata 2\n${i % 10}\n\n`;
+    parts.push(commit("import the tree", ops));
+    const COMMITS = Number(process.env.X9_COMMITS ?? 100_000);
+    const phases: string[] = [];
+    let phase = performance.now();
+    const mark = (what: string) => {
+      phases.push(`${what} ${((performance.now() - phase) / 1000).toFixed(1)} s`);
+      phase = performance.now();
+    };
+    for (let c = 1; c < COMMITS; c++) {
+      const i = Math.floor(rand() * 50_000);
+      const word = WORDS[c % WORDS.length] as string;
+      const body = `v${c}\n`;
+      parts.push(
+        commit(
+          `${word} ${file(i)} change ${c}`,
+          `M 100644 inline ${file(i)}\ndata ${body.length}\n${body}`,
+        ),
+      );
+    }
+    git(d, ["fast-import", "--quiet"], parts.join(""));
+    mark("fast-import");
+    // F4 is about the queries on tables of this size: the rows come from git's own log (reading
+    // them through our objects takes ~1.3 ms a commit, about 2 minutes here; see the README)
+    const db = await newNodeSqliteDb();
+    const index = await fossilIndex(db, {} as ObjectStore);
+    const log = git(d, [
+      "log",
+      "--root",
+      "--no-renames",
+      "--name-only",
+      "--format=%x00%H %ct %P%x01%B%x02",
+      "main",
+    ]);
+    const rows: CommitInfo[] = log
+      .split("\0")
+      .filter(Boolean)
+      .map((rec) => {
+        const [head, rest] = rec.split("\x01") as [string, string];
+        const [message, names = ""] = rest.split("\x02") as [string, string];
+        const [oid, date, ...parents] = head.split(" ");
+        return {
+          oid: oid as string,
+          date: Number(date),
+          merge: parents.filter(Boolean).length > 1,
+          message,
+          changes: names.split("\n").filter(Boolean),
+          parents: parents.filter(Boolean),
+          mergeChanges: [],
+        };
+      });
+    expect(rows.length).toBe(COMMITS);
+    mark("rows from git log");
+    await index.write(db, rows);
+    mark("write");
+
+    const target = file(12_345);
+    let t0 = performance.now();
+    const history = await index.pathHistory(target);
+    const pathMs = performance.now() - t0;
+    expect(history).toEqual(lines(git(d, ["log", "--format=%H", "--", target])));
+
+    t0 = performance.now();
+    const dirHistory = await index.pathHistory("d12/e3");
+    const dirMs = performance.now() - t0;
+    expect(dirHistory.length).toBe(lines(git(d, ["log", "--format=%H", "--", "d12/e3"])).length);
+
+    t0 = performance.now();
+    const found = await index.searchMessages("Rename d7/e1");
+    const searchMs = performance.now() - t0;
+    expect(found).toEqual(lines(git(d, ["log", "--format=%H", "-F", "--grep=Rename d7/e1"])));
+
+    const tip = git(d, ["rev-parse", "main"]).trim();
+    t0 = performance.now();
+    const simplified = await index.simplifiedPathHistory(target, [tip]);
+    const simplifiedMs = performance.now() - t0;
+    expect(simplified).toEqual(history); // a linear history: nothing to simplify
+    // the parent graph is loaded on the first walk; later walks only extend it
+    t0 = performance.now();
+    const warm = await index.simplifiedPathHistory("d12/e3", [tip]);
+    const warmMs = performance.now() - t0;
+    expect(warm).toEqual(dirHistory);
+    // X9c: from one tip (a branch's own history)
+    t0 = performance.now();
+    const branchPath = await index.pathHistory(target, { tips: [tip] });
+    const branchSearch = await index.searchMessages("Rename d7/e1", { tips: [tip] });
+    const branchMs = performance.now() - t0;
+    expect(branchPath).toEqual(history);
+    expect(branchSearch).toEqual(found);
+
+    phases.push(
+      `path ${pathMs.toFixed(1)} ms, directory ${dirMs.toFixed(1)} ms, search ${searchMs.toFixed(1)} ms, simplified path ${simplifiedMs.toFixed(1)} ms (first, loading the parents), ${warmMs.toFixed(1)} ms after, from a tip: path and search ${branchMs.toFixed(1)} ms`,
+    );
+    console.log(phases.join("\n"));
+    if (process.env.X9_TIMES) writeFileSync(process.env.X9_TIMES, phases.join("\n"));
+    expect(pathMs).toBeLessThan(100);
+    expect(dirMs).toBeLessThan(100);
+    expect(searchMs).toBeLessThan(100);
+    expect(warmMs).toBeLessThan(100);
+    expect(branchMs).toBeLessThan(100);
+  }, 1_800_000);
+});
+
+describe("F5 portable", () => {
+  it("src/ has no node: imports", () => {
+    const src = join(dirname(fileURLToPath(import.meta.url)), "../src");
+    for (const f of readdirSync(src))
+      expect(readFileSync(join(src, f), "utf8"), f).not.toMatch(/from "node:/);
+  });
+});

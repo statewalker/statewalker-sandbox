@@ -1,0 +1,8 @@
+.wrangler/
+.celld/
+.data/
+node_modules/
+dist/
+.dev.vars
+src/bundler/program.gen.js
+.wasmer-cache/

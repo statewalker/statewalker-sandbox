@@ -1,0 +1,25 @@
+{
+  "$comment": "How tool code is bundled (src/tools/bundle.ts, scripts/bundle-tool.mjs) and what the Agent accepts (src/tools/check.ts). See README, 'Bundled tools'.",
+  "fsModules": ["node:fs", "fs", "node:fs/promises", "fs/promises"],
+  "pathModules": ["node:path", "path", "node:path/posix", "path/posix"],
+  "builtins": "deny",
+  "modules": {},
+  "external": ["cloudflare:workers"],
+  "define": {
+    "process": "__capfs_process",
+    "global": "globalThis",
+    "require": "undefined"
+  },
+  "processEnv": {
+    "NODE_ENV": "production"
+  },
+  "check": {
+    "forbidIdentifiers": ["eval", "Function", "require", "process", "global", "importScripts"],
+    "forbidDynamicImport": true,
+    "forbidImportMeta": true,
+    "restrictGlobalObject": true
+  },
+  "hostFsRuntimes": "refuse",
+  "allowedBundles": [],
+  "requireBundled": false
+}

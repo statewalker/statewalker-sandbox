@@ -1,0 +1,60 @@
+{
+  "name": "@statewalker/flue-capfs-do",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Flue agents on Durable Objects with a Biscuit/Datalog-filtered file capability. One Worker project, run on wrangler (workerd), cellb and celld.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
+    "directory": "apps/flue-capfs-do"
+  },
+  "license": "MIT",
+  "scripts": {
+    "test": "pnpm run test:unit && pnpm run test:cellb && pnpm run test:cellb-bundled-only && pnpm run test:cellb-celld-bucket && pnpm run test:wrangler && pnpm run test:browser",
+    "test:unit": "node --test tests/unit/*.test.mjs",
+    "test:cellb": "node scripts/run-env.mjs cellb",
+    "test:wrangler": "node scripts/run-env.mjs wrangler",
+    "test:celld": "node scripts/run-env.mjs celld",
+    "dev:wrangler": "node scripts/build-bundler.mjs && wrangler dev",
+    "dev:cellb": "node scripts/build-bundler.mjs && node scripts/serve-cellb.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:cellb-celld-bucket": "node scripts/run-env.mjs cellb-celld-bucket",
+    "example": "node examples/walkthrough.mjs",
+    "bundle-tool": "node scripts/bundle-tool.mjs",
+    "test:cellb-bundled-only": "node scripts/run-env.mjs cellb-bundled-only",
+    "build:browser": "node scripts/build-browser.mjs",
+    "dev:browser": "node scripts/serve-browser.mjs",
+    "test:browser": "node --test tests/browser.test.mjs",
+    "build:bundler": "node scripts/build-bundler.mjs",
+    "predeploy": "node scripts/build-bundler.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "~1.4.0",
+    "@earendil-works/pi-ai": "catalog:",
+    "@flue/runtime": "catalog:",
+    "@statewalker/webrun-biscuit": "catalog:",
+    "@statewalker/webrun-bundler": "0.1.1",
+    "@statewalker/webrun-files": "catalog:",
+    "@statewalker/webrun-files-mem": "catalog:",
+    "@statewalker/webrun-files-rpc": "catalog:",
+    "@wasmer/sdk": "0.19.1",
+    "acorn": "^8.15.0",
+    "acorn-walk": "^8.3.4",
+    "esbuild-wasm": "0.28.2",
+    "eslint-scope": "^9.1.2",
+    "just-bash": "catalog:",
+    "pyodide": "314.0.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261107.1",
+    "@sqlite.org/sqlite-wasm": "3.53.4-build2",
+    "@statewalker/cellb": "0.8.8",
+    "@statewalker/webrun-files-node": "catalog:",
+    "esbuild": "0.28.2",
+    "playwright": "catalog:",
+    "typescript": "catalog:",
+    "wrangler": "4.158.0"
+  }
+}
