@@ -62,6 +62,8 @@ type JobState = {
   /** Failed attempts per page not done yet. */
   attempts: Record<string, number>;
   failedPages: { page: number; error: string }[];
+  /** The last attempts that failed and were retried (at most 20), for diagnosis. */
+  retried?: { page: number; attempt: number; error: string }[];
   /** How much of the PDF pdf.js has read from SQLite, over all alarms. */
   reads: { bytesRead: number; requests: number; opens: number };
   alarms: number;
@@ -337,7 +339,25 @@ export class PdfJob extends DurableObject<Env> {
     });
   }
 
+  /**
+   * Alarms are delivered at least once: celld re-delivers one that runs long (after about 20 s)
+   * while it still runs. An alarm arriving while this instance runs one waits for it and does
+   * nothing else; the running one sets the next alarm. In a fresh instance (after a crash)
+   * nothing is running, and the job carries on from its stored state.
+   */
   async alarm(): Promise<void> {
+    if (this.#alarmRunning) return this.#alarmRunning;
+    this.#alarmRunning = this.#runAlarm();
+    try {
+      await this.#alarmRunning;
+    } finally {
+      this.#alarmRunning = undefined;
+    }
+  }
+
+  #alarmRunning: Promise<void> | undefined;
+
+  async #runAlarm(): Promise<void> {
     const initial = this.#state();
     if (!initial) {
       // An upload that was never started.
@@ -428,6 +448,8 @@ export class PdfJob extends DurableObject<Env> {
       const attempts = now.attempts[n] ?? 1;
       if (attempts < MAX_ATTEMPTS) {
         retry = Math.max(retry, attempts);
+        const error = String(outcome.reason?.message ?? outcome.reason);
+        now.retried = [...(now.retried ?? []), { page: n, attempt: attempts, error }].slice(-20);
       } else {
         delete now.attempts[n];
         now.failedPages.push({ page: n, error: String(outcome.reason?.message ?? outcome.reason) });

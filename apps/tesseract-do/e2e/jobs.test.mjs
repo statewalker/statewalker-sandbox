@@ -90,7 +90,7 @@ test("four scanned pages at once, their images spread over three OCR cells", asy
   const done = await waitForJob(job.id);
   assert.equal(done.status, "done", JSON.stringify(done));
   assert.equal(done.pagesDone, 4);
-  assert.equal(done.alarms, 1, "one batch");
+  assert.equal(done.alarms, 1, `one batch: ${JSON.stringify(done)}`);
   const { body } = await jobJson(job.id, "/document");
   const truth = fixture("linn.txt").toString();
   const pages = body.document.pages.map((p) => p.number);

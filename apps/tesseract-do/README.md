@@ -172,8 +172,16 @@ Durable Object** (`src/pdf/pdf-job.ts`, a unique id per job) and returns at once
   in the language's cells over RPC, spread round-robin over a pool (`ocrCells`, default 2:
   `ocr-eng`, `ocr-eng-1`, …), outside the job's budget.
 - Each page and its new PNG assets commit in **one transaction**, so a crash loses nothing and
-  repeats nothing; a page finishing after a cancel or delete is not stored. A page that throws is
-  retried after 2 s and 4 s, then recorded in `failedPages`; an unreadable PDF fails the job.
+  repeats nothing; a page finishing after a cancel or delete is not stored. A page's attempt is
+  counted **before** it runs, so a crash or out-of-memory uses one up too: a page that throws or
+  kills the isolate is retried (alone, after a crash) after 2 s and 4 s, then recorded in
+  `failedPages`, and the job finishes instead of hanging. Retried errors are listed in `retried`.
+  An unreadable PDF fails the job.
+- Alarms are delivered **at least once**: celld 0.6 re-delivers an alarm that has run for 20 s
+  while it still runs. An alarm that arrives while the instance runs one waits for it and does
+  nothing else.
+- The document and assets are served in pieces (a page, or 3 MiB of an asset, per RPC) and
+  streamed, also with `assets=inline`: not bound by the 32 MiB RPC message limit.
 - Alarms are durable: after a **restart** the job reopens the PDF from SQLite and carries on with
   the pages not done (checked on all three runtimes by the durability suite).
 

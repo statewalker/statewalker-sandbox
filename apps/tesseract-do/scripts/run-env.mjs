@@ -6,7 +6,15 @@
 // celld: CELLD_BIN, or (default) the ghcr.io/denoland/celld:0.6.0 image in Docker (CELLD_IMAGE),
 // started as `celld dev <project> --host 127.0.0.1 --port <port> --no-watch`.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
@@ -106,6 +114,7 @@ const commands = {
     );
     ownDevVars = true;
     const args = ["dev", dir, "--host", "127.0.0.1", "--port", String(port), "--no-watch"];
+    if (process.env.RUNTIME_LOG) args.push("--logs");
     if (process.env.CELLD_BIN) return [process.env.CELLD_BIN, args];
     if (process.platform !== "linux") {
       console.error(
@@ -198,6 +207,8 @@ async function startRuntime() {
   return child;
 }
 async function stopRuntime(child) {
+  // RUNTIME_LOG=<file>: the runtime's own output, appended, for diagnosis.
+  if (process.env.RUNTIME_LOG) appendFileSync(process.env.RUNTIME_LOG, child.log ?? "");
   const portFree = async () => {
     try {
       await fetch(`${base}/api/runtime`, { signal: AbortSignal.timeout(1000) });
