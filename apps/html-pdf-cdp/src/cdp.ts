@@ -24,7 +24,12 @@ export class CdpError extends Error {
 
   /** The browser does not implement the method (JSON-RPC "method not found"). */
   get notImplemented(): boolean {
-    return this.code === -32601 || /not found|not implemented|unknown method/i.test(this.message);
+    // JSON-RPC's code, or Chromium's "'Page.x' wasn't found"; not "Session … not found".
+    return (
+      this.code === -32601 ||
+      (/wasn't found|not implemented|unknown method/i.test(this.message) &&
+        !/session/i.test(this.message))
+    );
   }
 }
 
@@ -40,6 +45,8 @@ export class CdpConnection {
   readonly #pending = new Map<number, Pending>();
   readonly #listeners = new Map<string, Set<Listener>>();
   #closed: Error | null = null;
+  /** Event waiters to fail when the socket closes. */
+  readonly #waiters = new Set<(e: Error) => void>();
 
   private readonly ws: WebSocket;
 
@@ -112,20 +119,43 @@ export class CdpConnection {
     return () => set.delete(listener);
   }
 
-  /** The next `method` event of `sessionId`, or a timeout error. */
-  waitFor(method: string, sessionId: string | undefined, timeoutMs: number) {
-    return new Promise<Record<string, unknown>>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        off();
-        reject(new Error(`ETIMEDOUT: no ${method} in ${timeoutMs} ms`));
-      }, timeoutMs);
-      const off = this.on(method, (params, sid) => {
-        if (sessionId && sid !== sessionId) return;
+  /**
+   * The next `method` event of `sessionId`. `promise` rejects on timeout or when the socket
+   * closes; `cancel` stops waiting (its timer and listener go) and settles it with null.
+   */
+  waitFor(
+    method: string,
+    sessionId: string | undefined,
+    timeoutMs: number,
+  ): { promise: Promise<Record<string, unknown> | null>; cancel: () => void } {
+    let cancel = () => {};
+    const promise = new Promise<Record<string, unknown> | null>((resolve, reject) => {
+      if (this.#closed) return reject(this.#closed);
+      const done = () => {
         clearTimeout(timer);
         off();
+        this.#waiters.delete(fail);
+      };
+      const fail = (e: Error) => {
+        done();
+        reject(e);
+      };
+      const timer = setTimeout(
+        () => fail(new Error(`ETIMEDOUT: no ${method} in ${timeoutMs} ms`)),
+        timeoutMs,
+      );
+      const off = this.on(method, (params, sid) => {
+        if (sessionId && sid !== sessionId) return;
+        done();
         resolve(params);
       });
+      this.#waiters.add(fail);
+      cancel = () => {
+        done();
+        resolve(null);
+      };
     });
+    return { promise, cancel };
   }
 
   close(): void {
@@ -161,6 +191,7 @@ export class CdpConnection {
     this.#closed = error;
     for (const p of this.#pending.values()) p.reject(error);
     this.#pending.clear();
+    for (const fail of [...this.#waiters]) fail(error);
   }
 }
 

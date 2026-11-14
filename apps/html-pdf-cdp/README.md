@@ -21,10 +21,12 @@ CF_ACCOUNT_ID=… CF_API_TOKEN=… pnpm --filter @statewalker/html-pdf-cdp print
 
 1. `Target.createTarget` (about:blank) and `Target.attachToTarget` with `flatten: true`.
 2. The HTML goes in with `Page.setDocumentContent`. If the engine does not implement it (a CDP
-   "method not found" answer), the page navigates to a `data:text/html;base64,…` URL instead and
-   waits for `Page.loadEventFired`.
+   "method not found" answer, not a lost session), the page navigates to a percent-encoded
+   `data:text/html,…` URL and waits for `Page.loadEventFired`; a page over Chromium's 2 MB URL
+   limit is written into about:blank with `document.write` instead.
 3. Web fonts and images are awaited with `Runtime.evaluate` (`document.fonts.ready`, image
-   `decode()`), best effort: an engine that refuses is printed as is, and the result says so.
+   `decode()`, lazy images made eager), best effort and at most 10 s: an engine that refuses, or
+   a resource that never arrives, is printed as is, and the result says so.
 4. `Page.printToPDF` (A4 and backgrounds by default; CSS `@page` size with `preferCSSPageSize`),
    returned base64, or with `stream` as an IO stream read in 1 MiB parts (`IO.read`).
 5. `Target.closeTarget`, whatever happened.
@@ -52,7 +54,7 @@ implements **a subset of CDP**. Per Cloudflare's docs (Nov 2026):
 
 | Engine | Result |
 | --- | --- |
-| Local Chromium 153 (headless) | 2 A4 pages, text with accents, table cells, bold font, the SVG chart as vectors; setDocumentContent, data: URL and streamed routes alike; ≈ 120 ms |
+| Local Chromium 153 (headless) | 2 A4 pages, text with accents, table cells, bold font, the SVG chart as vectors; setDocumentContent, data: URL, document.write (1.7 MB page) and streamed routes alike; an image that never loads still prints; ≈ 120 ms |
 | Browser Run, Kitesurf | **not run**: needs a Cloudflare account id and API token (`CF_ACCOUNT_ID`, `CF_API_TOKEN`); the test is skipped without them |
 | Browser Run, Chromium | **not run**, same reason |
 

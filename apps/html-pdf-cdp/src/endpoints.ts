@@ -79,40 +79,47 @@ export async function launchLocalChromium(): Promise<{
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
   );
-  let log = "";
-  const url = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`ETIMEDOUT: Chromium did not start\n${log}`)),
-      30_000,
-    );
-    child.stderr.on("data", (d) => {
-      log += d;
-      const m = log.match(/DevTools listening on (ws:\/\/\S+)/);
-      if (m) {
-        clearTimeout(timer);
-        resolve(m[1]);
-      }
-    });
-    child.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`EIO: Chromium exited (${code})\n${log}`));
-    });
-  });
-  const http = url.replace(/^ws:/, "http:").replace(/\/devtools\/.*$/, "");
-  const version = ((await (await fetch(`${http}/json/version`)).json()) as { Browser: string })
-    .Browser;
-  return {
-    endpoint: { url },
-    version,
-    close: async () => {
-      if (child.exitCode === null) {
-        const exited = new Promise((r) => child.once("exit", r));
-        child.kill("SIGTERM");
-        await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
-        if (child.exitCode === null) child.kill("SIGKILL");
-      }
-      // Chromium's helper processes may still be writing to the profile for a moment.
-      rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-    },
+  const close = async () => {
+    if (child.exitCode === null) {
+      const exited = new Promise((r) => child.once("exit", r));
+      child.kill("SIGTERM");
+      await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
+      if (child.exitCode === null) child.kill("SIGKILL");
+    }
+    // Chromium's helper processes may still be writing to the profile for a moment.
+    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   };
+  try {
+    let log = "";
+    const url = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`ETIMEDOUT: Chromium did not start\n${log}`)),
+        30_000,
+      );
+      const onData = (d: Buffer) => {
+        log += d;
+        const m = log.match(/DevTools listening on (ws:\/\/\S+)/);
+        if (m) {
+          clearTimeout(timer);
+          // Stop collecting: a chatty browser would grow the log for its whole life.
+          child.stderr.off("data", onData);
+          child.stderr.resume();
+          resolve(m[1]);
+        }
+      };
+      child.stderr.on("data", onData);
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        reject(new Error(`EIO: Chromium exited (${code})\n${log}`));
+      });
+    });
+    const http = url.replace(/^ws:/, "http:").replace(/\/devtools\/.*$/, "");
+    const version = ((await (await fetch(`${http}/json/version`)).json()) as { Browser: string })
+      .Browser;
+    return { endpoint: { url }, version, close };
+  } catch (e) {
+    // A browser that did not come up is not left running, nor its profile on disk.
+    await close();
+    throw e;
+  }
 }

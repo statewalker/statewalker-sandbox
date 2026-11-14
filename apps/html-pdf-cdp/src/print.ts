@@ -4,8 +4,10 @@
  * Only widely implemented methods are used, and each step has a fallback, because engines such
  * as Kitesurf implement a subset of CDP:
  *   - the HTML goes in with `Page.setDocumentContent`; if the engine lacks it, the page navigates
- *     to a `data:` URL of the HTML instead;
- *   - before printing, the page's fonts and images are awaited (`Runtime.evaluate`), best effort;
+ *     to a percent-encoded `data:` URL of the HTML, or (over Chromium's 2 MB URL limit) the HTML
+ *     is written into about:blank with document.write;
+ *   - before printing, the page's fonts and images are awaited (`Runtime.evaluate`), best
+ *     effort and at most 10 s;
  *   - the PDF comes back base64 (`ReturnAsBase64`), or as an IO stream read in parts when asked.
  */
 import { type CdpConnection, CdpError } from "./cdp.ts";
@@ -45,14 +47,18 @@ export type PrintRequest = {
 
 export type PrintResult = {
   pdf: Uint8Array;
-  /** How the HTML was loaded. */
-  loadedWith: "setDocumentContent" | "dataUrl";
+  /** How the HTML was loaded (documentWrite: too large for a data: URL). */
+  loadedWith: "setDocumentContent" | "dataUrl" | "documentWrite";
   /** Whether fonts and images were awaited (false: the engine refused, printed as is). */
   awaitedResources: boolean;
   timings: { loadMs: number; printMs: number; totalMs: number };
 };
 
 const A4 = { paperWidth: 8.27, paperHeight: 11.69 };
+/** Chromium's URL length limit (2 MB), less a margin. */
+const MAX_DATA_URL = 2 * 1024 * 1024 - 1024;
+/** How long fonts and images are awaited before printing anyway (ms). */
+const RESOURCE_WAIT_MS = 10_000;
 
 const fromBase64 = (b64: string) => new Uint8Array(Buffer.from(b64, "base64"));
 
@@ -123,30 +129,63 @@ async function loadHtml(
       const { frameTree } = await send<{ frameTree: { frame: { id: string } } }>(
         "Page.getFrameTree",
       );
-      const loaded = cdp.waitFor("Page.loadEventFired", sessionId, timeoutMs).catch(() => null);
-      await send("Page.setDocumentContent", { frameId: frameTree.frame.id, html: req.html });
-      // setDocumentContent replaces the document synchronously; the load event (subresources)
-      // follows when there are any. Not every engine sends it: resources are awaited below.
-      await Promise.race([loaded, new Promise((r) => setTimeout(r, 2000))]);
+      const loaded = cdp.waitFor("Page.loadEventFired", sessionId, timeoutMs);
+      loaded.promise.catch(() => {});
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await send("Page.setDocumentContent", { frameId: frameTree.frame.id, html: req.html });
+        // setDocumentContent replaces the document synchronously; the load event (subresources)
+        // follows when there are any. Not every engine sends it: resources are awaited below.
+        await Promise.race([
+          loaded.promise.catch(() => null),
+          new Promise((r) => {
+            timer = setTimeout(r, 2000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+        loaded.cancel();
+      }
       return "setDocumentContent";
     } catch (e) {
       if (mode === "setDocumentContent" || !(e instanceof CdpError && e.notImplemented)) throw e;
     }
   }
-  const loaded = cdp.waitFor("Page.loadEventFired", sessionId, timeoutMs);
-  const url = `data:text/html;charset=utf-8;base64,${Buffer.from(req.html, "utf8").toString("base64")}`;
-  const nav = await send<{ errorText?: string }>("Page.navigate", { url });
-  if (nav.errorText) throw new Error(`EIO: Page.navigate: ${nav.errorText}`);
-  await loaded;
-  return "dataUrl";
+  // Percent-encoded, not base64: near 1× for ASCII, where base64 adds a third. Chromium refuses
+  // URLs over 2 MB; a page too large for that is written into about:blank instead.
+  const url = `data:text/html;charset=utf-8,${encodeURIComponent(req.html)}`;
+  if (url.length <= MAX_DATA_URL) {
+    const loaded = cdp.waitFor("Page.loadEventFired", sessionId, timeoutMs);
+    loaded.promise.catch(() => {});
+    try {
+      const nav = await send<{ errorText?: string }>("Page.navigate", { url });
+      if (nav.errorText) throw new Error(`EIO: Page.navigate: ${nav.errorText}`);
+      await loaded.promise;
+    } finally {
+      loaded.cancel();
+    }
+    return "dataUrl";
+  }
+  const written = await send<{ exceptionDetails?: unknown }>("Runtime.evaluate", {
+    expression: `document.open(); document.write(${JSON.stringify(req.html)}); document.close(); true`,
+    returnByValue: true,
+  });
+  if (written.exceptionDetails) throw new Error("EIO: the page could not be written");
+  return "documentWrite";
 }
 
 /** Waits for web fonts and images, so the PDF does not print fallback glyphs or empty boxes. */
 async function awaitResources(send: Send): Promise<boolean> {
-  const script = `Promise.all([
-    document.fonts ? document.fonts.ready : null,
-    ...Array.from(document.images, (img) => img.complete ? null : img.decode().catch(() => null)),
-  ]).then(() => true)`;
+  // Lazy images below the fold would never load in a page nobody scrolls: make them eager.
+  // The wait is bounded in the page, so a resource that never settles still prints.
+  const script = `(() => {
+    for (const img of document.images) if (img.loading === "lazy") img.loading = "eager";
+    const all = Promise.all([
+      document.fonts ? document.fonts.ready : null,
+      ...Array.from(document.images, (img) => img.complete ? null : img.decode().catch(() => null)),
+    ]).then(() => true);
+    return Promise.race([all, new Promise((r) => setTimeout(() => r(false), ${RESOURCE_WAIT_MS}))]);
+  })()`;
   try {
     const r = await send<{ result?: { value?: unknown }; exceptionDetails?: unknown }>(
       "Runtime.evaluate",
@@ -154,7 +193,8 @@ async function awaitResources(send: Send): Promise<boolean> {
     );
     return !r.exceptionDetails && r.result?.value === true;
   } catch (e) {
-    if (e instanceof CdpError) return false;
+    // The engine lacks Runtime.evaluate, or it did not answer: print as is.
+    if (e instanceof CdpError || /^ETIMEDOUT/.test(String((e as Error)?.message))) return false;
     throw e;
   }
 }

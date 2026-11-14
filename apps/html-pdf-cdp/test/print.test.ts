@@ -2,9 +2,10 @@
 // default Chromium engine) when CF_ACCOUNT_ID and CF_API_TOKEN are set.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { after, before, describe, test } from "node:test";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
-import { CdpConnection, type CdpEndpoint } from "../src/cdp.ts";
+import { CdpConnection, type CdpEndpoint, CdpError } from "../src/cdp.ts";
 import { browserRunEndpoint, credentialsFromEnv, launchLocalChromium } from "../src/endpoints.ts";
 import { printHtmlToPdf } from "../src/print.ts";
 
@@ -112,6 +113,36 @@ describe("local Chromium", () => {
     assert.ok(without.pdf.byteLength < withBg.pdf.byteLength, "smaller without fills");
   });
 
+  test("a 1.7 MB page too large for a data: URL is written into the page instead", async () => {
+    const filler = `<p>${"lorem ipsum dolor sit amet ".repeat(64)}</p>\n`.repeat(1000);
+    const big = html.replace("<h2 class", `${filler}<h2 class`);
+    assert.ok(big.length > 1_700_000);
+    const r = await printHtmlToPdf(cdp, { html: big, load: "dataUrl" });
+    assert.equal(r.loadedWith, "documentWrite");
+    const info = await inspect(r.pdf);
+    assert.ok(info.all.includes("Quarterly Field Report") && info.all.includes("Appendix"));
+  });
+
+  test("an image that never loads delays printing at most 10 s, then prints", async () => {
+    const hang = createServer(() => {}); // accepts, never answers
+    await new Promise<void>((r) => hang.listen(0, "127.0.0.1", r));
+    const { port } = hang.address() as { port: number };
+    try {
+      const page = html.replace(
+        "<h2 class",
+        `<img loading="lazy" width="10" height="10" src="http://127.0.0.1:${port}/never.png"><h2 class`,
+      );
+      const started = Date.now();
+      const r = await printHtmlToPdf(cdp, { html: page });
+      assert.equal(r.awaitedResources, false, "reported as not awaited");
+      assert.ok(Date.now() - started < 25_000);
+      assert.ok((await inspect(r.pdf)).all.includes("Appendix"));
+    } finally {
+      hang.closeAllConnections();
+      hang.close();
+    }
+  });
+
   test("targets are closed after printing", async () => {
     type Targets = { targetInfos: { type: string }[] };
     const pages = async () =>
@@ -153,3 +184,26 @@ for (const [name, browser] of [
     }
   });
 }
+
+test("CdpError.notImplemented: a missing method, not a missing session", () => {
+  assert.equal(new CdpError("Page.x", -32601, "'Page.x' wasn't found").notImplemented, true);
+  assert.equal(new CdpError("Page.x", -32000, "'Page.x' wasn't found").notImplemented, true);
+  assert.equal(
+    new CdpError("Page.x", -32001, "Session with given id not found.").notImplemented,
+    false,
+  );
+});
+
+test("event waiters fail when the socket closes, not on their timeout", async () => {
+  const local = await launchLocalChromium();
+  try {
+    const cdp = await CdpConnection.connect(local.endpoint);
+    const waiter = cdp.waitFor("Page.loadEventFired", undefined, 60_000);
+    const started = Date.now();
+    cdp.close();
+    await assert.rejects(waiter.promise, /ECONNRESET/);
+    assert.ok(Date.now() - started < 1000);
+  } finally {
+    await local.close();
+  }
+});

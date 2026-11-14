@@ -56,8 +56,9 @@ if (values.kitesurf || values["browser-run"]) {
   label = `local ${local.version}`;
 }
 
-const cdp = await CdpConnection.connect(endpoint);
+let cdp: CdpConnection | undefined;
 try {
+  cdp = await CdpConnection.connect(endpoint);
   const result = await printHtmlToPdf(cdp, {
     html: readFileSync(input, "utf8"),
     load: values.load as "auto" | "setDocumentContent" | "dataUrl",
@@ -74,6 +75,6 @@ try {
       `resources ${result.awaitedResources ? "awaited" : "not awaited"}, ${result.timings.totalMs} ms`,
   );
 } finally {
-  cdp.close();
+  cdp?.close();
   await close();
 }
