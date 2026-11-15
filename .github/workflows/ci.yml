@@ -68,9 +68,10 @@ jobs:
         with:
           path: ${{ env.XET_REFERENCE_CACHE }}
           key: xet-reference-e72f4e05b9c4b96f1c6b2213d93de00ab943585a2f7c049fd127ba72ec1ff413
-      # The browser suites (vitest browser mode in fm-protos and mvc-blueprint-*,
-      # httpeers-stack's two-browser e2e) launch real browsers through the one
-      # Playwright version in the lockfile. A fresh runner has none installed.
+      # The browser suites run here (vcs-protos' browser project, httpeers-stack's
+      # two-browser e2e) launch real browsers through the one Playwright version in
+      # the lockfile. A fresh runner has none installed. The other browser suites
+      # and tesseract-do's end-to-end runs are in nightly.yml (root test:nightly).
       - run: pnpm --filter @statewalker/httpeers-stack exec playwright install --with-deps chromium firefox
       - run: pnpm run lint:check
       - run: pnpm run format:check

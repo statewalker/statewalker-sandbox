@@ -51,7 +51,7 @@ again.
 | `test:cellb` | `@statewalker/cellb` 0.8.8 `loadProject`, cells in `node:sqlite` files |
 | `test:cellb-bundled-only` | cellb with `TOOL_BUNDLE={"hostFsRuntimes":"bundled-only","allowedBundles":[<hash of tests/fixtures/todo-tool.ts>]}`: that approved bundle runs, other bundles and raw tools are refused |
 | `test:cellb-celld-bucket` | cellb with `celldBucket(sqliteObjectStore(...))`: cells as celld writes them (LTX logs, `own.json` ownership records), in the object store `celld dev` keeps |
-| `test:browser` | the project in Chromium on cellb (Playwright): builds `dist/`, serves it, runs the capability checks and the Python cases through the page |
+| `test:browser` | the project in Chromium on cellb (Playwright): builds `dist/`, serves it, runs the capability checks and the Python cases through the page. Not part of `test` (about two minutes, and it fetches packages from the Wasmer registry): the nightly workflow runs it (root `test:nightly`) |
 | `test:celld` | `celld dev <project> --host 127.0.0.1 --port <port> --no-watch`, with `--clean` on the first start only. By default this uses the `ghcr.io/denoland/celld:0.6.0` image in Docker (`CELLD_IMAGE`): host networking, the repository mounted at its own path, the container running as the host user, and the project's Linux esbuild as `CELLD_ESBUILD`. That needs a Linux host; elsewhere, set `CELLD_BIN` to a local celld. The state is the project's `.celld/dev`, so don't run two celld runs at once. It runs with `TRANSPORTS=token` (below) |
 
 For interactive use, start a runtime with `pnpm dev:wrangler` (port 8787) or `pnpm dev:cellb`

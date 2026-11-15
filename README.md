@@ -86,6 +86,10 @@ Work on one package with `pnpm --filter <name> <script>`, e.g.
   `lint:check` and `format:check`, `build`, `typecheck`, `typecheck:tests`, `test` for every
   package except `httpeers-conformance`, and then the conformance tests without
   `tests/coverage.test.ts` and `tests/parse-ids.test.ts`.
+- **The slow suites run nightly** (`.github/workflows/nightly.yml`, the shared nightly workflow):
+  root `test:nightly` runs the `test:browser` suites of `mvc-blueprint-00`…`03`, `vcs-protos`,
+  `fm-protos` and `flue-capfs-do`, then `tesseract-do`'s `test:e2e` (wrangler and cellb, after its `fixtures` download). A failure
+  opens one `bug` + `ci-baseline` issue here.
 - **Only `node-datachannel` may run install scripts.** pnpm 10 blocks dependency build scripts by
   default; `onlyBuiltDependencies` allows this one because it fetches the native WebRTC binary that
   `@libp2p/webrtc` needs in Node.
@@ -110,6 +114,7 @@ Work on one package with `pnpm --filter <name> <script>`, e.g.
 | --- | --- |
 | `pnpm run build` | `pnpm -r run build` |
 | `pnpm run test` | `pnpm -r run test` |
+| `pnpm run test:nightly` | The browser and end-to-end suites the nightly workflow runs |
 | `pnpm run typecheck` | `pnpm -r run typecheck` |
 | `pnpm run typecheck:tests` | `pnpm -r run typecheck:tests`: the test files, in the packages whose `typecheck` leaves them out |
 | `pnpm run lint` / `lint:check` | Biome check, with / without writing fixes |
