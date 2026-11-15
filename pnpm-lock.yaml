@@ -98,25 +98,25 @@ catalogs:
       version: 0.1.3
     '@statewalker/shared-adapters':
       specifier: ^0.1.0
-      version: 0.1.3
+      version: 0.1.4
     '@statewalker/shared-baseclass':
       specifier: ^0.1.1
-      version: 0.1.4
+      version: 0.1.5
     '@statewalker/shared-commands':
       specifier: ^0.2.1
-      version: 0.2.4
+      version: 0.2.5
     '@statewalker/shared-generators':
       specifier: ^0.1.0
-      version: 0.1.3
+      version: 0.1.4
     '@statewalker/shared-logger':
       specifier: ^0.1.0
-      version: 0.1.5
+      version: 0.1.6
     '@statewalker/shared-registry':
       specifier: ^0.1.0
-      version: 0.1.3
+      version: 0.1.4
     '@statewalker/shared-slots':
       specifier: ^0.2.1
-      version: 0.2.4
+      version: 0.2.5
     '@statewalker/ui.view.shadcn':
       specifier: ^0.1.1
       version: 0.1.4
@@ -558,10 +558,10 @@ importers:
     dependencies:
       '@statewalker/shared-baseclass':
         specifier: 'catalog:'
-        version: 0.1.4
+        version: 0.1.5
       '@statewalker/shared-commands':
         specifier: 'catalog:'
-        version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
+        version: 0.2.5(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
       '@statewalker/webrun-files':
         specifier: 'catalog:'
         version: 0.10.5
@@ -789,13 +789,13 @@ importers:
     dependencies:
       '@statewalker/shared-adapters':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@statewalker/shared-commands':
         specifier: 'catalog:'
-        version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
+        version: 0.2.5(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
       '@statewalker/shared-slots':
         specifier: 'catalog:'
-        version: 0.2.4
+        version: 0.2.5
       '@statewalker/webrun-biscuit':
         specifier: 'catalog:'
         version: 0.2.3
@@ -936,13 +936,13 @@ importers:
     dependencies:
       '@statewalker/shared-baseclass':
         specifier: 'catalog:'
-        version: 0.1.4
+        version: 0.1.5
       '@statewalker/shared-commands':
         specifier: 'catalog:'
-        version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
+        version: 0.2.5(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
       '@statewalker/shared-registry':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@statewalker/ui.view.shadcn':
         specifier: 'catalog:'
         version: 0.1.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -997,10 +997,10 @@ importers:
         version: 1.14.4
       '@statewalker/shared-commands':
         specifier: 'catalog:'
-        version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
+        version: 0.2.5(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
       '@statewalker/shared-registry':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@statewalker/ui.view.shadcn':
         specifier: 'catalog:'
         version: 0.1.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -1055,22 +1055,22 @@ importers:
     dependencies:
       '@statewalker/shared-adapters':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@statewalker/shared-baseclass':
         specifier: 'catalog:'
-        version: 0.1.4
+        version: 0.1.5
       '@statewalker/shared-commands':
         specifier: 'catalog:'
-        version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
+        version: 0.2.5(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
       '@statewalker/shared-logger':
         specifier: 'catalog:'
-        version: 0.1.5
+        version: 0.1.6
       '@statewalker/shared-registry':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@statewalker/shared-slots':
         specifier: 'catalog:'
-        version: 0.2.4
+        version: 0.2.5
       '@statewalker/ui.view.shadcn':
         specifier: 'catalog:'
         version: 0.1.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -1125,19 +1125,19 @@ importers:
     dependencies:
       '@statewalker/shared-adapters':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@statewalker/shared-commands':
         specifier: 'catalog:'
-        version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
+        version: 0.2.5(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
       '@statewalker/shared-logger':
         specifier: 'catalog:'
-        version: 0.1.5
+        version: 0.1.6
       '@statewalker/shared-registry':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@statewalker/shared-slots':
         specifier: 'catalog:'
-        version: 0.2.4
+        version: 0.2.5
       '@statewalker/ui.view.shadcn':
         specifier: 'catalog:'
         version: 0.1.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -1348,10 +1348,10 @@ importers:
         version: 0.1.3(html5-qrcode@2.3.8)
       '@statewalker/shared-commands':
         specifier: 'catalog:'
-        version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
+        version: 0.2.5(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
       '@statewalker/shared-slots':
         specifier: 'catalog:'
-        version: 0.2.4
+        version: 0.2.5
       '@statewalker/webrun-http-browser':
         specifier: 'catalog:'
         version: 0.7.1
@@ -1722,7 +1722,7 @@ importers:
     dependencies:
       '@statewalker/shared-adapters':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       urlpattern-polyfill:
         specifier: 'catalog:'
         version: 10.1.0
@@ -1762,10 +1762,10 @@ importers:
         version: link:../service-rpc
       '@statewalker/shared-adapters':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@statewalker/shared-logger':
         specifier: 'catalog:'
-        version: 0.1.5
+        version: 0.1.6
       hono:
         specifier: 'catalog:'
         version: 4.13.18
@@ -1775,7 +1775,7 @@ importers:
     devDependencies:
       '@statewalker/shared-registry':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
@@ -1802,13 +1802,13 @@ importers:
     dependencies:
       '@statewalker/shared-adapters':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@statewalker/shared-logger':
         specifier: 'catalog:'
-        version: 0.1.5
+        version: 0.1.6
       '@statewalker/shared-registry':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       pg:
         specifier: 'catalog:'
         version: 8.23.1
@@ -1824,7 +1824,7 @@ importers:
     dependencies:
       '@statewalker/shared-generators':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       comlink:
         specifier: 'catalog:'
         version: 4.4.2
@@ -4377,15 +4377,15 @@ packages:
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
 
-  '@standard-community/standard-json@0.3.6':
-    resolution: {integrity: sha512-tuXKz1Ps4al0W4xhfwii7v4lskKtOv3QE7mcouRVThrBdOR6JzY4Vea3nsxcEnte84bOJvMvXGmOMWE3IBbHyA==}
+  '@standard-community/standard-json@0.4.1':
+    resolution: {integrity: sha512-WU3elfzw8C8oTEAGcMhY9Fl86jI+0At/oLRjruQaUBPqX1JYRUwtrxzNGu5fIpUvFHXl7jze7HhuxxOf36h3Wg==}
     peerDependencies:
       '@standard-schema/spec': ^1.0.0
       '@types/json-schema': ^7.0.15
       '@valibot/to-json-schema': ^1.3.0
       arktype: ^2.1.20
-      effect: ^3.20.0
-      sury: ^10.0.0
+      effect: ^3.20.0 || ^4.0.0
+      sury: ^10.0.0 || ^11.0.0
       typebox: ^1.0.17
       valibot: ^1.4.2
       zod: ^4.6.7
@@ -4566,26 +4566,26 @@ packages:
       html5-qrcode:
         optional: true
 
-  '@statewalker/shared-adapters@0.1.3':
-    resolution: {integrity: sha512-hmF316wz5IwYcbHpKW42jwYJzssFZPcHgUz+jBOduYSPv+10TC/kA3NlnDjp2rSL+Woq0AJu57AdOJZDW6L6Pg==}
+  '@statewalker/shared-adapters@0.1.4':
+    resolution: {integrity: sha512-GhLAfNWhPHrIvMHaX1YuX40uVZLRO/IbU6wcVqpW8yV4lzKVH+gN7sBvIRJ2ipStakxpHXY1lrtYzHZel41iWA==}
 
-  '@statewalker/shared-baseclass@0.1.4':
-    resolution: {integrity: sha512-wJJj4vK5uM2p6C3rNeqd6kpNLUccoyfKHrLR4ZjZVCz5gxDvcMRG4hTYf9zXgpJUepHqJPpOx7urqn2LS6vljQ==}
+  '@statewalker/shared-baseclass@0.1.5':
+    resolution: {integrity: sha512-xSjQe9QU5K72NVhDPgD6j267QTrNhEVMDbiZwb/AXvUSIXz64dT9JwNi8qo2Z3K9yuZPZE0T3Cf601IlrZN1jA==}
 
-  '@statewalker/shared-commands@0.2.4':
-    resolution: {integrity: sha512-uVumbQjw4jQZaDy+eF7pyqW4pl00MW6xFDsqFnDSTcGe1V3QGItzd9eAmBPA+Hcz+dsoJyePJVu36qYjfhEBtQ==}
+  '@statewalker/shared-commands@0.2.5':
+    resolution: {integrity: sha512-6gpczLHelFGCKio8igFEN1nai5vSNGkOkqbaL1rP/eAf8m/vAV1+QveJBVrWS+CsUgxy4OJ+NZb9KuuYn9ch8g==}
 
-  '@statewalker/shared-generators@0.1.3':
-    resolution: {integrity: sha512-tCNPzc9GLCNDZHHlOlDquJw+8DZg0JNJXuoHKNneU83R/0QoZ35VqF1KjRj+Ak289YH3J1sso/Fcil7sSguVLQ==}
+  '@statewalker/shared-generators@0.1.4':
+    resolution: {integrity: sha512-XZGpMe2Wbw/L93QoQY8bQdFKJG3DZ5qotmceL+Zd591Oy5q8L5HGayBYtZSNCz9hirjsqMrmKbXKHZQOV/qjhw==}
 
-  '@statewalker/shared-logger@0.1.5':
-    resolution: {integrity: sha512-72QhQTOqY7ertXw+dDwwj8HM+NZYG1aAULbyHHQvgMBP0vgMyNFhsI613XWF/JII5Xb3Dwt76iOTH3yzWPKTAw==}
+  '@statewalker/shared-logger@0.1.6':
+    resolution: {integrity: sha512-ea3wutpFX8nI4PMKWEkpOZO7kokNK9VWczvwKHDhn5Wizf5Dbu1Rt9X6bUQPQpAoh7KXmPbq2oc5Zzs2gM4sMg==}
 
-  '@statewalker/shared-registry@0.1.3':
-    resolution: {integrity: sha512-JUNLccgnxp1x8EJdis6eSDwuS6umSXhhyjP6Ism1Yz+W2DL+jO7EXWS2t3DFTZf6QevBAbX3Hp1poCz9luihBQ==}
+  '@statewalker/shared-registry@0.1.4':
+    resolution: {integrity: sha512-6biBdfjUaLMc3Gce1khKAzMRy1yurbWMo3fzyKwPqddJxQr7siyWTyo93xe2ivGl9r+NpGZ+SsoGe38o26lOYg==}
 
-  '@statewalker/shared-slots@0.2.4':
-    resolution: {integrity: sha512-1U88fXm+kZHY84JKMY0+027EE9CvfBbIX7FryjWHWms98iNuuxIkT1JRilc/UzWQJyXOW3iSa0noneWHppWbCA==}
+  '@statewalker/shared-slots@0.2.5':
+    resolution: {integrity: sha512-xCWgxdiuIGd7UfugPLf7XHcA2uf0BnaFzp+Y3HviRFsRQCSYQ541BueAAk1K9X2OLXsXeTlp46NGjNS7cHX1Ew==}
 
   '@statewalker/ui.view.shadcn@0.1.4':
     resolution: {integrity: sha512-7+mDbo4LG/SDNlYygGuZaqZ9HepWQ8pHx7X9JY9856QtWkAaJ0hdQrdDf9iYb68+Xx8xeIJSnKZ8w0QZNNukpw==}
@@ -11231,7 +11231,7 @@ snapshots:
 
   '@stablelib/base64@1.0.1': {}
 
-  '@standard-community/standard-json@0.3.6(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)':
+  '@standard-community/standard-json@0.4.1(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)':
     dependencies:
       '@standard-schema/spec': 1.1.0
       '@types/json-schema': 7.0.15
@@ -11454,13 +11454,13 @@ snapshots:
     optionalDependencies:
       html5-qrcode: 2.3.8
 
-  '@statewalker/shared-adapters@0.1.3': {}
+  '@statewalker/shared-adapters@0.1.4': {}
 
-  '@statewalker/shared-baseclass@0.1.4': {}
+  '@statewalker/shared-baseclass@0.1.5': {}
 
-  '@statewalker/shared-commands@0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)':
+  '@statewalker/shared-commands@0.2.5(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)':
     dependencies:
-      '@standard-community/standard-json': 0.3.6(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
+      '@standard-community/standard-json': 0.4.1(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
       '@standard-schema/spec': 1.1.0
     transitivePeerDependencies:
       - '@types/json-schema'
@@ -11473,15 +11473,15 @@ snapshots:
       - zod
       - zod-to-json-schema
 
-  '@statewalker/shared-generators@0.1.3': {}
+  '@statewalker/shared-generators@0.1.4': {}
 
-  '@statewalker/shared-logger@0.1.5':
+  '@statewalker/shared-logger@0.1.6':
     dependencies:
-      '@statewalker/shared-adapters': 0.1.3
+      '@statewalker/shared-adapters': 0.1.4
 
-  '@statewalker/shared-registry@0.1.3': {}
+  '@statewalker/shared-registry@0.1.4': {}
 
-  '@statewalker/shared-slots@0.2.4': {}
+  '@statewalker/shared-slots@0.2.5': {}
 
   '@statewalker/ui.view.shadcn@0.1.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
@@ -11492,7 +11492,7 @@ snapshots:
       '@radix-ui/react-select': 2.3.7(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-separator': 1.1.15(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-tabs': 1.1.21(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      '@statewalker/shared-registry': 0.1.3
+      '@statewalker/shared-registry': 0.1.4
       class-variance-authority: 0.7.1
       clsx: 2.1.1
       lucide-react: 1.52.0(@types/react@19.3.0)(react@19.3.0)
