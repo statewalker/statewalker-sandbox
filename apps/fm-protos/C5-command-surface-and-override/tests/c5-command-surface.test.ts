@@ -12,7 +12,7 @@ import {
 } from "@fm/core";
 import { CommandError, Commands, CommandsRegistry } from "@statewalker/shared-commands";
 import { MemFilesApi } from "@statewalker/webrun-files-mem";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /** C5 — the whole namespace, its override convention, and its error kinds. */
 
@@ -218,13 +218,16 @@ describe("C5 · command surface", () => {
       expect(keys).toEqual(FILE_COMMANDS.map((c) => c.key));
     });
 
-    it("a claimed command still runs the lower-priority listeners, so they must decline", async () => {
-      // Dispatch breaks only on `cmd.settled`, which cannot happen
-      // synchronously. Without the `cmd.claimed` guard the core would enqueue
-      // a second job and sometimes win the race to resolve.
+    it("a claimed command does not run the lower-priority listeners", async () => {
+      // A claim stops the dispatch (@statewalker/shared-commands 0.3): the
+      // core's fallback never sees a command a host claimed, so it cannot
+      // enqueue a second job or race the host's answer.
+      const lower = vi.fn();
+      commands.listen(filesDelete, lower, { priority: -2 });
       commands.listen(filesDelete, async () => ({ jobId: "host" }), { priority: 0 });
       const { jobId } = await commands.call(filesDelete, { files: [ref("/src/a.txt")] }).promise;
       expect(jobId).toBe("host");
+      expect(lower).not.toHaveBeenCalled();
       expect(queue.active()).toEqual([]); // the core enqueued nothing
       expect(await instances["mem://a"].exists("/src/a.txt")).toBe(true);
     });

@@ -1,10 +1,6 @@
-import type { Command, Commands } from "@statewalker/shared-commands";
-
-/** See fm-core/file-commands: `claimed` is set by the bus, typed internally. */
-type Claimable<P, R> = Command<P, R> & { readonly claimed: boolean };
-
 import type { StorageRegistry } from "@fm/core";
 import { storagesOpen } from "@fm/core";
+import type { Commands } from "@statewalker/shared-commands";
 import type { FilesApi } from "@statewalker/webrun-files";
 
 export interface PickedStorage {
@@ -39,15 +35,11 @@ export function registerStorageOpener(
   registry: StorageRegistry,
   pick: Picker,
 ): () => void {
-  // A FALLBACK, per the C5 rule: negative priority orders listeners, it does
-  // not stop them, so this must decline explicitly when a host has claimed the
-  // command. Without the guard the app's picker runs alongside the host's and
-  // adopts a storage nobody asked for.
-  return commands.listen(
-    storagesOpen,
-    (cmd) => ((cmd as Claimable<typeof cmd.payload, never>).claimed ? undefined : open(cmd)),
-    { priority: -1 },
-  );
+  // A FALLBACK, per the C5 rule: at negative priority it runs only when no
+  // host claimed the command, since a claim stops the dispatch
+  // (@statewalker/shared-commands 0.3). A host replacing the picker claims
+  // at priority 0, and this picker never opens.
+  return commands.listen(storagesOpen, (cmd) => open(cmd), { priority: -1 });
 
   async function open(cmd: { payload: { mode: "read" | "readwrite"; suggestedName?: string } }) {
     const picked = await pick({
