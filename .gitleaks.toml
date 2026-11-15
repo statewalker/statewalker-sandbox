@@ -1,0 +1,14 @@
+# gitleaks (statewalker/statewalker-ci's secret scan): the default rules, with the false positives
+# below allowlisted. Each entry says why it is not a secret.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "BLAKE3's official test vectors (keyed_hash, derive_key outputs), public fixture data"
+paths = ['''^apps/vcs-protos/03-sha256-blake3/tests/fixtures/blake3-test-vectors\.json$''']
+
+[[allowlists]]
+description = "The TypeScript type name Ed25519PrivateKey in declarations such as `privateKey: Ed25519PrivateKey`, not a key"
+regexTarget = "secret"
+regexes = ['''^Ed25519PrivateKey$''']
