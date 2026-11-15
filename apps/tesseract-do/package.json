@@ -34,7 +34,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260702.1",
-    "@statewalker/cellb": "0.8.1",
+    "@statewalker/cellb": "0.10.0",
     "esbuild": "0.28.2",
     "pdf-lib": "^1.17.1",
     "typescript": "catalog:",
