@@ -101,7 +101,7 @@ catalogs:
       version: 0.1.3
     '@statewalker/shared-baseclass':
       specifier: ^0.1.1
-      version: 0.1.3
+      version: 0.1.4
     '@statewalker/shared-commands':
       specifier: ^0.2.1
       version: 0.2.4
@@ -110,13 +110,13 @@ catalogs:
       version: 0.1.3
     '@statewalker/shared-logger':
       specifier: ^0.1.0
-      version: 0.1.4
+      version: 0.1.5
     '@statewalker/shared-registry':
       specifier: ^0.1.0
       version: 0.1.3
     '@statewalker/shared-slots':
       specifier: ^0.2.1
-      version: 0.2.3
+      version: 0.2.4
     '@statewalker/ui.view.shadcn':
       specifier: ^0.1.1
       version: 0.1.4
@@ -558,7 +558,7 @@ importers:
     dependencies:
       '@statewalker/shared-baseclass':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@statewalker/shared-commands':
         specifier: 'catalog:'
         version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
@@ -795,7 +795,7 @@ importers:
         version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
       '@statewalker/shared-slots':
         specifier: 'catalog:'
-        version: 0.2.3
+        version: 0.2.4
       '@statewalker/webrun-biscuit':
         specifier: 'catalog:'
         version: 0.2.3
@@ -936,7 +936,7 @@ importers:
     dependencies:
       '@statewalker/shared-baseclass':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@statewalker/shared-commands':
         specifier: 'catalog:'
         version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
@@ -1058,19 +1058,19 @@ importers:
         version: 0.1.3
       '@statewalker/shared-baseclass':
         specifier: 'catalog:'
-        version: 0.1.3
+        version: 0.1.4
       '@statewalker/shared-commands':
         specifier: 'catalog:'
         version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
       '@statewalker/shared-logger':
         specifier: 'catalog:'
-        version: 0.1.4
+        version: 0.1.5
       '@statewalker/shared-registry':
         specifier: 'catalog:'
         version: 0.1.3
       '@statewalker/shared-slots':
         specifier: 'catalog:'
-        version: 0.2.3
+        version: 0.2.4
       '@statewalker/ui.view.shadcn':
         specifier: 'catalog:'
         version: 0.1.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -1131,13 +1131,13 @@ importers:
         version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
       '@statewalker/shared-logger':
         specifier: 'catalog:'
-        version: 0.1.4
+        version: 0.1.5
       '@statewalker/shared-registry':
         specifier: 'catalog:'
         version: 0.1.3
       '@statewalker/shared-slots':
         specifier: 'catalog:'
-        version: 0.2.3
+        version: 0.2.4
       '@statewalker/ui.view.shadcn':
         specifier: 'catalog:'
         version: 0.1.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -1351,7 +1351,7 @@ importers:
         version: 0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)
       '@statewalker/shared-slots':
         specifier: 'catalog:'
-        version: 0.2.3
+        version: 0.2.4
       '@statewalker/webrun-http-browser':
         specifier: 'catalog:'
         version: 0.7.1
@@ -1495,19 +1495,19 @@ importers:
         version: 2.4.0
       '@statewalker/db-api':
         specifier: ^0.1.4
-        version: 0.1.4
+        version: 0.1.5
       '@statewalker/db-sqlite':
         specifier: ^0.1.0
-        version: 0.1.0
+        version: 0.1.1
       '@statewalker/db-sqlite-browser':
         specifier: ^0.2.1
-        version: 0.2.1
+        version: 0.2.2
       '@statewalker/db-sqlite-do':
         specifier: ^0.1.0
-        version: 0.1.0
+        version: 0.1.1
       '@statewalker/db-sqlite-node':
         specifier: ^0.3.0
-        version: 0.3.0
+        version: 0.3.1
       '@statewalker/httpeers-access':
         specifier: 0.1.4
         version: 0.1.4
@@ -1765,7 +1765,7 @@ importers:
         version: 0.1.3
       '@statewalker/shared-logger':
         specifier: 'catalog:'
-        version: 0.1.4
+        version: 0.1.5
       hono:
         specifier: 'catalog:'
         version: 4.13.18
@@ -1805,7 +1805,7 @@ importers:
         version: 0.1.3
       '@statewalker/shared-logger':
         specifier: 'catalog:'
-        version: 0.1.4
+        version: 0.1.5
       '@statewalker/shared-registry':
         specifier: 'catalog:'
         version: 0.1.3
@@ -4480,22 +4480,22 @@ packages:
       esbuild:
         optional: true
 
-  '@statewalker/db-api@0.1.4':
-    resolution: {integrity: sha512-XqyQRE1CvJ8Ijv99u0eW8l/syARfuzhL3BGIFYC1375/KlvDJx+o4D4LNnMqCh97ScU/hERQaaJ0MeXYAngmvA==}
+  '@statewalker/db-api@0.1.5':
+    resolution: {integrity: sha512-RJVacBYGujHUwmvQxs2ijS0CdHk28nn5LvejqWq3A0f+SPxhNKqhnEWPA7ZmUOweFwqjmKgqailCufQtLBjP2g==}
 
-  '@statewalker/db-sqlite-browser@0.2.1':
-    resolution: {integrity: sha512-v0rnck/LnDFfz7M4YVS1qwmff7NYvQ+WU7SlxyHzFyzD0qKuv0/sQGxcL7sLBKwyh8iXLeA4D2Ib08hGv8u/jw==}
+  '@statewalker/db-sqlite-browser@0.2.2':
+    resolution: {integrity: sha512-+X7S48rJxPImZSt0JG+YxVQalZkUU2/3fgq0old8SGao20nVjXOoGYti/SVP+aPoBFmgjbfpIKforLB/479EPQ==}
 
-  '@statewalker/db-sqlite-do@0.1.0':
-    resolution: {integrity: sha512-vMeCkED6ezm2TQSjN3AXmM3EvwylMBrQ5Uk4MTVuvnY7ljwMQa3yzjLWRt1uBGaH8n1MTLpLMHG5Ti40paT3yQ==}
+  '@statewalker/db-sqlite-do@0.1.1':
+    resolution: {integrity: sha512-lixr+KizofrDg8uZ63q0vOHtqiuNXAdJ6zpk42dhSTdbv6bAQRfyAN6Vxva9hNS1FpSYy5Jx+HAWs4+SCVKz1g==}
     engines: {node: '>=22.13'}
 
-  '@statewalker/db-sqlite-node@0.3.0':
-    resolution: {integrity: sha512-hlRr2KD9nEUbuHWGUNMigmMQav87feSwUe/7VwPvSNdoRZ150UpJiAcL6ufEDX1kw/fF0J7Ivb5eeoVg1mHQhg==}
+  '@statewalker/db-sqlite-node@0.3.1':
+    resolution: {integrity: sha512-/AI1OcVUm5IWvtFAe+M6x3vx/rjlZgWrXNbop9phnJHsVrVwXBrOhn1sYgL0yfQktPTMOLeSDooMREkor2Qv+Q==}
     engines: {node: '>=22.13'}
 
-  '@statewalker/db-sqlite@0.1.0':
-    resolution: {integrity: sha512-LoVQS/KsuKwbJjXkbrYty2cuqmACFvdhmlQYtfQ8yuBiXSAX8yfKxdDWNcJYqcBJQk6Za7Mg+HU42Oh8jCL9eg==}
+  '@statewalker/db-sqlite@0.1.1':
+    resolution: {integrity: sha512-sR6CSBMcMf66QQnb7DAXBDhw03I7KKmnzV+SFKBKDVNwNjfsQgdmJGDaXIsYJpnH4UstooyC32GpIize4l0YPQ==}
 
   '@statewalker/httpeers-access@0.1.4':
     resolution: {integrity: sha512-7Gdp5ZfRwLEJftYtAkV3rEPyyAIAHEIjE2K0YmDRwthkBdt4ori62bMpng34zG2GtuZj6bHF5QX6R6vygfjccw==}
@@ -4569,8 +4569,8 @@ packages:
   '@statewalker/shared-adapters@0.1.3':
     resolution: {integrity: sha512-hmF316wz5IwYcbHpKW42jwYJzssFZPcHgUz+jBOduYSPv+10TC/kA3NlnDjp2rSL+Woq0AJu57AdOJZDW6L6Pg==}
 
-  '@statewalker/shared-baseclass@0.1.3':
-    resolution: {integrity: sha512-/emx12zO5WQvyM/pAlB/lrmlQtgEeWakrUIbzYhCJFYbtDlNq8LcZWqnHbYXNGOYDJlQdPRbb2btNpn99AAEvA==}
+  '@statewalker/shared-baseclass@0.1.4':
+    resolution: {integrity: sha512-wJJj4vK5uM2p6C3rNeqd6kpNLUccoyfKHrLR4ZjZVCz5gxDvcMRG4hTYf9zXgpJUepHqJPpOx7urqn2LS6vljQ==}
 
   '@statewalker/shared-commands@0.2.4':
     resolution: {integrity: sha512-uVumbQjw4jQZaDy+eF7pyqW4pl00MW6xFDsqFnDSTcGe1V3QGItzd9eAmBPA+Hcz+dsoJyePJVu36qYjfhEBtQ==}
@@ -4578,14 +4578,14 @@ packages:
   '@statewalker/shared-generators@0.1.3':
     resolution: {integrity: sha512-tCNPzc9GLCNDZHHlOlDquJw+8DZg0JNJXuoHKNneU83R/0QoZ35VqF1KjRj+Ak289YH3J1sso/Fcil7sSguVLQ==}
 
-  '@statewalker/shared-logger@0.1.4':
-    resolution: {integrity: sha512-r893XNge/0TVLJgw+gIze7L0B6T1uElBCCBDnJ7dr/hXchFpRYHLKNC1LDx4LrAt0iCmE06djMakznE9WLlynQ==}
+  '@statewalker/shared-logger@0.1.5':
+    resolution: {integrity: sha512-72QhQTOqY7ertXw+dDwwj8HM+NZYG1aAULbyHHQvgMBP0vgMyNFhsI613XWF/JII5Xb3Dwt76iOTH3yzWPKTAw==}
 
   '@statewalker/shared-registry@0.1.3':
     resolution: {integrity: sha512-JUNLccgnxp1x8EJdis6eSDwuS6umSXhhyjP6Ism1Yz+W2DL+jO7EXWS2t3DFTZf6QevBAbX3Hp1poCz9luihBQ==}
 
-  '@statewalker/shared-slots@0.2.3':
-    resolution: {integrity: sha512-uL3wAg4ZKpngNsnBwluQlSbeI2gK5yCRCqeRhARrjKMZnHmeA1Bisv9Vx5EraByl6ZWN+cl3quiwrobxbKEDfA==}
+  '@statewalker/shared-slots@0.2.4':
+    resolution: {integrity: sha512-1U88fXm+kZHY84JKMY0+027EE9CvfBbIX7FryjWHWms98iNuuxIkT1JRilc/UzWQJyXOW3iSa0noneWHppWbCA==}
 
   '@statewalker/ui.view.shadcn@0.1.4':
     resolution: {integrity: sha512-7+mDbo4LG/SDNlYygGuZaqZ9HepWQ8pHx7X9JY9856QtWkAaJ0hdQrdDf9iYb68+Xx8xeIJSnKZ8w0QZNNukpw==}
@@ -11344,27 +11344,27 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@statewalker/db-api@0.1.4': {}
+  '@statewalker/db-api@0.1.5': {}
 
-  '@statewalker/db-sqlite-browser@0.2.1':
+  '@statewalker/db-sqlite-browser@0.2.2':
     dependencies:
       '@sqlite.org/sqlite-wasm': 3.53.0-build1
-      '@statewalker/db-api': 0.1.4
-      '@statewalker/db-sqlite': 0.1.0
+      '@statewalker/db-api': 0.1.5
+      '@statewalker/db-sqlite': 0.1.1
 
-  '@statewalker/db-sqlite-do@0.1.0':
+  '@statewalker/db-sqlite-do@0.1.1':
     dependencies:
-      '@statewalker/db-api': 0.1.4
-      '@statewalker/db-sqlite': 0.1.0
+      '@statewalker/db-api': 0.1.5
+      '@statewalker/db-sqlite': 0.1.1
 
-  '@statewalker/db-sqlite-node@0.3.0':
+  '@statewalker/db-sqlite-node@0.3.1':
     dependencies:
-      '@statewalker/db-api': 0.1.4
-      '@statewalker/db-sqlite': 0.1.0
+      '@statewalker/db-api': 0.1.5
+      '@statewalker/db-sqlite': 0.1.1
 
-  '@statewalker/db-sqlite@0.1.0':
+  '@statewalker/db-sqlite@0.1.1':
     dependencies:
-      '@statewalker/db-api': 0.1.4
+      '@statewalker/db-api': 0.1.5
 
   '@statewalker/httpeers-access@0.1.4':
     dependencies:
@@ -11456,7 +11456,7 @@ snapshots:
 
   '@statewalker/shared-adapters@0.1.3': {}
 
-  '@statewalker/shared-baseclass@0.1.3': {}
+  '@statewalker/shared-baseclass@0.1.4': {}
 
   '@statewalker/shared-commands@0.2.4(@types/json-schema@7.0.15)(@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@7.0.2)))(typebox@1.3.27)(valibot@1.5.0(typescript@7.0.2))(zod@4.6.7)':
     dependencies:
@@ -11475,13 +11475,13 @@ snapshots:
 
   '@statewalker/shared-generators@0.1.3': {}
 
-  '@statewalker/shared-logger@0.1.4':
+  '@statewalker/shared-logger@0.1.5':
     dependencies:
       '@statewalker/shared-adapters': 0.1.3
 
   '@statewalker/shared-registry@0.1.3': {}
 
-  '@statewalker/shared-slots@0.2.3': {}
+  '@statewalker/shared-slots@0.2.4': {}
 
   '@statewalker/ui.view.shadcn@0.1.4(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
@@ -11546,8 +11546,8 @@ snapshots:
 
   '@statewalker/webrun-files-sqlite@0.11.2':
     dependencies:
-      '@statewalker/db-api': 0.1.4
-      '@statewalker/db-sqlite': 0.1.0
+      '@statewalker/db-api': 0.1.5
+      '@statewalker/db-sqlite': 0.1.1
       '@statewalker/webrun-files': 0.10.5
 
   '@statewalker/webrun-files@0.10.5': {}
