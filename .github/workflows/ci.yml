@@ -20,13 +20,46 @@ jobs:
       # SHA-256 checked): cached, so huggingface.co is reached only on a cache miss
       XET_REFERENCE_CACHE: /home/runner/.cache/xet-reference
     steps:
+      # The secret scan reads the commits of the pull request (or push): it needs their history.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # The required baseline, the secret scan and the release-path check of the shared CI
+      # (statewalker/statewalker-ci, `baseline: app`, `secret-scan`, `release-path`), run as the
+      # equivalent steps here: this job keeps the Gitea and Xet caches the shared workflow has no
+      # place for, and the shared workflow's dependency-reference check does not pass here yet
+      # (several apps declare versions outside the catalog).
+      - name: Check scripts
+        uses: actions/checkout@v7
+        with:
+          repository: statewalker/statewalker-ci
+          ref: main
+          path: .statewalker-ci
+      # Out of the repository, so linting never sees them.
+      - name: Move the check scripts out of the workspace
+        run: mv .statewalker-ci "$RUNNER_TEMP/statewalker-ci"
+      # Before the install, so only the repository's own files are scanned.
+      - name: Install gitleaks
+        run: bash "$RUNNER_TEMP/statewalker-ci/scripts/install-gitleaks.sh"
+      - name: Secret scan
+        env:
+          SECRET_SCAN_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node "$RUNNER_TEMP/statewalker-ci/scripts/check-secrets.mjs"
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # yaml for the release-path check: pinned by the lockfile of statewalker/statewalker-ci.
+      - name: Install the check tools
+        run: pnpm install --frozen-lockfile --dir "$RUNNER_TEMP/statewalker-ci"
+      - name: Release path
+        run: node "$RUNNER_TEMP/statewalker-ci/scripts/check-release-path.mjs"
+      # Required root scripts (build, typecheck), a typecheck in every package with a
+      # tsconfig.json, and every test file compiled by typecheck or typecheck:tests.
+      - name: Required scripts and typechecked tests
+        run: node "$RUNNER_TEMP/statewalker-ci/scripts/check-scripts.mjs" app
       - uses: actions/cache@v4
         with:
           path: ${{ env.GITEA_CACHE_DIR }}
@@ -35,24 +68,20 @@ jobs:
         with:
           path: ${{ env.XET_REFERENCE_CACHE }}
           key: xet-reference-e72f4e05b9c4b96f1c6b2213d93de00ab943585a2f7c049fd127ba72ec1ff413
-      # The browser suites (vitest browser mode in fm-protos and mvc-blueprint-*,
-      # httpeers-stack's two-browser e2e) launch real browsers through the one
-      # Playwright version in the lockfile. A fresh runner has none installed.
+      # The browser suites run here (vcs-protos' browser project, httpeers-stack's
+      # two-browser e2e) launch real browsers through the one Playwright version in
+      # the lockfile. A fresh runner has none installed. The other browser suites
+      # and tesseract-do's end-to-end runs are in nightly.yml (root test:nightly).
       - run: pnpm --filter @statewalker/httpeers-stack exec playwright install --with-deps chromium firefox
       - run: pnpm run lint:check
       - run: pnpm run format:check
-      # Some checks need the umbrella repository around this one, so a
-      # standalone checkout like this runner's cannot run them:
-      # - httpeers-lib-protos links to packages in the sibling webrun-wire
-      #   repository (`link:../../../webrun-wire/...`);
-      # - httpeers-conformance's coverage and parse-ids tests compare the suite
-      #   with the specification in the umbrella's docs/ (HTTPEERS_SPEC).
-      # Its other tests still run below.
       - run: pnpm run build
-      - run: pnpm -r --filter '!@statewalker/httpeers-lib-protos' run typecheck
-      - run: >-
-          pnpm -r --filter '!@statewalker/httpeers-lib-protos'
-          --filter '!@statewalker/httpeers-conformance' run test
+      - run: pnpm run typecheck
+      - run: pnpm run typecheck:tests
+      # httpeers-conformance's coverage and parse-ids tests compare the suite with the
+      # specification in the umbrella's docs/ (HTTPEERS_SPEC), which a standalone checkout like
+      # this runner's does not have. Its other tests still run below.
+      - run: pnpm -r --filter '!@statewalker/httpeers-conformance' run test
       - run: >-
           pnpm --filter @statewalker/httpeers-conformance exec vitest run
           --exclude tests/coverage.test.ts --exclude tests/parse-ids.test.ts

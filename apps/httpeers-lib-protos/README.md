@@ -38,12 +38,8 @@ failure.
 
 ## What will surprise you
 
-- **The app does not typecheck, and `pnpm test` stops there.** Rungs 11, 12, 13
-  and 15 pass `{ port }` to `@statewalker/webrun-rpc`'s port `connect`/`serve`,
-  whose `PortParams` has no `port` field:
-  `error TS2353: Object literal may only specify known properties, and 'port' does not exist in type 'PortParams'.`
-  Those rungs also fail when run with vitest alone. CI skips this app's
-  `typecheck` and `test`.
+- **Rungs 11 and 15 need Node 24 or later.** The site builder routes with the global
+  `URLPattern`, which Node 22 lacks: `ReferenceError: URLPattern is not defined`.
 - **`sideEffects: false` with `rollupOptions` produces a dead ServiceWorker**: it
   registers, activates, and intercepts nothing. The check that matters is *does
   it control the page*, not *does it register*.
