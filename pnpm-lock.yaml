@@ -1495,19 +1495,19 @@ importers:
         version: 2.4.0
       '@statewalker/db-api':
         specifier: ^0.1.4
-        version: 0.1.5
+        version: 0.1.6
       '@statewalker/db-sqlite':
         specifier: ^0.1.0
-        version: 0.1.1
+        version: 0.1.2
       '@statewalker/db-sqlite-browser':
         specifier: ^0.2.1
-        version: 0.2.2
+        version: 0.2.3
       '@statewalker/db-sqlite-do':
         specifier: ^0.1.0
-        version: 0.1.1
+        version: 0.1.2
       '@statewalker/db-sqlite-node':
         specifier: ^0.3.0
-        version: 0.3.1
+        version: 0.3.2
       '@statewalker/httpeers-access':
         specifier: 0.1.4
         version: 0.1.4
@@ -4480,22 +4480,22 @@ packages:
       esbuild:
         optional: true
 
-  '@statewalker/db-api@0.1.5':
-    resolution: {integrity: sha512-RJVacBYGujHUwmvQxs2ijS0CdHk28nn5LvejqWq3A0f+SPxhNKqhnEWPA7ZmUOweFwqjmKgqailCufQtLBjP2g==}
+  '@statewalker/db-api@0.1.6':
+    resolution: {integrity: sha512-SokfgcyB9ZY5pWUUyxIMo1JsN7FOQGPLZVlMcoxrtwgk0jKeQMAfz2GKvihAJB/VFStqDk/bqgR07mDh+TxdQw==}
 
-  '@statewalker/db-sqlite-browser@0.2.2':
-    resolution: {integrity: sha512-+X7S48rJxPImZSt0JG+YxVQalZkUU2/3fgq0old8SGao20nVjXOoGYti/SVP+aPoBFmgjbfpIKforLB/479EPQ==}
+  '@statewalker/db-sqlite-browser@0.2.3':
+    resolution: {integrity: sha512-0vCq06gn8K4V3JkLsZ8LKHXEnrYhM3gHb5oxAOWXGik2weW7IsAn/Ab35J/4799PH0dBS/aLAbGvy6UO9f0WKA==}
 
-  '@statewalker/db-sqlite-do@0.1.1':
-    resolution: {integrity: sha512-lixr+KizofrDg8uZ63q0vOHtqiuNXAdJ6zpk42dhSTdbv6bAQRfyAN6Vxva9hNS1FpSYy5Jx+HAWs4+SCVKz1g==}
+  '@statewalker/db-sqlite-do@0.1.2':
+    resolution: {integrity: sha512-nbb0YTSp7rfxR88wGWiayLIlZbB+m8Iqm6MUP1ahN8OPYzkx9BmYtzDwCzjOEk4TdODq8cnePdnTErWCRupcEA==}
     engines: {node: '>=22.13'}
 
-  '@statewalker/db-sqlite-node@0.3.1':
-    resolution: {integrity: sha512-/AI1OcVUm5IWvtFAe+M6x3vx/rjlZgWrXNbop9phnJHsVrVwXBrOhn1sYgL0yfQktPTMOLeSDooMREkor2Qv+Q==}
+  '@statewalker/db-sqlite-node@0.3.2':
+    resolution: {integrity: sha512-R9bFKc+Db3udHjv1DGxtK8TsVT9WkA3hDce0j58oZqzB+gsDWT3dpT4KECVBM0K4Fz9JwHRZL0GMtTkq+GcgFQ==}
     engines: {node: '>=22.13'}
 
-  '@statewalker/db-sqlite@0.1.1':
-    resolution: {integrity: sha512-sR6CSBMcMf66QQnb7DAXBDhw03I7KKmnzV+SFKBKDVNwNjfsQgdmJGDaXIsYJpnH4UstooyC32GpIize4l0YPQ==}
+  '@statewalker/db-sqlite@0.1.2':
+    resolution: {integrity: sha512-ZufzC/9ex8ihfKCtMnu9xgKFEbuXVevCzFiMifNZlALlrUtFsdxGGaUPPPCG2cYmsWRaqJbu+akf4Ke8Exzq6Q==}
 
   '@statewalker/httpeers-access@0.1.4':
     resolution: {integrity: sha512-7Gdp5ZfRwLEJftYtAkV3rEPyyAIAHEIjE2K0YmDRwthkBdt4ori62bMpng34zG2GtuZj6bHF5QX6R6vygfjccw==}
@@ -11344,27 +11344,27 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@statewalker/db-api@0.1.5': {}
+  '@statewalker/db-api@0.1.6': {}
 
-  '@statewalker/db-sqlite-browser@0.2.2':
+  '@statewalker/db-sqlite-browser@0.2.3':
     dependencies:
       '@sqlite.org/sqlite-wasm': 3.53.0-build1
-      '@statewalker/db-api': 0.1.5
-      '@statewalker/db-sqlite': 0.1.1
+      '@statewalker/db-api': 0.1.6
+      '@statewalker/db-sqlite': 0.1.2
 
-  '@statewalker/db-sqlite-do@0.1.1':
+  '@statewalker/db-sqlite-do@0.1.2':
     dependencies:
-      '@statewalker/db-api': 0.1.5
-      '@statewalker/db-sqlite': 0.1.1
+      '@statewalker/db-api': 0.1.6
+      '@statewalker/db-sqlite': 0.1.2
 
-  '@statewalker/db-sqlite-node@0.3.1':
+  '@statewalker/db-sqlite-node@0.3.2':
     dependencies:
-      '@statewalker/db-api': 0.1.5
-      '@statewalker/db-sqlite': 0.1.1
+      '@statewalker/db-api': 0.1.6
+      '@statewalker/db-sqlite': 0.1.2
 
-  '@statewalker/db-sqlite@0.1.1':
+  '@statewalker/db-sqlite@0.1.2':
     dependencies:
-      '@statewalker/db-api': 0.1.5
+      '@statewalker/db-api': 0.1.6
 
   '@statewalker/httpeers-access@0.1.4':
     dependencies:
@@ -11546,8 +11546,8 @@ snapshots:
 
   '@statewalker/webrun-files-sqlite@0.11.2':
     dependencies:
-      '@statewalker/db-api': 0.1.5
-      '@statewalker/db-sqlite': 0.1.1
+      '@statewalker/db-api': 0.1.6
+      '@statewalker/db-sqlite': 0.1.2
       '@statewalker/webrun-files': 0.10.5
 
   '@statewalker/webrun-files@0.10.5': {}
