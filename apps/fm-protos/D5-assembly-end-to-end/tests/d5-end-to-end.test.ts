@@ -39,8 +39,8 @@ describe("D5 · end to end", () => {
    * different folder each time.
    *
    * Registering a second opener does NOT replace the first: both are fallbacks
-   * at the same priority, both decline when the command is already claimed,
-   * and the earliest registration wins. Replacing an opener means disposing
+   * at the same priority, the first one's claim stops the dispatch, and the
+   * earliest registration wins. Replacing an opener means disposing
    * the previous one or claiming at priority 0.
    */
   let pending: { files: Record<string, string>; name: string }[];
