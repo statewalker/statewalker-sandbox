@@ -35,7 +35,7 @@
     "@earendil-works/pi-ai": "catalog:",
     "@flue/runtime": "catalog:",
     "@statewalker/webrun-biscuit": "catalog:",
-    "@statewalker/webrun-bundler": "0.1.1",
+    "@statewalker/webrun-bundler": "0.2.0",
     "@statewalker/webrun-files": "catalog:",
     "@statewalker/webrun-files-mem": "catalog:",
     "@statewalker/webrun-files-rpc": "catalog:",
