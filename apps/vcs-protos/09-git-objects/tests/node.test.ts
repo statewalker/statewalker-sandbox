@@ -253,18 +253,17 @@ describe("R4 one pass over a large blob", () => {
       readdirSync(join(repo, ".git", "objects")).filter((n) => n.startsWith("tmp_obj_")),
     ).toEqual([]);
   }, 600_000);
-  it("trap: webrun-files-node's NodeFilesApi.write collects the whole file before writing", async () => {
+  it("webrun-files-node's NodeFilesApi.write streams too (the 0.10 trap is gone in 0.12)", async () => {
+    // Up to webrun-files-node 0.10 this was a trap: the published NodeFilesApi collected the whole
+    // file before writing (peak above half of it). 0.12 streams, so it now meets the R4 bound.
     const MBT = 160;
     const repo = newRepo();
     const objs = gitObjects(repoStore(repo)); // the published NodeFilesApi
     const { peak } = await peakDuring(() =>
       objs.put("blob", MBT * MiB, randomSource(MBT, { passes: 0, pulled: 0 })),
     );
-    console.log(
-      `trap: NodeFilesApi, ${MBT} MB incompressible: peak +${(peak / MiB).toFixed(0)} MB`,
-    );
-    // A streaming write stays under the R4 bound (64 MB); this one holds a large share of the file.
-    expect(peak).toBeGreaterThan(MBT * MiB * 0.5);
+    console.log(`NodeFilesApi, ${MBT} MB incompressible: peak +${(peak / MiB).toFixed(0)} MB`);
+    expect(peak).toBeLessThan(64 * MiB);
   }, 300_000);
   it("reading a 256 MB object retains < 16 MB while its first content chunk is held (SqliteFilesApi, 1 MiB blocks)", async () => {
     const fs = new SqliteFilesApi(await newNodeSqliteDb(), { compression: null });
