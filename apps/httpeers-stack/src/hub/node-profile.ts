@@ -48,6 +48,7 @@ import { webSockets } from "@libp2p/websockets";
 import type { Ed25519PrivateKey, Libp2p } from "@statewalker/httpeers.core";
 import { createLibp2p, type ServiceFactoryMap } from "libp2p";
 import { hubRelayServer, type IsMember, membershipGater } from "../hub-relay.js";
+import { webRTCInit } from "../ice-servers.js";
 
 export interface CreateHubNodeInit {
   /** The hub's signing key -- `main.ts`'s `loadHubKey`. Its peerId IS the mesh identity, so this is never optional here. */
@@ -81,7 +82,7 @@ export async function createHubNode(init: CreateHubNodeInit): Promise<Libp2p> {
   return createLibp2p({
     privateKey: init.privateKey,
     addresses: { listen: [...(init.listen ?? []), "/p2p-circuit", "/webrtc"] },
-    transports: [tcp(), webSockets(), webRTC(), circuitRelayTransport()],
+    transports: [tcp(), webSockets(), webRTC(webRTCInit()), circuitRelayTransport()],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],
     connectionGater: {
