@@ -181,8 +181,8 @@ describe("D4 · opening a filesystem", () => {
     }));
     registerStorageOpener(commands, registry, async () => ({ api: second, name: "Second" }));
 
-    // Both are fallbacks at the same priority and both decline once claimed,
-    // so registration order decides. Replacing an opener means disposing the
+    // Both are fallbacks at the same priority and the first one's claim stops
+    // the dispatch, so registration order decides. Replacing an opener means disposing the
     // previous one — or claiming at priority 0, as a host would.
     expect((await commands.call(storagesOpen, { mode: "read" }).promise).name).toBe("First");
 
