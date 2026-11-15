@@ -45,5 +45,7 @@ describe("B2 · claimed contract", () => {
 
     expect(id).toBe("host");
     expect(lowerCalls).toEqual([]);
+    // The core default (priority -1) did not run either: it would have added a todo.
+    expect(await api.list()).toEqual([]);
   });
 });

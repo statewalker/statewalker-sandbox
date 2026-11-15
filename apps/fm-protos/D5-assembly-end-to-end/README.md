@@ -1,5 +1,11 @@
 # D5-assembly-end-to-end — rung record
 
+> **Update (2026-11-15, shared-commands 0.3.0):** the `cmd.claimed` guard described below is gone. Since
+> statewalker/statewalker-shared#60 a claim stops the dispatch: once a higher-priority listener claims a
+> command, lower-priority listeners (the fallbacks) do not run at all, and the bus no longer exposes
+> `claimed`. The fallbacks in this prototype now just run (statewalker/statewalker-sandbox#149). The
+> text below is kept as the record of what this step found with shared-commands 0.2.
+
 _Recovered verbatim from the Drive session `2026-09-08.File-Manager/D5-assembly-end-to-end/`._
 
 ---
