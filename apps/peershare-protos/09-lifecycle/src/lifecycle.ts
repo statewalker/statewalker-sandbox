@@ -20,7 +20,7 @@ export function revokeGuest(sharer: Sharer, guestPeerId: string): void {
  *
  * Measured: once the Sharer stops, a Guest's request comes back within tens
  * of ms, never as a hang, almost always as `peer-unreachable` from the
- * Guest's own member. Rarely (1 in 200 runs) the request goes out on the
+ * Guest's own member. Rarely (1 in 400 measured runs) the request goes out on the
  * dying per-peer mux before the Guest sees it close; it then fails as
  * `PeerGoneError`, which the member reports as `stream-reset`. Both mean the
  * same thing to a Guest, so both count; there is no retry (decided on
