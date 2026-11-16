@@ -231,7 +231,15 @@ describe("15 — a libp2p connection that hands out ports", () => {
       peerId: server.peerId.toString(),
       protocol: "/t4/1.0.0",
     });
-    const link = await connectHttpLink(opened.port as unknown as MessagePort);
+    // `window: 0`: webrun-http-browser >= 0.12 windows each request's port by
+    // default, and both ends size a message by walking its keys. This rung's
+    // msgpack port drops keys whose value is `undefined` (a real MessagePort
+    // keeps them), so the receiver credits back less than the sender counted,
+    // and the 256 KiB body scenario (one message the size of the window) waits
+    // forever for the window to empty. Unwindowed, the link sends exactly the
+    // envelopes it did before; what this claim is about (nothing is
+    // transferred) does not change.
+    const link = await connectHttpLink(opened.port as unknown as MessagePort, { window: 0 });
 
     const outcomes = await runScenarios((request) => link.send(request), {
       goodToken,
