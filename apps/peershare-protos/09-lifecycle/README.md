@@ -36,5 +36,6 @@ SHARER_OFFLINE_KINDS                          // ["peer-unreachable", "stream-re
    it then fails as `PeerGoneError`, which the member reports as `stream-reset`. Both
    mean the Sharer is gone, so `isSharerOffline` accepts either kind
    (`SHARER_OFFLINE_KINDS`), with no retry (the human's decision on
-   statewalker-sandbox#154). Measured 2026-11-16: the Stop test run 200 times in a loop:
-   (results pending).
+   statewalker-sandbox#154). Measured 2026-11-16, the Stop test run 200 times in a loop: one
+   run passed 200/200 with `peer-unreachable` ×199 and `stream-reset` ×1; a second
+   passed 200/200 with `peer-unreachable` ×200 (slowest 38 ms).
