@@ -19,7 +19,7 @@ import {
   startSharer,
   toSharer,
 } from "../../05-tab-hub-invite/src/mesh.js";
-import { isSharerOffline, revokeGuest } from "../src/lifecycle.js";
+import { isSharerOffline, revokeGuest, SHARER_OFFLINE_KINDS } from "../src/lifecycle.js";
 
 let app: Running;
 let relay: Relay;
@@ -69,6 +69,30 @@ async function eventually(check: () => Promise<boolean>, ms: number): Promise<nu
   throw new Error(`not within ${ms} ms`);
 }
 
+describe("09 — isSharerOffline", () => {
+  const reply = (status: number, body: unknown) =>
+    new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
+
+  it("accepts a 502 whose kind is peer-unreachable or stream-reset", async () => {
+    expect(await isSharerOffline(reply(502, { kind: "peer-unreachable" }))).toBe(true);
+    expect(await isSharerOffline(reply(502, { kind: "stream-reset" }))).toBe(true);
+  });
+
+  it("rejects other kinds, other statuses and bodies that are not JSON", async () => {
+    expect(await isSharerOffline(reply(502, { kind: "upstream-error" }))).toBe(false);
+    expect(await isSharerOffline(reply(502, {}))).toBe(false);
+    expect(await isSharerOffline(reply(502, "not json"))).toBe(false);
+    expect(await isSharerOffline(reply(503, { kind: "stream-reset" }))).toBe(false);
+    expect(await isSharerOffline(reply(200, { kind: "peer-unreachable" }))).toBe(false);
+  });
+
+  it("leaves the body readable for the caller", async () => {
+    const res = reply(502, { kind: "stream-reset" });
+    await isSharerOffline(res);
+    expect(await res.json()).toEqual({ kind: "stream-reset" });
+  });
+});
+
 describe("09 — Revoke", () => {
   it("a revoked Guest's next request is refused", async () => {
     const sharer = await sharerWith();
@@ -94,6 +118,15 @@ describe("09 — Stop", () => {
     const started = Date.now();
     const res = await fooOf(guest, sharer);
     const ms = Date.now() - started;
+    const kind = (
+      await res
+        .clone()
+        .json()
+        .catch(() => null)
+    )?.kind;
+    console.log(`after Stop: ${res.status} ${kind} in ${ms} ms`);
+    expect(res.status).toBe(502);
+    expect(SHARER_OFFLINE_KINDS).toContain(kind);
     expect(await isSharerOffline(res)).toBe(true);
     expect(ms).toBeLessThan(10_000);
   }, 60_000);
