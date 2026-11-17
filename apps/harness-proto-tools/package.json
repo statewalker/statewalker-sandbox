@@ -1,0 +1,26 @@
+{
+  "name": "@statewalker/harness-proto-tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PROTOTYPE (statewalker/statewalker-root#90): tool definitions as one OpenAPI document per tool, projected to Flue (pi) tools and a per-session MCP endpoint, narrowed by role, agent and mode, on CellB.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "~1.4.0",
+    "@earendil-works/pi-ai": "catalog:",
+    "@flue/runtime": "catalog:",
+    "@statewalker/webrun-biscuit": "catalog:",
+    "@statewalker/webrun-files": "catalog:",
+    "@statewalker/webrun-files-mem": "catalog:",
+    "just-bash": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261107.1",
+    "@statewalker/cellb": "0.8.8",
+    "typescript": "catalog:"
+  }
+}

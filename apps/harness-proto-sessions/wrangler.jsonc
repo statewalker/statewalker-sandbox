@@ -1,0 +1,16 @@
+{
+  // PROTOTYPE (statewalker/statewalker-root#89). Run by tests/*.test.mjs on cellb.
+  "name": "harness-proto-sessions",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "ISSUER", "class_name": "Issuer" },
+      { "name": "WORKSPACE", "class_name": "Workspace" },
+      { "name": "AGENT", "class_name": "AgentSession" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Issuer", "Workspace", "AgentSession"] }],
+  "vars": { "DEV_ADMIN_KEY": "dev-admin-key", "TOKEN_TTL_MS": "3600000" }
+}

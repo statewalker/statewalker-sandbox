@@ -1,0 +1,26 @@
+{
+  "name": "@statewalker/harness-proto-sessions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PROTOTYPE (statewalker/statewalker-root#89): user sessions and agent sessions on CellB — live roles, modes held by the user session, approvals that re-check, revocation of subtrees, access tokens that expire under running agents.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "~1.4.0",
+    "@earendil-works/pi-ai": "catalog:",
+    "@flue/runtime": "catalog:",
+    "@statewalker/webrun-biscuit": "catalog:",
+    "@statewalker/webrun-files": "catalog:",
+    "@statewalker/webrun-files-mem": "catalog:",
+    "just-bash": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261107.1",
+    "@statewalker/cellb": "0.8.8",
+    "typescript": "catalog:"
+  }
+}
