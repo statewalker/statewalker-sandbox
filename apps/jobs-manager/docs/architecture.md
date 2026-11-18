@@ -1,7 +1,7 @@
 # Architecture
 
-How the jobs manager is put together today, and why. The prototype has 1,120 lines in `src/` and
-no runtime dependencies.
+How the jobs manager is put together today, and why. The prototype has about 2,000 lines in
+`src/`. Its one runtime dependency is citty, used by the CLI.
 
 ## 1. Layers
 
@@ -9,10 +9,11 @@ no runtime dependencies.
 flowchart TB
   subgraph clients[Clients]
     ts[TypeScript caller]
+    jobs["jobs CLI<br/>(cli.ts, citty)"]
     http[HTTP client: curl, browser EventSource]
   end
   subgraph adapters[Adapters]
-    cli["cli.ts<br/>jobs-server"]
+    client["client.ts<br/>JobsClient: JobManager over HTTP"]
     node["node-server.ts<br/>serve(): node:http ⇄ Request/Response"]
     rest["rest.ts<br/>createJobsHandler(): routes, SSE, NDJSON"]
   end
@@ -23,39 +24,49 @@ flowchart TB
   subgraph support[Support modules]
     store["file-store.ts<br/>FileJobStore"]
     launch["launchers.ts<br/>commandFor(), discoverTasks()"]
-    jsonl["jsonl.ts<br/>lines(), parseLine()"]
-    stamps["stamps.ts<br/>nextStamp()"]
+    tdir["tasks-dir.ts<br/>addTask(), removeTask()"]
+    verify["verify.ts<br/>verifyJob()"]
+    jsonl["jsonl.ts · stamps.ts"]
   end
   os[(OS: child processes,<br/>process groups)]
   fs[(File system:<br/>one folder per job)]
 
   ts --> api
+  jobs -- "client commands" --> client --> http
+  jobs -- "jobs serve" --> node
+  jobs --> tdir
+  jobs --> verify
   http --> node --> rest --> api
-  cli --> node
-  cli --> launch
+  client -. implements .-> api
   api -. implemented by .-> pjm
   pjm --> store --> fs
   pjm --> launch
   pjm --> jsonl
-  pjm --> stamps
   pjm --> os
 ```
 
 | Module | Lines | Responsibility |
 | --- | ---: | --- |
-| `types.ts` | 121 | The contract: `JobManager`, `JobMessage`, `JobInfo`, `TaskDefinition`, `JobsError`. Nothing in it depends on Node. |
-| `job-manager.ts` | 448 | `ProcessJobManager`: the queue, spawning, recording, following, interrupting, recovery and cleanup. |
-| `file-store.ts` | 128 | `FileJobStore`: the folder layout, atomic `job.json`, ordered appends, repair of torn lines. |
-| `launchers.ts` | 51 | Extension → command table; finds tasks in a folder (`name.ext` + `name.cleanup.ext`). |
-| `jsonl.ts` | 26 | Splits a byte stream into lines; a line that is JSON becomes a value, any other line stays a string. |
-| `stamps.ts` | 12 | Timestamps in microseconds that strictly increase within a job. |
-| `rest.ts` | 216 | Fetch-style handler over *any* `JobManager`: routes, request parsing, SSE and NDJSON streaming, error mapping. |
+| `types.ts` | 115 | The contract: `JobManager`, `JobMessage`, `JobInfo`, `TaskDefinition`, `JobsError`. Nothing in it depends on Node. |
+| `job-manager.ts` | 502 | `ProcessJobManager`: the queue, spawning, recording, following, interrupting, recovery and cleanup. `setTasks()` swaps the registered tasks. |
+| `file-store.ts` | 140 | `FileJobStore`: the folder layout, atomic `job.json`, ordered appends, repair of torn lines. |
+| `launchers.ts` | 57 | Extension → command table; finds tasks in a folder (`name.ext` + `name.cleanup.ext`). |
+| `tasks-dir.ts` | 57 | Adds and removes tasks in that folder layout (used by `jobs tasks add` and `jobs tasks remove`). |
+| `rest.ts` | 243 | Fetch-style handler over *any* `JobManager`: routes, request parsing, SSE and NDJSON streaming, error mapping. |
 | `node-server.ts` | 67 | Bridges `node:http` to `Request`/`Response`, with request and response bodies streamed. |
-| `cli.ts` | 45 | `jobs-server`: discovers tasks, opens a manager, serves it, shuts down cleanly on SIGTERM. |
+| `client.ts` | 142 | `JobsClient`: the `JobManager` interface over the REST API. Server error codes come back as `JobsError`. |
+| `verify.ts` | 80 | `verifyJob()`: checks a job's status and results against expectations. Patterns match subsets. |
+| `cli.ts` | 549 | The `jobs` CLI (citty): `serve` and the client commands; see the README. |
+| `jsonl.ts`, `stamps.ts` | 37 | Splits a byte stream into lines (a JSON line becomes a value); timestamps that strictly increase within a job. |
+
+**Build:** tsdown (rolldown) bundles `dist/index.mjs`, `dist/cli.mjs` and type declarations.
+Vitest builds `dist/` in a global setup and tests the bundle as well as the source. Turbo orders
+`build` before `test`.
 
 **The main boundary is the `JobManager` interface.** The REST layer only knows that interface,
-so a different implementation can sit behind the same HTTP API: a remote manager, or one running
-jobs in Durable Objects. `FileJobStore`, on the other hand, is a concrete class. Swapping in
+so a different implementation can sit behind the same HTTP API, for example one running jobs in
+Durable Objects. `JobsClient` implements the interface on the other side of HTTP. The CLI, or any
+caller, works the same against a local manager or a remote server. `FileJobStore`, on the other hand, is a concrete class. Swapping in
 another store (SQLite, S3) means extracting an interface from it first. That isn't done yet.
 
 ## 2. Job lifecycle

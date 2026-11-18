@@ -10,21 +10,82 @@ is a *job* that clients can start, follow, interrupt and clean up, over a TypeSc
 - Each **stdout line** is parsed as JSON and recorded as a message. Each stderr line is recorded
   too. Clients read the messages while the job runs and after it finishes.
 
-Prototype status: about 1,100 lines in `src/` with no runtime dependencies, and 53 tests. See [docs/architecture.md](docs/architecture.md) and [docs/parallel-report.md](docs/parallel-report.md).
+Prototype status: about 2,000 lines in `src/`, one runtime dependency (citty, for the CLI), and
+79 tests. See [docs/architecture.md](docs/architecture.md) and
+[docs/parallel-report.md](docs/parallel-report.md).
+
+## Toolchain
+
+The same toolchain as the rest of this repository:
+
+| Tool | Role |
+| --- | --- |
+| TypeScript 7 | Type checking (`tsc --noEmit`). The source runs directly on Node ≥ 22.18, which strips types. |
+| tsdown (rolldown) | `build`: bundles `dist/index.mjs`, `dist/cli.mjs` (the `jobs` bin) and type declarations. |
+| Vitest (Vite) | `test`. A global setup builds `dist/` first, so the bundle is tested too. |
+| Turbo | `turbo run test` runs `build`, then `test`, and caches `dist/`. |
+| Biome | Lint and format. |
 
 From the repository root:
 
 ```sh
 pnpm install
-pnpm --filter @statewalker/jobs-manager-app test        # ~30 s: two tests run a 30 s job
+pnpm --filter @statewalker/jobs-manager-app build       # tsdown → dist/
+pnpm --filter @statewalker/jobs-manager-app test        # ~30 s: two tests stream a 30 s job
 pnpm --filter @statewalker/jobs-manager-app typecheck
+pnpm turbo run test --filter=@statewalker/jobs-manager-app
 pnpm --filter @statewalker/jobs-manager-app report out.json   # 36 jobs at 5 limits + REST
-pnpm --filter @statewalker/jobs-manager-app start --tasks ./test/fixtures/tasks --data ./.jobs --port 8080
 ```
 
-The tests need `python3` and `bash` on the PATH; Linux and macOS runners have both.
+The tests need `python3` and `bash` on the PATH; Linux and macOS have both.
 
-Requires Node ≥ 22.18, which runs `.ts` files directly.
+## The `jobs` CLI
+
+There's one command for the server and the client. Client commands talk to `--url`, which
+defaults to `$JOBS_URL`, then `http://127.0.0.1:8080`. Run `jobs help` for the overview, and
+`jobs <command> --help` for one command's options. In this repository, run it as `pnpm jobs …`
+from the app folder, or as `node dist/cli.mjs …` after a build.
+
+```sh
+jobs serve --tasks ./tasks --data ./.jobs --port 8080 &
+export JOBS_URL=http://127.0.0.1:8080
+
+jobs tasks add ./resize.py --cleanup ./resize.cleanup.py   # the server picks it up at once
+jobs tasks                                                 # resize  (+cleanup)
+
+id=$(jobs start resize -p width=64 -p 'formats=["png","webp"]' --input photo.jpg)
+jobs logs "$id" --follow                                   # time, status, stdout/stderr, payload
+jobs wait "$id" --timeout 5m                               # exit 0 done, 1 error, 2 interrupted
+jobs result "$id"                                          # the stdout lines, as JSONL
+jobs verify "$id" --status done --count 2 --contains '{"format":"webp"}'
+jobs list --status error,interrupted
+jobs interrupt "$id"
+jobs cleanup --older-than 24h
+```
+
+| Command | Does |
+| --- | --- |
+| `serve` | Runs the server. It re-scans `--tasks` on every request, so `tasks add` and `tasks remove` apply at once. |
+| `tasks [add <script> \| remove <name>]` | Lists the tasks, or copies a script (and its `--cleanup`) into the tasks folder, or deletes one. |
+| `start <task>` | Prints the job id. `-p key=value` is repeatable, and each value is parsed as JSON when it can be. `--params <json>` gives all parameters at once, `--input <file\|->` sends an input, and `--wait` or `--follow` waits for the end. |
+| `status`, `info`, `list` | The job's status; its record as JSON; all jobs, filtered with `--status a,b` and `--task`. |
+| `logs <id>` | Readable lines, or `--json`. Add `--since <stamp>` to resume, `--follow` to keep printing until the end. |
+| `wait <id>` | Exits with the job's outcome. `--timeout` gives up with exit 124. |
+| `result <id>` | The result messages (stdout lines) as JSONL; `--last` prints only the last one. |
+| `verify <id>` | Waits for the job, then checks it: `--status`, `--count`, `--contains <json>` (repeatable; matches any subset), `--last <json>`, `--expect <file.jsonl>` (the results in order). Exits 0 if everything holds, 1 otherwise, naming each failure. |
+| `interrupt <id>`, `cleanup` | Stops a job. `cleanup` removes finished jobs, `--older-than 24h` or `--before <stamp>`. |
+
+**Exit codes:**
+
+- `0`: the job finished `done`
+- `1`: the job finished `error`, or `verify` found a failure
+- `2`: the job was `interrupted`
+- `3`: a usage error, an unreachable server, or an unknown task or job
+- `124`: `wait --timeout` gave up
+
+The CLI is a thin layer over `JobsClient`, which implements the same `JobManager` interface over
+REST. Code written against `JobManager` therefore runs unchanged in process or against a remote
+server.
 
 ## Writing a task
 
@@ -89,7 +150,7 @@ You can override the table, for example `launchers: { ts: ["tsx"] }`.
 ## TypeScript API
 
 ```ts
-import { createJobManager, discoverTasks } from "@statewalker/jobs-manager-app";
+import { createJobManager, discoverTasks, JobsClient } from "@statewalker/jobs-manager-app";
 
 const manager = await createJobManager({
   root: "./.jobs",                       // one directory per job
