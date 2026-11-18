@@ -13,7 +13,8 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 export type JobId = string;
 
 /**
- * Milliseconds since the Unix epoch, with microsecond fractions.
+ * Wall-clock milliseconds since the Unix epoch (`Date.now()`); messages recorded in the same
+ * millisecond get microsecond fractions.
  * Stamps are strictly increasing within one job, so a stamp identifies a
  * message and `logs(id, since)` can resume exactly after it.
  */
@@ -100,7 +101,7 @@ export interface JobManager {
   /** Stops a pending or running job; resolves with the final status. A finished job is left as is. */
   interrupt(id: JobId): Promise<JobStatus>;
   list(filter?: ListFilter): AsyncGenerator<JobInfo>;
-  /** Removes finished jobs that finished before `before` (default: now), running their cleanup scripts. */
+  /** Removes jobs that finished at or before `before` (default: now, to the millisecond), running their cleanup scripts. */
   cleanup(before?: JobTimeStamp): Promise<CleanupResult>;
   tasks(): Promise<TaskInfo[]>;
 }

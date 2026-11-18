@@ -290,7 +290,7 @@ export class ProcessJobManager implements JobManager {
   }
 
   /** Cleanups run one at a time, so a timer tick never races an explicit call. */
-  cleanup(before: JobTimeStamp = nextStamp()): Promise<CleanupResult> {
+  cleanup(before: JobTimeStamp = Date.now()): Promise<CleanupResult> {
     const run = this.#cleaning.then(() => this.#cleanup(before));
     this.#cleaning = run.catch(() => {});
     return run;
@@ -301,7 +301,8 @@ export class ProcessJobManager implements JobManager {
     for (const id of await this.#store.ids()) {
       if (this.#live.has(id)) continue;
       const info = await this.#store.readInfo(id);
-      if (!info || !isTerminal(info.status) || info.updated >= before) continue;
+      // To the millisecond: a job that finished in the same millisecond as `before` counts as before it.
+      if (!info || !isTerminal(info.status) || Math.floor(info.updated) > before) continue;
       const def = this.#tasks.get(info.task);
       if (def?.cleanup) {
         const error = await this.#runCleanup(def, info);

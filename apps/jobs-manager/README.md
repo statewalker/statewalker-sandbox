@@ -187,7 +187,8 @@ type JobMessage =
 `status` is always the job's status at the time the message was recorded. The payload field says
 where the message came from.
 
-`stamp` is the time in epoch milliseconds, with microsecond fractions. Stamps are **strictly
+`stamp` is the wall-clock time in epoch milliseconds (`Date.now()`), so it compares directly with
+the `before` of a cleanup; messages within the same millisecond get microsecond fractions. Stamps are **strictly
 increasing within a job**, so a stamp identifies a message. `logs(id, since)` resumes exactly
 after it, and SSE uses the stamp as the event id.
 

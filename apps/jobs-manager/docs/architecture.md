@@ -209,7 +209,7 @@ so the client decides whether to start it again.
 ## 8. Cleanup
 
 `cleanup(before = now)` takes jobs **one cleanup at a time**, so a timer tick never races an
-explicit call. It only considers finished jobs whose `updated` stamp is older than `before`. For
+explicit call. It only considers finished jobs whose `updated` stamp is at or before `before`, to the millisecond. For
 each one:
 
 1. If the task has a cleanup script, the script runs with the job's environment, and
