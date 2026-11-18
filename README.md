@@ -47,6 +47,7 @@ pnpm-workspace.yaml   workspace globs and the dependency catalog
 | [kitesurf-cellb](apps/kitesurf-cellb) | Cloudflare's Kitesurf browser engine Worker on CellB in Node: a CDP endpoint without workerd |
 | [flue-workbench](apps/flue-workbench) | Browser Flue agent workbench over a local directory, using Gemini |
 | [notes-demo](apps/notes-demo) | React notes app served without a bundler by `@statewalker/webrun-modules-build` |
+| [jobs-manager](apps/jobs-manager) | Runs named tasks as shell commands (Python, TypeScript, Bash), records their JSONL output per job, serves it over REST with SSE |
 | [openai-proxy.app](apps/openai-proxy.app) | OpenAI v1 HTTP proxy in front of a local llama.cpp server |
 | [byok-config-prototype](apps/byok-config-prototype) | Throwaway UI prototype for editing an LLM connections config file |
 | [pdf-portabletext-prototype](apps/pdf-portabletext-prototype) | Demo UI and openly licensed test corpus for `@statewalker/pdf-portabletext` |
