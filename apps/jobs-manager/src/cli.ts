@@ -27,8 +27,8 @@ Server
 
 Tasks (the server re-scans its tasks directory on every request)
   jobs tasks [--json]                         list the server's tasks
-  jobs tasks add <script> [--name n] [--cleanup script] [--tasks-dir ./tasks]
-  jobs tasks remove <name> [--tasks-dir ./tasks]
+  jobs tasks add <script> [--name n] [--cleanup script] [--tasks ./tasks]
+  jobs tasks remove <name> [--tasks ./tasks]
 
 Jobs
   jobs start <task> [-p key=value]... [--params json] [--input file|-] [--wait | --follow] [--json]
@@ -243,7 +243,7 @@ const tasksAdd = defineCommand({
     script: { type: "positional", required: true, description: "Job script (.js .ts .py .sh …)" },
     name: { type: "string", description: "Task name (default: the script's file name)" },
     cleanup: { type: "string", description: "Cleanup script for the task" },
-    "tasks-dir": {
+    tasks: {
       type: "string",
       default: "./tasks",
       description: "The server's tasks directory",
@@ -251,7 +251,7 @@ const tasksAdd = defineCommand({
   },
   async run({ args }) {
     try {
-      const { name, files } = await addTask(args["tasks-dir"], args.script, {
+      const { name, files } = await addTask(args.tasks, args.script, {
         name: args.name,
         cleanup: args.cleanup,
       });
@@ -266,7 +266,7 @@ const tasksRemove = defineCommand({
   meta: { name: "remove", description: "Delete a task's scripts from the tasks directory" },
   args: {
     name: { type: "positional", required: true, description: "Task name" },
-    "tasks-dir": {
+    tasks: {
       type: "string",
       default: "./tasks",
       description: "The server's tasks directory",
@@ -274,7 +274,7 @@ const tasksRemove = defineCommand({
   },
   async run({ args }) {
     try {
-      out(`removed ${(await removeTask(args["tasks-dir"], args.name)).join(", ")}`);
+      out(`removed ${(await removeTask(args.tasks, args.name)).join(", ")}`);
     } catch (e) {
       throw new UsageError((e as Error).message);
     }
@@ -548,4 +548,11 @@ export async function cli(argv: string[]): Promise<void> {
   }
 }
 
-if (import.meta.main) await cli(process.argv.slice(2));
+if (import.meta.main) {
+  // `jobs logs … | head -1`: the reader left, so stop quietly like other Unix filters.
+  process.stdout.on("error", (e: NodeJS.ErrnoException) => {
+    if (e.code !== "EPIPE") throw e;
+    process.exit(0);
+  });
+  await cli(process.argv.slice(2));
+}

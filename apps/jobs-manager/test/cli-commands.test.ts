@@ -97,7 +97,7 @@ describe("jobs tasks", () => {
       "greet",
       "--cleanup",
       cleanup,
-      "--tasks-dir",
+      "--tasks",
       tasksDir,
     ]);
     expect(added.code).toBe(0);
@@ -112,12 +112,12 @@ describe("jobs tasks", () => {
     const id = run.stdout.trim();
     expect(jsonl((await jobs(["result", id])).stdout)).toEqual([{ greeting: "world" }]);
 
-    expect((await jobs(["tasks", "remove", "greet", "--tasks-dir", tasksDir])).code).toBe(0);
+    expect((await jobs(["tasks", "remove", "greet", "--tasks", tasksDir])).code).toBe(0);
     expect((await jobs(["tasks"])).stdout).not.toMatch(/^greet/m);
   });
 
   it("refuses to overwrite an existing task", async () => {
-    const add = await jobs(["tasks", "add", join(TASKS_DIR, "quick.mjs"), "--tasks-dir", tasksDir]);
+    const add = await jobs(["tasks", "add", join(TASKS_DIR, "quick.mjs"), "--tasks", tasksDir]);
     expect(add.code).toBe(3);
     expect(add.stderr).toMatch(/already exists/);
   });
@@ -295,5 +295,23 @@ describe("jobs cleanup and errors", () => {
     const unknown = await jobs(["frobnicate"]);
     expect(unknown.code).toBe(3);
     expect(unknown.stderr).toMatch(/unknown command: frobnicate/);
+  });
+});
+
+describe("jobs output into a closed pipe", () => {
+  it("stops quietly when the reader closes stdout early, like `| head -1`", async () => {
+    const id = (
+      await jobs(["start", "count", "--input", "-", "--wait"], { input: "a\n" })
+    ).stdout.trim();
+    const child = spawn(process.execPath, [CLI, "logs", id, "--json"], {
+      env: { ...process.env, JOBS_URL: url },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8").on("data", (d: string) => (stderr += d));
+    child.stdout.destroy(); // the reader is gone before the first line is written
+    const [code] = await once(child, "close");
+    expect(stderr).not.toMatch(/EPIPE|Unhandled/);
+    expect(code).toBe(0);
   });
 });
