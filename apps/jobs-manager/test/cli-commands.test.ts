@@ -199,6 +199,14 @@ describe("jobs status / logs / interrupt / wait / list", () => {
     expect((await jobs(["wait", id])).code).toBe(2);
   });
 
+  // Review finding (PR #160): a timeout that fires before the server answers crashed with exit 1.
+  it("wait --timeout gives up with exit 124 even before the server has answered", async () => {
+    const id = (await jobs(["start", "sleepy"])).stdout.trim();
+    const timedOut = await jobs(["wait", id, "--timeout", "0"]);
+    expect([timedOut.code, timedOut.stderr]).toEqual([124, expect.stringMatching(/^still /)]);
+    expect((await jobs(["interrupt", id])).stdout.trim()).toBe("interrupted");
+  });
+
   it("prints logs as readable lines or JSONL, resumable with --since", async () => {
     const id = (await jobs(["start", "fail", "--wait"])).stdout.trim();
     const text = (await jobs(["logs", id])).stdout;

@@ -62,9 +62,16 @@ export class JobsClient implements JobManager {
   ): AsyncGenerator<JobMessage> {
     const { follow = true, signal } = options;
     const query = `?since=${since}&follow=${follow ? 1 : 0}`;
-    const response = await this.#fetch("GET", `/jobs/${encodeURIComponent(id)}/logs${query}`, {
-      signal,
-    });
+    // Aborting ends the generator quietly, also before the server has answered (`wait --timeout`).
+    let response: Response;
+    try {
+      response = await this.#fetch("GET", `/jobs/${encodeURIComponent(id)}/logs${query}`, {
+        signal,
+      });
+    } catch (e) {
+      if (signal?.aborted) return;
+      throw e;
+    }
     if (!response.body) return;
     try {
       for await (const line of lines(response.body as unknown as AsyncIterable<Uint8Array>)) {
