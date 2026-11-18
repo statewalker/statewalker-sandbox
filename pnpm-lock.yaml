@@ -916,6 +916,21 @@ importers:
         specifier: 'catalog:'
         version: 5.1.0(@types/node@26.6.6)(@vitest/browser-playwright@5.1.0)(@vitest/ui@5.1.0)(happy-dom@21.0.4(bufferutil@4.2.0))(jsdom@31.0.0(@napi-rs/canvas@1.1.0)(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
 
+  apps/jobs-manager:
+    devDependencies:
+      '@biomejs/biome':
+        specifier: 'catalog:'
+        version: 2.5.15
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.6
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.0(@types/node@26.6.6)(@vitest/browser-playwright@5.1.0)(@vitest/ui@5.1.0)(happy-dom@21.0.4(bufferutil@4.2.0))(jsdom@31.0.0(@napi-rs/canvas@1.1.0)(@noble/hashes@2.4.0))(vite@8.3.2(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+
   apps/kitesurf-cellb:
     dependencies:
       '@statewalker/cellb':
@@ -7866,6 +7881,7 @@ packages:
 
   tldts-core@7.4.20:
     resolution: {integrity: sha512-C630TWXZCZmLq0F2bW4QqwnaaxCQ/svpAqvJwnC4JvgEM5ohhBnGsEzTLSOXcN+xjz+kEaHS5uoWIw2klnqd0A==}
+    deprecated: Partial release, see https://github.com/remusao/tldts/issues/2735. Use >=7.4.22.
 
   tldts@7.4.19:
     resolution: {integrity: sha512-48dH6aSpQnpbzDUc4vIQZ1VjB8tkK+e8c1yx05/SZK+rkssgjEOlxDd/yU8/a4vGYQ9vRgJr9dwMq9TJ0b3X2Q==}
