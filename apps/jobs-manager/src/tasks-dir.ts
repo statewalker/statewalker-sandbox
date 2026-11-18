@@ -1,6 +1,7 @@
 import { copyFile, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { DEFAULT_LAUNCHERS, type Launchers } from "./launchers.ts";
+import { compileTaskSchema } from "./task-schema.ts";
 import { JobsError, type TaskRegistry } from "./types.ts";
 
 /**
@@ -33,7 +34,7 @@ export async function addTask(
 
 /**
  * A `TaskRegistry` over a tasks directory: an upload becomes `<name>.<ext>` (and
- * `<name>.cleanup.<ext>`), the layout `discoverTasks` reads. `onChange` runs after every add or
+ * `<name>.cleanup.<ext>`, `<name>.schema.json`), the layout `discoverTasks` reads. `onChange` runs after every add or
  * remove, typically to hand the re-scanned tasks to the manager.
  */
 export function folderRegistry(
@@ -42,11 +43,20 @@ export function folderRegistry(
   launchers: Launchers = DEFAULT_LAUNCHERS,
 ): TaskRegistry {
   return {
-    async add({ name, ext, script, cleanup }) {
+    async add({ name, ext, script, cleanup, schema }) {
       checkTask(name, [`.${ext}`], launchers);
+      if (schema !== undefined) {
+        try {
+          compileTaskSchema(schema);
+        } catch (e) {
+          throw new JobsError("invalid_params", `invalid schema: ${(e as Error).message}`);
+        }
+      }
       await checkFree(dir, name);
       await writeFile(join(dir, `${name}.${ext}`), script);
       if (cleanup !== undefined) await writeFile(join(dir, `${name}.cleanup.${ext}`), cleanup);
+      if (schema !== undefined)
+        await writeFile(join(dir, `${name}.schema.json`), `${JSON.stringify(schema, null, 2)}\n`);
       await onChange();
       return { name, hasCleanup: cleanup !== undefined };
     },
@@ -73,7 +83,7 @@ async function checkFree(dir: string, name: string): Promise<void> {
     throw new JobsError("invalid_params", `task "${name}" already exists`);
 }
 
-/** Deletes a task's script and cleanup script; resolves with the removed files. */
+/** Deletes a task's script, cleanup script and schema; resolves with the removed files. */
 export async function removeTask(dir: string, name: string): Promise<string[]> {
   const files = await taskFiles(dir, name);
   if (files.length === 0) throw new Error(`no task "${name}" in ${dir}`);
@@ -91,7 +101,7 @@ async function taskFiles(dir: string, name: string): Promise<string[]> {
   return entries
     .filter((f) => {
       const stem = f.slice(0, f.length - extname(f).length);
-      return stem === name || stem === `${name}.cleanup`;
+      return stem === name || stem === `${name}.cleanup` || stem === `${name}.schema`;
     })
     .map((f) => join(dir, f));
 }

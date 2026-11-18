@@ -10,6 +10,7 @@ import {
   JobsError,
   type Json,
   type TaskRegistry,
+  type TaskUpload,
 } from "./types.ts";
 
 /**
@@ -142,15 +143,19 @@ export function createJobsMcpServer(manager: JobManager, options: JobsMcpOptions
       "add_task",
       {
         description:
-          "Add a task from script source. `ext` picks the launcher (sh, py, js, ts, …); `cleanup` is an optional cleanup script with the same extension. The server runs this code.",
+          "Add a task from script source. `ext` picks the launcher (sh, py, js, ts, …); `cleanup` is an optional cleanup script with the same extension; `schema` optional JSON Schemas { params, body, message, error } that jobs of the task are checked against. The server runs this code.",
         inputSchema: z.object({
           name: z.string(),
           ext: z.string(),
           script: z.string(),
           cleanup: z.string().optional(),
+          schema: z
+            .record(z.string(), z.json())
+            .optional()
+            .describe("{ params?, body?, message?, error? }, each a JSON Schema"),
         }),
       },
-      (task) => run(async () => registry.add(task)),
+      (task) => run(async () => registry.add(task as TaskUpload)),
     );
     server.registerTool(
       "remove_task",

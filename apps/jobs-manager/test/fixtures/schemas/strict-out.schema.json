@@ -1,0 +1,8 @@
+{
+  "message": { "type": "object", "properties": { "n": { "type": "integer" } }, "required": ["n"] },
+  "error": {
+    "type": "object",
+    "properties": { "code": { "type": "string" }, "detail": { "type": "string" } },
+    "required": ["code"]
+  }
+}

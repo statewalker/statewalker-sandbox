@@ -1,11 +1,13 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createReadStream, existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { FileJobStore } from "./file-store.ts";
 import { lines, parseLine } from "./jsonl.ts";
 import { commandFor, DEFAULT_LAUNCHERS, type Launchers } from "./launchers.ts";
 import { nextStamp } from "./stamps.ts";
+import { checkedJsonl, compileTaskSchema, describeIssues, type TaskChecks } from "./task-schema.ts";
 import {
   type ByteInput,
   type CleanupResult,
@@ -36,6 +38,13 @@ export type JobManagerOptions = {
   killGraceMs?: number;
   /** Periodically clean up jobs that finished more than `maxAgeMs` ago. */
   retention?: { maxAgeMs: number; intervalMs?: number };
+  /**
+   * A results folder per job, `<dir>/<jobId>/`, created before the script starts and handed to it
+   * (and to the cleanup script) as JOB_OUTPUT_DIR, with JOB_OUTPUT_URL = `<url>/<jobId>/`, the URL
+   * path the REST app serves it at (`outputs` option). Results belong to the task: the manager
+   * never deletes the folder; the task's cleanup script does.
+   */
+  outputs?: { dir: string; url: string };
 };
 
 type MessageBody = JobMessage extends infer M
@@ -99,6 +108,7 @@ export class ProcessJobManager implements JobManager {
   readonly #queue: Live[] = [];
   readonly #maxConcurrent: number;
   readonly #killGraceMs: number;
+  readonly #outputs?: { dir: string; url: string };
   #running = 0;
   #cleaning: Promise<unknown> = Promise.resolve();
   #retentionTimer?: NodeJS.Timeout;
@@ -108,6 +118,11 @@ export class ProcessJobManager implements JobManager {
     this.#launchers = { ...DEFAULT_LAUNCHERS, ...options.launchers };
     this.#maxConcurrent = Math.max(1, options.maxConcurrent ?? 4);
     this.#killGraceMs = options.killGraceMs ?? 5000;
+    if (options.outputs)
+      this.#outputs = {
+        dir: resolve(options.outputs.dir),
+        url: options.outputs.url.replace(/\/$/, ""),
+      };
     const retention = options.retention;
     if (retention) {
       const interval = retention.intervalMs ?? Math.max(1000, retention.maxAgeMs / 10);
@@ -116,7 +131,7 @@ export class ProcessJobManager implements JobManager {
       }, interval);
       this.#retentionTimer.unref();
     }
-    for (const task of options.tasks) this.#tasks.set(task.name, task);
+    this.setTasks(options.tasks);
   }
 
   /**
@@ -175,12 +190,19 @@ export class ProcessJobManager implements JobManager {
    * definition they started with; a pending job whose task disappeared fails with `unknown_task`.
    */
   setTasks(tasks: TaskDefinition[]): void {
+    for (const task of tasks) checksOf(task); // a task with an invalid schema throws here, before any change
     this.#tasks.clear();
     for (const task of tasks) this.#tasks.set(task.name, task);
   }
 
+  /** Checks params (and, while it is stored, a JSONL input) against the task's schema first. */
   async start(task: string, params: Json = null, input?: ByteInput): Promise<JobId> {
-    if (!this.#tasks.has(task)) throw new JobsError("unknown_task", `Unknown task: ${task}`);
+    const def = this.#tasks.get(task);
+    if (!def) throw new JobsError("unknown_task", `Unknown task: ${task}`);
+    const checks = checksOf(def);
+    const issues = checks.params?.(params);
+    if (issues) throw new JobsError("invalid_params", describeIssues("params", issues), issues);
+    if (input && checks.body) input = checkedJsonl(input, checks.body);
     const id = randomUUID();
     const stamp = nextStamp();
     const info: JobInfo = { id, task, params, status: "pending", created: stamp, updated: stamp };
@@ -351,6 +373,10 @@ export class ProcessJobManager implements JobManager {
       JOB_TASK: info.task,
       JOB_PARAMS: JSON.stringify(info.params),
       JOB_DIR: this.#store.workDir(info.id),
+      ...(this.#outputs && {
+        JOB_OUTPUT_DIR: join(this.#outputs.dir, info.id),
+        JOB_OUTPUT_URL: `${this.#outputs.url}/${info.id}/`,
+      }),
     };
   }
 
@@ -409,8 +435,10 @@ export class ProcessJobManager implements JobManager {
         await this.#record(live, { status: "interrupted" });
         return;
       }
+      const checks = checksOf(def);
       const [command, ...args] = commandFor(def.script, this.#launchers);
       const hasInput = await this.#store.hasInput(id);
+      if (this.#outputs) await mkdir(join(this.#outputs.dir, id), { recursive: true });
       const child = spawn(command, args, {
         cwd: def.cwd ?? dirname(def.script),
         env: this.#env(def, live.info),
@@ -434,8 +462,15 @@ export class ProcessJobManager implements JobManager {
       const running = this.#record(live, { status: "running" });
       const stdout = (async () => {
         for await (const line of lines(child.stdout!)) {
-          if (line.trim())
-            await this.#record(live, { status: "running", message: parseLine(line) });
+          if (!line.trim()) continue;
+          const message = parseLine(line);
+          const issues = checks.message?.(message);
+          await this.#record(
+            live,
+            issues
+              ? { status: "running", error: { code: "invalid_message", issues, raw: line } }
+              : { status: "running", message },
+          );
         }
       })();
       const stderrTail: string[] = [];
@@ -444,7 +479,12 @@ export class ProcessJobManager implements JobManager {
           if (!line.trim()) continue;
           stderrTail.push(line);
           if (stderrTail.length > 20) stderrTail.shift();
-          await this.#record(live, { status: "running", error: parseLine(line) });
+          const error = parseLine(line);
+          const issues = checks.error?.(error);
+          await this.#record(live, {
+            status: "running",
+            error: issues ? { code: "invalid_error", issues, raw: line } : error,
+          });
         }
       })();
       if (hasInput && child.stdin) {
@@ -499,5 +539,15 @@ export class ProcessJobManager implements JobManager {
     await Promise.all(writes);
     for (const listener of live.listeners) listener(message);
     return message;
+  }
+}
+
+/** The task's compiled schema; throws naming the task when the schema is invalid. */
+function checksOf(task: TaskDefinition): TaskChecks {
+  if (!task.schema) return {};
+  try {
+    return compileTaskSchema(task.schema);
+  } catch (e) {
+    throw new Error(`task "${task.name}": invalid schema: ${(e as Error).message}`);
   }
 }

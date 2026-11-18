@@ -1,0 +1,48 @@
+{
+  "params": {
+    "type": "object",
+    "properties": {
+      "targets": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "size": { "type": "integer", "minimum": 1 },
+            "uploadUrl": {
+              "type": "string",
+              "format": "uri",
+              "description": "Presigned PUT URL for this result"
+            },
+            "readUrl": {
+              "type": "string",
+              "format": "uri",
+              "description": "URL the result can be read from"
+            },
+            "deleteUrl": {
+              "type": "string",
+              "format": "uri",
+              "description": "Presigned DELETE URL, used by the cleanup script"
+            }
+          },
+          "required": ["size", "uploadUrl", "readUrl", "deleteUrl"]
+        }
+      }
+    },
+    "required": ["targets"]
+  },
+  "body": { "contentMediaType": "image/x-portable-pixmap" },
+  "message": {
+    "type": "object",
+    "properties": {
+      "size": { "type": "integer" },
+      "width": { "type": "integer" },
+      "height": { "type": "integer" },
+      "url": {
+        "type": "string",
+        "format": "uri",
+        "description": "Where to GET the result (the object store)"
+      }
+    },
+    "required": ["size", "url"]
+  }
+}

@@ -4,12 +4,15 @@ import { isSafeId } from "./ids.ts";
 import { createJobsMcpHandler } from "./mcp.ts";
 import {
   type ByteInput,
+  type Issue,
   type JobManager,
   type JobMessage,
   type JobStatus,
   JobsError,
   type Json,
+  type OutputFiles,
   type TaskRegistry,
+  type TaskSchema,
 } from "./types.ts";
 
 /**
@@ -29,6 +32,7 @@ import {
  *   GET    /jobs/:id/events       text/event-stream, follows to the end; resume with Last-Event-ID or ?since
  *   DELETE /jobs/:id              interrupt -> { id, status }
  *   POST   /cleanup               ?before=<stamp> -> { removed, failed }
+ *   GET    /outputs/:id/<path>    a file from the job's results folder (needs `outputs`)
  *   *      /mcp                   MCP (Streamable HTTP), see `createJobsMcpHandler`
  *
  * Errors: `{ error: { code, message } }` with 400 (invalid_params), 403 (task_upload_disabled),
@@ -45,6 +49,8 @@ export type JobsAppOptions = {
   mcp?: boolean;
   /** Send CORS headers for these origins (`"*"` for any). No CORS headers when omitted. */
   cors?: { origin: string | string[] };
+  /** Serve the jobs' results folders at `<basePath>/outputs/:jobId/<path>`. No route when omitted. */
+  outputs?: OutputFiles;
 };
 
 /** Options of `createJobsHandler`: the same as the app's. */
@@ -92,6 +98,7 @@ export function createJobsApp(manager: JobManager, options: JobsAppOptions = {})
       ext: field(body, "ext"),
       script: field(body, "script"),
       cleanup: body.cleanup === undefined ? undefined : field(body, "cleanup"),
+      schema: body.schema === undefined ? undefined : (body.schema as TaskSchema),
     };
     return c.json(await uploads(registry).add(upload), 201);
   });
@@ -166,6 +173,27 @@ export function createJobsApp(manager: JobManager, options: JobsAppOptions = {})
   });
   app.all("/jobs/:id/events", notAllowed);
 
+  const { outputs } = options;
+  if (outputs) {
+    app.get("/outputs/:id/*", async (c) => {
+      const id = c.req.param("id");
+      const prefix = `${basePath}/outputs/${id}/`;
+      const pathname = new URL(c.req.url).pathname;
+      let path: string;
+      try {
+        path = decodeURIComponent(pathname.slice(prefix.length));
+      } catch {
+        return c.json(errorBody("not_found", "No such file"), 404);
+      }
+      const file = pathname.startsWith(prefix) ? await outputs.read(id, path) : undefined;
+      if (!file) return c.json(errorBody("not_found", "No such file"), 404);
+      return new Response(file.body, {
+        headers: { "content-type": file.type, "content-length": String(file.size) },
+      });
+    });
+    app.all("/outputs/:id/*", notAllowed);
+  }
+
   if (options.mcp ?? true) {
     const mcp = createJobsMcpHandler(manager, { registry });
     app.all("/mcp", (c) => mcp.fetch(c.req.raw));
@@ -173,7 +201,7 @@ export function createJobsApp(manager: JobManager, options: JobsAppOptions = {})
 
   app.notFound((c) => c.json(errorBody("not_found", "No such route"), 404));
   app.onError((e, c) => {
-    if (e instanceof JobsError) return c.json(errorBody(e.code, e.message), statusOf(e));
+    if (e instanceof JobsError) return c.json(errorBody(e.code, e.message, e.issues), statusOf(e));
     return c.json(errorBody("internal", e instanceof Error ? e.message : String(e)), 500);
   });
   return app;
@@ -307,8 +335,8 @@ function stream(
   });
 }
 
-function errorBody(code: string, message: string) {
-  return { error: { code, message } };
+function errorBody(code: string, message: string, issues?: Issue[]) {
+  return { error: issues ? { code, message, issues } : { code, message } };
 }
 
 function notAllowed(c: Context): Response {

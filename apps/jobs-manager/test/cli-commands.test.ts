@@ -4,7 +4,7 @@ import { cp, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { TASKS_DIR, tempDir } from "./helpers.ts";
+import { SCHEMAS_DIR, TASKS_DIR, tempDir } from "./helpers.ts";
 
 const CLI = join(import.meta.dirname, "../src/cli.ts");
 
@@ -184,6 +184,31 @@ describe("jobs start / wait / result", () => {
     const messages = lines.map((l) => JSON.parse(l));
     expect(messages.filter((m) => "message" in m).map((m) => m.message.tick)).toEqual([1, 2, 3, 4]);
     expect(messages.at(-1).status).toBe("done");
+  });
+});
+
+describe("jobs start with a task schema", () => {
+  it("exits 3 naming the issue when params or input lines do not match; runs when they do", async () => {
+    await cp(join(SCHEMAS_DIR, "lib"), join(tasksDir, "lib"), { recursive: true });
+    for (const file of ["records.py", "records.schema.json", "resize.py", "resize.schema.json"])
+      await cp(join(SCHEMAS_DIR, file), join(tasksDir, file));
+
+    const badParams = await jobs(["start", "resize", "-p", "sizes=[0]"]);
+    expect(badParams.code).toBe(3);
+    expect(badParams.stderr).toMatch(/invalid_params|params.*\/sizes\/0/);
+    expect(badParams.stderr).toMatch(/\/sizes\/0/);
+
+    const badLine = await jobs(["start", "records", "--input", "-"], { input: "{}\n" });
+    expect(badLine.code).toBe(3);
+    expect(badLine.stderr).toMatch(/line 1/);
+
+    const ok = await jobs(["start", "records", "--input", "-", "--wait"], {
+      input: '{"name":"a","amount":2}\n',
+    });
+    expect(ok.code).toBe(0);
+    expect(jsonl((await jobs(["result", ok.stdout.trim()])).stdout)).toEqual([
+      { count: 1, total: 2 },
+    ]);
   });
 });
 

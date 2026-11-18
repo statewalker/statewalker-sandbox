@@ -1,0 +1,27 @@
+{
+  "params": {
+    "type": "object",
+    "properties": { "sizes": { "type": "array", "items": { "type": "integer", "minimum": 1 } } },
+    "required": ["sizes"]
+  },
+  "body": { "contentMediaType": "image/x-portable-pixmap" },
+  "message": {
+    "type": "object",
+    "properties": {
+      "size": { "type": "integer" },
+      "width": { "type": "integer" },
+      "height": { "type": "integer" },
+      "url": {
+        "type": "string",
+        "format": "uri-reference",
+        "description": "Where to GET the image: a path on the jobs server (resolve it against the server's URL)"
+      },
+      "path": {
+        "type": "string",
+        "description": "The file on the server's disk; usable only by a client on the same machine"
+      },
+      "bytes": { "type": "integer", "minimum": 0 }
+    },
+    "required": ["size", "url", "path", "bytes"]
+  }
+}

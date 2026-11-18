@@ -1,0 +1,13 @@
+{
+  "body": {
+    "type": "object",
+    "properties": { "name": { "type": "string" }, "amount": { "type": "number" } },
+    "required": ["name", "amount"],
+    "description": "One record per line (JSONL)"
+  },
+  "message": {
+    "type": "object",
+    "properties": { "count": { "type": "integer" }, "total": { "type": "number" } },
+    "required": ["count", "total"]
+  }
+}

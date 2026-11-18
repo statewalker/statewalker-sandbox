@@ -1,0 +1,12 @@
+{
+  "message": {
+    "type": "object",
+    "properties": { "step": { "type": "integer" } },
+    "required": ["step"]
+  },
+  "error": {
+    "type": "object",
+    "properties": { "code": { "type": "string" } },
+    "required": ["code"]
+  }
+}
