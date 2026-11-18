@@ -7,7 +7,6 @@ import {
   ErrorBody,
   JobInfo,
   JobMessage,
-  JobStatus,
   START_BODY,
   StartResponse,
   TaskInfo,

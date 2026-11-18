@@ -182,6 +182,27 @@ describe("results in a separate folder", () => {
   });
 });
 
+describe("results folders of tasks without a cleanup script", () => {
+  it("cleanup removes the folder when the job left it empty, and keeps it with results in it", async () => {
+    const quiet = join(dir.path, "quiet.sh");
+    await writeFile(quiet, "echo '{}'\n");
+    const writer = join(dir.path, "writer.sh");
+    await writeFile(writer, 'echo data > "$JOB_OUTPUT_DIR/out.txt"\n');
+    manager.setTasks([
+      { name: "quiet", script: quiet },
+      { name: "writer", script: writer },
+    ]);
+    const empty = await manager.start("quiet");
+    const full = await manager.start("writer");
+    await logs(empty);
+    await logs(full);
+    expect(existsSync(join(outputs, empty))).toBe(true);
+    expect((await manager.cleanup()).removed.sort()).toEqual([empty, full].sort());
+    expect(existsSync(join(outputs, empty))).toBe(false);
+    expect(await readFile(join(outputs, full, "out.txt"), "utf8")).toBe("data\n");
+  });
+});
+
 describe("the results folder's environment", () => {
   const envTask = async () => {
     const script = join(dir.path, "env.sh");

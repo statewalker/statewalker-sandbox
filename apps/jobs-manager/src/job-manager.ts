@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createReadStream, existsSync, readdirSync, readFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rmdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { FileJobStore } from "./file-store.ts";
 import { lines, parseLine } from "./jsonl.ts";
@@ -42,7 +42,8 @@ export type JobManagerOptions = {
    * A results folder per job, `<dir>/<jobId>/`, created before the script starts and handed to it
    * (and to the cleanup script) as JOB_OUTPUT_DIR, with JOB_OUTPUT_URL = `<url>/<jobId>/`, the URL
    * path the REST app serves it at (`outputs` option). Results belong to the task: the manager
-   * never deletes the folder; the task's cleanup script does.
+   * deletes no file in it (the task's cleanup script does), only the folder once a cleaned-up job
+   * left it empty.
    */
   outputs?: { dir: string; url: string };
 };
@@ -334,6 +335,8 @@ export class ProcessJobManager implements JobManager {
         }
       }
       await this.#store.remove(id);
+      // An empty results folder holds no results: drop it. One with files stays (the task's own).
+      if (this.#outputs) await rmdir(join(this.#outputs.dir, id)).catch(() => {});
       result.removed.push(id);
     }
     return result;
