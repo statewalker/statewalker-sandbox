@@ -166,8 +166,17 @@ export class ProcessJobManager implements JobManager {
     return { info, last, listeners: new Set(), finished, finish };
   }
 
-  tasks(): TaskInfo[] {
+  async tasks(): Promise<TaskInfo[]> {
     return [...this.#tasks.values()].map((t) => ({ name: t.name, hasCleanup: Boolean(t.cleanup) }));
+  }
+
+  /**
+   * Replaces the registered tasks, e.g. after re-scanning a tasks directory. Running jobs keep the
+   * definition they started with; a pending job whose task disappeared fails with `unknown_task`.
+   */
+  setTasks(tasks: TaskDefinition[]): void {
+    this.#tasks.clear();
+    for (const task of tasks) this.#tasks.set(task.name, task);
   }
 
   async start(task: string, params: Json = null, input?: ByteInput): Promise<JobId> {
@@ -385,8 +394,15 @@ export class ProcessJobManager implements JobManager {
 
   async #run(live: Live): Promise<void> {
     const { id, task } = live.info;
-    const def = this.#tasks.get(task)!;
+    const def = this.#tasks.get(task);
     try {
+      if (!def) {
+        await this.#record(live, {
+          status: "error",
+          error: { code: "unknown_task", message: task },
+        });
+        return;
+      }
       if (live.interrupting) {
         // interrupted while its input was still being stored: never spawn it
         await this.#record(live, { status: "interrupted" });

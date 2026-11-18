@@ -15,6 +15,7 @@ it("serves the tasks of a directory over HTTP and shuts down on SIGTERM", async 
     process.execPath,
     [
       join(import.meta.dirname, "../src/cli.ts"),
+      "serve",
       "--tasks",
       TASKS_DIR,
       "--data",

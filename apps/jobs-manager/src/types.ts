@@ -102,7 +102,7 @@ export interface JobManager {
   list(filter?: ListFilter): AsyncGenerator<JobInfo>;
   /** Removes finished jobs that finished before `before` (default: now), running their cleanup scripts. */
   cleanup(before?: JobTimeStamp): Promise<CleanupResult>;
-  tasks(): TaskInfo[];
+  tasks(): Promise<TaskInfo[]>;
 }
 
 export class JobsError extends Error {

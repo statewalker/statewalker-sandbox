@@ -57,7 +57,7 @@ export function createJobsHandler(
     try {
       // /tasks
       if (parts.length === 1 && parts[0] === "tasks") {
-        return method === "GET" ? json(200, manager.tasks()) : notAllowed();
+        return method === "GET" ? json(200, await manager.tasks()) : notAllowed();
       }
       // /tasks/:task/jobs
       if (parts.length === 3 && parts[0] === "tasks" && parts[2] === "jobs") {
