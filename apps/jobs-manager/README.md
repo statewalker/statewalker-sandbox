@@ -65,7 +65,7 @@ jobs cleanup --older-than 24h
 
 | Command | Does |
 | --- | --- |
-| `serve` | Runs the server. It re-scans `--tasks` on every request, so `tasks add` and `tasks remove` apply at once. |
+| `serve` | Runs the server. It creates `--tasks` (default `./tasks`) when it is missing, prints its absolute path with the tasks found, and re-scans it on every request, so `tasks add` and `tasks remove` apply at once. A fresh folder starts with no tasks: `jobs tasks` prints nothing until you add one. |
 | `tasks [add <script> \| remove <name>]` | Lists the tasks, or copies a script (and its `--cleanup`) into the tasks folder, or deletes one. |
 | `start <task>` | Prints the job id. `-p key=value` is repeatable, and each value is parsed as JSON when it can be. `--params <json>` gives all parameters at once, `--input <file\|->` sends an input, and `--wait` or `--follow` waits for the end. |
 | `status`, `info`, `list` | The job's status; its record as JSON; all jobs, filtered with `--status a,b` and `--task`. |

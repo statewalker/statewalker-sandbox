@@ -2,7 +2,8 @@
 // `jobs`: run the jobs server, or drive one over REST. Built on citty; `jobs <command> --help`
 // shows each command's options.
 import { createReadStream } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { type ArgsDef, type CommandDef, defineCommand, runCommand, runMain } from "citty";
 import { JobsClient, JobsClientError } from "./client.ts";
 import { createJobManager } from "./job-manager.ts";
@@ -185,7 +186,7 @@ const serve = defineCommand({
     tasks: {
       type: "string",
       default: "./tasks",
-      description: "Tasks directory, re-scanned on every request",
+      description: "Tasks directory, re-scanned on every request; created when missing",
     },
     data: {
       type: "string",
@@ -202,6 +203,7 @@ const serve = defineCommand({
     "base-path": { type: "string", default: "", description: "Path prefix of the API, e.g. /api" },
   },
   async run({ args }) {
+    await mkdir(args.tasks, { recursive: true }); // `tasks add` fills it while the server runs
     const initial = await discoverTasks(args.tasks);
     const retentionHours = args["retention-hours"] ? Number(args["retention-hours"]) : undefined;
     const manager = await createJobManager({
@@ -220,7 +222,7 @@ const serve = defineCommand({
     );
     out(`jobs listening on http://${args.host}:${server.port}${args["base-path"]}`);
     const names = initial.map((t) => (t.cleanup ? `${t.name} (+cleanup)` : t.name));
-    note(`tasks: ${names.join(", ") || "(none)"}`);
+    note(`tasks in ${resolve(args.tasks)}: ${names.join(", ") || "(none)"}`);
     let stopping = false;
     const stop = async () => {
       if (stopping) return;
