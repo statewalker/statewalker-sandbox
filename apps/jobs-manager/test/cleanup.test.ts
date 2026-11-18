@@ -49,6 +49,13 @@ describe("cleanup", () => {
     await expect(manager.status(id)).rejects.toMatchObject({ code: "unknown_job" });
   });
 
+  it("counts a job that finished within the cutoff's millisecond as before it", async () => {
+    const id = await run("quick");
+    const finished = Math.floor((await manager.info(id)).updated);
+    expect(await manager.cleanup(finished - 1)).toEqual({ removed: [], failed: [] });
+    expect(await manager.cleanup(finished)).toEqual({ removed: [id], failed: [] });
+  });
+
   it("removes a finished job of a task without a cleanup script", async () => {
     const id = await run("quick");
     expect(await manager.cleanup()).toEqual({ removed: [id], failed: [] });
