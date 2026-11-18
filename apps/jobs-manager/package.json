@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Runs named long-running tasks as shell commands (launcher by extension, JSONL stdout), stores their messages per job and serves them over REST (NDJSON logs, SSE events).",
+  "description": "Runs named long-running tasks as shell commands (launcher by extension, JSONL stdout), stores their messages per job and serves them over REST (NDJSON logs, SSE events) and MCP, through a runtime-agnostic Hono app.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/statewalker/statewalker-sandbox.git",
@@ -20,6 +20,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./web": {
+      "types": "./src/web.ts",
+      "import": "./src/web.ts"
     },
     "./dist": {
       "types": "./dist/index.d.mts",
@@ -44,6 +48,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "catalog:",
+    "@modelcontextprotocol/client": "catalog:",
     "@types/node": "catalog:",
     "rimraf": "catalog:",
     "tsdown": "catalog:",
@@ -53,7 +58,11 @@
     "vitest": "catalog:"
   },
   "dependencies": {
-    "citty": "catalog:"
+    "@hono/node-server": "catalog:",
+    "@modelcontextprotocol/server": "catalog:",
+    "citty": "catalog:",
+    "hono": "catalog:",
+    "zod": "catalog:"
   },
   "main": "src/index.ts",
   "files": [

@@ -3,6 +3,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, truncate, writeFile } from 
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { isSafeId } from "./ids.ts";
 import type { ByteInput, JobId, JobInfo, JobMessage } from "./types.ts";
 
 /**
@@ -132,9 +133,4 @@ export class FileJobStore {
     this.#appends.delete(id);
     await rm(this.dir(id), { recursive: true, force: true });
   }
-}
-
-/** Ids come from clients (REST paths); only UUID-shaped names may touch the file system. */
-export function isSafeId(id: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
 }

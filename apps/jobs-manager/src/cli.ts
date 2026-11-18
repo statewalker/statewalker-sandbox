@@ -9,8 +9,8 @@ import { JobsClient, JobsClientError } from "./client.ts";
 import { createJobManager } from "./job-manager.ts";
 import { discoverTasks } from "./launchers.ts";
 import { serve as serveHttp } from "./node-server.ts";
-import { createJobsHandler } from "./rest.ts";
-import { addTask, removeTask } from "./tasks-dir.ts";
+import { createJobsApp } from "./rest.ts";
+import { addTask, folderRegistry, removeTask } from "./tasks-dir.ts";
 import { isTerminal, type JobMessage, type JobStatus, JobsError, type Json } from "./types.ts";
 import { results, verifyJob } from "./verify.ts";
 
@@ -24,6 +24,8 @@ const OVERVIEW = `jobs: run named tasks as shell commands and track them
 Server
   jobs serve [--tasks ./tasks] [--data ./.jobs] [--port 8080] [--host 127.0.0.1]
              [--max-concurrent 4] [--retention-hours N] [--base-path /api]
+             [--allow-task-upload] [--no-mcp] [--cors origin,origin|*]
+             REST at <base-path>/, MCP (Streamable HTTP) at <base-path>/mcp
 
 Tasks (the server re-scans its tasks directory on every request)
   jobs tasks [--json]                         list the server's tasks
@@ -201,6 +203,21 @@ const serve = defineCommand({
       description: "Clean up finished jobs older than this many hours",
     },
     "base-path": { type: "string", default: "", description: "Path prefix of the API, e.g. /api" },
+    "allow-task-upload": {
+      type: "boolean",
+      default: false,
+      description:
+        "Accept PUT/DELETE /tasks/:name and the MCP add_task/remove_task tools: anyone who can reach the server can then run code on it",
+    },
+    mcp: {
+      type: "boolean",
+      default: true,
+      description: "Serve MCP at <base-path>/mcp (--no-mcp to turn off)",
+    },
+    cors: {
+      type: "string",
+      description: "Send CORS headers for these origins: comma-separated, or * for any",
+    },
   },
   async run({ args }) {
     await mkdir(args.tasks, { recursive: true }); // `tasks add` fills it while the server runs
@@ -212,17 +229,30 @@ const serve = defineCommand({
       maxConcurrent: Number(args["max-concurrent"]),
       retention: retentionHours ? { maxAgeMs: retentionHours * 3_600_000 } : undefined,
     });
-    const handler = createJobsHandler(manager, { basePath: args["base-path"] });
+    const rescan = async () => manager.setTasks(await discoverTasks(args.tasks));
+    const origins = args.cors
+      ?.split(",")
+      .map((o) => o.trim())
+      .filter(Boolean);
+    const app = createJobsApp(manager, {
+      basePath: args["base-path"],
+      mcp: args.mcp,
+      registry: args["allow-task-upload"] ? folderRegistry(args.tasks, rescan) : undefined,
+      cors: origins?.length ? { origin: origins.includes("*") ? "*" : origins } : undefined,
+    });
     const server = await serveHttp(
       async (request) => {
-        manager.setTasks(await discoverTasks(args.tasks)); // added or removed tasks apply at once
-        return handler(request);
+        await rescan(); // tasks added or removed in the folder apply at once
+        return app.fetch(request);
       },
       { port: Number(args.port), host: args.host },
     );
     out(`jobs listening on http://${args.host}:${server.port}${args["base-path"]}`);
     const names = initial.map((t) => (t.cleanup ? `${t.name} (+cleanup)` : t.name));
     note(`tasks in ${resolve(args.tasks)}: ${names.join(", ") || "(none)"}`);
+    if (args.mcp) note(`mcp at http://${args.host}:${server.port}${args["base-path"]}/mcp`);
+    if (args["allow-task-upload"])
+      note("task upload is on: anyone who can reach this server can run code on it");
     let stopping = false;
     const stop = async () => {
       if (stopping) return;

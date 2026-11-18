@@ -1,7 +1,8 @@
 # Architecture
 
-How the jobs manager is put together today, and why. The prototype has about 2,000 lines in
-`src/`. Its one runtime dependency is citty, used by the CLI.
+How the jobs manager is put together today, and why. The prototype has about 2,400 lines in
+`src/`. Runtime dependencies: Hono and the MCP server SDK (with zod) for the HTTP adapters,
+`@hono/node-server` to serve them on Node, and citty for the CLI.
 
 ## 1. Layers
 
@@ -11,12 +12,14 @@ flowchart TB
     ts[TypeScript caller]
     jobs["jobs CLI<br/>(cli.ts, citty)"]
     http[HTTP client: curl, browser EventSource]
+    agent[MCP client: an agent, MCP Inspector]
   end
-  subgraph adapters[Adapters]
+  subgraph adapters["Adapters (web.ts: no Node imports)"]
     client["client.ts<br/>JobsClient: JobManager over HTTP"]
-    node["node-server.ts<br/>serve(): node:http ⇄ Request/Response"]
-    rest["rest.ts<br/>createJobsHandler(): routes, SSE, NDJSON"]
+    rest["rest.ts<br/>createJobsApp(): Hono routes, SSE, NDJSON, CORS"]
+    mcp["mcp.ts<br/>createJobsMcpHandler(): MCP tools"]
   end
+  node["node-server.ts<br/>serve(): @hono/node-server"]
   subgraph core[Core]
     api["types.ts<br/>JobManager interface + message types"]
     pjm["job-manager.ts<br/>ProcessJobManager"]
@@ -24,7 +27,7 @@ flowchart TB
   subgraph support[Support modules]
     store["file-store.ts<br/>FileJobStore"]
     launch["launchers.ts<br/>commandFor(), discoverTasks()"]
-    tdir["tasks-dir.ts<br/>addTask(), removeTask()"]
+    tdir["tasks-dir.ts<br/>addTask(), removeTask(), folderRegistry()"]
     verify["verify.ts<br/>verifyJob()"]
     jsonl["jsonl.ts · stamps.ts"]
   end
@@ -37,6 +40,9 @@ flowchart TB
   jobs --> tdir
   jobs --> verify
   http --> node --> rest --> api
+  agent --> node
+  rest -- "/mcp" --> mcp --> api
+  rest -. "uploads (optional)" .-> tdir
   client -. implements .-> api
   api -. implemented by .-> pjm
   pjm --> store --> fs
@@ -47,23 +53,30 @@ flowchart TB
 
 | Module | Lines | Responsibility |
 | --- | ---: | --- |
-| `types.ts` | 115 | The contract: `JobManager`, `JobMessage`, `JobInfo`, `TaskDefinition`, `JobsError`. Nothing in it depends on Node. |
+| `types.ts` | 137 | The contract: `JobManager`, `JobMessage`, `JobInfo`, `TaskDefinition`, `TaskRegistry`, `JobsError`. Nothing in it depends on Node. |
 | `job-manager.ts` | 502 | `ProcessJobManager`: the queue, spawning, recording, following, interrupting, recovery and cleanup. `setTasks()` swaps the registered tasks. |
-| `file-store.ts` | 140 | `FileJobStore`: the folder layout, atomic `job.json`, ordered appends, repair of torn lines. |
+| `file-store.ts` | 136 | `FileJobStore`: the folder layout, atomic `job.json`, ordered appends, repair of torn lines. |
 | `launchers.ts` | 57 | Extension → command table; finds tasks in a folder (`name.ext` + `name.cleanup.ext`). |
-| `tasks-dir.ts` | 57 | Adds and removes tasks in that folder layout (used by `jobs tasks add` and `jobs tasks remove`). |
-| `rest.ts` | 243 | Fetch-style handler over *any* `JobManager`: routes, request parsing, SSE and NDJSON streaming, error mapping. |
-| `node-server.ts` | 67 | Bridges `node:http` to `Request`/`Response`, with request and response bodies streamed. |
-| `client.ts` | 142 | `JobsClient`: the `JobManager` interface over the REST API. Server error codes come back as `JobsError`. |
+| `tasks-dir.ts` | 97 | Adds and removes tasks in that folder layout: from files (`jobs tasks add`/`remove`), and from uploaded source (`folderRegistry()`, a `TaskRegistry`). |
+| `rest.ts` | 316 | `createJobsApp()`: a Hono app over *any* `JobManager`: routes, request parsing, SSE and NDJSON streaming, task upload, CORS, error mapping; mounts MCP at `/mcp`. |
+| `mcp.ts` | 231 | `createJobsMcpHandler()`: MCP tools over any `JobManager` (stateless Streamable HTTP), `job_logs` as a cursor long-poll. |
+| `web.ts`, `ids.ts` | 26 | The runtime-agnostic entry (REST app, MCP, client, types); the UUID check shared by the store and the adapters. |
+| `node-server.ts` | 24 | `serve()`: a fetch handler on Node through `@hono/node-server`. |
+| `client.ts` | 149 | `JobsClient`: the `JobManager` interface over the REST API. Server error codes come back as `JobsError`. |
 | `verify.ts` | 80 | `verifyJob()`: checks a job's status and results against expectations. Patterns match subsets. |
-| `cli.ts` | 549 | The `jobs` CLI (citty): `serve` and the client commands; see the README. |
+| `cli.ts` | 588 | The `jobs` CLI (citty): `serve` and the client commands; see the README. |
 | `jsonl.ts`, `stamps.ts` | 37 | Splits a byte stream into lines (a JSON line becomes a value); timestamps that strictly increase within a job. |
 
-**Build:** tsdown (rolldown) bundles `dist/index.mjs`, `dist/cli.mjs` and type declarations.
+**Build:** tsdown (rolldown) bundles `dist/index.mjs`, `dist/web.mjs`, `dist/cli.mjs` and type declarations.
 Vitest builds `dist/` in a global setup and tests the bundle as well as the source. Turbo orders
 `build` before `test`.
 
-**The main boundary is the `JobManager` interface.** The REST layer only knows that interface,
+**The adapters are runtime-agnostic.** Everything reachable from `web.ts` (the Hono app, the MCP
+handler, `JobsClient`) uses only Web-standard APIs, so it runs on Node, Bun, Deno or a Worker.
+`test/agnostic.test.ts` walks that import graph and `test/dist.test.ts` scans the built
+`dist/web.mjs`; both fail on a `node:` import.
+
+**The main boundary is the `JobManager` interface.** The REST and MCP layers only know that interface,
 so a different implementation can sit behind the same HTTP API, for example one running jobs in
 Durable Objects. `JobsClient` implements the interface on the other side of HTTP. The CLI, or any
 caller, works the same against a local manager or a remote server. `FileJobStore`, on the other hand, is a concrete class. Swapping in
@@ -234,16 +247,38 @@ each one:
 | `DELETE /jobs/:id` | `interrupt()` |
 | `POST /cleanup` | `cleanup(before)` |
 
+| `PUT`, `DELETE /tasks/:name` | `registry.add()`, `registry.remove()`; 403 without a registry |
+| `* /mcp` | the MCP handler (below) |
+
 When the client disconnects, the request's signal aborts the follower. `before`, `since` and
 `Last-Event-ID` must be finite numbers, or the request gets 400. They are never read as
 "everything".
 
-## 10. Known limits
+## 10. MCP mapping
+
+`createJobsMcpHandler(manager, { registry })` wraps the SDK's `createMcpHandler`, which builds a
+fresh `McpServer` per request: no MCP sessions, so nothing to expire or share between processes.
+
+| Tool | Calls |
+| --- | --- |
+| `list_tasks` | `tasks()` |
+| `start_job` | `start(task, params, [bytes])`; `input` is UTF-8 encoded, `inputBase64` decoded with `atob` |
+| `get_job`, `list_jobs` | `info()`, `list()` |
+| `job_logs` | `logs(id, since, { follow: false })`; if that is empty and `waitMs > 0`, `logs(…, { follow: true, signal: AbortSignal.timeout(waitMs) })` until the first message, then one more snapshot read for whatever arrived with it |
+| `interrupt_job`, `cleanup_jobs` | `interrupt()`, `cleanup(before)` |
+| `add_task`, `remove_task` | `registry.add()`, `registry.remove()`; registered only when a registry is given |
+
+`job_logs` returns `next` (the last stamp, or `since` when nothing came) and `finished`, true once
+the final message has been returned. A `JobsError` becomes a tool error whose text starts with its
+code.
+
+## 11. Known limits
 
 - **One manager per root.** There is no lock file, and a second manager on the same root would
   take the first one's pending jobs.
 - **`list()` and `cleanup()` read every `job.json`.** That's fine for thousands of jobs; more
   would need an index.
 - **Reruns start from scratch.** Jobs have no checkpointing.
-- **No authentication, timeouts or output size limits.**
+- **No authentication, timeouts or output size limits.** No Host or Origin check either, so a
+  server on `localhost` takes simple requests from any web page (CORS only hides the responses).
 - **The store is not swappable yet.** `FileJobStore` has no interface (section 1).

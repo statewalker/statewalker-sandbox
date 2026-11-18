@@ -74,6 +74,27 @@ export type TaskDefinition = {
 
 export type TaskInfo = { name: string; hasCleanup: boolean };
 
+/** A task sent over the API: the script's source text and the extension that picks its launcher. */
+export type TaskUpload = {
+  name: string;
+  /** Launcher extension without the dot: `sh`, `py`, `js`, `ts`, … */
+  ext: string;
+  script: string;
+  /** Cleanup script source, run with the same launcher. */
+  cleanup?: string;
+};
+
+/**
+ * Where uploaded tasks go. The REST and MCP adapters accept uploads only when given one, because
+ * an uploaded task is code the server runs: anyone who can reach the API can then run commands.
+ */
+export interface TaskRegistry {
+  /** Fails with `invalid_params` for a bad name or extension, or a name already taken. */
+  add(task: TaskUpload): Promise<TaskInfo>;
+  /** Fails with `unknown_task` when there is no such task. */
+  remove(name: string): Promise<void>;
+}
+
 export type ByteInput = Iterable<Uint8Array> | AsyncIterable<Uint8Array>;
 
 export type LogsOptions = {
@@ -107,7 +128,7 @@ export interface JobManager {
 }
 
 export class JobsError extends Error {
-  readonly code: "unknown_task" | "unknown_job" | "invalid_params";
+  readonly code: "unknown_task" | "unknown_job" | "invalid_params" | "task_upload_disabled";
   constructor(code: JobsError["code"], message: string) {
     super(message);
     this.name = "JobsError";
