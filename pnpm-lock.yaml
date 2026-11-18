@@ -6,47 +6,344 @@ settings:
 
 catalogs:
   default:
+    '@ai-sdk/openai':
+      specifier: ^4.0.83
+      version: 4.0.83
+    '@ai-sdk/provider':
+      specifier: ^4.0.21
+      version: 4.0.21
     '@biomejs/biome':
       specifier: ^2.5.15
       version: 2.5.15
+    '@biscuit-auth/biscuit-wasm':
+      specifier: ^0.6.0
+      version: 0.6.0
+    '@chainsafe/libp2p-noise':
+      specifier: ^17.0.0
+      version: 17.0.0
+    '@chainsafe/libp2p-yamux':
+      specifier: ^8.0.1
+      version: 8.0.1
+    '@changesets/cli':
+      specifier: ^3.0.3
+      version: 3.0.3
+    '@earendil-works/pi-ai':
+      specifier: ~1.4.0
+      version: 1.4.0
+    '@flue/runtime':
+      specifier: ^2.3.0
+      version: 2.3.0
     '@hono/node-server':
-      specifier: 2.1.8
+      specifier: ^2.1.8
       version: 2.1.8
+    '@hono/node-ws':
+      specifier: ^1.3.1
+      version: 1.3.1
+    '@just-bash/executor':
+      specifier: ^7.0.0
+      version: 7.0.0
+    '@libp2p/circuit-relay-v2':
+      specifier: ^4.2.13
+      version: 4.2.17
+    '@libp2p/crypto':
+      specifier: ^5.1.23
+      version: 5.2.0
+    '@libp2p/identify':
+      specifier: ^4.1.14
+      version: 4.1.18
+    '@libp2p/interface':
+      specifier: ^3.4.0
+      version: 3.4.0
+    '@libp2p/peer-id':
+      specifier: ^6.0.15
+      version: 6.0.18
+    '@libp2p/tcp':
+      specifier: ^11.0.28
+      version: 11.0.32
+    '@libp2p/webrtc':
+      specifier: ^7.0.2
+      version: 7.0.2
+    '@libp2p/websockets':
+      specifier: ^10.1.21
+      version: 10.1.25
+    '@lume/kiwi':
+      specifier: ^0.4.4
+      version: 0.4.4
     '@modelcontextprotocol/client':
       specifier: ^2.4.0
       version: 2.4.0
     '@modelcontextprotocol/server':
       specifier: ^2.4.0
       version: 2.4.0
+    '@multiformats/multiaddr':
+      specifier: ^13.0.3
+      version: 13.0.3
+    '@preact/signals-core':
+      specifier: ^1.14.4
+      version: 1.14.4
+    '@statewalker/ai-openai-compat.core':
+      specifier: ^0.4.0
+      version: 0.4.2
+    '@statewalker/httpeers-access':
+      specifier: ^0.1.5
+      version: 0.1.5
+    '@statewalker/httpeers-core':
+      specifier: ^0.1.4
+      version: 0.1.4
+    '@statewalker/httpeers-hub':
+      specifier: ^0.1.6
+      version: 0.1.6
+    '@statewalker/httpeers-libp2p':
+      specifier: ^0.6.0
+      version: 0.6.0
+    '@statewalker/httpeers-member':
+      specifier: ^0.6.0
+      version: 0.6.0
+    '@statewalker/httpeers-qr':
+      specifier: ^0.1.3
+      version: 0.1.3
+    '@statewalker/shared-adapters':
+      specifier: ^0.1.0
+      version: 0.1.4
+    '@statewalker/shared-baseclass':
+      specifier: ^0.1.1
+      version: 0.1.6
+    '@statewalker/shared-commands':
+      specifier: ^0.3.0
+      version: 0.3.0
+    '@statewalker/shared-generators':
+      specifier: ^0.1.0
+      version: 0.1.4
+    '@statewalker/shared-logger':
+      specifier: ^0.1.0
+      version: 0.1.6
+    '@statewalker/shared-registry':
+      specifier: ^0.1.0
+      version: 0.1.4
+    '@statewalker/shared-slots':
+      specifier: ^0.2.1
+      version: 0.2.6
+    '@statewalker/ui.view.shadcn':
+      specifier: ^0.1.1
+      version: 0.1.4
+    '@statewalker/webrun-biscuit':
+      specifier: ^0.2.3
+      version: 0.2.3
+    '@statewalker/webrun-files':
+      specifier: ^0.12.0
+      version: 0.12.0
+    '@statewalker/webrun-files-browser':
+      specifier: ^0.12.0
+      version: 0.12.0
+    '@statewalker/webrun-files-composite':
+      specifier: ^0.12.0
+      version: 0.12.0
+    '@statewalker/webrun-files-mem':
+      specifier: ^0.12.0
+      version: 0.12.0
+    '@statewalker/webrun-files-node':
+      specifier: ^0.12.0
+      version: 0.12.0
+    '@statewalker/webrun-files-rpc':
+      specifier: ^0.3.0
+      version: 0.3.0
+    '@statewalker/webrun-http-browser':
+      specifier: ^0.17.1
+      version: 0.17.2
+    '@statewalker/webrun-http-proxy':
+      specifier: ^0.2.3
+      version: 0.2.3
+    '@statewalker/webrun-http-streams':
+      specifier: ^0.8.1
+      version: 0.8.2
+    '@statewalker/webrun-modules':
+      specifier: ^0.4.0
+      version: 0.4.0
+    '@statewalker/webrun-modules-build':
+      specifier: ^0.7.0
+      version: 0.7.0
+    '@statewalker/webrun-msgpack':
+      specifier: ^0.14.1
+      version: 0.14.2
+    '@statewalker/webrun-rpc':
+      specifier: ^0.15.1
+      version: 0.15.2
+    '@statewalker/webrun-site-builder':
+      specifier: ^0.3.0
+      version: 0.3.0
+    '@statewalker/webrun-site-host':
+      specifier: ^0.6.0
+      version: 0.6.0
+    '@statewalker/webrun-streams':
+      specifier: ^0.6.1
+      version: 0.6.2
+    '@statewalker/webrun-streams-libp2p':
+      specifier: ^0.7.1
+      version: 0.7.2
+    '@storybook/addon-docs':
+      specifier: ^10.6.1
+      version: 10.6.5
+    '@storybook/addon-themes':
+      specifier: ^10.6.1
+      version: 10.6.5
+    '@storybook/react-vite':
+      specifier: ^10.6.1
+      version: 10.6.5
+    '@tailwindcss/cli':
+      specifier: ^4.3.3
+      version: 4.3.3
+    '@tailwindcss/vite':
+      specifier: ^4.3.3
+      version: 4.3.3
+    '@testing-library/react':
+      specifier: ^16.3.3
+      version: 16.3.3
     '@types/node':
       specifier: ^26.6.4
       version: 26.6.6
+    '@types/pg':
+      specifier: ^8.23.1
+      version: 8.23.1
+    '@types/react':
+      specifier: ^19.3.0
+      version: 19.3.0
+    '@types/react-dom':
+      specifier: ^19.3.0
+      version: 19.3.0
+    '@types/ws':
+      specifier: ^8.18.2
+      version: 8.18.2
+    '@vitejs/plugin-react':
+      specifier: ^6.1.1
+      version: 6.1.1
+    '@vitest/browser-playwright':
+      specifier: ^5.0.5
+      version: 5.1.0
+    '@xterm/addon-fit':
+      specifier: ^0.11.0
+      version: 0.11.0
+    '@xterm/addon-web-links':
+      specifier: ^0.12.0
+      version: 0.12.0
+    '@xterm/xterm':
+      specifier: ^6.0.0
+      version: 6.0.0
+    ai:
+      specifier: ^7.0.127
+      version: 7.0.127
+    alien-signals:
+      specifier: ^3.2.1
+      version: 3.2.1
+    basecoat-css:
+      specifier: ^1.0.2
+      version: 1.0.2
     citty:
       specifier: ^0.2.2
       version: 0.2.2
+    comlink:
+      specifier: ^4.4.2
+      version: 4.4.2
+    dockview-core:
+      specifier: ^8.4.0
+      version: 8.4.0
+    happy-dom:
+      specifier: ^21.0.4
+      version: 21.0.4
+    hightable:
+      specifier: ^0.26.4
+      version: 0.26.4
     hono:
-      specifier: 4.13.18
+      specifier: ^4.13.18
       version: 4.13.18
+    html5-qrcode:
+      specifier: ^2.3.8
+      version: 2.3.8
+    idb-keyval:
+      specifier: ^6.3.0
+      version: 6.3.0
+    isomorphic-ws:
+      specifier: ^5.0.0
+      version: 5.0.0
+    jsdom:
+      specifier: ^31.0.0
+      version: 31.0.0
+    jsqr:
+      specifier: ^1.4.0
+      version: 1.4.0
+    just-bash:
+      specifier: ^3.6.0
+      version: 3.6.0
+    libp2p:
+      specifier: ^3.5.1
+      version: 3.5.1
+    lucide-react:
+      specifier: ^1.51.0
+      version: 1.52.0
+    multiformats:
+      specifier: ^14.0.5
+      version: 14.0.5
+    openai:
+      specifier: ^7.27.0
+      version: 7.27.0
+    pg:
+      specifier: ^8.23.1
+      version: 8.23.1
+    playwright:
+      specifier: ^1.63.0
+      version: 1.63.0
+    qrcode-generator:
+      specifier: ^2.0.4
+      version: 2.0.4
+    radix-ui:
+      specifier: ^1.6.7
+      version: 1.6.7
+    react:
+      specifier: ^19.3.0
+      version: 19.3.0
+    react-dom:
+      specifier: ^19.3.0
+      version: 19.3.0
     rimraf:
       specifier: ^6.1.3
       version: 6.1.3
+    sharp:
+      specifier: ^0.35.5
+      version: 0.35.5
+    storybook:
+      specifier: ^10.6.1
+      version: 10.6.5
+    tailwindcss:
+      specifier: ^4.3.3
+      version: 4.3.3
     tsdown:
       specifier: ^0.23.0
       version: 0.23.0
+    tsx:
+      specifier: ^4.23.15
+      version: 4.23.15
     turbo:
       specifier: ^2.11.7
       version: 2.11.7
+    tw-animate-css:
+      specifier: ^1.4.0
+      version: 1.4.0
     typescript:
       specifier: ^7.0.2
       version: 7.0.2
+    urlpattern-polyfill:
+      specifier: ^10.1.0
+      version: 10.1.0
     vite:
       specifier: ^8.3.2
       version: 8.3.2
     vitest:
       specifier: ^5.0.5
       version: 5.1.0
+    ws:
+      specifier: ^8.22.0
+      version: 8.22.0
     zod:
-      specifier: 4.6.7
+      specifier: ^4.6.7
       version: 4.6.7
 
 overrides:
@@ -12742,7 +13039,7 @@ snapshots:
       buffer-image-size: 0.6.4
       entities: 7.0.1
       whatwg-mimetype: 3.0.0
-      ws: 8.22.2(bufferutil@4.2.0)
+      ws: 8.22.0(bufferutil@4.2.0)
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate

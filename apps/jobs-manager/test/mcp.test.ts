@@ -22,6 +22,7 @@ const TASKS = [
   task("stream", "stream.ts"),
   task("sleepy", "sleepy.sh"),
   task("fail", "fail.sh"),
+  task("burst", "burst.mjs"),
 ];
 
 /** An MCP client talking to the app in process: no server, the app's fetch is the transport. */
@@ -136,6 +137,20 @@ describe("MCP tools", () => {
     expect(new Set(run.messages.map((m) => m.stamp)).size).toBe(run.messages.length);
     expect(run.calls).toBeGreaterThan(2); // it waited for new lines, not for the end
     expect(run.status).toBe("done");
+  });
+
+  it("does not report finished before the last lines and the final message are returned", async () => {
+    await connect();
+    for (const waitMs of [0, 5_000]) {
+      for (let run = 0; run < 5; run++) {
+        const { jobId } = await tool<{ jobId: string }>("start_job", { task: "burst" });
+        const followed = await follow(jobId, waitMs);
+        const all = [];
+        for await (const m of manager.logs(jobId, 0, { follow: false })) all.push(m);
+        expect(followed.messages).toEqual(all);
+        expect(followed.messages.at(-1)?.status).toBe("done");
+      }
+    }
   });
 
   it("returns at once with no messages when nothing new arrives within waitMs", async () => {

@@ -188,10 +188,14 @@ async function logsPage(
       messages.push(...(await read(manager.logs(id, last, { follow: false }))));
   }
   const page = messages.slice(0, MAX_PAGE);
-  const status = (await manager.info(id)).status;
-  const ended =
-    page.some((m) => isTerminal(m.status)) || (isTerminal(status) && messages.length <= MAX_PAGE);
-  return { messages: page, next: page.at(-1)?.stamp ?? since ?? 0, status, finished: ended };
+  const next = page.at(-1)?.stamp ?? since ?? 0;
+  const { status, updated } = await manager.info(id);
+  // Finished only once the final message has been handed out: in this page, or before the cursor.
+  // A terminal `status` alone is not enough, since it can be set before the final message (and the
+  // last output lines) are readable.
+  const finished =
+    page.some((m) => isTerminal(m.status)) || (isTerminal(status) && next >= updated);
+  return { messages: page, next, status, finished };
 }
 
 async function read(messages: AsyncGenerator<JobMessage>): Promise<JobMessage[]> {
