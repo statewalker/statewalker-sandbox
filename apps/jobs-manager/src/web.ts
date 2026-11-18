@@ -6,8 +6,10 @@ export { isSafeId } from "./ids.ts";
 export {
   createJobsMcpHandler,
   createJobsMcpServer,
+  FOLLOW_TIMEOUT_MS,
   type JobsMcpHandler,
   type JobsMcpOptions,
+  MAX_FOLLOW_TIMEOUT_MS,
   MAX_PAGE,
   MAX_WAIT_MS,
 } from "./mcp.ts";

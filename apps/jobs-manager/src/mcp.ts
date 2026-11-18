@@ -19,9 +19,11 @@ import {
  * fresh server per request), Web-standard only: the returned `fetch` runs wherever the REST app
  * does. `createJobsApp` mounts it at `<basePath>/mcp`.
  *
- * Logs are followed with a cursor: `job_logs` returns the messages after `since`, waiting up to
- * `waitMs` for the first new one, and the `next` cursor to pass back. Every MCP client can do
- * that, unlike progress-notification streams.
+ * Logs are followed two ways. `job_logs` returns the messages after the cursor `since`, waiting
+ * up to `waitMs` for the first new one, and the `next` cursor to pass back: every MCP client can
+ * do that. `follow_job` stays open until the job ends (or `timeoutMs`), sending each message as a
+ * progress notification when the client asked for progress, and returns them all with the same
+ * cursor, so a client that ignores notifications, or times out, loses nothing.
  */
 export type JobsMcpOptions = { registry?: TaskRegistry };
 
@@ -31,6 +33,9 @@ export type JobsMcpHandler = { fetch: (request: Request) => Promise<Response> };
 export const MAX_WAIT_MS = 60_000;
 /** Most messages one `job_logs` call returns; `finished` stays false while more are pending. */
 export const MAX_PAGE = 1_000;
+/** Default and longest time a `follow_job` call stays open. */
+export const FOLLOW_TIMEOUT_MS = 300_000;
+export const MAX_FOLLOW_TIMEOUT_MS = 1_800_000;
 
 const STATUS = z.enum(["pending", "running", "done", "error", "interrupted"]);
 const JOB_ID = z.string().describe("Job id, as returned by start_job");
@@ -99,6 +104,44 @@ export function createJobsMcpServer(manager: JobManager, options: JobsMcpOptions
       }),
     },
     ({ id, since, waitMs }) => run(async () => logsPage(manager, checkId(id), since, waitMs ?? 0)),
+  );
+
+  server.registerTool(
+    "follow_job",
+    {
+      description: `Follow a job until it ends: each new message is sent as a progress notification (when the call carries a progressToken), and the call returns { messages, next, status, finished } with all of them. Returns early, finished false, after timeoutMs (default ${FOLLOW_TIMEOUT_MS}, max ${MAX_FOLLOW_TIMEOUT_MS}) or ${MAX_PAGE} messages: continue with follow_job or job_logs from \`next\`.`,
+      inputSchema: z.object({
+        id: JOB_ID,
+        since: z.number().optional().describe("Cursor: the `next` of a previous call"),
+        timeoutMs: z.number().int().min(1).max(MAX_FOLLOW_TIMEOUT_MS).optional(),
+      }),
+    },
+    ({ id, since, timeoutMs }, ctx) =>
+      run(async () => {
+        const token = ctx.mcpReq._meta?.progressToken;
+        // Stops on the timeout, or when the client drops the HTTP request (the SDK aborts
+        // mcpReq.signal). A later notifications/cancelled alone cannot reach this call: the server
+        // is stateless, a fresh one per request.
+        const signal = AbortSignal.any([
+          AbortSignal.timeout(timeoutMs ?? FOLLOW_TIMEOUT_MS),
+          ctx.mcpReq.signal,
+        ]);
+        const messages: JobMessage[] = [];
+        for await (const message of manager.logs(checkId(id), since, { follow: true, signal })) {
+          messages.push(message);
+          if (token !== undefined)
+            await ctx.mcpReq.notify({
+              method: "notifications/progress",
+              params: {
+                progressToken: token,
+                progress: messages.length,
+                message: JSON.stringify(message),
+              },
+            });
+          if (messages.length >= MAX_PAGE) break;
+        }
+        return pageOf(manager, id, since, messages);
+      }),
   );
 
   server.registerTool(
@@ -192,7 +235,16 @@ async function logsPage(
     if (last !== undefined)
       messages.push(...(await read(manager.logs(id, last, { follow: false }))));
   }
-  const page = messages.slice(0, MAX_PAGE);
+  return pageOf(manager, id, since, messages.slice(0, MAX_PAGE));
+}
+
+/** A page of messages with its cursor and whether the job's final message has been handed out. */
+async function pageOf(
+  manager: JobManager,
+  id: string,
+  since: number | undefined,
+  page: JobMessage[],
+) {
   const next = page.at(-1)?.stamp ?? since ?? 0;
   const { status, updated } = await manager.info(id);
   // Finished only once the final message has been handed out: in this page, or before the cursor.

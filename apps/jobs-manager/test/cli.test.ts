@@ -1,10 +1,18 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { stat } from "node:fs/promises";
+import { cp, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { TASKS_DIR, tempDir } from "./helpers.ts";
+import {
+  encodePpm,
+  makePpm,
+  parsePpm,
+  resizeNearest,
+  SCHEMAS_DIR,
+  TASKS_DIR,
+  tempDir,
+} from "./helpers.ts";
 import { ndjson } from "./rest-helpers.ts";
 
 let dir: Awaited<ReturnType<typeof tempDir>>;
@@ -137,4 +145,75 @@ it("accepts task uploads with --allow-task-upload, drops MCP with --no-mcp, send
   cli.kill("SIGTERM");
   const [code] = await once(cli, "exit");
   expect(code).toBe(0);
+});
+
+it("serves results with --outputs, the OpenAPI document, and names the tasks it skips", async () => {
+  const tasksDir = join(dir.path, "tasks");
+  await cp(join(SCHEMAS_DIR, "lib"), join(tasksDir, "lib"), { recursive: true });
+  for (const file of ["resize-out.py", "resize-out.cleanup.py", "resize-out.schema.json"])
+    await cp(join(SCHEMAS_DIR, file), join(tasksDir, file));
+  await writeFile(join(tasksDir, "bad.sh"), "true\n");
+  await writeFile(join(tasksDir, "bad.schema.json"), "{ not json");
+  const outputs = join(dir.path, "results");
+  const cli = spawn(
+    process.execPath,
+    [
+      join(import.meta.dirname, "../src/cli.ts"),
+      "serve",
+      "--tasks",
+      tasksDir,
+      "--data",
+      join(dir.path, "data"),
+      "--outputs",
+      outputs,
+      "--base-path",
+      "/api",
+      "--port",
+      "0",
+      "--host",
+      "127.0.0.1",
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let stderr = "";
+  cli.stderr!.setEncoding("utf8").on("data", (d: string) => (stderr += d));
+  try {
+    const lines = createInterface({ input: cli.stdout! })[Symbol.asyncIterator]();
+    const base = /listening on (http:\/\/\S+)/.exec(String((await lines.next()).value))?.[1];
+    expect(base).toBeDefined();
+    const origin = new URL(base!).origin;
+
+    expect(await (await fetch(`${base}/tasks`)).json()).toEqual([
+      { name: "resize-out", hasCleanup: true },
+    ]);
+    expect(stderr).toMatch(/skipped task bad: .*bad\.schema\.json.*JSON/);
+    expect(stderr).toContain(`outputs in ${outputs}`);
+    expect((await (await fetch(`${base}/openapi.json`)).json()).openapi).toBe("3.1.0");
+
+    const started = await fetch(
+      `${base}/tasks/resize-out/jobs?params=${encodeURIComponent('{"sizes":[6]}')}`,
+      {
+        method: "POST",
+        headers: { "content-type": "image/x-portable-pixmap" },
+        body: makePpm(12, 8) as BodyInit,
+      },
+    );
+    const { jobId } = (await started.json()) as { jobId: string };
+    const messages = ndjson(await (await fetch(`${base}/jobs/${jobId}/logs?follow=1`)).text());
+    const found = messages.find((m) => "message" in m && m.message);
+    const result = (found as unknown as { message: { url: string } }).message;
+    expect(result.url).toBe(`/api/outputs/${jobId}/6.ppm`);
+    const image = await fetch(new URL(result.url, origin));
+    expect(image.status).toBe(200);
+    expect(new Uint8Array(await image.arrayBuffer())).toEqual(
+      encodePpm(resizeNearest(parsePpm(makePpm(12, 8)), 6)),
+    );
+
+    const cleaned = await (await fetch(`${base}/cleanup`, { method: "POST" })).json();
+    expect(cleaned).toEqual({ removed: [jobId], failed: [] });
+    expect((await fetch(new URL(result.url, origin))).status).toBe(404);
+  } finally {
+    cli.kill("SIGTERM");
+    await once(cli, "exit");
+  }
 });
