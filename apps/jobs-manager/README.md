@@ -2,7 +2,8 @@
 
 Runs named long-running tasks as shell commands and stores what they print. It works like
 [Observable Framework data loaders](https://observablehq.com/framework/data-loaders), but each run
-is a *job* that clients can start, follow, interrupt and clean up, over a TypeScript API or REST.
+is a *job* that clients can start, follow, interrupt and clean up, over a TypeScript API, REST or
+MCP (so an agent can drive it as tools).
 
 - A **task** is a script, `image-generator.ts`, plus an optional cleanup script,
   `image-generator.cleanup.ts`. The file extension picks the launcher.
@@ -10,8 +11,9 @@ is a *job* that clients can start, follow, interrupt and clean up, over a TypeSc
 - Each **stdout line** is parsed as JSON and recorded as a message. Each stderr line is recorded
   too. Clients read the messages while the job runs and after it finishes.
 
-Prototype status: about 2,000 lines in `src/`, one runtime dependency (citty, for the CLI), and
-79 tests. See [docs/architecture.md](docs/architecture.md) and
+Prototype status: about 2,400 lines in `src/` and 104 tests. Runtime dependencies: Hono (the HTTP
+app), the MCP server SDK with zod (tool schemas), `@hono/node-server` (serving it on Node) and citty
+(the CLI). See [docs/architecture.md](docs/architecture.md) and
 [docs/parallel-report.md](docs/parallel-report.md).
 
 ## Toolchain
@@ -21,7 +23,7 @@ The same toolchain as the rest of this repository:
 | Tool | Role |
 | --- | --- |
 | TypeScript 7 | Type checking (`tsc --noEmit`). The source runs directly on Node ≥ 22.18, which strips types. |
-| tsdown (rolldown) | `build`: bundles `dist/index.mjs`, `dist/cli.mjs` (the `jobs` bin) and type declarations. |
+| tsdown (rolldown) | `build`: bundles `dist/index.mjs` (Node), `dist/web.mjs` (runtime-agnostic), `dist/cli.mjs` (the `jobs` bin) and type declarations. |
 | Vitest (Vite) | `test`. A global setup builds `dist/` first, so the bundle is tested too. |
 | Turbo | `turbo run test` runs `build`, then `test`, and caches `dist/`. |
 | Biome | Lint and format. |
@@ -65,7 +67,7 @@ jobs cleanup --older-than 24h
 
 | Command | Does |
 | --- | --- |
-| `serve` | Runs the server. It creates `--tasks` (default `./tasks`) when it is missing, prints its absolute path with the tasks found, and re-scans it on every request, so `tasks add` and `tasks remove` apply at once. A fresh folder starts with no tasks: `jobs tasks` prints nothing until you add one. |
+| `serve` | Runs the server: REST at `--base-path`, MCP at `<base-path>/mcp` (`--no-mcp` turns it off). It creates `--tasks` (default `./tasks`) when it is missing, prints its absolute path with the tasks found, and re-scans it on every request, so `tasks add` and `tasks remove` apply at once. A fresh folder starts with no tasks: `jobs tasks` prints nothing until you add one. `--allow-task-upload` accepts tasks over the API (see below). `--cors http://a,http://b` (or `*`) sends CORS headers for those origins. |
 | `tasks [add <script> \| remove <name>]` | Lists the tasks, or copies a script (and its `--cleanup`) into the tasks folder, or deletes one. |
 | `start <task>` | Prints the job id. `-p key=value` is repeatable, and each value is parsed as JSON when it can be. `--params <json>` gives all parameters at once, `--input <file\|->` sends an input, and `--wait` or `--follow` waits for the end. |
 | `status`, `info`, `list` | The job's status; its record as JSON; all jobs, filtered with `--status a,b` and `--task`. |
@@ -194,12 +196,34 @@ after it, and SSE uses the stamp as the event id.
 
 ## REST API
 
-The adapter is `createJobsHandler(manager, { basePath })`, a fetch-style `Request → Response`
-handler. It runs on Node through `serve()`, and unchanged on Bun, Deno or Workers.
+The adapter is `createJobsApp(manager, options)`, a [Hono](https://hono.dev) app over *any*
+`JobManager`. `createJobsHandler(manager, options)` gives the same app as a plain
+`Request → Response` function. On Node, `serve(app.fetch)` runs it through `@hono/node-server`.
+
+```ts
+const app = createJobsApp(manager, {
+  basePath: "/api",                          // optional prefix; URLs in responses include it
+  registry: folderRegistry("./tasks", rescan), // optional: accept task uploads (see below)
+  mcp: true,                                 // default: MCP at /api/mcp
+  cors: { origin: ["http://localhost:5173"] },// optional; "*" for any origin
+});
+```
+
+### Why the adapters import nothing from Node
+
+The REST app, the MCP handler and `JobsClient` use only Web-standard APIs (`Request`, `Response`,
+`ReadableStream`, `AbortSignal`), Hono and the MCP SDK. They are exported on their own from
+`@statewalker/jobs-manager-app/web`, so a Worker, Deno or Bun server can serve a different
+`JobManager` (one running jobs in Durable Objects, say) with the same API. The process-based
+manager, the file store and the folder registry stay in the Node entry. A test walks the import
+graph from `src/web.ts`, and another scans the built `dist/web.mjs`; both fail on any `node:`
+import, because one stray import would only show up as a crash on the first deploy to a Worker.
 
 | Method & path               | Behaviour |
 | --------------------------- | --------- |
 | `GET /tasks`                | `[{ name, hasCleanup }]` |
+| `PUT /tasks/:name`          | Upload a task: JSON `{ ext, script, cleanup? }`, the source text and the launcher extension (`sh`, `py`, …); `cleanup` uses the same extension. `201 { name, hasCleanup }`. Needs a registry |
+| `DELETE /tasks/:name`       | Remove a task: `{ removed }`. Needs a registry |
 | `POST /tasks/:task/jobs`    | `202 { jobId, statusUrl, logsUrl, eventsUrl }` plus a `Location` header. The body is one of: `application/json` (the params); `multipart/form-data` (a `params` field holding JSON and an `input` file); any other type (the input stream, with params in `?params=<json>`) |
 | `GET /jobs`                 | `JobInfo[]`, oldest first. Filter with `?status=error,interrupted` and `&task=name` |
 | `GET /jobs/:id`             | `{ id, task, params, status, created, updated }` |
@@ -210,7 +234,8 @@ handler. It runs on Node through `serve()`, and unchanged on Bun, Deno or Worker
 
 Errors come back as `{ error: { code, message } }`:
 
-- 400: `invalid_params`
+- 400: `invalid_params` (also a bad task name or extension, or a name already taken)
+- 403: `task_upload_disabled`: the server runs without a registry (`--allow-task-upload`)
 - 404: `unknown_task`, `unknown_job`, `not_found`
 - 405: `method_not_allowed`
 - 500: `internal`
@@ -219,7 +244,59 @@ Errors come back as `{ error: { code, message } }`:
 curl -s localhost:8080/tasks/count/jobs -H 'content-type: application/json' -d '{"n":1}'
 curl -s --data-binary @photo.png "localhost:8080/tasks/image-generator/jobs?params=%7B%22sizes%22%3A%5B64%5D%7D"
 curl -N localhost:8080/jobs/<id>/events
+curl -s -X PUT localhost:8080/tasks/answer -H 'content-type: application/json' \
+  -d '{"ext":"py","script":"print(42)"}'               # with --allow-task-upload
 ```
+
+### Task upload is off unless you turn it on
+
+An uploaded task is code the server runs, so a server that accepts uploads lets anyone who can
+reach it run commands as its user. Uploads (REST `PUT`/`DELETE /tasks/:name`, MCP
+`add_task`/`remove_task`) therefore need a `TaskRegistry`, which `jobs serve` passes only with
+`--allow-task-upload`, and it prints a warning when it does. Without one, the MCP tools are not
+even listed, and the REST routes answer `403 task_upload_disabled`. `folderRegistry(dir, onChange)`
+writes uploads into the tasks folder as `<name>.<ext>` and `<name>.cleanup.<ext>`, the layout
+`discoverTasks` reads, then calls `onChange` so the manager sees the new task.
+
+### CORS
+
+Without `cors`, no CORS headers are sent, and a browser page on another origin cannot read the
+API. `cors: { origin }` (`--cors`) allows the listed origins, or `*`, on every route including
+`/mcp`. It allows the headers an MCP client sends (`mcp-protocol-version`, `mcp-session-id`,
+`last-event-id`) and exposes `location` and `mcp-session-id`. A preflight from an origin that is
+not listed gets no `access-control-allow-origin`, and the browser reports a CORS error, not a
+4xx, which is the symptom to look for.
+
+## MCP: the same jobs as agent tools
+
+`createJobsApp` serves MCP (Streamable HTTP) at `<basePath>/mcp`, stateless: each request gets a
+fresh server from `createJobsMcpServer(manager)`, so there are no MCP sessions to keep. It answers
+both the current protocol revision and the 2025 revisions most clients still send.
+
+| Tool | Does |
+| --- | --- |
+| `list_tasks` | `{ tasks: [{ name, hasCleanup }] }` |
+| `start_job` | `{ task, params?, input? \| inputBase64? }` → `{ jobId }`. `input` is text for stdin; `inputBase64` is binary |
+| `job_logs` | `{ id, since?, waitMs? }` → `{ messages, next, status, finished }` |
+| `get_job`, `list_jobs` | The job's record; jobs filtered by `status` (a list) and `task` |
+| `interrupt_job` | `{ id }` → `{ id, status }` |
+| `cleanup_jobs` | `{ before? }` → `{ removed, failed }` |
+| `add_task`, `remove_task` | `{ name, ext, script, cleanup? }`; `{ name }`. Only listed when task upload is on |
+
+**Following a job is a cursor loop**, because a tool call returns one result. Call `job_logs`
+without `since`, then repeat with `since` set to the `next` you got, until `finished` is true.
+With `waitMs` (up to 60,000), a call that finds nothing new waits for the next message instead of
+returning empty at once: it is a long-poll, and works with every MCP client, where
+progress-notification streams are ignored by many. A call that times out returns
+`{ messages: [], next: <your since>, finished: false }`: that means "nothing yet", not an error.
+One call returns at most 1,000 messages; `finished` stays false while more are pending.
+
+Errors come back as tool errors whose text starts with the code (`unknown_job: …`,
+`unknown_task: …`, `invalid_params: …`), so an agent can tell a typo from a failure.
+
+**Trying it by hand:** run `pnpm start`, then the MCP Inspector (`npx @modelcontextprotocol/inspector`),
+transport *Streamable HTTP*, URL `http://127.0.0.1:8080/mcp`. To let Claude Code use it:
+`claude mcp add --transport http jobs http://127.0.0.1:8080/mcp`.
 
 ## Storage
 
@@ -266,7 +343,10 @@ root would take the first one's pending jobs.
 
 ## Open questions and limits
 
-- **No authentication** on the REST API. Keep it on a private network or put it behind a proxy.
+- **No authentication** on REST or MCP. Keep the server on a private network or behind a proxy.
+  CORS only stops browsers from *reading* responses: a page on any site can still send simple
+  requests (a form POST) to a server on `localhost`, and there is no Host or Origin check. With
+  `--allow-task-upload`, that matters most.
 - **Reruns start from scratch.** An interrupted job is not restarted; the client starts a new one.
 - **`list()` reads every `job.json`.** That's fine for thousands of jobs; an index would be
   needed for more.

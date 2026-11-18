@@ -1,4 +1,7 @@
-import { isSafeId } from "./file-store.ts";
+import { type Context, Hono } from "hono";
+import { cors } from "hono/cors";
+import { isSafeId } from "./ids.ts";
+import { createJobsMcpHandler } from "./mcp.ts";
 import {
   type ByteInput,
   type JobManager,
@@ -6,13 +9,16 @@ import {
   type JobStatus,
   JobsError,
   type Json,
+  type TaskRegistry,
 } from "./types.ts";
 
 /**
- * REST adapter over any JobManager, as a fetch-style handler (`Request -> Response`), so it runs
- * under Node (see `serve`), Bun, Deno or a Worker unchanged.
+ * The HTTP face of any JobManager, as a Hono app. It uses only Web-standard APIs (Request,
+ * Response, ReadableStream), so the same app runs under Node (see `serve`), Bun, Deno or a Worker.
  *
  *   GET    /tasks                 registered tasks
+ *   PUT    /tasks/:name           upload a task { ext, script, cleanup? } -> 201 (needs `registry`)
+ *   DELETE /tasks/:name           remove an uploaded task (needs `registry`)
  *   POST   /tasks/:task/jobs      start a job -> 202 { jobId, statusUrl, logsUrl, eventsUrl }
  *                                   application/json     body = params, no input
  *                                   multipart/form-data  field `params` (JSON) + file `input`
@@ -23,121 +29,195 @@ import {
  *   GET    /jobs/:id/events       text/event-stream, follows to the end; resume with Last-Event-ID or ?since
  *   DELETE /jobs/:id              interrupt -> { id, status }
  *   POST   /cleanup               ?before=<stamp> -> { removed, failed }
+ *   *      /mcp                   MCP (Streamable HTTP), see `createJobsMcpHandler`
  *
- * Errors: `{ error: { code, message } }` with 400 (invalid_params), 404 (unknown_task, unknown_job,
- * not_found), 405 (method_not_allowed) or 500 (internal).
+ * Errors: `{ error: { code, message } }` with 400 (invalid_params), 403 (task_upload_disabled),
+ * 404 (unknown_task, unknown_job, not_found), 405 (method_not_allowed) or 500 (internal).
  */
-export type JobsHandlerOptions = {
+export type JobsAppOptions = {
   /** Path prefix the routes live under, e.g. "/api". URLs in responses include it. */
   basePath?: string;
   /** Interval of SSE keep-alive comments. Default 15 s. */
   keepAliveMs?: number;
+  /** Accept task uploads into this registry. Without one, upload and removal answer 403. */
+  registry?: TaskRegistry;
+  /** Serve MCP at `<basePath>/mcp`. Default true. */
+  mcp?: boolean;
+  /** Send CORS headers for these origins (`"*"` for any). No CORS headers when omitted. */
+  cors?: { origin: string | string[] };
 };
+
+/** Options of `createJobsHandler`: the same as the app's. */
+export type JobsHandlerOptions = JobsAppOptions;
 
 export type JobsHandler = (request: Request) => Promise<Response>;
 
 const STATUSES: JobStatus[] = ["pending", "running", "done", "error", "interrupted"];
 
-export function createJobsHandler(
-  manager: JobManager,
-  options: JobsHandlerOptions = {},
-): JobsHandler {
+/** Headers an MCP client (and the REST API's SSE resume) sends, and the ones it must read. */
+const CORS_ALLOW_HEADERS = [
+  "content-type",
+  "authorization",
+  "last-event-id",
+  "mcp-protocol-version",
+  "mcp-session-id",
+];
+const CORS_EXPOSE_HEADERS = ["location", "mcp-session-id", "mcp-protocol-version"];
+
+export function createJobsApp(manager: JobManager, options: JobsAppOptions = {}): Hono {
   const basePath = (options.basePath ?? "").replace(/\/$/, "");
   const keepAliveMs = options.keepAliveMs ?? 15_000;
+  const { registry } = options;
+  const app = basePath ? new Hono().basePath(basePath) : new Hono();
 
-  return async (request) => {
-    const url = new URL(request.url);
-    if (!url.pathname.startsWith(basePath)) return error(404, "not_found", "No such route");
-    const parts = url.pathname
-      .slice(basePath.length)
-      .split("/")
-      .filter(Boolean)
-      .map(decodeURIComponent);
-    const method = request.method;
-    try {
-      // /tasks
-      if (parts.length === 1 && parts[0] === "tasks") {
-        return method === "GET" ? json(200, await manager.tasks()) : notAllowed();
-      }
-      // /tasks/:task/jobs
-      if (parts.length === 3 && parts[0] === "tasks" && parts[2] === "jobs") {
-        if (method !== "POST") return notAllowed();
-        const { params, input } = await readSubmission(request, url);
-        const jobId = await manager.start(parts[1], params, input);
-        const statusUrl = `${basePath}/jobs/${jobId}`;
-        return json(
-          202,
-          { jobId, statusUrl, logsUrl: `${statusUrl}/logs`, eventsUrl: `${statusUrl}/events` },
-          { location: statusUrl },
-        );
-      }
-      // /jobs
-      if (parts.length === 1 && parts[0] === "jobs") {
-        if (method !== "GET") return notAllowed();
-        const status = url.searchParams
-          .get("status")
-          ?.split(",")
-          .filter((s): s is JobStatus => STATUSES.includes(s as JobStatus));
-        const task = url.searchParams.get("task") ?? undefined;
-        const jobs = [];
-        for await (const info of manager.list({ status, task })) jobs.push(info);
-        jobs.sort((a, b) => a.created - b.created);
-        return json(200, jobs);
-      }
-      // /cleanup
-      if (parts.length === 1 && parts[0] === "cleanup") {
-        if (method !== "POST") return notAllowed();
-        return json(200, await manager.cleanup(stampParam(url.searchParams.get("before"))));
-      }
-      // /jobs/:id[/logs|/events]
-      if (parts[0] === "jobs" && (parts.length === 2 || parts.length === 3)) {
-        const id = parts[1];
-        if (!isSafeId(id)) throw new JobsError("unknown_job", `Unknown job: ${id}`);
-        const sub = parts[2];
-        if (sub === undefined) {
-          if (method === "GET") return json(200, await manager.info(id));
-          if (method === "DELETE") return json(200, { id, status: await manager.interrupt(id) });
-          return notAllowed();
-        }
-        if (method !== "GET") return notAllowed();
-        if (sub === "logs") {
-          const since = stampParam(url.searchParams.get("since"));
-          await manager.info(id); // 404 before the stream starts
-          const follow = ["1", "true"].includes(url.searchParams.get("follow") ?? "");
-          return stream(
-            (signal) => manager.logs(id, since, { follow, signal }),
-            (m) => `${JSON.stringify(m)}\n`,
-            "application/x-ndjson",
-            request.signal,
-          );
-        }
-        if (sub === "events") {
-          const since = stampParam(
-            request.headers.get("last-event-id") ?? url.searchParams.get("since"),
-          );
-          await manager.info(id);
-          return stream(
-            (signal) => manager.logs(id, since, { follow: true, signal }),
-            (m) => `id: ${m.stamp}\ndata: ${JSON.stringify(m)}\n\n`,
-            "text/event-stream",
-            request.signal,
-            keepAliveMs,
-          );
-        }
-      }
-      return error(404, "not_found", "No such route");
-    } catch (e) {
-      if (e instanceof JobsError)
-        return error(e.code === "invalid_params" ? 400 : 404, e.code, e.message);
-      return error(500, "internal", e instanceof Error ? e.message : String(e));
-    }
-  };
+  if (options.cors) {
+    app.use(
+      "*",
+      cors({
+        origin: options.cors.origin,
+        allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allowHeaders: CORS_ALLOW_HEADERS,
+        exposeHeaders: CORS_EXPOSE_HEADERS,
+      }),
+    );
+  }
+
+  app.get("/tasks", async (c) => c.json(await manager.tasks()));
+  app.all("/tasks", notAllowed);
+
+  app.put("/tasks/:name", async (c) => {
+    const body = await readJson(c);
+    const upload = {
+      name: c.req.param("name"),
+      ext: field(body, "ext"),
+      script: field(body, "script"),
+      cleanup: body.cleanup === undefined ? undefined : field(body, "cleanup"),
+    };
+    return c.json(await uploads(registry).add(upload), 201);
+  });
+  app.delete("/tasks/:name", async (c) => {
+    const name = c.req.param("name");
+    await uploads(registry).remove(name);
+    return c.json({ removed: name });
+  });
+  app.all("/tasks/:name", notAllowed);
+
+  app.post("/tasks/:task/jobs", async (c) => {
+    const { params, input } = await readSubmission(c.req.raw);
+    const jobId = await manager.start(c.req.param("task"), params, input);
+    const statusUrl = `${basePath}/jobs/${jobId}`;
+    c.header("location", statusUrl);
+    return c.json(
+      { jobId, statusUrl, logsUrl: `${statusUrl}/logs`, eventsUrl: `${statusUrl}/events` },
+      202,
+    );
+  });
+  app.all("/tasks/:task/jobs", notAllowed);
+
+  app.get("/jobs", async (c) => {
+    const status = c.req
+      .query("status")
+      ?.split(",")
+      .filter((s): s is JobStatus => STATUSES.includes(s as JobStatus));
+    const jobs = [];
+    for await (const info of manager.list({ status, task: c.req.query("task") })) jobs.push(info);
+    jobs.sort((a, b) => a.created - b.created);
+    return c.json(jobs);
+  });
+  app.all("/jobs", notAllowed);
+
+  app.post("/cleanup", async (c) =>
+    c.json(await manager.cleanup(stampParam(c.req.query("before") ?? null))),
+  );
+  app.all("/cleanup", notAllowed);
+
+  app.get("/jobs/:id", async (c) => c.json(await manager.info(jobId(c))));
+  app.delete("/jobs/:id", async (c) => {
+    const id = jobId(c);
+    return c.json({ id, status: await manager.interrupt(id) });
+  });
+  app.all("/jobs/:id", notAllowed);
+
+  app.get("/jobs/:id/logs", async (c) => {
+    const id = jobId(c);
+    const since = stampParam(c.req.query("since") ?? null);
+    await manager.info(id); // 404 before the stream starts
+    const follow = ["1", "true"].includes(c.req.query("follow") ?? "");
+    return stream(
+      (signal) => manager.logs(id, since, { follow, signal }),
+      (m) => `${JSON.stringify(m)}\n`,
+      "application/x-ndjson",
+      c.req.raw.signal,
+    );
+  });
+  app.all("/jobs/:id/logs", notAllowed);
+
+  app.get("/jobs/:id/events", async (c) => {
+    const id = jobId(c);
+    const since = stampParam(c.req.header("last-event-id") ?? c.req.query("since") ?? null);
+    await manager.info(id);
+    return stream(
+      (signal) => manager.logs(id, since, { follow: true, signal }),
+      (m) => `id: ${m.stamp}\ndata: ${JSON.stringify(m)}\n\n`,
+      "text/event-stream",
+      c.req.raw.signal,
+      keepAliveMs,
+    );
+  });
+  app.all("/jobs/:id/events", notAllowed);
+
+  if (options.mcp ?? true) {
+    const mcp = createJobsMcpHandler(manager, { registry });
+    app.all("/mcp", (c) => mcp.fetch(c.req.raw));
+  }
+
+  app.notFound((c) => c.json(errorBody("not_found", "No such route"), 404));
+  app.onError((e, c) => {
+    if (e instanceof JobsError) return c.json(errorBody(e.code, e.message), statusOf(e));
+    return c.json(errorBody("internal", e instanceof Error ? e.message : String(e)), 500);
+  });
+  return app;
 }
 
-async function readSubmission(
-  request: Request,
-  url: URL,
-): Promise<{ params: Json; input?: ByteInput }> {
+/** The app as a plain fetch handler (`Request -> Response`). */
+export function createJobsHandler(manager: JobManager, options: JobsAppOptions = {}): JobsHandler {
+  const app = createJobsApp(manager, options);
+  return async (request) => app.fetch(request);
+}
+
+function statusOf(e: JobsError): 400 | 403 | 404 {
+  if (e.code === "invalid_params") return 400;
+  if (e.code === "task_upload_disabled") return 403;
+  return 404;
+}
+
+function uploads(registry: TaskRegistry | undefined): TaskRegistry {
+  if (registry) return registry;
+  throw new JobsError("task_upload_disabled", "This server does not accept task uploads");
+}
+
+function jobId(c: Context): string {
+  const id = c.req.param("id") ?? "";
+  if (!isSafeId(id)) throw new JobsError("unknown_job", `Unknown job: ${id}`);
+  return id;
+}
+
+async function readJson(c: Context): Promise<Record<string, unknown>> {
+  try {
+    const body: unknown = await c.req.json();
+    if (body && typeof body === "object" && !Array.isArray(body))
+      return body as Record<string, unknown>;
+  } catch {}
+  throw new JobsError("invalid_params", "the body must be a JSON object");
+}
+
+function field(body: Record<string, unknown>, name: string): string {
+  const value = body[name];
+  if (typeof value !== "string") throw new JobsError("invalid_params", `${name} must be a string`);
+  return value;
+}
+
+async function readSubmission(request: Request): Promise<{ params: Json; input?: ByteInput }> {
   const type = request.headers.get("content-type") ?? "";
   if (type.startsWith("application/json")) {
     const text = await request.text();
@@ -155,7 +235,7 @@ async function readSubmission(
           : undefined,
     };
   }
-  const query = url.searchParams.get("params");
+  const query = new URL(request.url).searchParams.get("params");
   return {
     params: query ? parseParams(query) : null,
     input: request.body ? (request.body as unknown as AsyncIterable<Uint8Array>) : undefined,
@@ -227,17 +307,10 @@ function stream(
   });
 }
 
-function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json", ...headers },
-  });
+function errorBody(code: string, message: string) {
+  return { error: { code, message } };
 }
 
-function error(status: number, code: string, message: string): Response {
-  return json(status, { error: { code, message } });
-}
-
-function notAllowed(): Response {
-  return error(405, "method_not_allowed", "Method not allowed");
+function notAllowed(c: Context): Response {
+  return c.json(errorBody("method_not_allowed", "Method not allowed"), 405);
 }
