@@ -167,7 +167,7 @@ it("serves results with --outputs, the OpenAPI document, and names the tasks it 
       "--outputs",
       outputs,
       "--base-path",
-      "/api",
+      "/api/", // a trailing slash must not leak into the URLs tasks report
       "--port",
       "0",
       "--host",

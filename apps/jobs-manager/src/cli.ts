@@ -227,6 +227,7 @@ const serve = defineCommand({
     },
   },
   async run({ args }) {
+    const basePath = args["base-path"].replace(/\/+$/, ""); // "/api/" and "/api" are the same API
     await mkdir(args.tasks, { recursive: true }); // `tasks add` fills it while the server runs
     const skipped: string[] = [];
     const initial = await discoverTasks(args.tasks, undefined, (task, reason) =>
@@ -239,7 +240,7 @@ const serve = defineCommand({
       tasks: initial,
       maxConcurrent: Number(args["max-concurrent"]),
       retention: retentionHours ? { maxAgeMs: retentionHours * 3_600_000 } : undefined,
-      outputs: outputs ? { dir: outputs, url: `${args["base-path"]}/outputs` } : undefined,
+      outputs: outputs ? { dir: outputs, url: `${basePath}/outputs` } : undefined,
     });
     const rescan = async () => manager.setTasks(await discoverTasks(args.tasks));
     const origins = args.cors
@@ -247,7 +248,7 @@ const serve = defineCommand({
       .map((o) => o.trim())
       .filter(Boolean);
     const app = createJobsApp(manager, {
-      basePath: args["base-path"],
+      basePath,
       mcp: args.mcp,
       registry: args["allow-task-upload"] ? folderRegistry(args.tasks, rescan) : undefined,
       cors: origins?.length ? { origin: origins.includes("*") ? "*" : origins } : undefined,
@@ -260,12 +261,12 @@ const serve = defineCommand({
       },
       { port: Number(args.port), host: args.host },
     );
-    out(`jobs listening on http://${args.host}:${server.port}${args["base-path"]}`);
+    out(`jobs listening on http://${args.host}:${server.port}${basePath}`);
     const names = initial.map((t) => (t.cleanup ? `${t.name} (+cleanup)` : t.name));
     note(`tasks in ${resolve(args.tasks)}: ${names.join(", ") || "(none)"}`);
     for (const line of skipped) note(line);
     if (outputs) note(`outputs in ${outputs}`);
-    if (args.mcp) note(`mcp at http://${args.host}:${server.port}${args["base-path"]}/mcp`);
+    if (args.mcp) note(`mcp at http://${args.host}:${server.port}${basePath}/mcp`);
     if (args["allow-task-upload"])
       note("task upload is on: anyone who can reach this server can run code on it");
     let stopping = false;
