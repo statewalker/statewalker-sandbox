@@ -106,11 +106,12 @@ function listFiles(tree) {
 // --- pnpm-lock.yaml (v9), read line by line: importers and snapshots are all we need.
 
 function parseLockfile(text) {
-  const importers = new Map(); // dir -> [{ name, version }]
+  const importers = new Map(); // dir -> [{ name, version, dev }]
   const snapshots = new Map(); // key -> [key of each dependency]
   let section = "";
   let current = null;
   let depName = null;
+  let kind = "";
   const unquote = (s) => s.replace(/^'(.*)'$/, "$1");
   for (const line of text.split("\n")) {
     if (/^\S/.test(line)) {
@@ -125,10 +126,18 @@ function parseLockfile(text) {
       if (indent === 2) {
         current = [];
         importers.set(unquote(body.slice(0, -1)), current);
+      } else if (indent === 4) {
+        kind = body.replace(/:$/, "");
       } else if (indent === 6 && current) {
         depName = unquote(body.replace(/:$/, ""));
-      } else if (indent === 8 && body.startsWith("version:") && current) {
-        current.push({ name: depName, version: unquote(body.slice(8).trim()) });
+      } else if (
+        indent === 8 &&
+        body.startsWith("version:") &&
+        current &&
+        kind.endsWith("ependencies")
+      ) {
+        const version = unquote(body.slice(8).trim());
+        current.push({ name: depName, version, dev: kind === "devDependencies" });
       }
     } else if (section === "snapshots") {
       if (indent === 2) {
@@ -171,7 +180,9 @@ function computeHashes() {
     files.has(path) ? git(["cat-file", "blob", files.get(path).split(" ")[1]]) : "";
   const lock = parseLockfile(readBlob("pnpm-lock.yaml"));
 
-  const packages = new Map(); // dir -> { dir, name, command, external, links }
+  // A package's own tests see all its dependencies; as a dependency of another package only its
+  // runtime ones count, not its devDependencies nor its `links`.
+  const packages = new Map();
   for (const [dir, deps] of lock.importers) {
     if (dir === ".") continue;
     const manifestText = readBlob(`${dir}/package.json`);
@@ -180,15 +191,31 @@ function computeHashes() {
     const custom = config.commands[dir] ?? config.commands[manifest.name];
     const command = custom ?? (manifest.scripts?.test ? "pnpm run test" : null);
     const links = [];
+    const runtimeLinks = [];
     const external = [];
-    for (const { name, version } of deps) {
-      if (version.startsWith("link:"))
-        links.push(posix.normalize(posix.join(dir, version.slice(5))));
-      else external.push(snapshotKey(name, version));
+    const runtimeExternal = [];
+    for (const { name, version, dev } of deps) {
+      if (version.startsWith("link:")) {
+        const target = posix.normalize(posix.join(dir, version.slice(5)));
+        links.push(target);
+        if (!dev) runtimeLinks.push(target);
+      } else {
+        external.push(snapshotKey(name, version));
+        if (!dev) runtimeExternal.push(snapshotKey(name, version));
+      }
     }
     // Workspace packages its tests reach without declaring them (an alias to their sources).
     links.push(...(config.links[dir] ?? config.links[manifest.name] ?? []));
-    packages.set(dir, { dir, name: manifest.name, command, links, external });
+    const pkg = {
+      dir,
+      name: manifest.name,
+      command,
+      links,
+      runtimeLinks,
+      external,
+      runtimeExternal,
+    };
+    packages.set(dir, pkg);
   }
 
   const rootDeps = (lock.importers.get(".") ?? [])
@@ -213,18 +240,16 @@ function computeHashes() {
     ownFiles.get(owner).push(`${path.slice(owner.length + 1)} ${entry}`);
   }
 
-  const shallow = new Map();
-  for (const pkg of packages.values()) {
-    shallow.set(
-      pkg.dir,
-      sha(
-        [
-          ...ownFiles.get(pkg.dir).sort(),
-          ...closure(pkg.external, lock.snapshots).map((k) => `dep ${k}`),
-        ].join("\n"),
-      ),
+  const shallow = (pkg, external) =>
+    sha(
+      [
+        ...ownFiles.get(pkg.dir).sort(),
+        ...closure(external, lock.snapshots).map((k) => `dep ${k}`),
+      ].join("\n"),
     );
-  }
+  const asDependency = new Map(
+    [...packages.values()].map((pkg) => [pkg.dir, shallow(pkg, pkg.runtimeExternal)]),
+  );
 
   const result = new Map();
   for (const pkg of packages.values()) {
@@ -234,11 +259,11 @@ function computeHashes() {
       const d = stack.pop();
       if (reached.has(d) || d === pkg.dir || !packages.has(d)) continue;
       reached.add(d);
-      stack.push(...packages.get(d).links);
+      stack.push(...packages.get(d).runtimeLinks);
     }
     const parts = [
-      `self ${shallow.get(pkg.dir)}`,
-      ...[...reached].sort().map((d) => `ws ${d} ${shallow.get(d)}`),
+      `self ${shallow(pkg, pkg.external)}`,
+      ...[...reached].sort().map((d) => `ws ${d} ${asDependency.get(d)}`),
       `global ${globalHash}`,
       `command ${pkg.command}`,
     ];
