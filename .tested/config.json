@@ -1,5 +1,5 @@
 {
-  "globalFiles": ["tsconfig.base.json", "scripts/tested.mjs"],
+  "globalFiles": ["tsconfig.base.json"],
   "globalDeps": ["vitest", "typescript", "@types/node"],
   "ignore": ["CHANGELOG.md", "README.md"],
   "commands": {
