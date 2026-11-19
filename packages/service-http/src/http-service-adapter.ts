@@ -22,4 +22,3 @@ function getRootContext(context: Record<string, unknown>): Record<string, unknow
   }
   return rootContext as Record<string, unknown>;
 }
-// y

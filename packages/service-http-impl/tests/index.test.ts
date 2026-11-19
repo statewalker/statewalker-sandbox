@@ -45,6 +45,3 @@ it("should create and start HTTP server with default context", async () => {
     await cleanup();
   }
 });
-
-import { it as __it, expect as __e } from "vitest";
-__it("deliberate failure", () => __e(1).toBe(2));
