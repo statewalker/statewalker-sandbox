@@ -49,6 +49,7 @@
   "devDependencies": {
     "@biomejs/biome": "catalog:",
     "@modelcontextprotocol/client": "catalog:",
+    "@readme/openapi-parser": "catalog:",
     "@types/node": "catalog:",
     "rimraf": "catalog:",
     "tsdown": "catalog:",
@@ -59,6 +60,7 @@
   },
   "dependencies": {
     "@hono/node-server": "catalog:",
+    "@hono/zod-openapi": "catalog:",
     "@modelcontextprotocol/server": "catalog:",
     "citty": "catalog:",
     "hono": "catalog:",

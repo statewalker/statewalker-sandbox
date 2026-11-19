@@ -1,3 +1,4 @@
 .jobs/
 dist/
 /tasks/
+__pycache__/

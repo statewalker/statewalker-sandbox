@@ -9,6 +9,7 @@ import { JobsClient, JobsClientError } from "./client.ts";
 import { createJobManager } from "./job-manager.ts";
 import { discoverTasks } from "./launchers.ts";
 import { serve as serveHttp } from "./node-server.ts";
+import { folderOutputs } from "./outputs.ts";
 import { createJobsApp } from "./rest.ts";
 import { addTask, folderRegistry, removeTask } from "./tasks-dir.ts";
 import { isTerminal, type JobMessage, type JobStatus, JobsError, type Json } from "./types.ts";
@@ -24,8 +25,9 @@ const OVERVIEW = `jobs: run named tasks as shell commands and track them
 Server
   jobs serve [--tasks ./tasks] [--data ./.jobs] [--port 8080] [--host 127.0.0.1]
              [--max-concurrent 4] [--retention-hours N] [--base-path /api]
-             [--allow-task-upload] [--no-mcp] [--cors origin,origin|*]
-             REST at <base-path>/, MCP (Streamable HTTP) at <base-path>/mcp
+             [--allow-task-upload] [--no-mcp] [--cors origin,origin|*] [--outputs ./outputs]
+             REST at <base-path>/, OpenAPI at <base-path>/openapi.json,
+             MCP (Streamable HTTP) at <base-path>/mcp, results at <base-path>/outputs/<id>/
 
 Tasks (the server re-scans its tasks directory on every request)
   jobs tasks [--json]                         list the server's tasks
@@ -218,16 +220,27 @@ const serve = defineCommand({
       type: "string",
       description: "Send CORS headers for these origins: comma-separated, or * for any",
     },
+    outputs: {
+      type: "string",
+      description:
+        "Results folder: each job gets <dir>/<id>/ as JOB_OUTPUT_DIR, served at <base-path>/outputs/<id>/ (JOB_OUTPUT_URL)",
+    },
   },
   async run({ args }) {
+    const basePath = args["base-path"].replace(/\/+$/, ""); // "/api/" and "/api" are the same API
     await mkdir(args.tasks, { recursive: true }); // `tasks add` fills it while the server runs
-    const initial = await discoverTasks(args.tasks);
+    const skipped: string[] = [];
+    const initial = await discoverTasks(args.tasks, undefined, (task, reason) =>
+      skipped.push(`skipped task ${task}: ${reason}`),
+    );
+    const outputs = args.outputs ? resolve(args.outputs) : undefined;
     const retentionHours = args["retention-hours"] ? Number(args["retention-hours"]) : undefined;
     const manager = await createJobManager({
       root: args.data,
       tasks: initial,
       maxConcurrent: Number(args["max-concurrent"]),
       retention: retentionHours ? { maxAgeMs: retentionHours * 3_600_000 } : undefined,
+      outputs: outputs ? { dir: outputs, url: `${basePath}/outputs` } : undefined,
     });
     const rescan = async () => manager.setTasks(await discoverTasks(args.tasks));
     const origins = args.cors
@@ -235,10 +248,11 @@ const serve = defineCommand({
       .map((o) => o.trim())
       .filter(Boolean);
     const app = createJobsApp(manager, {
-      basePath: args["base-path"],
+      basePath,
       mcp: args.mcp,
       registry: args["allow-task-upload"] ? folderRegistry(args.tasks, rescan) : undefined,
       cors: origins?.length ? { origin: origins.includes("*") ? "*" : origins } : undefined,
+      outputs: outputs ? folderOutputs(outputs) : undefined,
     });
     const server = await serveHttp(
       async (request) => {
@@ -247,10 +261,12 @@ const serve = defineCommand({
       },
       { port: Number(args.port), host: args.host },
     );
-    out(`jobs listening on http://${args.host}:${server.port}${args["base-path"]}`);
+    out(`jobs listening on http://${args.host}:${server.port}${basePath}`);
     const names = initial.map((t) => (t.cleanup ? `${t.name} (+cleanup)` : t.name));
     note(`tasks in ${resolve(args.tasks)}: ${names.join(", ") || "(none)"}`);
-    if (args.mcp) note(`mcp at http://${args.host}:${server.port}${args["base-path"]}/mcp`);
+    for (const line of skipped) note(line);
+    if (outputs) note(`outputs in ${outputs}`);
+    if (args.mcp) note(`mcp at http://${args.host}:${server.port}${basePath}/mcp`);
     if (args["allow-task-upload"])
       note("task upload is on: anyone who can reach this server can run code on it");
     let stopping = false;

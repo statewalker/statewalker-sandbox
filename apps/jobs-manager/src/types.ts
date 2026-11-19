@@ -70,7 +70,32 @@ export type TaskDefinition = {
   cwd?: string;
   /** Extra environment variables for both scripts. */
   env?: Record<string, string>;
+  /** JSON Schemas for the job's params, input, output and error lines; see `TaskSchema`. */
+  schema?: TaskSchema;
 };
+
+/** A JSON Schema (draft 2020-12), as read by `z.fromJSONSchema`. */
+export type JsonSchema = { [key: string]: Json } | boolean;
+
+/**
+ * What a task accepts and produces, read from `<task>.schema.json`. Every part is optional; a
+ * missing part is not checked. Checks never change values.
+ *
+ * - `params`  the job's params; a mismatch rejects `start` with `invalid_params`
+ * - `body`    the input: a JSON Schema means JSONL, each line checked (a bad line rejects `start`);
+ *             `{ contentMediaType }` without `type` means opaque bytes, not checked
+ * - `message` each stdout line; a mismatch is recorded as `{ code: "invalid_message", issues, raw }`
+ * - `error`   each stderr line; a mismatch is recorded as `{ code: "invalid_error", issues, raw }`
+ */
+export type TaskSchema = {
+  params?: JsonSchema;
+  body?: JsonSchema;
+  message?: JsonSchema;
+  error?: JsonSchema;
+};
+
+/** One schema violation: where (a JSON Pointer into the value, `/` for the value itself) and what. */
+export type Issue = { path: string; message: string };
 
 export type TaskInfo = { name: string; hasCleanup: boolean };
 
@@ -82,6 +107,8 @@ export type TaskUpload = {
   script: string;
   /** Cleanup script source, run with the same launcher. */
   cleanup?: string;
+  /** Written as `<name>.schema.json`; refused with `invalid_params` if it does not compile. */
+  schema?: TaskSchema;
 };
 
 /**
@@ -96,6 +123,18 @@ export interface TaskRegistry {
 }
 
 export type ByteInput = Iterable<Uint8Array> | AsyncIterable<Uint8Array>;
+
+/** A file in a job's results folder, as served over HTTP. */
+export type OutputFile = { body: ReadableStream<Uint8Array>; size: number; type: string };
+
+/**
+ * Read access to the jobs' results folders, for `GET <basePath>/outputs/:jobId/<path>`. An
+ * implementation answers `undefined` for anything that is not a file inside that job's own folder:
+ * `..`, absolute paths and other jobs' files included.
+ */
+export interface OutputFiles {
+  read(id: JobId, path: string): Promise<OutputFile | undefined>;
+}
 
 export type LogsOptions = {
   /** Keep waiting for new messages until the job finishes. Default `true`. */
@@ -129,9 +168,12 @@ export interface JobManager {
 
 export class JobsError extends Error {
   readonly code: "unknown_task" | "unknown_job" | "invalid_params" | "task_upload_disabled";
-  constructor(code: JobsError["code"], message: string) {
+  /** The schema violations behind an `invalid_params`, when a task's schema rejected a value. */
+  readonly issues?: Issue[];
+  constructor(code: JobsError["code"], message: string, issues?: Issue[]) {
     super(message);
     this.name = "JobsError";
     this.code = code;
+    if (issues) this.issues = issues;
   }
 }

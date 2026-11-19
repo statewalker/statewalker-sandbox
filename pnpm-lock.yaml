@@ -39,6 +39,9 @@ catalogs:
     '@hono/node-ws':
       specifier: ^1.3.1
       version: 1.3.1
+    '@hono/zod-openapi':
+      specifier: ^1.6.3
+      version: 1.6.3
     '@just-bash/executor':
       specifier: ^7.0.0
       version: 7.0.0
@@ -81,6 +84,9 @@ catalogs:
     '@preact/signals-core':
       specifier: ^1.14.4
       version: 1.14.4
+    '@readme/openapi-parser':
+      specifier: ^10.0.0
+      version: 10.0.0
     '@statewalker/ai-openai-compat.core':
       specifier: ^0.4.0
       version: 0.4.2
@@ -930,6 +936,9 @@ importers:
       '@hono/node-server':
         specifier: 'catalog:'
         version: 2.1.8(hono@4.13.18)
+      '@hono/zod-openapi':
+        specifier: 'catalog:'
+        version: 1.6.3(hono@4.13.18)(zod@4.6.7)
       '@modelcontextprotocol/server':
         specifier: 'catalog:'
         version: 2.4.0
@@ -949,6 +958,9 @@ importers:
       '@modelcontextprotocol/client':
         specifier: 'catalog:'
         version: 2.4.0
+      '@readme/openapi-parser':
+        specifier: 'catalog:'
+        version: 10.0.0(openapi-types@12.1.3)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
@@ -1945,6 +1957,17 @@ packages:
       zod:
         optional: true
 
+  '@apidevtools/json-schema-ref-parser@15.5.2':
+    resolution: {integrity: sha512-B+C9Ok0DF/rjANIUHgwcV5/d4C72MB7f2IbKFL8jDGcGq2qn3yr893s8vAn2kbhmyaelAin0JK8EKF9P1+y7aQ==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@types/json-schema': ^7.0.15
+
+  '@asteasolutions/zod-to-openapi@9.1.0':
+    resolution: {integrity: sha512-pLMeRgRYS7/vZIgAAkOe2P6+XGTifR1MT9pqDoxZ11EmcJJ+DPmdPqLN8ZZF4U8R9KHCCQCS9c2wtuE8wSrfkw==}
+    peerDependencies:
+      zod: ^4.6.7
+
   '@aws-sdk/client-bedrock-runtime@3.1127.0':
     resolution: {integrity: sha512-IDl/lrPb90aH+pZFHGNDmgH9nAUQj5PlZH1sJ3w7RikctyjHSnY3oNjZhrLoaBoQn/rNK0zsP6OHEqEhj2tdLA==}
     engines: {node: '>=20.0.0'}
@@ -2628,6 +2651,23 @@ packages:
     peerDependencies:
       '@hono/node-server': ^1.19.11
       hono: ^4.13.18
+
+  '@hono/zod-openapi@1.6.3':
+    resolution: {integrity: sha512-VYR82Y60plu8g3pN60OUXMVKpmxh3R04Qs++3DY9vtwZ9/sA/BRY0PcRIR+Z37/3itWtM7pYwT9bKiH9JhqV6Q==}
+    engines: {node: '>=16.0.0'}
+    peerDependencies:
+      hono: ^4.13.18
+      zod: ^4.6.7
+
+  '@hono/zod-validator@0.9.1':
+    resolution: {integrity: sha512-iiv6w0qrIc0arfvCtUqBWsvl4fXjzaTcQcCJTTtCnkawF9HHGE+KjEl0ox3gQJ6rKZEgE3mLExlQCF72M+mNuw==}
+    peerDependencies:
+      hono: ^4.13.18
+      zod: ^4.6.7
+
+  '@humanwhocodes/momoa@2.0.4':
+    resolution: {integrity: sha512-RE815I4arJFtt+FVeU1Tgp9/Xvecacji8w/V6XtXsWWH/wz/eNkNbhb+ny/+PlVZjV0rxQpRSQKNKE3lcktHEA==}
+    engines: {node: '>=10.10.0'}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -4331,6 +4371,22 @@ packages:
       '@types/react':
         optional: true
 
+  '@readme/better-ajv-errors@2.4.0':
+    resolution: {integrity: sha512-9WODaOAKSl/mU+MYNZ2aHCrkoRSvmQ+1YkLj589OEqqjOAhbn8j7Z+ilYoiTu/he6X63/clsxxAB4qny9/dDzg==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      ajv: 4.11.8 - 8
+
+  '@readme/openapi-parser@10.0.0':
+    resolution: {integrity: sha512-i00ADeEJ24QoVS3QDM66bZxyTdIT0zoPtYxA4xS4L5Zw/3ivt0smzIjf1GSma3/uArSGXTG+oJf0gnieH2iSbQ==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      openapi-types: '>=7'
+
+  '@readme/openapi-schemas@4.0.0':
+    resolution: {integrity: sha512-hrG//9/+RpOZTrUDirU4OzfMqaxCdY5BMpr3YuLf3Rje9rfNsydQJsH9iCPTie9ZRu9xe+0OUD4fHe0JmGwa2w==}
+    engines: {node: '>=20'}
+
   '@rolldown/binding-android-arm-eabi@1.2.12':
     resolution: {integrity: sha512-dB/a1214qKfHMXCpgqR4OZT+jS4kTyEXbQGJPqzobt5EwH5rX080pxE37alt3RzvR1bf1Yz/yGqRfrYAxuPw0A==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -5447,6 +5503,17 @@ packages:
     peerDependencies:
       zod: ^4.6.7
 
+  ajv-draft-04@1.0.0:
+    resolution: {integrity: sha512-mv00Te6nmYbRp5DCwclxtt7yV/joXJPGS7nM+97GdxvuttCOfgI3K4U25zboyeX0O+myI8ERluxQe5wljMmVIw==}
+    peerDependencies:
+      ajv: ^8.5.0
+    peerDependenciesMeta:
+      ajv:
+        optional: true
+
+  ajv@8.20.0:
+    resolution: {integrity: sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==}
+
   alien-signals@3.2.1:
     resolution: {integrity: sha512-I8FjmltrfnDFoZedi5CG8DghVYNhzb/Ijluz7tCSJH0xpd0484Kowhbb1XDYOxfJpU1p5wnM2X54dA+IfGyD1g==}
 
@@ -6036,6 +6103,9 @@ packages:
   extend@3.0.2:
     resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
 
+  fast-deep-equal@3.1.3:
+    resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
+
   fast-png@8.0.0:
     resolution: {integrity: sha512-gCysNasJ8KEMgfdYIKd/wTDo6ENK1PWT0RJO7O+0pgmuHPw2O6tA1WvdxFRJoLf9V8yFYpG0FA1YgI8X97OhJA==}
 
@@ -6051,6 +6121,9 @@ packages:
   fast-unique-numbers@9.0.27:
     resolution: {integrity: sha512-nDA9ADeINN8SA2u2wCtU+siWFTTDqQR37XvgPIDDmboWQeExz7X0mImxuaN+kJddliIqy2FpVRmnvRZ+j8i1/A==}
     engines: {node: '>=18.2.0'}
+
+  fast-uri@3.1.9:
+    resolution: {integrity: sha512-hS/0Wt3Ya043oKXs0sIxrMpKQITXhMLIrVAKKXi4gozGC9v7YRWVnXIZzjNPTO02M9BdxLCWqK1yRXgNziVyJQ==}
 
   fast-wrap-ansi@0.2.2:
     resolution: {integrity: sha512-7F2Fl+TjRSenLqlU3UjSH0iyqopqoZIu7eZVpEirP2g1GtWa2G/ecEmBdgz31+Mxr+ELclgg6sokpSFIQiZ02Q==}
@@ -6563,6 +6636,9 @@ packages:
     resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
     engines: {node: '>=16'}
 
+  json-schema-traverse@1.0.0:
+    resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
+
   json-schema@0.4.0:
     resolution: {integrity: sha512-es94M3nTIfsEPisRafak+HDLfHXnKBhV3vU5eqPcS3flIWqcxJWgXHXiey3YrpaNsanY5ei1VoYEbOzijuq9BA==}
 
@@ -6573,6 +6649,10 @@ packages:
 
   jsonc-parser@3.3.1:
     resolution: {integrity: sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ==}
+
+  jsonpointer@5.0.1:
+    resolution: {integrity: sha512-p/nXbhSEcu3pZRdkW1OfJhpsVtW1gd4Wa1fnQc9YLiTfAjn0312eMKimbdIQzuZl9aa9xUGaRlP9T/CJE/ditQ==}
+    engines: {node: '>=0.10.0'}
 
   jsqr@1.4.0:
     resolution: {integrity: sha512-dxLob7q65Xg2DvstYkRpkYtmKm2sPJ9oFhrhmudT1dZvNFFTlroai3AWSpLey/w5vMcLBXRgOJsbXpdN9HzU/A==}
@@ -7150,6 +7230,12 @@ packages:
       zod:
         optional: true
 
+  openapi-types@12.1.3:
+    resolution: {integrity: sha512-N4YtSYJqghVu4iek2ZUvcN/0aqH1kRDuNqzcycDxhOUpg7GdvLa2F3DgS6yBNhInhv2r/6I0Flkn7CqL8+nIcw==}
+
+  openapi3-ts@4.6.2:
+    resolution: {integrity: sha512-gyyil3DweqhXiEhTqtAs9wwRLfWHmetwhI4kmM5Rn0d6gtmK863Ki7qqbQnp9+Wwlqoe3B1LFWj7kMp5ctE4rQ==}
+
   oxc-parser@0.127.0:
     resolution: {integrity: sha512-bkgD4qHlN7WxLdX8bLXdaU54TtQtAIg/ZBAfm0aje/mo3MRDo3P0hZSgr4U7O3xfX+fQmR5AP04JS/TGcZLcFA==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -7557,6 +7643,10 @@ packages:
 
   require-directory@2.1.1:
     resolution: {integrity: sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q==}
+    engines: {node: '>=0.10.0'}
+
+  require-from-string@2.0.2:
+    resolution: {integrity: sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw==}
     engines: {node: '>=0.10.0'}
 
   resolve-pkg-maps@1.0.0:
@@ -8537,6 +8627,17 @@ snapshots:
     optionalDependencies:
       zod: 4.6.7
 
+  '@apidevtools/json-schema-ref-parser@15.5.2(@types/json-schema@7.0.15)':
+    dependencies:
+      '@types/json-schema': 7.0.15
+      js-yaml: 5.4.2
+      undici: 7.30.1
+
+  '@asteasolutions/zod-to-openapi@9.1.0(zod@4.6.7)':
+    dependencies:
+      openapi3-ts: 4.6.2
+      zod: 4.6.7
+
   '@aws-sdk/client-bedrock-runtime@3.1127.0':
     dependencies:
       '@aws-sdk/core': 3.978.1
@@ -9390,6 +9491,21 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
+
+  '@hono/zod-openapi@1.6.3(hono@4.13.18)(zod@4.6.7)':
+    dependencies:
+      '@asteasolutions/zod-to-openapi': 9.1.0(zod@4.6.7)
+      '@hono/zod-validator': 0.9.1(hono@4.13.18)(zod@4.6.7)
+      hono: 4.13.18
+      openapi3-ts: 4.6.2
+      zod: 4.6.7
+
+  '@hono/zod-validator@0.9.1(hono@4.13.18)(zod@4.6.7)':
+    dependencies:
+      hono: 4.13.18
+      zod: 4.6.7
+
+  '@humanwhocodes/momoa@2.0.4': {}
 
   '@img/colour@1.1.0': {}
 
@@ -11226,6 +11342,30 @@ snapshots:
       '@types/react': 19.3.0
     optional: true
 
+  '@readme/better-ajv-errors@2.4.0(ajv@8.20.0)':
+    dependencies:
+      '@babel/code-frame': 7.29.7
+      '@babel/runtime': 7.29.14
+      '@humanwhocodes/momoa': 2.0.4
+      ajv: 8.20.0
+      jsonpointer: 5.0.1
+      leven: 3.1.0
+      picocolors: 1.1.1
+
+  '@readme/openapi-parser@10.0.0(openapi-types@12.1.3)':
+    dependencies:
+      '@apidevtools/json-schema-ref-parser': 15.5.2(@types/json-schema@7.0.15)
+      '@readme/better-ajv-errors': 2.4.0(ajv@8.20.0)
+      '@readme/openapi-schemas': 4.0.0
+      '@types/json-schema': 7.0.15
+      ajv: 8.20.0
+      ajv-draft-04: 1.0.0(ajv@8.20.0)
+      openapi-types: 12.1.3
+
+  '@readme/openapi-schemas@4.0.0':
+    dependencies:
+      '@types/json-schema': 7.0.15
+
   '@rolldown/binding-android-arm-eabi@1.2.12':
     optional: true
 
@@ -12253,6 +12393,17 @@ snapshots:
       '@ai-sdk/provider-utils': 5.0.53(zod@4.6.7)
       zod: 4.6.7
 
+  ajv-draft-04@1.0.0(ajv@8.20.0):
+    optionalDependencies:
+      ajv: 8.20.0
+
+  ajv@8.20.0:
+    dependencies:
+      fast-deep-equal: 3.1.3
+      fast-uri: 3.1.9
+      json-schema-traverse: 1.0.0
+      require-from-string: 2.0.2
+
   alien-signals@3.2.1: {}
 
   anser@1.4.10:
@@ -12828,6 +12979,8 @@ snapshots:
 
   extend@3.0.2: {}
 
+  fast-deep-equal@3.1.3: {}
+
   fast-png@8.0.0:
     dependencies:
       fflate: 0.8.3
@@ -12845,6 +12998,8 @@ snapshots:
     dependencies:
       '@babel/runtime': 7.29.14
       tslib: 2.8.1
+
+  fast-uri@3.1.9: {}
 
   fast-wrap-ansi@0.2.2:
     dependencies:
@@ -13436,11 +13591,15 @@ snapshots:
       '@babel/runtime': 7.29.13
       ts-algebra: 2.0.0
 
+  json-schema-traverse@1.0.0: {}
+
   json-schema@0.4.0: {}
 
   json5@2.2.3: {}
 
   jsonc-parser@3.3.1: {}
+
+  jsonpointer@5.0.1: {}
 
   jsqr@1.4.0: {}
 
@@ -13488,8 +13647,7 @@ snapshots:
 
   layerr@3.0.0: {}
 
-  leven@3.1.0:
-    optional: true
+  leven@3.1.0: {}
 
   libp2p@3.5.1:
     dependencies:
@@ -14131,6 +14289,12 @@ snapshots:
       ws: 8.22.2(bufferutil@4.2.0)
       zod: 4.6.7
 
+  openapi-types@12.1.3: {}
+
+  openapi3-ts@4.6.2:
+    dependencies:
+      yaml: 2.9.1
+
   oxc-parser@0.127.0:
     dependencies:
       '@oxc-project/types': 0.127.0
@@ -14677,6 +14841,8 @@ snapshots:
 
   require-directory@2.1.1:
     optional: true
+
+  require-from-string@2.0.2: {}
 
   resolve-pkg-maps@1.0.0: {}
 

@@ -6,6 +6,7 @@ import {
   createJobsApp,
   discoverTasks,
   folderRegistry,
+  type JobManager,
   type JobMessage,
   type JobsAppOptions,
   type ProcessJobManager,
@@ -26,8 +27,8 @@ const TASKS = [
 ];
 
 /** An MCP client talking to the app in process: no server, the app's fetch is the transport. */
-async function connect(options: JobsAppOptions = {}) {
-  const app = createJobsApp(manager, options);
+async function connect(options: JobsAppOptions = {}, jobs: JobManager = manager) {
+  const app = createJobsApp(jobs, options);
   client = new Client({ name: "jobs-test", version: "1.0.0" });
   await client.connect(
     new StreamableHTTPClientTransport(new URL("http://jobs.test/mcp"), {
@@ -75,6 +76,7 @@ describe("MCP tools", () => {
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual([
       "cleanup_jobs",
+      "follow_job",
       "get_job",
       "interrupt_job",
       "job_logs",
@@ -151,6 +153,81 @@ describe("MCP tools", () => {
         expect(followed.messages.at(-1)?.status).toBe("done");
       }
     }
+  });
+
+  it("follow_job streams every message once as a progress notification and returns them all", async () => {
+    await connect();
+    const { jobId } = await tool<{ jobId: string }>("start_job", {
+      task: "stream",
+      params: { seconds: 1, intervalMs: 200 },
+    });
+    const notified: { progress: number; message?: string }[] = [];
+    const result = await client.callTool(
+      { name: "follow_job", arguments: { id: jobId } },
+      { onprogress: (p) => notified.push(p) },
+    );
+    const page = result.structuredContent as Logs;
+    expect(page.finished).toBe(true);
+    expect(page.status).toBe("done");
+    const all = [];
+    for await (const m of manager.logs(jobId, 0, { follow: false })) all.push(m);
+    expect(page.messages).toEqual(all);
+    expect(notified.map((n) => JSON.parse(n.message ?? "null"))).toEqual(all);
+    expect(notified.map((n) => n.progress)).toEqual(all.map((_, i) => i + 1));
+  });
+
+  it("follow_job returns unfinished at timeoutMs with a cursor job_logs continues from", async () => {
+    await connect();
+    const { jobId } = await tool<{ jobId: string }>("start_job", { task: "sleepy" });
+    const started = Date.now();
+    const first = (
+      await client.callTool({ name: "follow_job", arguments: { id: jobId, timeoutMs: 300 } })
+    ).structuredContent as Logs;
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(first.finished).toBe(false);
+    expect(first.status).toBe("running");
+    await tool("interrupt_job", { id: jobId });
+    const rest = await tool<Logs>("job_logs", { id: jobId, since: first.next });
+    expect(rest.finished).toBe(true);
+    const all = [];
+    for await (const m of manager.logs(jobId, 0, { follow: false })) all.push(m);
+    expect([...first.messages, ...rest.messages]).toEqual(all);
+  });
+
+  // A stateless server cannot match the client's later notifications/cancelled to the call; what
+  // it sees is the client dropping the request, as closing the transport (or the process) does.
+  it("follow_job stops following when the client goes away after cancelling", async () => {
+    let open = 0;
+    const counting: JobManager = {
+      start: (...a) => manager.start(...a),
+      status: (id) => manager.status(id),
+      info: (id) => manager.info(id),
+      interrupt: (id) => manager.interrupt(id),
+      list: (filter) => manager.list(filter),
+      cleanup: (before) => manager.cleanup(before),
+      tasks: () => manager.tasks(),
+      logs: async function* (...args) {
+        open++;
+        try {
+          yield* manager.logs(...args);
+        } finally {
+          open--;
+        }
+      },
+    };
+    await connect({}, counting);
+    const { jobId } = await tool<{ jobId: string }>("start_job", { task: "sleepy" });
+    const abort = new AbortController();
+    const call = client.callTool(
+      { name: "follow_job", arguments: { id: jobId } },
+      { signal: abort.signal, onprogress: () => abort.abort() },
+    );
+    await expect(call).rejects.toThrow();
+    expect(open).toBe(1); // the cancellation alone does not reach the call
+    await client.close();
+    for (let i = 0; i < 40 && open > 0; i++) await new Promise((r) => setTimeout(r, 50));
+    expect(open).toBe(0);
+    await manager.interrupt(jobId);
   });
 
   it("returns at once with no messages when nothing new arrives within waitMs", async () => {

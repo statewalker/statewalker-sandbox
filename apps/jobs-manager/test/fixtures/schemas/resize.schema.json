@@ -1,0 +1,32 @@
+{
+  "params": {
+    "type": "object",
+    "properties": {
+      "sizes": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1 }
+    },
+    "required": ["sizes"],
+    "additionalProperties": false
+  },
+  "body": { "contentMediaType": "image/x-portable-pixmap" },
+  "message": {
+    "type": "object",
+    "properties": {
+      "size": { "type": "integer" },
+      "width": { "type": "integer" },
+      "height": { "type": "integer" },
+      "data": {
+        "type": "string",
+        "contentEncoding": "base64",
+        "contentMediaType": "image/x-portable-pixmap",
+        "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+        "description": "The resized image, a binary PPM, base64-encoded"
+      }
+    },
+    "required": ["size", "width", "height", "data"]
+  },
+  "error": {
+    "type": "object",
+    "properties": { "code": { "type": "string" }, "detail": { "type": "string" } },
+    "required": ["code"]
+  }
+}
