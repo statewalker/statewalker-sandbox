@@ -26,4 +26,6 @@ take either side: a record that no longer matches only makes the package test ag
 - `globalDeps`: root devDependencies every package depends on (their locked closure)
 - `ignore`: file names left out of package hashes
 - `commands`: a test command per package directory or name, instead of `pnpm run test`
+- `links`: workspace package directories a package's tests use without declaring them
+  (through a vitest alias to their sources, for example), per package directory or name
 - `skip`: packages never tested here

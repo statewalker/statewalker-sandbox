@@ -53,6 +53,7 @@ const config = {
   globalDeps: [],
   ignore: [],
   commands: {},
+  links: {},
   skip: [],
   ...readJson(join(RECORDS, "config.json"), {}),
 };
@@ -185,6 +186,8 @@ function computeHashes() {
         links.push(posix.normalize(posix.join(dir, version.slice(5))));
       else external.push(snapshotKey(name, version));
     }
+    // Workspace packages its tests reach without declaring them (an alias to their sources).
+    links.push(...(config.links[dir] ?? config.links[manifest.name] ?? []));
     packages.set(dir, { dir, name: manifest.name, command, links, external });
   }
 
