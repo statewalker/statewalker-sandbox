@@ -4,5 +4,6 @@
   "ignore": ["CHANGELOG.md", "README.md"],
   "commands": {
     "packages/httpeers-conformance": "pnpm exec vitest run --exclude tests/coverage.test.ts --exclude tests/parse-ids.test.ts"
-  }
+  },
+  "runtime": ["node", "git"]
 }
