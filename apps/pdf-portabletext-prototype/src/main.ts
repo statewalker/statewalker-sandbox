@@ -1,9 +1,17 @@
-import type { ImageFormat } from "./assets.ts";
-import { createBundle, download } from "./bundle.ts";
-import { type ConvertResult, convertPdf } from "./convert.ts";
-import { DEFAULT_LANGUAGE, LANGUAGES } from "./languages.ts";
-import { createOcrPool, type OcrPool } from "./ocr-client.ts";
-import { renderPreview } from "./preview.ts";
+import {
+  type ConvertResult,
+  convertPdfStream,
+  createBundle,
+  createOcrPool,
+  DEFAULT_LANGUAGE,
+  download,
+  type ImageFormat,
+  LANGUAGES,
+  type OcrEngine,
+  type OcrPool,
+  type PdfPortableTextDocument,
+} from "@statewalker/pdf-portabletext";
+import { renderPreview } from "@statewalker/pdf-portabletext/preview";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -73,30 +81,73 @@ form.addEventListener("submit", async (e) => {
   cancelBtn.disabled = false;
   jsonBtn.disabled = zipBtn.disabled = true;
   abort = new AbortController();
+  const engine = $<HTMLSelectElement>("engine").value as OcrEngine;
+  if (ocr && ocr.engine !== engine) {
+    ocr.terminate();
+    ocr = null;
+  }
   ocr ??= createOcrPool({
+    engine,
     modelBaseUrl: new URLSearchParams(location.search).get("models") ?? undefined,
   });
   const started = performance.now();
   try {
-    result = await convertPdf(file, ocr, {
+    const options = {
       language: $<HTMLSelectElement>("language").value,
       fallbackLanguage: $<HTMLSelectElement>("fallback").value,
       maxPages: Number($<HTMLInputElement>("max-pages").value) || undefined,
       detectOrientation: $<HTMLInputElement>("orientation").checked,
+      invisibleText: $<HTMLSelectElement>("invisible").value as "replace" | "reuse" | "keep",
       imageFormat: $<HTMLSelectElement>("format").value as ImageFormat,
       ocrImages: $<HTMLInputElement>("ocr-images").checked,
       ocrEmptyPages: $<HTMLInputElement>("ocr-pages").checked,
       minImageSize: Number($<HTMLInputElement>("min-size").value) || 1,
       minConfidence: Number($<HTMLInputElement>("min-conf").value) || 0,
       onLog: log,
-      onProgress: (p) => {
+      onProgress: (p: number) => {
         convertBtn.textContent = p >= 100 ? "Convert" : `OCR ${p}%`;
       },
       signal: abort.signal,
-    });
+    };
+    // Pages are shown as they are converted; the document is assembled alongside.
+    const doc: PdfPortableTextDocument = {
+      _type: "pdfDocument",
+      version: 1,
+      title: file.name.replace(/\.pdf$/i, ""),
+      source: { fileName: file.name, size: file.size, pageCount: 0 },
+      createdAt: new Date().toISOString(),
+      pages: [],
+      blocks: [],
+      assets: {},
+    };
+    const blobs = new Map<string, Blob>();
+    const urls = new Map<string, string>();
+    let pageCount = 0;
+    for await (const event of convertPdfStream(file, ocr, options)) {
+      if (event.type === "start") {
+        pageCount = event.pageCount;
+        doc.source = event.source;
+      } else if (event.type === "page") {
+        doc.pages.push(event.page);
+        doc.blocks.push(...event.blocks);
+        for (const a of event.assets) {
+          doc.assets[a.meta._id] = a.meta;
+          blobs.set(a.meta._id, a.blob);
+          const url = URL.createObjectURL(a.blob);
+          objectUrls.push(url);
+          urls.set(a.meta._id, url);
+        }
+        previewEl.insertAdjacentHTML("beforeend", renderPreview({ blocks: event.blocks }, urls));
+        const n = event.page.number;
+        if (n === pageCount || n % 10 === 0) log(`page ${n}/${pageCount} done${heap()}`);
+      } else if (event.language) {
+        doc.language = event.language;
+      }
+    }
+    result = { document: doc, blobs };
     log(
       `done in ${((performance.now() - started) / 1000).toFixed(1)}s: ` +
-        `${result.document.blocks.length} blocks, ${Object.keys(result.document.assets).length} assets`,
+        `${doc.blocks.length} blocks, ${Object.keys(doc.assets).length} assets${heap()}`,
     );
     show(result);
   } catch (err) {
@@ -119,16 +170,15 @@ form.addEventListener("submit", async (e) => {
 
 cancelBtn.addEventListener("click", () => abort?.abort());
 
-function show({ document: doc, blobs }: ConvertResult) {
+/** JS heap in use (Chromium only), for watching memory on long documents. */
+function heap(): string {
+  const memory = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+  return memory ? `, JS heap ${(memory.usedJSHeapSize / 2 ** 20).toFixed(0)} MB` : "";
+}
+
+function show({ document: doc }: ConvertResult) {
   // Exposed for scripts/corpus.ts and debugging from the console.
   (window as unknown as { __lastResult?: ConvertResult }).__lastResult = result ?? undefined;
-  const urls = new Map<string, string>();
-  for (const [id, blob] of blobs) {
-    const url = URL.createObjectURL(blob);
-    objectUrls.push(url);
-    urls.set(id, url);
-  }
-  previewEl.innerHTML = renderPreview(doc, urls);
   jsonEl.textContent = JSON.stringify(doc, null, 2);
   jsonBtn.disabled = zipBtn.disabled = false;
 }

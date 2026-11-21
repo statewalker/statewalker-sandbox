@@ -13,6 +13,8 @@ const OCRMYPDF = "https://raw.githubusercontent.com/ocrmypdf/OCRmyPDF/main/tests
 const PYPDF = "https://raw.githubusercontent.com/py-pdf/sample-files/main";
 
 export type CorpusEntry = {
+  /** Name of the run (and its output files); defaults to the file name. */
+  id?: string;
   file: string;
   url: string;
   license: string;
@@ -20,11 +22,18 @@ export type CorpusEntry = {
   /** What the file exercises. */
   purpose: string;
   maxPages?: number;
+  /** UI options for this run (select id → value). */
+  options?: Record<string, string>;
   /**
    * Built locally instead of downloaded: one page per rotation, each holding
    * the image at `url` with its pixels turned clockwise by that angle.
    */
-  derive?: { rotations: number[] };
+  derive?:
+    | { kind: "rotate"; rotations: number[] }
+    | { kind: "columns" }
+    | { kind: "formatting" }
+    | { kind: "images" }
+    | { kind: "longscan"; pages: number };
   expect: {
     /** Expected `document.language` (BCP 47). */
     language?: string;
@@ -33,15 +42,49 @@ export type CorpusEntry = {
     /** Words/phrases that must appear in the text (case-insensitive). */
     contains?: string[];
     /** Plain-text ground truth: fraction of its words found in the OCR text, per page. */
-    groundTruth?: { url: string; minRecall: number; perPage?: boolean };
+    /**
+     * Plain-text transcript in reading order, `file` in the corpus directory:
+     * downloaded from `url`, written by a `derive` builder, or (`fromStream`)
+     * taken from the PDF's own text in content-stream order. Checks the
+     * fraction of its words found (recall, per page with `perPage`) and of its
+     * adjacent word pairs found (`minOrder`: catches wrong reading order).
+     */
+    groundTruth?: {
+      file: string;
+      url?: string;
+      fromStream?: boolean;
+      minRecall: number;
+      minOrder?: number;
+      perPage?: boolean;
+    };
     /** Expected OCR rotation of each image, in document order. */
     rotations?: number[];
     /** Expected rotation of each image's placement on its page, in document order. */
     placementRotations?: number[];
+    /** Phrases that must appear at most this many times (catches duplicated text). */
+    maxOccurrences?: Record<string, number>;
+    /** Engine that must have produced the text of every image with words. */
+    ocrEngine?: string;
+    /** Exact number of pages converted. */
+    pages?: number;
+    /** Upper bound for the page's JS heap after the conversion (Chromium only). */
+    maxHeapMB?: number;
+    /** Per image, in document order: stored type, transparency, stencil mask. */
+    imageChecks?: { mimeType?: string; alpha?: boolean; stencil?: boolean }[];
+    /** Text formatting: phrases that must carry a decorator, list items, tables. */
+    formatting?: {
+      strong?: string[];
+      em?: string[];
+      /** Minimum number of spans marked strong anywhere. */
+      minStrong?: number;
+      listItems?: { bullet?: number; number?: number };
+      maxLevel?: number;
+      tables?: { rows: number; cols: number; headerRows?: number }[];
+    };
   };
 };
 
-const linnTruth = `${OCRMYPDF}/linn.txt`;
+const linnTruth = { file: "linn.txt", url: `${OCRMYPDF}/linn.txt` };
 
 export const CORPUS: CorpusEntry[] = [
   {
@@ -53,7 +96,7 @@ export const CORPUS: CorpusEntry[] = [
     expect: {
       language: "en",
       minImages: 1,
-      groundTruth: { url: linnTruth, minRecall: 0.9 },
+      groundTruth: { ...linnTruth, minRecall: 0.9, minOrder: 0.85 },
     },
   },
   {
@@ -65,7 +108,7 @@ export const CORPUS: CorpusEntry[] = [
     expect: {
       language: "en",
       minImages: 1,
-      groundTruth: { url: linnTruth, minRecall: 0.9 },
+      groundTruth: { ...linnTruth, minRecall: 0.9 },
     },
   },
   {
@@ -77,7 +120,7 @@ export const CORPUS: CorpusEntry[] = [
     expect: {
       language: "en",
       minImages: 1,
-      groundTruth: { url: linnTruth, minRecall: 0.9 },
+      groundTruth: { ...linnTruth, minRecall: 0.9 },
     },
   },
   {
@@ -89,7 +132,7 @@ export const CORPUS: CorpusEntry[] = [
     expect: {
       language: "en",
       minImages: 4,
-      groundTruth: { url: linnTruth, minRecall: 0.85, perPage: true },
+      groundTruth: { ...linnTruth, minRecall: 0.85, perPage: true },
       placementRotations: [0, 90, 180, 270],
     },
   },
@@ -99,12 +142,71 @@ export const CORPUS: CorpusEntry[] = [
     license: "GFDL-1.2-or-later OR CC-BY-SA-3.0",
     attribution: "(C) 1985 Forat Electronics; pixels rotated by scripts/fetch-corpus.ts",
     purpose: "scan whose pixels are stored sideways/upside down: OCR orientation detection",
-    derive: { rotations: [90, 180, 270] },
+    derive: { kind: "rotate", rotations: [90, 180, 270] },
     expect: {
       language: "en",
       minImages: 3,
-      groundTruth: { url: linnTruth, minRecall: 0.85, perPage: true },
+      groundTruth: { ...linnTruth, minRecall: 0.85, perPage: true },
       rotations: [90, 180, 270],
+    },
+  },
+  {
+    file: "columns-en.pdf",
+    url: "scripts/make-columns.ts",
+    license: "CC0-1.0",
+    attribution: "Written for this test suite",
+    purpose: "two columns drawn line-interleaved, aligned paragraph breaks, longer left column",
+    derive: { kind: "columns" },
+    expect: {
+      language: "en",
+      groundTruth: { file: "columns-en.txt", minRecall: 0.98, minOrder: 0.95 },
+    },
+  },
+  {
+    file: "formatting-en.pdf",
+    url: "scripts/make-formatting.ts",
+    license: "CC0-1.0",
+    attribution: "Written for this test suite",
+    purpose: "inline bold/italic, bullet + nested + numbered lists, a table with header",
+    derive: { kind: "formatting" },
+    expect: {
+      language: "en",
+      contains: ["The end of the formatting test."],
+      formatting: {
+        strong: ["bold words", "Formatting Test"],
+        em: ["italic words"],
+        listItems: { bullet: 4, number: 3 },
+        maxLevel: 2,
+        tables: [{ rows: 4, cols: 3, headerRows: 1 }],
+      },
+    },
+  },
+  {
+    file: "images-en.pdf",
+    url: "scripts/make-images.ts",
+    license: "CC0-1.0",
+    attribution: "Made for this test suite",
+    purpose: "JPEG kept byte for byte, PNG with alpha (soft mask), 1-bit stencil mask",
+    derive: { kind: "images" },
+    expect: {
+      minImages: 3,
+      contains: ["Original JPEG photo", "Transparent label text", "Stencil mask scan"],
+      imageChecks: [
+        { mimeType: "image/jpeg", alpha: false },
+        { mimeType: "image/png", alpha: true },
+        { mimeType: "image/png", alpha: true, stencil: true },
+      ],
+    },
+  },
+  {
+    file: "multicolumn.pdf",
+    url: `${PYPDF}/026-latex-multicolumn/multicolumn.pdf`,
+    license: "CC-BY-SA-4.0",
+    attribution: "py-pdf/sample-files contributors",
+    purpose: "LaTeX two-column article (lorem ipsum) and a table",
+    expect: {
+      formatting: { tables: [{ rows: 6, cols: 5, headerRows: 1 }] },
+      groundTruth: { file: "multicolumn.txt", fromStream: true, minRecall: 0.98, minOrder: 0.95 },
     },
   },
   {
@@ -116,7 +218,7 @@ export const CORPUS: CorpusEntry[] = [
     expect: {
       language: "en",
       minImages: 1,
-      groundTruth: { url: linnTruth, minRecall: 0.8 },
+      groundTruth: { ...linnTruth, minRecall: 0.8 },
     },
   },
   {
@@ -190,6 +292,34 @@ export const CORPUS: CorpusEntry[] = [
     expect: { minImages: 1 },
   },
   {
+    file: "graph_ocred.pdf",
+    url: `${OCRMYPDF}/graph_ocred.pdf`,
+    license: "GFDL-1.2-or-later OR CC-BY-SA-3.0",
+    attribution: "(C) 2012 SmokeyJoe, via Wikimedia Commons (OCRed by OCRmyPDF)",
+    purpose: "chart with an invisible OCR text layer: replaced by own OCR, no duplicates",
+    expect: {
+      minImages: 1,
+      contains: ["Percentage"],
+      maxOccurrences: { Percentage: 1, Oppose: 1 },
+      ocrEngine: "tesseract-wasm",
+    },
+  },
+  {
+    id: "graph_ocred-reuse",
+    file: "graph_ocred.pdf",
+    url: `${OCRMYPDF}/graph_ocred.pdf`,
+    license: "GFDL-1.2-or-later OR CC-BY-SA-3.0",
+    attribution: "(C) 2012 SmokeyJoe, via Wikimedia Commons (OCRed by OCRmyPDF)",
+    purpose: "the same, reusing the invisible layer as OCR (no tesseract)",
+    options: { invisible: "reuse" },
+    expect: {
+      minImages: 1,
+      contains: ["Percentage"],
+      maxOccurrences: { Percentage: 1, Oppose: 1 },
+      ocrEngine: "pdf-text-layer",
+    },
+  },
+  {
     file: "lichtenstein.pdf",
     url: `${OCRMYPDF}/lichtenstein.pdf`,
     license: "GFDL-1.2-or-later OR CC-BY-SA-3.0",
@@ -202,8 +332,8 @@ export const CORPUS: CorpusEntry[] = [
     url: `${OCRMYPDF}/multipage.pdf`,
     license: "public domain",
     attribution: "OCRmyPDF test resources (assembled from public-domain scans)",
-    purpose: "six pages mixing scans, a blank page and a partial text layer",
-    expect: { language: "en", minImages: 4 },
+    purpose: "six pages mixing scans, a blank page and an invisible OCR layer",
+    expect: { language: "en", minImages: 4, maxOccurrences: { Percentage: 2 } },
   },
   {
     file: "google-doc-document.pdf",
@@ -220,7 +350,33 @@ export const CORPUS: CorpusEntry[] = [
     attribution: "Martin Thoma, py-pdf/sample-files",
     purpose: "German LaTeX lecture notes: language detected from the text layer",
     maxPages: 6,
-    expect: { language: "de", contains: ["Topologie"] },
+    expect: { language: "de", contains: ["Topologie"], formatting: { minStrong: 3 } },
+  },
+  {
+    id: "GeoTopo-full",
+    file: "GeoTopo.pdf",
+    url: `${PYPDF}/009-pdflatex-geotopo/GeoTopo.pdf`,
+    license: "CC-BY-SA-4.0",
+    attribution: "Martin Thoma, py-pdf/sample-files",
+    purpose: "all 117 pages, streamed page by page",
+    maxPages: 1000,
+    expect: { language: "de", pages: 117, maxHeapMB: 400, formatting: { minStrong: 50 } },
+  },
+  {
+    file: "linn-24-pages.pdf",
+    url: `${OCRMYPDF}/linn.png`,
+    license: "GFDL-1.2-or-later OR CC-BY-SA-3.0",
+    attribution: "(C) 1985 Forat Electronics; page numbers stamped by scripts/fetch-corpus.ts",
+    purpose: "24-page scan (a distinct image per page): streaming keeps memory flat",
+    derive: { kind: "longscan", pages: 24 },
+    maxPages: 1000,
+    expect: {
+      language: "en",
+      pages: 24,
+      minImages: 24,
+      maxHeapMB: 400,
+      groundTruth: { ...linnTruth, minRecall: 0.9, perPage: true },
+    },
   },
   {
     file: "crazyones-pdfa.pdf",
@@ -235,8 +391,8 @@ export const CORPUS: CorpusEntry[] = [
     url: `${PYPDF}/023-cmyk-image/cmyk-image.pdf`,
     license: "CC-BY-SA-4.0",
     attribution: "py-pdf/sample-files contributors",
-    purpose: "CMYK image colour conversion",
-    expect: { minImages: 1 },
+    purpose: "CMYK JPEG: converted (not kept, browsers render CMYK JPEGs differently)",
+    expect: { minImages: 1, imageChecks: [{ mimeType: "image/png" }] },
   },
   {
     file: "grayscale-image.pdf",

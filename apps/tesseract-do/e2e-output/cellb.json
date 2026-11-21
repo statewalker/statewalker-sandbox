@@ -1,0 +1,151 @@
+{
+  "runtime": {
+    "userAgent": "Node.js/22",
+    "compileWasmFromBytes": true,
+    "workerLoader": true,
+    "isolateEngine": true,
+    "imageApis": {
+      "OffscreenCanvas": "undefined",
+      "ImageData": "undefined",
+      "createImageBitmap": "undefined"
+    },
+    "sharedArrayBuffer": "function"
+  },
+  "baiona": {
+    "baiona.png": {
+      "size": "640×682",
+      "bands": 1,
+      "words": 19,
+      "meanConfidence": 0.582,
+      "wasmMemoryMiB": 27.8,
+      "decodedMiB": 1.2,
+      "seconds": 0.553,
+      "model": "fetch"
+    },
+    "baiona_gray.png": {
+      "size": "640×682",
+      "bands": 1,
+      "words": 19,
+      "meanConfidence": 0.512,
+      "wasmMemoryMiB": 27.8,
+      "decodedMiB": 0.4,
+      "seconds": 0.209,
+      "model": "memory"
+    },
+    "baiona_colormapped.png": {
+      "size": "640×682",
+      "bands": 1,
+      "words": 20,
+      "meanConfidence": 0.591,
+      "wasmMemoryMiB": 27.8,
+      "decodedMiB": 0.4,
+      "seconds": 0.187,
+      "model": "memory"
+    },
+    "baiona_alpha.png": {
+      "size": "640×682",
+      "bands": 1,
+      "words": 19,
+      "meanConfidence": 0.582,
+      "wasmMemoryMiB": 27.8,
+      "decodedMiB": 1.7,
+      "seconds": 0.19,
+      "model": "memory"
+    }
+  },
+  "c03-29.jpg": {
+    "size": "770×995",
+    "bands": 1,
+    "words": 292,
+    "meanConfidence": 0.935,
+    "wasmMemoryMiB": 27.8,
+    "decodedMiB": 2.2,
+    "seconds": 1.276,
+    "model": "memory"
+  },
+  "linn.png": {
+    "size": "2550×3300",
+    "bands": 3,
+    "words": 729,
+    "meanConfidence": 0.944,
+    "wasmMemoryMiB": 58.1,
+    "decodedMiB": 1,
+    "seconds": 6.665,
+    "model": "fetch",
+    "recall": 0.993
+  },
+  "typewriter.png": {
+    "size": "4000×2864",
+    "bands": 4,
+    "words": 100,
+    "meanConfidence": 0.905,
+    "wasmMemoryMiB": 68.4,
+    "decodedMiB": 1.4,
+    "seconds": 2.825,
+    "model": "fetch"
+  },
+  "engine reuse": {
+    "first": 1.408,
+    "second": 2.245
+  },
+  "model downloads (first run)": {
+    "eng.traineddata": 3,
+    "nld.traineddata": 1,
+    "fra.traineddata": 1,
+    "tesseract-core.wasm": 1
+  },
+  "after restart": {
+    "model": "sqlite",
+    "seconds": 2.799,
+    "wasmMemoryMiB": 68.4
+  },
+  "linn.png (isolate)": {
+    "size": "2550×3300",
+    "bands": 3,
+    "words": 729,
+    "meanConfidence": 0.944,
+    "wasmMemoryMiB": 58.1,
+    "decodedMiB": 1,
+    "seconds": 6.022,
+    "model": "fetch",
+    "recall": 0.993
+  },
+  "pdf multicolumn.pdf": {
+    "blocks": 14,
+    "seconds": 0.305
+  },
+  "pdf linn.pdf": {
+    "recall": 0.99,
+    "words": 722,
+    "seconds": 5.55
+  },
+  "pdf GeoTopo.pdf (6 pages)": {
+    "blocks": 64,
+    "seconds": 0.4
+  },
+  "job GeoTopo.pdf (117 pages)": {
+    "acceptedSeconds": 0.122,
+    "seconds": 7.065,
+    "blocks": 2880,
+    "assets": 10,
+    "alarms": 30,
+    "bytesRead": 5321132,
+    "size": 5321132
+  },
+  "job linn.pdf": {
+    "recall": 0.99
+  },
+  "job resumed after restart": {
+    "pagesBeforeRestart": 2,
+    "pagesAtRestart": 5
+  },
+  "job big-34mb.pdf": {
+    "size": 33881804,
+    "bytesRead": 392908,
+    "requests": 5,
+    "readShare": 0.0116
+  },
+  "job scan-4.pdf (4 pages at once, 3 cells)": {
+    "seconds": 22.211
+  }
+}

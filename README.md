@@ -31,6 +31,7 @@ pnpm-workspace.yaml   workspace globs and the dependency catalog
 | [@statewalker/service-rpc](packages/service-rpc) | evaluate | RPC over `MessagePort` and WebSocket, built on Comlink, with streaming |
 | [@statewalker/service-pg](packages/service-pg) | replace | PostgreSQL pool stored in a context object; no consumer here |
 | [@statewalker/layout-reconstructor-core](packages/layout-reconstructor-core) | evaluate | Rebuilds a CSS-grid layout from absolutely positioned blocks |
+| [@statewalker/pdf-portabletext](packages/pdf-portabletext) | prototype | In-browser PDF → PortableText: text layer with formatting, reading order, images, worker OCR, language detection |
 
 ### Apps
 
@@ -46,9 +47,11 @@ pnpm-workspace.yaml   workspace globs and the dependency catalog
 | [kitesurf-cellb](apps/kitesurf-cellb) | Cloudflare's Kitesurf browser engine Worker on CellB in Node: a CDP endpoint without workerd |
 | [flue-workbench](apps/flue-workbench) | Browser Flue agent workbench over a local directory, using Gemini |
 | [notes-demo](apps/notes-demo) | React notes app served without a bundler by `@statewalker/webrun-modules-build` |
+| [jobs-manager](apps/jobs-manager) | Runs named tasks as shell commands (Python, TypeScript, Bash), records their JSONL output per job, serves it over REST with SSE |
 | [openai-proxy.app](apps/openai-proxy.app) | OpenAI v1 HTTP proxy in front of a local llama.cpp server |
 | [byok-config-prototype](apps/byok-config-prototype) | Throwaway UI prototype for editing an LLM connections config file |
-| [pdf-portabletext-prototype](apps/pdf-portabletext-prototype) | In-browser PDF → PortableText conversion: OCR of embedded images (tesseract-wasm, one worker per language) with in-browser language detection (franc) |
+| [pdf-portabletext-prototype](apps/pdf-portabletext-prototype) | Demo UI and openly licensed test corpus for `@statewalker/pdf-portabletext` |
+| [tesseract-do](apps/tesseract-do) | Tesseract OCR inside Durable Objects: one Worker project on wrangler, cellb and celld, with the platform limits measured |
 
 Each folder has a README with its own run instructions.
 
@@ -73,23 +76,27 @@ Work on one package with `pnpm --filter <name> <script>`, e.g.
 - **Dependencies come from the catalog.** External versions, including published `@statewalker/*`
   packages, are declared once in `pnpm-workspace.yaml` (`catalog:`); packages in this repository
   refer to each other with `workspace:^`.
-- **The repository has its own CI workflow** (`.github/workflows/ci.yml`), because a few checks
-  cannot run in a plain checkout and are excluded there. On every push to `main` and every pull
-  request it: installs with `--frozen-lockfile` on Node 24, installs Playwright's Chromium and
-  Firefox, runs `lint:check` and `format:check`, `build`, `typecheck` for every package except
-  `httpeers-lib-protos`, `test` for every package except `httpeers-lib-protos` and
-  `httpeers-conformance`, and then the conformance tests without `tests/coverage.test.ts` and
-  `tests/parse-ids.test.ts`.
+- **The repository has its own CI workflow** (`.github/workflows/ci.yml`), not the shared one of
+  `statewalker/statewalker-ci`: it keeps caches for the Gitea and Xet test oracles, and several
+  apps declare versions outside the catalog, which the shared dependency-reference check refuses.
+  It runs the shared baseline checks as its own steps. On every push to `main` and every pull
+  request it: scans the files and the new commits for secrets (gitleaks, `.gitleaks.toml`),
+  installs with `--frozen-lockfile` on Node 24, checks that nothing publishes outside a `publish`
+  job (`check-release-path.mjs`) and that the required scripts exist and every test file is
+  typechecked (`check-scripts.mjs app`), installs Playwright's Chromium and Firefox, runs
+  `lint:check` and `format:check`, `build`, `typecheck`, `typecheck:tests`, `test` for every
+  package except `httpeers-conformance`, and then the conformance tests without
+  `tests/coverage.test.ts` and `tests/parse-ids.test.ts`.
+- **The slow suites run nightly** (`.github/workflows/nightly.yml`, the shared nightly workflow):
+  root `test:nightly` runs the `test:browser` suites of `mvc-blueprint-00`…`03`, `vcs-protos`,
+  `fm-protos` and `flue-capfs-do`, then `tesseract-do`'s `test:e2e` (wrangler and cellb, after its `fixtures` download). A failure
+  opens one `bug` + `ci-baseline` issue here.
 - **Only `node-datachannel` may run install scripts.** pnpm 10 blocks dependency build scripts by
   default; `onlyBuiltDependencies` allows this one because it fetches the native WebRTC binary that
   `@libp2p/webrtc` needs in Node.
 
 ## What will surprise you
 
-- **`httpeers-lib-protos` does not typecheck.** Several rungs pass `{ port }` to
-  `@statewalker/webrun-rpc`'s port `connect`/`serve`, whose `PortParams` has no such field:
-  `error TS2353: Object literal may only specify known properties, and 'port' does not exist in type 'PortParams'.`
-  CI skips this app's typecheck and tests.
 - **`httpeers-conformance`'s coverage and parse-ids tests need the httpeers specification**, a
   file outside this repository. Without it both suites fail at load with
   `sync-criteria: could not find docs/superpowers/specs/2026-08-20-httpeers-api-design.md above ... Set HTTPEERS_SPEC to point at it.`
@@ -108,7 +115,9 @@ Work on one package with `pnpm --filter <name> <script>`, e.g.
 | --- | --- |
 | `pnpm run build` | `pnpm -r run build` |
 | `pnpm run test` | `pnpm -r run test` |
+| `pnpm run test:nightly` | The browser and end-to-end suites the nightly workflow runs |
 | `pnpm run typecheck` | `pnpm -r run typecheck` |
+| `pnpm run typecheck:tests` | `pnpm -r run typecheck:tests`: the test files, in the packages whose `typecheck` leaves them out |
 | `pnpm run lint` / `lint:check` | Biome check, with / without writing fixes |
 | `pnpm run format` / `format:check` | Biome format, with / without writing |
 

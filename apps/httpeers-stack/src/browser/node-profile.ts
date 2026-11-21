@@ -39,6 +39,7 @@ import { webSockets } from "@libp2p/websockets";
 import type { Ed25519PrivateKey, Libp2p } from "@statewalker/httpeers.core";
 import { createLibp2p, type ServiceFactoryMap } from "libp2p";
 import { hubRelayServer, type IsMember, membershipGater } from "../hub-relay.js";
+import { webRTCInit } from "../ice-servers.js";
 import { loadOrCreateIdentity } from "./identity.js";
 
 /**
@@ -142,7 +143,7 @@ export async function createBrowserNode(init: CreateBrowserNodeInit): Promise<Li
     // nothing else; a `/p2p-circuit` entry here would make libp2p reserve on
     // the first relay it meets -- the public one -- and spend its capacity.
     addresses: { listen: init.isMember != null ? ["/p2p-circuit", "/webrtc"] : ["/webrtc"] },
-    transports: [webSockets(), webRTC(), circuitRelayTransport()],
+    transports: [webSockets(), webRTC(webRTCInit()), circuitRelayTransport()],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],
     connectionGater: {

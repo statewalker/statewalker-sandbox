@@ -393,7 +393,7 @@ describe("RPC Service Registry", () => {
 
       expect(service?.nested.method1(5)).toBe(10);
       expect(service?.nested.method2("hello")).toBe("HELLO");
-      expect(service?.array[0]()).toBe(1);
+      expect(service?.array[0]?.()).toBe(1);
       await expect(service?.promise()).resolves.toBe("async result");
     });
 

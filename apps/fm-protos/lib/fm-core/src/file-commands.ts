@@ -1,12 +1,5 @@
 import type { Command, CommandListener, Commands } from "@statewalker/shared-commands";
 
-/**
- * What a fallback listener actually receives. `claimed` is set by the bus
- * on the dispatched command but declared only on its internal type, so it
- * is spelled out here rather than silently relied upon.
- */
-type Claimable<P, R> = Command<P, R> & { readonly claimed: boolean };
-
 import {
   FILE_COMMANDS,
   filesCopy,
@@ -40,24 +33,14 @@ export function registerFileCommands(commands: Commands, options: FileCommandsOp
   const at = { priority: -1 };
 
   /**
-   * Negative priority orders the listeners; it does NOT stop them.
-   *
-   * Dispatch runs every listener in one pass and only breaks on `cmd.settled`,
-   * which cannot happen synchronously because a claim resolves through async
-   * output validation. So a host claiming at priority 0 does not prevent this
-   * listener from running — and a fallback that acts anyway would perform the
-   * operation twice, or race the host's answer and sometimes win.
-   *
-   * A fallback must therefore decline explicitly when the command is already
-   * claimed. Returning nothing is observe-only, which is exactly right: it
-   * leaves the host's claim untouched.
+   * Negative priority orders the listeners, and a claim stops the dispatch
+   * (@statewalker/shared-commands 0.3): once a host at priority 0 returns
+   * `true` or a promise, the lower-priority listeners do not run. So a host
+   * claiming the command means this listener never sees it, and a fallback
+   * needs no guard. `fallback` only names the role and fixes the type.
    */
-  const fallback =
-    <P, R>(handler: (cmd: Claimable<P, R>) => Promise<R>): CommandListener<P, R> =>
-    (cmd) => {
-      const c = cmd as Claimable<P, R>;
-      return c.claimed ? undefined : handler(c);
-    };
+  const fallback = <P, R>(handler: (cmd: Command<P, R>) => Promise<R>): CommandListener<P, R> =>
+    handler;
 
   const transfer = (operation: "copy" | "move") =>
     fallback<

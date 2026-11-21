@@ -1,0 +1,26 @@
+{
+  // wrangler.jsonc plus the CPU limit, for `wrangler deploy -c wrangler.production.jsonc`.
+  // Keep the two in step. Recognition is CPU-bound (seconds per page): the default is 30 s of
+  // CPU per request, Workers Paid allows up to 300 000 ms.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tesseract-do",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "OCR", "class_name": "OcrCell" },
+      { "name": "PDF_JOB", "class_name": "PdfJob" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["OcrCell"] },
+    { "tag": "v2", "new_sqlite_classes": ["PdfJob"] }
+  ],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  // tesseract-wasm's Emscripten glue computes `new URL("tesseract-core.wasm", import.meta.url)`
+  // at load, which throws where a bundled Worker has no import.meta.url. The URL is never
+  // fetched (the wasm comes as a module), so any absolute URL does.
+  "define": { "import.meta.url": "\"file:///tesseract-do/worker.js\"" },
+  "limits": { "cpu_ms": 120000 },
+  "vars": {}
+}

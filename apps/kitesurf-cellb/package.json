@@ -17,7 +17,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@statewalker/cellb": "0.8.9",
+    "@statewalker/cellb": "0.11.0",
     "esbuild": "0.28.2",
     "ws": "catalog:"
   },

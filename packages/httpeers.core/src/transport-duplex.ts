@@ -383,6 +383,11 @@ export function mapPeerCallError(err: unknown, peerId: PeerIdStr): PeerCallError
     // specifically.
     case "StreamResetError":
     case "StreamAbortedError":
+    // `webrun-streams-libp2p` >= 0.2: the call's stream ended before the call
+    // finished (a stream reset mid-read, a connection that died without a
+    // FIN). Same class as a reset; the libp2p error, when there is one, is
+    // its `cause`. httpeers-libp2p's transport maps it the same way.
+    case "PeerGoneError":
     case "TooManyOutboundProtocolStreamsError":
     case "TooManyInboundProtocolStreamsError":
       return new PeerStreamResetError(peerId, cause);

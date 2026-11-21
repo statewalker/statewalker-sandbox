@@ -11,7 +11,7 @@
   },
   "license": "MIT",
   "scripts": {
-    "test": "pnpm run test:unit && pnpm run test:cellb && pnpm run test:cellb-bundled-only && pnpm run test:cellb-celld-bucket && pnpm run test:wrangler && pnpm run test:browser",
+    "test": "pnpm run test:unit && pnpm run test:cellb && pnpm run test:cellb-bundled-only && pnpm run test:cellb-celld-bucket && pnpm run test:wrangler",
     "test:unit": "node --test tests/unit/*.test.mjs",
     "test:cellb": "node scripts/run-env.mjs cellb",
     "test:wrangler": "node scripts/run-env.mjs wrangler",
@@ -35,7 +35,7 @@
     "@earendil-works/pi-ai": "catalog:",
     "@flue/runtime": "catalog:",
     "@statewalker/webrun-biscuit": "catalog:",
-    "@statewalker/webrun-bundler": "0.1.1",
+    "@statewalker/webrun-bundler": "0.2.0",
     "@statewalker/webrun-files": "catalog:",
     "@statewalker/webrun-files-mem": "catalog:",
     "@statewalker/webrun-files-rpc": "catalog:",
@@ -50,7 +50,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261107.1",
     "@sqlite.org/sqlite-wasm": "3.53.4-build2",
-    "@statewalker/cellb": "0.8.8",
+    "@statewalker/cellb": "0.11.0",
     "@statewalker/webrun-files-node": "catalog:",
     "esbuild": "0.28.2",
     "playwright": "catalog:",

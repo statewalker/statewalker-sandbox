@@ -59,7 +59,7 @@ describe("Stream Protocol", () => {
       expect(messages).toHaveLength(3);
       expect(messages[0]).toEqual({ done: false, value: 1 });
       expect(messages[1]).toEqual({ done: false, value: 2 });
-      expect(messages[2].done).toBe(true);
+      expect(messages[2]?.done).toBe(true);
       const lastMsg = messages[2];
       if (lastMsg?.done) {
         expect(lastMsg.error).toBeInstanceOf(Error);

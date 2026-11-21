@@ -12,25 +12,15 @@ import {
 import type { TodoApi } from "./types.js";
 
 /**
- * What a fallback listener actually receives. `claimed` is set by the bus on the
- * dispatched command but declared only on its internal type, so it is spelled
- * out rather than silently relied upon. Exported so the B2 guard
- * reads it through this same type: if the upstream field moves, the guard and
- * the fallback fail to compile together, rather than one hiding behind `any`.
- */
-export type Claimable<P, R> = Command<P, R> & { readonly claimed: boolean };
-
-/**
- * Negative priority ORDERS listeners; it does not STOP them. A fallback must
- * therefore decline explicitly when a host has already claimed the command —
- * returning nothing is observe-only, which leaves the host's claim untouched.
+ * A claim stops the dispatch (shared-commands 0.3, statewalker/statewalker-shared#60):
+ * once a higher-priority listener (a host) claims the command, lower-priority
+ * listeners do not run. A fallback at a negative priority therefore fires only
+ * when nobody claimed first, and needs no guard of its own.
  */
 const fallback =
-  <P, R>(handler: (cmd: Claimable<P, R>) => Promise<R>): CommandListener<P, R> =>
-  (cmd) => {
-    const c = cmd as Claimable<P, R>;
-    return c.claimed ? undefined : handler(c);
-  };
+  <P, R>(handler: (cmd: Command<P, R>) => Promise<R>): CommandListener<P, R> =>
+  (cmd) =>
+    handler(cmd);
 
 /**
  * Returns the registry's cleanup: LIFO, idempotent, and it does not strand the
