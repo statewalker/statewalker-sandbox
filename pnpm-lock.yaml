@@ -986,8 +986,8 @@ importers:
   apps/kitesurf-cellb:
     dependencies:
       '@statewalker/cellb':
-        specifier: 0.11.0
-        version: 0.11.0(@statewalker/webrun-bundler@0.2.0(esbuild-wasm@0.28.2))(@statewalker/webrun-modules@0.4.0)(@statewalker/webrun-site-builder@0.3.0(@statewalker/webrun-files@0.12.0))(@statewalker/webrun-site-host@0.6.0(@statewalker/webrun-files@0.12.0))(bufferutil@4.2.0)(esbuild@0.28.2)
+        specifier: 0.11.1
+        version: 0.11.1(@statewalker/webrun-bundler@0.2.0(esbuild-wasm@0.28.2))(@statewalker/webrun-modules@0.4.0)(@statewalker/webrun-site-builder@0.3.0(@statewalker/webrun-files@0.12.0))(@statewalker/webrun-site-host@0.6.0(@statewalker/webrun-files@0.12.0))(bufferutil@4.2.0)(esbuild@0.28.2)
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -4584,6 +4584,28 @@ packages:
 
   '@statewalker/cellb@0.11.0':
     resolution: {integrity: sha512-HA8IS6JA6c1i4Bi5ElnAWH+9gPaYk7Y1WQdKCyEQ+2ZLS6JGwm4Wh6rll4m5z3/FcgcPtmc/W/TU4ygD+JcxiQ==}
+    engines: {node: '>=22.13'}
+    hasBin: true
+    peerDependencies:
+      '@statewalker/webrun-bundler': ^0.2.0
+      '@statewalker/webrun-modules': ^0.4.0
+      '@statewalker/webrun-site-builder': ^0.3.0
+      '@statewalker/webrun-site-host': ^0.6.0
+      esbuild: '>=0.25'
+    peerDependenciesMeta:
+      '@statewalker/webrun-bundler':
+        optional: true
+      '@statewalker/webrun-modules':
+        optional: true
+      '@statewalker/webrun-site-builder':
+        optional: true
+      '@statewalker/webrun-site-host':
+        optional: true
+      esbuild:
+        optional: true
+
+  '@statewalker/cellb@0.11.1':
+    resolution: {integrity: sha512-YhUiLu6kxoQwjU07AQguKI9tXOYxGddwkumnS8De1QzS6X+meI17BwCgnzd0s6AdQmgvcH2bYPnIKiHn1APSEg==}
     engines: {node: '>=22.13'}
     hasBin: true
     peerDependencies:
@@ -11490,6 +11512,37 @@ snapshots:
       - zod
 
   '@statewalker/cellb@0.11.0(@statewalker/webrun-bundler@0.2.0(esbuild-wasm@0.28.2))(@statewalker/webrun-modules@0.4.0)(@statewalker/webrun-site-builder@0.3.0(@statewalker/webrun-files@0.12.0))(@statewalker/webrun-site-host@0.6.0(@statewalker/webrun-files@0.12.0))(bufferutil@4.2.0)(esbuild@0.28.2)':
+    dependencies:
+      '@noble/hashes': 2.4.0
+      '@sqlite.org/sqlite-wasm': 3.54.1-build1
+      '@statewalker/webrun-files': 0.12.0
+      '@statewalker/webrun-files-browser': 0.12.0
+      '@statewalker/webrun-files-mem': 0.12.0
+      '@statewalker/webrun-files-node': 0.12.0
+      '@statewalker/webrun-http-browser': 0.17.2
+      '@statewalker/webrun-http-streams': 0.8.2
+      '@statewalker/webrun-rpc': 0.15.2
+      '@statewalker/webrun-streams': 0.6.2
+      acorn: 8.19.0
+      assert: 2.1.0
+      buffer: 6.0.3
+      events: 3.3.0
+      path-browserify: 1.0.1
+      sqlite-vec: 0.1.9
+      util: 0.12.5
+      worker-timers: 8.0.34
+      ws: 8.22.2(bufferutil@4.2.0)
+    optionalDependencies:
+      '@statewalker/webrun-bundler': 0.2.0(esbuild-wasm@0.28.2)
+      '@statewalker/webrun-modules': 0.4.0
+      '@statewalker/webrun-site-builder': 0.3.0(@statewalker/webrun-files@0.12.0)
+      '@statewalker/webrun-site-host': 0.6.0(@statewalker/webrun-files@0.12.0)
+      esbuild: 0.28.2
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
+  '@statewalker/cellb@0.11.1(@statewalker/webrun-bundler@0.2.0(esbuild-wasm@0.28.2))(@statewalker/webrun-modules@0.4.0)(@statewalker/webrun-site-builder@0.3.0(@statewalker/webrun-files@0.12.0))(@statewalker/webrun-site-host@0.6.0(@statewalker/webrun-files@0.12.0))(bufferutil@4.2.0)(esbuild@0.28.2)':
     dependencies:
       '@noble/hashes': 2.4.0
       '@sqlite.org/sqlite-wasm': 3.54.1-build1
