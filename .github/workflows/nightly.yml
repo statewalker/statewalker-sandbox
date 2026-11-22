@@ -2,7 +2,7 @@ name: Nightly
 
 # The slow suites the CI of a pull request does not run (statewalker/statewalker-ci's
 # nightly.yml): root `test:nightly` runs the browser suites (`test:browser` of mvc-blueprint-00…03,
-# vcs-protos, fm-protos and flue-capfs-do, each to the end even when one fails) and tesseract-do's
+# vcs-protos and fm-protos, each to the end even when one fails) and tesseract-do's
 # end-to-end runs on wrangler and cellb (`test:e2e`, after `fixtures` downloads its test images
 # and models). A failure opens one `bug` + `ci-baseline` issue here; later failures comment on it
 # while it is open.

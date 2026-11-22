@@ -14,10 +14,6 @@ catalog:
   "@chainsafe/libp2p-noise": ^17.0.0
   "@chainsafe/libp2p-yamux": ^8.0.1
   "@changesets/cli": "^3.0.3"
-  # ~1.4: pi-ai 1.5.0 dropped the `Type` export that @flue/runtime 2.3.0 imports.
-  "@earendil-works/pi-ai": "~1.4.0"
-  "@flue/runtime": "^2.3.0"
-  "@just-bash/executor": "^7.0.0"
   "@libp2p/circuit-relay-v2": ^4.2.13
   "@libp2p/crypto": ^5.1.23
   "@libp2p/identify": ^4.1.14
@@ -39,9 +35,6 @@ catalog:
   "@statewalker/webrun-streams": "^0.6.1"
   "@tailwindcss/cli": ^4.3.3
   "@vitest/browser-playwright": "^5.0.5"
-  "@xterm/addon-fit": "^0.11.0"
-  "@xterm/addon-web-links": "^0.12.0"
-  "@xterm/xterm": "^6.0.0"
   "alien-signals": ^3.2.1
   "basecoat-css": ^1.0.2
   "dockview-core": ^8.4.0
@@ -49,7 +42,6 @@ catalog:
   "hightable": ^0.26.4
   "html5-qrcode": "^2.3.8"
   "jsqr": "^1.4.0"
-  "just-bash": "^3.6.0"
   "libp2p": ^3.5.1
   "multiformats": ^14.0.5
   "playwright": ^1.63.0
@@ -79,10 +71,8 @@ catalog:
   "@statewalker/webrun-streams-libp2p": ^0.7.1
   "@statewalker/webrun-http-streams": ^0.8.1
   "@statewalker/webrun-files-mem": "^0.12.0"
-  "@statewalker/webrun-files-composite": "^0.12.0"
   "@statewalker/webrun-files-browser": "^0.12.0"
   "@statewalker/webrun-files": "^0.12.0"
-  "@statewalker/webrun-files-rpc": "^0.3.0"
   "@statewalker/ui.view.shadcn": ^0.1.1
   "@ai-sdk/openai": ^4.0.83
   "@ai-sdk/provider": ^4.0.21
