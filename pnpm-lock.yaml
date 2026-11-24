@@ -1163,7 +1163,7 @@ importers:
         version: 26.6.6
       openai:
         specifier: 'catalog:'
-        version: 7.27.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@7.30.1)(ws@8.22.2(bufferutil@4.2.0))(zod@4.6.7)
+        version: 7.27.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.5)(undici@7.30.1)(ws@8.22.2(bufferutil@4.2.0))(zod@4.6.7)
       tsx:
         specifier: 'catalog:'
         version: 4.23.15
@@ -4239,8 +4239,8 @@ packages:
     resolution: {integrity: sha512-P1Cz1dWaFfR4IR+U13mqqiGsLFf1KbayybWwdd2vfctdV6hDpUkgCY0nKOLLTMSoRd/jJNjtbqzf13K8DCCXQw==}
     engines: {node: '>=18'}
 
-  '@smithy/core@3.41.0':
-    resolution: {integrity: sha512-fuZ34H1uizS3WgcX9VXG7Uy8od5A5/kCc+CR3NkHLNm2H/BE9AUHG02VIdu8ZB7FYhLqsr/RZbqAoXuOCg/Oxg==}
+  '@smithy/core@3.41.1':
+    resolution: {integrity: sha512-24LyiHSY0R/MLcbTylurWXU6Uy4lzI6KJgsdzxkNnjT9/OLWc2zGPb/3k5AM1f0vcgCGrExanUG339t+TBiIrA==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/credential-provider-imds@4.5.2':
@@ -4253,10 +4253,6 @@ packages:
 
   '@smithy/node-http-handler@4.14.2':
     resolution: {integrity: sha512-i1uORV1v3qBqP43ayRKzIdm1q5x14tf8N4Dd06/QUX1Szm6VxHMrTsu20X5E63UFsaNZCRjI4SXG0jDmqYa+3w==}
-    engines: {node: '>=18.0.0'}
-
-  '@smithy/signature-v4@5.7.4':
-    resolution: {integrity: sha512-tHy0K0VtqNd5Y7Y41h0a0Lhh0L1GzC08dTWg0F7vRJWFtTENg7IZikf3wQkanYIRdb7ngoIPMTmqgUi401fEeQ==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/signature-v4@5.7.5':
@@ -5377,8 +5373,8 @@ packages:
   caniuse-lite@1.0.30001815:
     resolution: {integrity: sha512-uDybUEyfgbyJJ93J1vikTylBX31AkdVYeVPeffMQpf8XN7hSfr0oZOn4VFOIMNvtU5+rHvC5Udg2TgtJKHm23Q==}
 
-  caniuse-lite@1.0.30001827:
-    resolution: {integrity: sha512-YWEDr46gSO81M8w6uPbaIy4++IXsirx2asUqvllNiD4BPf75ibxclUjWEqp8ObCenRv+UM2n5Y8xuRPT8V8FrQ==}
+  caniuse-lite@1.0.30001828:
+    resolution: {integrity: sha512-7MWeT+3DlrpuDybTWHl4Zb1Z80Z1fLLnOXuBjDXebzDVcqnEWUlV8JcbASg8B8BhcW8QT2UiR1KAtzYFIZHZYA==}
 
   cborg@6.1.3:
     resolution: {integrity: sha512-Kb/wD/AFuVcqvVjR+HYNOjNiuhVJ2C+RWxQE2Yqq2WVlVkRjdvVLkkM6QsL3NMsBRh+rgNc+aXmcraA+X0HObQ==}
@@ -5614,8 +5610,8 @@ packages:
   electron-to-chromium@1.5.451:
     resolution: {integrity: sha512-vUNKPrUzw8ByEMOxloq0a71iD/mPuPxVkbDm3G5YhnxTzOw/I6qAg2MUS0cYj/c267lWmw26yW4Vv7foxTxPLg==}
 
-  electron-to-chromium@1.5.492:
-    resolution: {integrity: sha512-4uMs7omhajKiud0GqALLTazS/zyvHLTLmDWVTR+e6BnyJo5bSNrph/JoRWEFJJmY75ct9hCiSGsbFF9fLe5gDw==}
+  electron-to-chromium@1.5.493:
+    resolution: {integrity: sha512-/Wto2sKd0EpepzMqwSP2il2TNc+rnBDF6k1poCvhRKpaSSD4sLGRBE+FydqHs2QwcW9cXKLVDqnauzJy1oByYw==}
 
   emoji-regex@10.6.0:
     resolution: {integrity: sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A==}
@@ -7964,7 +7960,7 @@ snapshots:
       '@aws-sdk/types': 3.975.1
       '@aws-sdk/xml-builder': 3.972.43
       '@aws/lambda-invoke-store': 0.3.0
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/signature-v4': 5.7.5
       '@smithy/types': 4.20.0
       bowser: 2.15.1
@@ -7975,7 +7971,7 @@ snapshots:
     dependencies:
       '@aws-sdk/core': 3.981.1
       '@aws-sdk/types': 3.975.1
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
@@ -7984,7 +7980,7 @@ snapshots:
     dependencies:
       '@aws-sdk/core': 3.981.1
       '@aws-sdk/types': 3.975.1
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/fetch-http-handler': 5.8.1
       '@smithy/node-http-handler': 4.14.2
       '@smithy/types': 4.20.0
@@ -8002,7 +7998,7 @@ snapshots:
       '@aws-sdk/credential-provider-web-identity': 3.972.91
       '@aws-sdk/nested-clients': 3.998.4
       '@aws-sdk/types': 3.975.1
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/credential-provider-imds': 4.5.2
       '@smithy/types': 4.20.0
       tslib: 2.9.1
@@ -8013,7 +8009,7 @@ snapshots:
       '@aws-sdk/core': 3.981.1
       '@aws-sdk/nested-clients': 3.998.4
       '@aws-sdk/types': 3.975.1
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
@@ -8027,7 +8023,7 @@ snapshots:
       '@aws-sdk/credential-provider-sso': 3.973.29
       '@aws-sdk/credential-provider-web-identity': 3.972.91
       '@aws-sdk/types': 3.975.1
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/credential-provider-imds': 4.5.2
       '@smithy/types': 4.20.0
       tslib: 2.9.1
@@ -8037,7 +8033,7 @@ snapshots:
     dependencies:
       '@aws-sdk/core': 3.981.1
       '@aws-sdk/types': 3.975.1
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
@@ -8048,7 +8044,7 @@ snapshots:
       '@aws-sdk/nested-clients': 3.998.4
       '@aws-sdk/token-providers': 3.1175.0
       '@aws-sdk/types': 3.975.1
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
@@ -8058,7 +8054,7 @@ snapshots:
       '@aws-sdk/core': 3.981.1
       '@aws-sdk/nested-clients': 3.998.4
       '@aws-sdk/types': 3.975.1
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
@@ -8068,7 +8064,7 @@ snapshots:
       '@aws-sdk/core': 3.981.1
       '@aws-sdk/signature-v4-multi-region': 3.996.52
       '@aws-sdk/types': 3.975.1
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/fetch-http-handler': 5.8.1
       '@smithy/node-http-handler': 4.14.2
       '@smithy/types': 4.20.0
@@ -8088,7 +8084,7 @@ snapshots:
       '@aws-sdk/core': 3.981.1
       '@aws-sdk/nested-clients': 3.998.4
       '@aws-sdk/types': 3.975.1
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
@@ -10596,7 +10592,7 @@ snapshots:
 
   '@sindresorhus/is@7.2.0': {}
 
-  '@smithy/core@3.41.0':
+  '@smithy/core@3.41.1':
     dependencies:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
@@ -10604,35 +10600,28 @@ snapshots:
 
   '@smithy/credential-provider-imds@4.5.2':
     dependencies:
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
 
   '@smithy/fetch-http-handler@5.8.1':
     dependencies:
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
 
   '@smithy/node-http-handler@4.14.2':
     dependencies:
-      '@smithy/core': 3.41.0
-      '@smithy/types': 4.20.0
-      tslib: 2.9.1
-    optional: true
-
-  '@smithy/signature-v4@5.7.4':
-    dependencies:
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
 
   '@smithy/signature-v4@5.7.5':
     dependencies:
-      '@smithy/core': 3.41.0
+      '@smithy/core': 3.41.1
       '@smithy/types': 4.20.0
       tslib: 2.9.1
     optional: true
@@ -11665,8 +11654,8 @@ snapshots:
   browserslist@4.29.6:
     dependencies:
       baseline-browser-mapping: 2.11.39
-      caniuse-lite: 1.0.30001827
-      electron-to-chromium: 1.5.492
+      caniuse-lite: 1.0.30001828
+      electron-to-chromium: 1.5.493
       node-releases: 2.0.65
       update-browserslist-db: 1.4.0(browserslist@4.29.6)
     optional: true
@@ -11721,7 +11710,7 @@ snapshots:
 
   caniuse-lite@1.0.30001815: {}
 
-  caniuse-lite@1.0.30001827:
+  caniuse-lite@1.0.30001828:
     optional: true
 
   cborg@6.1.3: {}
@@ -11952,7 +11941,7 @@ snapshots:
 
   electron-to-chromium@1.5.451: {}
 
-  electron-to-chromium@1.5.492:
+  electron-to-chromium@1.5.493:
     optional: true
 
   emoji-regex@10.6.0: {}
@@ -13171,10 +13160,10 @@ snapshots:
       is-wsl: 2.2.0
     optional: true
 
-  openai@7.27.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@7.30.1)(ws@8.22.2(bufferutil@4.2.0))(zod@4.6.7):
+  openai@7.27.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.5)(undici@7.30.1)(ws@8.22.2(bufferutil@4.2.0))(zod@4.6.7):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.84
-      '@smithy/signature-v4': 5.7.4
+      '@smithy/signature-v4': 5.7.5
       undici: 7.30.1
       ws: 8.22.2(bufferutil@4.2.0)
       zod: 4.6.7
