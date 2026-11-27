@@ -1,7 +1,7 @@
 # kitesurf-cellb
 
 Runs [Kitesurf](https://github.com/cloudflare/kitesurf), Cloudflare's experimental browser engine
-for Workers, unchanged on [CellB](https://cellb.dev) 0.11.1 in Node, and serves its Chrome DevTools
+for Workers, unchanged on [CellB](https://cellb.dev) 0.12.0 in Node, and serves its Chrome DevTools
 Protocol endpoint. Puppeteer, chrome-devtools-mcp and other CDP clients can drive it without
 workerd, wrangler or a Cloudflare account.
 
@@ -84,11 +84,9 @@ node run.mjs https://example.com/
 Checked in Chromium: example.com, Hacker News, and React and Vue TodoMVC render (screenshots, title
 and text), the engine loads in about 2 s and a navigation takes 1.5–2.3 s.
 
-What a tab adds: a page needs a classic `<script>`, or Kitesurf never finishes loading it
-(CellB 0.11.1 and earlier, in a browser; fixed by statewalker/cellb.dev#188); a CORS proxy for the pages Kitesurf fetches (the browser drops `Set-Cookie`, and
+What a tab adds: a CORS proxy for the pages Kitesurf fetches (the browser drops `Set-Cookie`, and
 forbidden request headers such as `User-Agent` never reach the proxy); CDP clients outside the tab
-cannot reach the engine's socket (the page holds it); an `import()` in code Kitesurf builds with
-`Function` resolves against the isolate worker's URL, not Kitesurf's modules (Node resolves it).
+cannot reach the engine's socket (the page holds it).
 
 ## Limits
 
