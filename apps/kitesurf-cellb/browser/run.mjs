@@ -11,7 +11,9 @@ const browser = await chromium.launch();
 const page = await browser.newPage();
 page.on("console", (m) => process.stdout.write(`[page] ${m.text().slice(0, 300)}\n`));
 page.on("pageerror", (e) => console.log(`[pageerror] ${e.message}`));
-await page.goto(`http://127.0.0.1:${port}/?url=${encodeURIComponent(target)}${pdf ? "&pdf=1" : ""}`);
+await page.goto(
+  `http://127.0.0.1:${port}/?url=${encodeURIComponent(target)}${pdf ? "&pdf=1" : ""}`,
+);
 await page.waitForFunction(() => window.__result?.done, null, { timeout: 600_000 });
 const r = await page.evaluate(() => window.__result);
 if (r.screenshot) {
