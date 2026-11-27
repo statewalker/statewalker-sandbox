@@ -39,15 +39,12 @@ pnpm-workspace.yaml   workspace globs and the dependency catalog
 | --- | --- |
 | [httpeers-stack](apps/httpeers-stack) | Installable reference deployment of the httpeers mesh (relay, hub, browser pages) |
 | [httpeers-protos](apps/httpeers-protos) | Runnable httpeers demos: HTTP over libp2p with proven peer identity |
-| [flue-capfs-do](apps/flue-capfs-do) | Flue agents on Durable Objects with a Biscuit/Datalog-filtered file capability; runs on wrangler, cellb and celld |
 | [httpeers-lib-protos](apps/httpeers-lib-protos) | Test-suite prototypes for the httpeers library |
 | [httpeers-shell-protos](apps/httpeers-shell-protos) | Test-suite ladder for a shell that renders apps served by peers |
 | [fm-protos](apps/fm-protos) | File-manager prototype ladder over one `fm-core` / `fm-app` / `fm-ui` |
 | [mvc-blueprint-00](apps/mvc-blueprint-00) … [03](apps/mvc-blueprint-03) | MVC blueprint TODO apps, four variants |
 | [kitesurf-cellb](apps/kitesurf-cellb) | Cloudflare's Kitesurf browser engine Worker on CellB in Node: a CDP endpoint without workerd |
-| [flue-workbench](apps/flue-workbench) | Browser Flue agent workbench over a local directory, using Gemini |
 | [notes-demo](apps/notes-demo) | React notes app served without a bundler by `@statewalker/webrun-modules-build` |
-| [jobs-manager](apps/jobs-manager) | Runs named tasks as shell commands (Python, TypeScript, Bash), records their JSONL output per job, serves it over REST with SSE |
 | [openai-proxy.app](apps/openai-proxy.app) | OpenAI v1 HTTP proxy in front of a local llama.cpp server |
 | [byok-config-prototype](apps/byok-config-prototype) | Throwaway UI prototype for editing an LLM connections config file |
 | [pdf-portabletext-prototype](apps/pdf-portabletext-prototype) | Demo UI and openly licensed test corpus for `@statewalker/pdf-portabletext` |
@@ -88,8 +85,8 @@ Work on one package with `pnpm --filter <name> <script>`, e.g.
   package except `httpeers-conformance`, and then the conformance tests without
   `tests/coverage.test.ts` and `tests/parse-ids.test.ts`.
 - **The slow suites run nightly** (`.github/workflows/nightly.yml`, the shared nightly workflow):
-  root `test:nightly` runs the `test:browser` suites of `mvc-blueprint-00`…`03`, `vcs-protos`,
-  `fm-protos` and `flue-capfs-do`, then `tesseract-do`'s `test:e2e` (wrangler and cellb, after its `fixtures` download). A failure
+  root `test:nightly` runs the `test:browser` suites of `mvc-blueprint-00`…`03`, `vcs-protos`
+  and `fm-protos`, then `tesseract-do`'s `test:e2e` (wrangler and cellb, after its `fixtures` download). A failure
   opens one `bug` + `ci-baseline` issue here.
 - **Only `node-datachannel` may run install scripts.** pnpm 10 blocks dependency build scripts by
   default; `onlyBuiltDependencies` allows this one because it fetches the native WebRTC binary that
