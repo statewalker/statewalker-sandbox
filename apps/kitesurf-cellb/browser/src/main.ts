@@ -96,6 +96,27 @@ try {
   const shot = await send("Page.captureScreenshot", { format: "png" }, sessionId);
   result.screenshot = shot.data;
   log(`title: ${result.title} (navigate ${result.navigateMs} ms)`);
+  // `?pdf=1`: also print the page to PDF (A4, backgrounds on).
+  if (new URLSearchParams(location.search).get("pdf")) {
+    const t2 = performance.now();
+    const pdf = await send(
+      "Page.printToPDF",
+      {
+        paperWidth: 8.27,
+        paperHeight: 11.69,
+        printBackground: true,
+        marginTop: 0.4,
+        marginBottom: 0.4,
+        marginLeft: 0.4,
+        marginRight: 0.4,
+      },
+      sessionId,
+    );
+    if (pdf.error) throw new Error(`Page.printToPDF: ${pdf.error}`);
+    result.pdf = pdf.data;
+    result.pdfMs = Math.round(performance.now() - t2);
+    log(`PDF: ${Math.round((pdf.data.length * 3) / 4)} bytes in ${result.pdfMs} ms`);
+  }
   const img = document.createElement("img");
   img.src = `data:image/png;base64,${shot.data}`;
   document.body.append(img);

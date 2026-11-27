@@ -11,7 +11,7 @@
     "run": "node run.mjs"
   },
   "dependencies": {
-    "@statewalker/cellb": "0.10.0"
+    "@statewalker/cellb": "0.12.0"
   },
   "devDependencies": {
     "esbuild": "0.28.2",
